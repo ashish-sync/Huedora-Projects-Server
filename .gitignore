@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build / runtime
+dist/
+build/
+coverage/
+*.log
+npm-debug.log*
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Local file-DB and uploads (reseeded locally)
+data/
+uploads/
+tmp/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+.cache/
+*.tgz
