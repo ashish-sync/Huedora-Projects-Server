@@ -49,6 +49,19 @@ Assets shall be returned in working order at the end of the custody period.
 
 Signed electronically by the parties.`;
 
+function canBootstrapAdmin() {
+  const email = env.bootstrapAdminEmail;
+  const password = env.bootstrapAdminPassword;
+  if (!email || !password) return false;
+  if (password.length < 12) {
+    console.warn(
+      '[seed] BOOTSTRAP_ADMIN_PASSWORD ignored — must be at least 12 characters'
+    );
+    return false;
+  }
+  return true;
+}
+
 export async function ensureSeed() {
   for (const [name, permissions] of Object.entries(ROLE_PERMISSIONS)) {
     await Role.findOneAndUpdate(
@@ -71,64 +84,57 @@ export async function ensureSeed() {
   const verifierRole = await Role.findOne({ name: 'Verifier' });
   const approverRole = await Role.findOne({ name: 'Approver' });
 
-  const passwordHash = await bcrypt.hash(env.bootstrapAdminPassword, 12);
-
-  // Migrate legacy @alms.local demo accounts to @dhub.local
-  const emailMigrations = [
-    ['admin@alms.local', env.bootstrapAdminEmail],
-    ['manager@alms.local', 'manager@dhub.local'],
-    ['verifier@alms.local', 'verifier@dhub.local'],
-  ];
-  for (const [from, to] of emailMigrations) {
-    if (!from || !to || from === to) continue;
-    const legacy = await User.findOne({ email: from });
-    const target = await User.findOne({ email: to });
-    if (legacy && !target) {
-      legacy.email = to;
-      if (from.startsWith('admin@')) legacy.fullName = env.bootstrapAdminName;
-      await legacy.save();
-      console.log(`[seed] Migrated user ${from} → ${to}`);
-    }
-  }
-
-  let admin = await User.findOne({ email: env.bootstrapAdminEmail });
-  if (!admin) {
-    admin = await User.create({
-      email: env.bootstrapAdminEmail,
-      username: 'admin',
-      fullName: env.bootstrapAdminName,
-      passwordHash,
-      roleIds: [adminRole._id],
-      isActive: true,
-    });
-    console.log(`[seed] Admin user created: ${env.bootstrapAdminEmail}`);
-  }
-
-  const extras = [
-    {
-      email: 'manager@dhub.local',
-      username: 'manager',
-      fullName: 'Asset Manager',
-      roleIds: [managerRole._id, approverRole._id],
-    },
-    {
-      email: 'verifier@dhub.local',
-      username: 'verifier',
-      fullName: 'Field Verifier',
-      roleIds: [verifierRole._id],
-    },
-  ];
-
-  for (const e of extras) {
-    const existing = await User.findOne({ email: e.email });
+  // First-run admin only when credentials are explicitly provided
+  if (canBootstrapAdmin() && adminRole) {
+    const existing = await User.findOne({ email: env.bootstrapAdminEmail });
     if (!existing) {
-      await User.create({ ...e, passwordHash, isActive: true });
-      console.log(`[seed] User created: ${e.email}`);
+      const passwordHash = await bcrypt.hash(env.bootstrapAdminPassword, 12);
+      await User.create({
+        email: env.bootstrapAdminEmail,
+        username: env.bootstrapAdminEmail.split('@')[0] || 'admin',
+        fullName: env.bootstrapAdminName || 'Administrator',
+        passwordHash,
+        roleIds: [adminRole._id],
+        isActive: true,
+      });
+      console.log(`[seed] Bootstrap admin created: ${env.bootstrapAdminEmail}`);
+    }
+  } else {
+    const anyUser = await User.countDocuments({ isDeleted: false });
+    if (!anyUser) {
+      console.warn(
+        '[seed] No users found. Set BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD (12+ chars) once to create the first admin, or create a user via an existing admin.'
+      );
     }
   }
 
-  const seedAgreementSamples = env.seedAgreementSamples !== false;
-  if (seedAgreementSamples) {
+  // Optional local demo accounts — never in production
+  if (env.seedDemoUsers && managerRole && verifierRole && approverRole && canBootstrapAdmin()) {
+    const passwordHash = await bcrypt.hash(env.bootstrapAdminPassword, 12);
+    const extras = [
+      {
+        email: 'manager@dhub.local',
+        username: 'manager',
+        fullName: 'Asset Manager',
+        roleIds: [managerRole._id, approverRole._id],
+      },
+      {
+        email: 'verifier@dhub.local',
+        username: 'verifier',
+        fullName: 'Field Verifier',
+        roleIds: [verifierRole._id],
+      },
+    ];
+    for (const e of extras) {
+      const existing = await User.findOne({ email: e.email });
+      if (!existing) {
+        await User.create({ ...e, passwordHash, isActive: true });
+        console.log(`[seed] Demo user created: ${e.email}`);
+      }
+    }
+  }
+
+  if (env.seedAgreementSamples) {
     const templates = [
       {
         name: 'Standard Device Lease',
@@ -171,30 +177,16 @@ export async function ensureSeed() {
         city: 'Pune',
       });
       console.log('[seed] Sample contact created');
-    } else {
-      // enrich older sample records
-      if (!sampleContact.resourceType || sampleContact.resourceType === 'HCW') {
-        sampleContact.resourceType = 'Full Timer';
-        sampleContact.profession = sampleContact.profession === 'Coordinator' || !sampleContact.profession
-          ? 'Camp Coordinator'
-          : sampleContact.profession;
-        sampleContact.contact = sampleContact.contact || sampleContact.mobile || '+91 98765 43210';
-        sampleContact.mobile = sampleContact.contact;
-        await sampleContact.save();
-      }
     }
   }
 
-  return { admin };
+  return {};
 }
 
 async function run() {
   await connectDb();
   await ensureSeed();
   console.log('[seed] Complete');
-  console.log(`  Admin: ${env.bootstrapAdminEmail} / ${env.bootstrapAdminPassword}`);
-  console.log('  Manager: manager@dhub.local / (same password)');
-  console.log('  Verifier: verifier@dhub.local / (same password)');
   if (env.useMemoryDb) {
     console.log('[seed] Note: memory DB is process-local; prefer npm run dev which seeds on boot.');
   }

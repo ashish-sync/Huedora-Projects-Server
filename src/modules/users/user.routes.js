@@ -223,7 +223,7 @@ router.post(
     if (!email || !username || !fullName || !password || !roleIds?.length) {
       throw new AppError('Missing required fields', 400, 'VALIDATION_ERROR');
     }
-    if (password.length < 10) throw new AppError('Password min 10 chars', 400, 'VALIDATION_ERROR');
+    if (password.length < 12) throw new AppError('Password must be at least 12 characters', 400, 'VALIDATION_ERROR');
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await User.create({
       email: email.toLowerCase().trim(),
@@ -264,8 +264,8 @@ router.patch(
     }
     if (req.body.roleIds !== undefined) user.roleIds = req.body.roleIds;
     if (req.body.password) {
-      if (String(req.body.password).length < 10) {
-        throw new AppError('Password min 10 chars', 400, 'VALIDATION_ERROR');
+      if (String(req.body.password).length < 12) {
+        throw new AppError('Password must be at least 12 characters', 400, 'VALIDATION_ERROR');
       }
       user.passwordHash = await bcrypt.hash(String(req.body.password), 12);
       user.tokenVersion = (user.tokenVersion || 0) + 1;

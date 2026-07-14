@@ -9,9 +9,10 @@ const router = Router();
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 30,
+  max: env.isProd ? 10 : 30,
   standardHeaders: true,
   legacyHeaders: false,
+  message: { error: { message: 'Too many login attempts. Try again later.', code: 'RATE_LIMIT' } },
 });
 
 function setRefreshCookie(res, token) {

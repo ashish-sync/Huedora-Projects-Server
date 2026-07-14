@@ -188,8 +188,8 @@ export async function changePassword({ user, currentPassword, newPassword, reque
   const fresh = await User.findById(user._id);
   const ok = await bcrypt.compare(currentPassword, fresh.passwordHash);
   if (!ok) throw new AppError('Current password is incorrect', 400, 'VALIDATION_ERROR');
-  if (!newPassword || newPassword.length < 10) {
-    throw new AppError('Password must be at least 10 characters', 400, 'VALIDATION_ERROR');
+  if (!newPassword || newPassword.length < 12) {
+    throw new AppError('Password must be at least 12 characters', 400, 'VALIDATION_ERROR');
   }
   fresh.passwordHash = await bcrypt.hash(newPassword, 12);
   fresh.passwordChangedAt = new Date();
