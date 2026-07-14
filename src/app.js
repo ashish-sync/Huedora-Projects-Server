@@ -49,7 +49,26 @@ export function createApp() {
   app.use('/uploads', express.static(uploadsRoot));
 
   app.get('/api/v1/health', (_req, res) => {
-    res.json({ data: { status: 'ok', service: 'dhub-api', ts: new Date().toISOString() } });
+    res.json({
+      data: {
+        status: 'ok',
+        live: true,
+        service: 'dhub-api',
+        ts: new Date().toISOString(),
+      },
+    });
+  });
+
+  /** Liveness probe — same payload as /health for load balancers / frontend boot gate */
+  app.get('/api/v1/live', (_req, res) => {
+    res.status(200).json({
+      data: {
+        status: 'ok',
+        live: true,
+        service: 'dhub-api',
+        ts: new Date().toISOString(),
+      },
+    });
   });
 
   app.use('/api/v1/auth', authRoutes);
