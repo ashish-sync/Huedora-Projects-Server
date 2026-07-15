@@ -27,6 +27,7 @@ import notificationRoutes from './modules/notifications/notification.routes.js';
 import dashboardRoutes from './modules/dashboards/dashboard.routes.js';
 import auditRoutes from './modules/audit/audit.routes.js';
 import importRoutes from './modules/imports/import.routes.js';
+import campRoutes from './modules/camps/camp.routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsRoot = path.resolve(__dirname, '../uploads');
@@ -90,6 +91,7 @@ export function createApp() {
   app.use('/api/v1/dashboards', dashboardRoutes);
   app.use('/api/v1/audit-logs', auditRoutes);
   app.use('/api/v1/imports', importRoutes);
+  app.use('/api/v1/camps', campRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

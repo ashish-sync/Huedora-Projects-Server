@@ -1,0 +1,32 @@
+import { defineCollection } from '../../store/filedb.js';
+import { softDelete } from '../common/counter.model.js';
+
+export const CampRequest = defineCollection('camp_requests', {
+  ...softDelete,
+  requestKey: '',
+  method: '',
+  process: '',
+  campType: '',
+  doctorName: '',
+  address: '',
+  city: '',
+  state: '',
+  campDate: '',
+  startTime: '',
+  endTime: '',
+  campSlot: '',
+  technicianName: '',
+  technicianNumber: '',
+  technicianContactId: null,
+  status: 'Pending',
+  decisionReason: '',
+  decidedAt: null,
+  decidedById: null,
+  decidedByEmail: '',
+  requestedAt: '',
+  requesterId: null,
+  requesterEmail: '',
+  requesterName: '',
+  remarks: '',
+  isActive: true,
+});

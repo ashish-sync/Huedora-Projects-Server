@@ -29,6 +29,14 @@ export const MODULE_ACCESS_CATALOG = [
     writeKey: PERMISSIONS.VERIFICATIONS_WRITE,
   },
   {
+    id: 'camps',
+    label: 'In-House Camp Management',
+    description: 'Camp requests, status tracking, and approvals',
+    readKey: PERMISSIONS.CAMPS_READ,
+    writeKey: PERMISSIONS.CAMPS_REQUEST,
+    writeIncludes: [PERMISSIONS.CAMPS_APPROVE],
+  },
+  {
     id: 'movements',
     label: 'Movements',
     description: 'Request and approve asset moves',
