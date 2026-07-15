@@ -12,6 +12,11 @@ import { sendExcel } from '../../utils/excelExport.js';
 
 const router = Router();
 
+function asRoleIdList(roleIds) {
+  if (!Array.isArray(roleIds)) return [];
+  return [...new Set(roleIds.map((id) => String(id?._id || id)).filter(Boolean))];
+}
+
 router.use(authenticate);
 
 router.get(
@@ -230,8 +235,9 @@ router.post(
       username: username.trim(),
       fullName,
       phone,
-      roleIds,
+      roleIds: asRoleIdList(roleIds),
       passwordHash,
+      passwordChangedAt: new Date().toISOString(),
     });
     await user.populate('roleIds');
     await writeAudit({
@@ -253,7 +259,16 @@ router.patch(
   asyncHandler(async (req, res) => {
     const user = await User.findOne({ _id: req.params.id, isDeleted: false });
     if (!user) throw new AppError('User not found', 404);
-    const before = publicUser(await user.populate('roleIds'));
+
+    // Snapshot before mutating — and always keep roleIds as string ids in the DB
+    // (populate() would otherwise persist nested role docs and break later loads).
+    const beforeDoc = await User.findOne({ _id: user._id, isDeleted: false });
+    await beforeDoc.populate('roleIds');
+    const before = publicUser(beforeDoc);
+
+    // Normalize any previously populated / nested role ids back to strings
+    user.roleIds = asRoleIdList(user.roleIds);
+
     if (req.body.fullName !== undefined) user.fullName = req.body.fullName;
     if (req.body.phone !== undefined) user.phone = req.body.phone;
     if (req.body.isActive !== undefined) {
@@ -262,12 +277,22 @@ router.patch(
       }
       user.isActive = req.body.isActive;
     }
-    if (req.body.roleIds !== undefined) user.roleIds = req.body.roleIds;
+    if (req.body.roleIds !== undefined) {
+      const nextIds = asRoleIdList(req.body.roleIds);
+      if (!nextIds.length) throw new AppError('Select at least one role', 400, 'VALIDATION_ERROR');
+      const roleRows = await Role.find({ isDeleted: false });
+      const valid = new Set(roleRows.map((r) => String(r._id)));
+      if (nextIds.some((id) => !valid.has(id))) {
+        throw new AppError('One or more roles are invalid', 400, 'VALIDATION_ERROR');
+      }
+      user.roleIds = nextIds;
+    }
     if (req.body.password) {
       if (String(req.body.password).length < 12) {
         throw new AppError('Password must be at least 12 characters', 400, 'VALIDATION_ERROR');
       }
       user.passwordHash = await bcrypt.hash(String(req.body.password), 12);
+      user.passwordChangedAt = new Date().toISOString();
       user.tokenVersion = (user.tokenVersion || 0) + 1;
     }
     await user.save();

@@ -63,20 +63,48 @@ function canBootstrapAdmin() {
 }
 
 export async function ensureSeed() {
+  // Create built-in roles once. Never overwrite permissions on restart —
+  // admins customize access in Roles & Permissions and those edits must stick.
   for (const [name, permissions] of Object.entries(ROLE_PERMISSIONS)) {
-    await Role.findOneAndUpdate(
-      { name },
-      {
-        $set: {
-          name,
-          permissions,
-          description: `${name} role`,
-          isSystem: true,
-          isDeleted: false,
-        },
-      },
-      { upsert: true, new: true }
-    );
+    const existing = await Role.findOne({ name });
+    if (!existing) {
+      await Role.create({
+        name,
+        permissions,
+        description: `${name} role`,
+        isSystem: true,
+        isDeleted: false,
+      });
+      continue;
+    }
+    let dirty = false;
+    if (existing.isDeleted) {
+      existing.isDeleted = false;
+      dirty = true;
+    }
+    if (existing.isSystem !== true) {
+      existing.isSystem = true;
+      dirty = true;
+    }
+    // Admin must always retain full access
+    if (name === 'Admin') {
+      const perms = Array.isArray(existing.permissions) ? existing.permissions : [];
+      if (!perms.includes('*')) {
+        existing.permissions = ['*'];
+        dirty = true;
+      }
+    }
+    if (dirty) await existing.save();
+  }
+
+  // Repair users that previously saved populated role documents into roleIds
+  const allUsers = await User.find({});
+  for (const u of allUsers) {
+    if (!Array.isArray(u.roleIds) || !u.roleIds.length) continue;
+    const needsFix = u.roleIds.some((id) => id && typeof id === 'object');
+    if (!needsFix) continue;
+    u.roleIds = u.roleIds.map((id) => String(id?._id || id)).filter(Boolean);
+    await u.save();
   }
 
   const adminRole = await Role.findOne({ name: 'Admin' });

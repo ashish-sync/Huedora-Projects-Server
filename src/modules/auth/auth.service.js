@@ -43,9 +43,13 @@ export function publicUser(user) {
     fullName: user.fullName,
     phone: user.phone,
     isActive: user.isActive !== false,
-    roles: (user.roleIds || []).map((r) => ({ id: r._id, name: r.name })),
+    roles: (user.roleIds || []).map((r) => ({
+      id: r?._id || r,
+      name: r?.name || '',
+    })),
     permissions: collectPermissions(user),
     lastLoginAt: user.lastLoginAt,
+    passwordChangedAt: user.passwordChangedAt || null,
   };
 }
 
