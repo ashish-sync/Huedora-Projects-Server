@@ -54,7 +54,7 @@ export const MODULE_ACCESS_CATALOG = [
   },
   {
     id: 'masters',
-    label: 'Asset Inventory',
+    label: 'Catalog sync',
     description: 'Register and update assets (catalog + inventory sync)',
     readKey: PERMISSIONS.MASTERS_READ,
     writeKey: PERMISSIONS.DEVICES_WRITE,
