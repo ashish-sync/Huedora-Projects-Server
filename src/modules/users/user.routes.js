@@ -5,7 +5,7 @@ import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/
 import { PERMISSIONS } from '../../config/constants.js';
 import { User } from './user.model.js';
 import { Role } from './role.model.js';
-import { PERMISSION_CATALOG, MODULE_ACCESS_CATALOG, ALL_PERMISSION_KEYS } from './permission.catalog.js';
+import { PERMISSION_CATALOG, MODULE_ACCESS_CATALOG, ALL_PERMISSION_KEYS, ACCESS_ACTIONS } from './permission.catalog.js';
 import { writeAudit } from '../../utils/audit.js';
 import { publicUser } from '../auth/auth.service.js';
 import { sendExcel } from '../../utils/excelExport.js';
@@ -25,6 +25,7 @@ router.get(
     res.json({
       data: {
         modules: MODULE_ACCESS_CATALOG,
+        actions: ACCESS_ACTIONS,
         catalog: PERMISSION_CATALOG,
         keys: ALL_PERMISSION_KEYS,
       },

@@ -1,7 +1,13 @@
 import { Router } from 'express';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { v4 as uuid } from 'uuid';
 import { authenticate, requirePermission, hasPermission } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
+import { env } from '../../config/env.js';
 import { Asset } from './asset.model.js';
 import { AssetEvent } from './assetEvent.model.js';
 import { createAsset, transitionAsset } from './asset.service.js';
@@ -11,7 +17,10 @@ import {
   Agreement,
   AgreementAsset,
   AgreementDocument,
+  AgreementActivity,
 } from '../agreements/agreement.model.js';
+import { nextSequence } from '../../utils/counters.js';
+import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import {
   ASSET_TYPE_OPTIONS,
@@ -23,8 +32,41 @@ import {
   normalizeCustodianState,
 } from '../devices/device.constants.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const agreementUploadRoot = path.resolve(__dirname, '../../../uploads/agreements');
+fs.mkdirSync(agreementUploadRoot, { recursive: true });
+
+const agreementUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, agreementUploadRoot),
+    filename: (_req, file, cb) => {
+      const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+      cb(null, `${uuid()}-${safe}`);
+    },
+  }),
+  limits: { fileSize: env.uploadMaxBytes },
+  fileFilter: (_req, file, cb) => {
+    const ok =
+      file.mimetype === 'application/pdf' ||
+      String(file.originalname || '')
+        .toLowerCase()
+        .endsWith('.pdf') ||
+      file.mimetype === 'application/msword' ||
+      file.mimetype ===
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    if (!ok) return cb(new Error('Upload a PDF or Word document'));
+    cb(null, true);
+  },
+});
+
 const router = Router();
 router.use(authenticate);
+
+const canManageDocs = requirePermission(
+  PERMISSIONS.AGREEMENTS_WRITE,
+  PERMISSIONS.DOCUMENTS_WRITE,
+  PERMISSIONS.ASSETS_WRITE
+);
 
 const PURCHASE_RE = /^(0[1-9]|1[0-2])\/\d{4}$/;
 
@@ -204,14 +246,23 @@ router.get(
         startDate: agreement.startDate,
         endDate: agreement.endDate,
         completedAt: agreement.completedAt,
+        documentSource: agreement.documentSource,
         isActiveLink: links.some(
           (l) => String(l.agreementId) === String(agreement._id) && l.isActive !== false
         ),
         documents: documents.map((d) => ({
           _id: d._id,
-          fileName: d.fileName,
-          mimeType: d.mimeType,
-          kind: d.kind,
+          fileName: d.name || d.fileName,
+          name: d.name || d.fileName,
+          mimeType: d.contentType || d.mimeType,
+          contentType: d.contentType || d.mimeType,
+          kind: d.docKind || d.kind,
+          docKind: d.docKind || d.kind,
+          version: d.version || 1,
+          isPrimary: Boolean(d.isPrimary),
+          sizeBytes: d.sizeBytes || 0,
+          createdAt: d.createdAt,
+          hasFile: Boolean(d.storageKey),
         })),
       });
     }
@@ -223,6 +274,189 @@ router.get(
     });
 
     res.json({ data: items });
+  })
+);
+
+/** Upload a signed agreement for this asset (creates envelope + link if needed). */
+router.post(
+  '/:id/documents',
+  canManageDocs,
+  agreementUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    const asset = await Asset.findOne({ _id: req.params.id, isDeleted: false });
+    if (!asset) throw new AppError('Asset not found', 404);
+    if (!req.file) throw new AppError('Choose a signed agreement file to upload', 400, 'VALIDATION_ERROR');
+
+    const title =
+      String(req.body.title || '').trim() ||
+      `Signed agreement — ${asset.deviceNameSnapshot || asset.assetTag || asset.serialNumber || 'asset'}`;
+
+    const agreement = await Agreement.create({
+      agreementNumber: await nextSequence('agreementNumber', 'AGR'),
+      title,
+      status: 'COMPLETED',
+      type: req.body.type || 'LEASE',
+      documentSource: 'UPLOAD',
+      signingType: 'NON_SIGNING',
+      partyName: asset.custodianName || '',
+      partyContact: asset.custodianContact || '',
+      partyCity: asset.custodianCity || asset.location?.city || '',
+      partyState: asset.custodianState || asset.location?.state || '',
+      contactId: asset.contactId || null,
+      completedAt: new Date().toISOString(),
+      startDate: new Date().toISOString().slice(0, 10),
+      termsSummary: 'Uploaded signed agreement from Asset Registry',
+    });
+
+    await AgreementAsset.create({
+      agreementId: agreement._id,
+      assetId: asset._id,
+      isActive: true,
+      linkedAt: new Date().toISOString(),
+    });
+
+    const doc = await AgreementDocument.create({
+      agreementId: agreement._id,
+      name: req.file.originalname,
+      docKind: 'CONTRACT',
+      contentType: req.file.mimetype,
+      sizeBytes: req.file.size,
+      storageKey: req.file.filename,
+      version: 1,
+      isPrimary: true,
+      uploadedBy: req.user._id,
+    });
+
+    asset.activeAgreementId = agreement._id;
+    asset.agreementStatus = normalizeAgreementStatus('Agreement Signed') || 'Agreement Signed';
+    await asset.save();
+
+    await AgreementActivity.create({
+      agreementId: agreement._id,
+      at: new Date().toISOString(),
+      actorId: req.user._id,
+      actorName: req.user.fullName,
+      actorEmail: req.user.email,
+      action: 'DOCUMENT_UPLOADED',
+      message: `Signed agreement uploaded from Asset Registry: ${doc.name}`,
+    });
+
+    await AssetEvent.create({
+      assetId: asset._id,
+      at: new Date().toISOString(),
+      type: 'AGREEMENT_UPLOADED',
+      message: `Signed agreement ${agreement.agreementNumber} uploaded`,
+      actorId: req.user._id,
+    });
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'ASSET.AGREEMENT_UPLOAD',
+      entityType: 'Asset',
+      entityId: asset._id,
+      after: { agreementId: agreement._id, documentId: doc._id },
+      requestId: req.requestId,
+    });
+
+    res.status(201).json({
+      data: {
+        agreement,
+        document: doc,
+      },
+    });
+  })
+);
+
+/**
+ * Replace the primary signed file on a linked agreement.
+ * Previous files are kept (not deleted) for future reference.
+ */
+router.post(
+  '/:id/documents/:agreementId/replace',
+  canManageDocs,
+  agreementUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    const asset = await Asset.findOne({ _id: req.params.id, isDeleted: false });
+    if (!asset) throw new AppError('Asset not found', 404);
+    if (!req.file) throw new AppError('Choose a file to replace the agreement', 400, 'VALIDATION_ERROR');
+
+    const link = await AgreementAsset.findOne({
+      assetId: asset._id,
+      agreementId: req.params.agreementId,
+    });
+    const isActiveAgreement = String(asset.activeAgreementId || '') === String(req.params.agreementId);
+    if (!link && !isActiveAgreement) {
+      throw new AppError('Agreement is not linked to this asset', 404);
+    }
+
+    const agreement = await Agreement.findOne({
+      _id: req.params.agreementId,
+      isDeleted: false,
+    });
+    if (!agreement) throw new AppError('Agreement not found', 404);
+
+    const existing = await AgreementDocument.find({
+      agreementId: agreement._id,
+      isDeleted: false,
+    });
+    const maxVersion = existing.reduce((m, d) => Math.max(m, Number(d.version) || 1), 0);
+
+    for (const d of existing) {
+      if (d.isPrimary) {
+        d.isPrimary = false;
+        d.docKind = d.docKind === 'CONTRACT' ? 'ATTACHMENT' : d.docKind;
+        await d.save();
+      }
+    }
+
+    const doc = await AgreementDocument.create({
+      agreementId: agreement._id,
+      name: req.file.originalname,
+      docKind: 'CONTRACT',
+      contentType: req.file.mimetype,
+      sizeBytes: req.file.size,
+      storageKey: req.file.filename,
+      version: maxVersion + 1,
+      isPrimary: true,
+      uploadedBy: req.user._id,
+      replacedPrevious: true,
+    });
+
+    if (req.body.title?.trim()) {
+      agreement.title = req.body.title.trim();
+    }
+    if (!['COMPLETED', 'ACTIVE'].includes(agreement.status)) {
+      agreement.status = 'COMPLETED';
+      agreement.completedAt = agreement.completedAt || new Date().toISOString();
+    }
+    await agreement.save();
+
+    asset.activeAgreementId = agreement._id;
+    asset.agreementStatus = normalizeAgreementStatus('Agreement Signed') || 'Agreement Signed';
+    await asset.save();
+
+    await AgreementActivity.create({
+      agreementId: agreement._id,
+      at: new Date().toISOString(),
+      actorId: req.user._id,
+      actorName: req.user.fullName,
+      actorEmail: req.user.email,
+      action: 'DOCUMENT_REPLACED',
+      message: `Replaced signed agreement with ${doc.name} (v${doc.version}); prior files kept`,
+    });
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'ASSET.AGREEMENT_REPLACE',
+      entityType: 'Asset',
+      entityId: asset._id,
+      after: { agreementId: agreement._id, documentId: doc._id, version: doc.version },
+      requestId: req.requestId,
+    });
+
+    res.status(201).json({ data: { agreement, document: doc } });
   })
 );
 

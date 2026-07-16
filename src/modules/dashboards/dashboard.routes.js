@@ -109,7 +109,7 @@ router.get(
   })
 );
 
-/** Tracking board: Asset Inventory status (Qty + Value) + Asset Verification (Qty + Value) */
+/** Tracking board: Asset Registry status (Qty + Value) + Asset Verification (Qty + Value) */
 router.get(
   '/tracking',
   asyncHandler(async (req, res) => {
@@ -321,7 +321,7 @@ router.get(
         headers: ['Metric', 'Count'],
         rows: [
           ['Exported At', exportedAt],
-          ['Asset Inventory', assetCount],
+          ['Asset Registry', assetCount],
           ['Contacts', contactCount],
           ['Agreements', agreementCount],
           ['Document Templates', templateCount],

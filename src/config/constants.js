@@ -51,10 +51,18 @@ export const PERMISSIONS = {
   NOTIFICATIONS_READ: 'notifications:read',
   DEVICES_WRITE: 'devices:write',
   MASTERS_READ: 'masters:read',
-  /** In-House Camp Management */
+  /** Camp Management */
   CAMPS_READ: 'camps:read',
   CAMPS_REQUEST: 'camps:request',
   CAMPS_APPROVE: 'camps:approve',
+  /** The Request Center (Repair / Maintenance / Movement) */
+  ASSET_REQUESTS_READ: 'asset-requests:read',
+  ASSET_REQUESTS_REQUEST: 'asset-requests:request',
+  ASSET_REQUESTS_APPROVE: 'asset-requests:approve',
+  /** Logistics & Inventory */
+  LOGISTICS_READ: 'logistics:read',
+  LOGISTICS_WRITE: 'logistics:write',
+  LOGISTICS_MASTER: 'logistics:master',
 };
 
 export const ROLE_PERMISSIONS = {
@@ -64,6 +72,8 @@ export const ROLE_PERMISSIONS = {
     PERMISSIONS.ASSETS_WRITE,
     PERMISSIONS.ASSETS_TRANSITION,
     PERMISSIONS.ASSETS_VIEW_VALUE,
+    PERMISSIONS.ASSET_REQUESTS_READ,
+    PERMISSIONS.ASSET_REQUESTS_REQUEST,
     PERMISSIONS.MOVEMENTS_REQUEST,
     PERMISSIONS.AGREEMENTS_READ,
     PERMISSIONS.AGREEMENTS_WRITE,
@@ -88,6 +98,9 @@ export const ROLE_PERMISSIONS = {
   ],
   Approver: [
     PERMISSIONS.ASSETS_READ,
+    PERMISSIONS.ASSET_REQUESTS_READ,
+    PERMISSIONS.ASSET_REQUESTS_REQUEST,
+    PERMISSIONS.ASSET_REQUESTS_APPROVE,
     PERMISSIONS.MOVEMENTS_READ,
     PERMISSIONS.MOVEMENTS_REQUEST,
     PERMISSIONS.MOVEMENTS_APPROVE,

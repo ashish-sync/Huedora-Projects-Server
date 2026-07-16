@@ -7,6 +7,8 @@ export const RESOURCE_TYPES = [
   'Retainer',
   'Full Timer',
   'Service Provider',
+  'Supplier',
+  'Vendor',
 ];
 
 export const PROFESSIONS = [
@@ -32,6 +34,8 @@ export function matchPicklist(value, options) {
     'full-time': 'Full Timer',
     fulltime: 'Full Timer',
     serviceprovider: 'Service Provider',
+    supplier: 'Supplier',
+    vendor: 'Vendor',
     deitician: 'Dietician',
     dietician: 'Dietician',
     dietitian: 'Dietician',

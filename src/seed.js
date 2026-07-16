@@ -6,6 +6,7 @@ import { Role } from './modules/users/role.model.js';
 import { User } from './modules/users/user.model.js';
 import { DocumentTemplate } from './modules/templates/template.model.js';
 import { Contact } from './modules/contacts/contact.model.js';
+import { ensureLogisticsSeed } from './modules/logistics/logistics.seed.js';
 
 const LEASE_TEMPLATE = `ASSET LEASE AGREEMENT
 
@@ -207,6 +208,8 @@ export async function ensureSeed() {
       console.log('[seed] Sample contact created');
     }
   }
+
+  await ensureLogisticsSeed();
 
   return {};
 }

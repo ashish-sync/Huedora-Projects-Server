@@ -14,6 +14,13 @@ import { PHYSICAL_CHECK, FUNCTIONALITY_CHECK } from '../../config/constants.js';
 import { Notification } from '../notifications/notification.model.js';
 
 const INVITE_TTL_DAYS = 7;
+const INVITE_TTL_ALLOWED = [1, 3, 7, 14, 30];
+
+function resolveInviteTtlDays(raw) {
+  const n = Number(raw);
+  if (Number.isFinite(n) && INVITE_TTL_ALLOWED.includes(n)) return n;
+  return INVITE_TTL_DAYS;
+}
 
 export async function logVerificationActivity({
   recordId,
@@ -46,6 +53,52 @@ function photoUrl(filename) {
   return filename ? `/uploads/verifications/${filename}` : null;
 }
 
+export const PHOTO_KIND = {
+  FULL_DEVICE: 'FULL_DEVICE',
+  SERIAL_VISIBLE: 'SERIAL_VISIBLE',
+  ADDITIONAL: 'ADDITIONAL',
+};
+
+/**
+ * Normalize uploaded verification photos.
+ * Requires FULL_DEVICE + SERIAL_VISIBLE; ADDITIONAL is optional (0..n).
+ * Legacy single photoFilename still accepted as FULL_DEVICE only (rejected until serial present).
+ */
+export function buildRoundPhotos(payload = {}) {
+  const list = Array.isArray(payload.photos) ? payload.photos.filter(Boolean) : [];
+  const photos = list
+    .map((p) => ({
+      kind: String(p.kind || PHOTO_KIND.ADDITIONAL).toUpperCase(),
+      filename: p.filename || p.photoFilename || null,
+      name: p.name || p.photoName || null,
+    }))
+    .filter((p) => p.filename)
+    .map((p) => ({
+      kind: Object.values(PHOTO_KIND).includes(p.kind) ? p.kind : PHOTO_KIND.ADDITIONAL,
+      url: photoUrl(p.filename),
+      name: p.name || null,
+    }));
+
+  // Legacy single-file fallback → treat as full device only (still need serial)
+  if (!photos.length && payload.photoFilename) {
+    photos.push({
+      kind: PHOTO_KIND.FULL_DEVICE,
+      url: photoUrl(payload.photoFilename),
+      name: payload.photoName || null,
+    });
+  }
+
+  const hasFull = photos.some((p) => p.kind === PHOTO_KIND.FULL_DEVICE);
+  const hasSerial = photos.some((p) => p.kind === PHOTO_KIND.SERIAL_VISIBLE);
+  if (!hasFull) {
+    throw new AppError('Full device photo is required', 400, 'VALIDATION_ERROR');
+  }
+  if (!hasSerial) {
+    throw new AppError('Device photo with serial number visible is required', 400, 'VALIDATION_ERROR');
+  }
+  return photos;
+}
+
 export async function completeVerificationRound({
   record,
   roundNum,
@@ -66,8 +119,6 @@ export async function completeVerificationRound({
   }
 
   const {
-    photoFilename,
-    photoName,
     latitude,
     longitude,
     accuracy,
@@ -80,7 +131,10 @@ export async function completeVerificationRound({
     custodianContact,
   } = payload;
 
-  if (!photoFilename) throw new AppError('GPS photo is required', 400, 'VALIDATION_ERROR');
+  const photos = buildRoundPhotos(payload);
+  const primary =
+    photos.find((p) => p.kind === PHOTO_KIND.FULL_DEVICE) || photos[0];
+
   if (latitude == null || longitude == null || Number.isNaN(latitude) || Number.isNaN(longitude)) {
     throw new AppError('GPS latitude and longitude are required', 400, 'VALIDATION_ERROR');
   }
@@ -99,8 +153,10 @@ export async function completeVerificationRound({
     verifiedOn,
     physical: phys,
     functionality: func,
-    photoUrl: photoUrl(photoFilename),
-    photoName: photoName || null,
+    photos,
+    /** @deprecated prefer photos[]; kept for older readers */
+    photoUrl: primary.url,
+    photoName: primary.name,
     gps: {
       latitude,
       longitude,
@@ -172,7 +228,13 @@ export async function completeVerificationRound({
     action: auditAction,
     entityType: 'VerificationRecord',
     entityId: record._id,
-    after: { round: roundNum, method, gps: roundPayload.gps, photoUrl: roundPayload.photoUrl },
+    after: {
+      round: roundNum,
+      method,
+      gps: roundPayload.gps,
+      photoUrl: roundPayload.photoUrl,
+      photos: roundPayload.photos,
+    },
     requestId,
   });
 
@@ -368,7 +430,14 @@ export async function logCallAttempt({
   };
 }
 
-export async function createSelfVerifyInvite({ record, asset, roundNum, actor, requestId }) {
+export async function createSelfVerifyInvite({
+  record,
+  asset,
+  roundNum,
+  actor,
+  requestId,
+  validForDays,
+}) {
   if (!record || !asset) throw new AppError('Record and asset required', 400);
 
   const key = roundNum === 1 ? 'round1' : 'round2';
@@ -406,10 +475,11 @@ export async function createSelfVerifyInvite({ record, asset, roundNum, actor, r
     await inv.save();
   }
 
+  const ttlDays = resolveInviteTtlDays(validForDays);
   const { accessToken, shortCode } = await createUniqueInviteCodes();
   const sentAt = new Date();
   const expiresAt = new Date(sentAt);
-  expiresAt.setDate(expiresAt.getDate() + INVITE_TTL_DAYS);
+  expiresAt.setDate(expiresAt.getDate() + ttlDays);
 
   const invite = await VerificationInvite.create({
     recordId: record._id,
@@ -427,6 +497,7 @@ export async function createSelfVerifyInvite({ record, asset, roundNum, actor, r
     sentAt: sentAt.toISOString(),
     sentBy: actor?.id || actor?._id || null,
     expiresAt: expiresAt.toISOString(),
+    validForDays: ttlDays,
   });
 
   await logVerificationActivity({
@@ -437,13 +508,14 @@ export async function createSelfVerifyInvite({ record, asset, roundNum, actor, r
     round: roundNum,
     action: 'LINK_SENT',
     actor,
-    message: `Self-verification link sent to ${contact.name}`,
+    message: `Self-verification link sent to ${contact.name} (valid ${ttlDays} day${ttlDays === 1 ? '' : 's'})`,
     meta: {
       inviteId: invite._id,
       shortCode,
       holderEmail: invite.holderEmail,
       holderPhone: invite.holderPhone,
       expiresAt: invite.expiresAt,
+      validForDays: ttlDays,
     },
   });
 
@@ -453,11 +525,17 @@ export async function createSelfVerifyInvite({ record, asset, roundNum, actor, r
     action: 'VERIFICATION.LINK_SENT',
     entityType: 'VerificationRecord',
     entityId: record._id,
-    after: { round: roundNum, inviteId: invite._id, holderName: contact.name },
+    after: {
+      round: roundNum,
+      inviteId: invite._id,
+      holderName: contact.name,
+      validForDays: ttlDays,
+      expiresAt: invite.expiresAt,
+    },
     requestId,
   });
 
-  return { invite, contact };
+  return { invite, contact, validForDays: ttlDays };
 }
 
 export async function completeInviteAfterSelfVerify(invite, record) {

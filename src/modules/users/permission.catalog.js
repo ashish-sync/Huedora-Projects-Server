@@ -1,127 +1,158 @@
 import { PERMISSIONS } from '../../config/constants.js';
 
+/** Ordered action labels for the Roles UI matrix */
+export const ACCESS_ACTIONS = [
+  { id: 'all', label: 'All Access' },
+  { id: 'view', label: 'View' },
+  { id: 'add', label: 'Add' },
+  { id: 'delete', label: 'Delete' },
+  { id: 'upload', label: 'Upload' },
+  { id: 'request', label: 'Request' },
+  { id: 'approve', label: 'Approve' },
+];
+
+function withAll(actions) {
+  const union = [
+    ...new Set(
+      Object.entries(actions)
+        .filter(([k]) => k !== 'all')
+        .flatMap(([, keys]) => keys)
+    ),
+  ];
+  return { ...actions, all: union };
+}
+
 /**
  * Module access matrix for Roles & Permissions.
- * Each module exposes Read and/or Write toggles.
+ * Each module exposes a subset of actions that map to backend permission keys.
+ * Admin all Access is handled as global `*` in the UI (not a module row).
  */
 export const MODULE_ACCESS_CATALOG = [
   {
     id: 'assets',
-    label: 'Asset Inventory',
-    description: 'Assets, custodians, and lifecycle status',
-    readKey: PERMISSIONS.ASSETS_READ,
-    writeKey: PERMISSIONS.ASSETS_WRITE,
-    writeIncludes: [PERMISSIONS.ASSETS_TRANSITION, PERMISSIONS.ASSETS_VIEW_VALUE],
+    label: 'Asset Registry',
+    description: 'Ownership, lifecycle, and status tracking',
+    actions: withAll({
+      view: [PERMISSIONS.ASSETS_READ],
+      add: [
+        PERMISSIONS.ASSETS_WRITE,
+        PERMISSIONS.ASSETS_TRANSITION,
+        PERMISSIONS.ASSETS_VIEW_VALUE,
+        PERMISSIONS.DEVICES_WRITE,
+        PERMISSIONS.HCWS_WRITE,
+      ],
+      delete: [
+        PERMISSIONS.ASSETS_WRITE,
+        PERMISSIONS.ASSETS_TRANSITION,
+        PERMISSIONS.ASSETS_VIEW_VALUE,
+        PERMISSIONS.DEVICES_WRITE,
+        PERMISSIONS.HCWS_WRITE,
+      ],
+    }),
   },
   {
     id: 'agreements',
-    label: 'Document Hub',
-    description: 'Documents, contacts, signatures, and e-signature envelopes',
-    readKey: PERMISSIONS.AGREEMENTS_READ,
-    writeKey: PERMISSIONS.AGREEMENTS_WRITE,
-    writeIncludes: [PERMISSIONS.DOCUMENTS_WRITE],
+    label: 'Document Center',
+    description: 'Contracts, approvals, and digital records',
+    actions: withAll({
+      view: [PERMISSIONS.AGREEMENTS_READ],
+      add: [PERMISSIONS.AGREEMENTS_WRITE],
+      delete: [PERMISSIONS.AGREEMENTS_WRITE],
+      upload: [PERMISSIONS.DOCUMENTS_WRITE],
+    }),
   },
   {
     id: 'verifications',
     label: 'Asset Verification',
-    description: 'Campaigns and Round I/II checks',
-    readKey: PERMISSIONS.VERIFICATIONS_READ,
-    writeKey: PERMISSIONS.VERIFICATIONS_WRITE,
+    description: 'Photo, GPS, and audit checks',
+    actions: withAll({
+      view: [PERMISSIONS.VERIFICATIONS_READ],
+      add: [PERMISSIONS.VERIFICATIONS_WRITE],
+      delete: [PERMISSIONS.VERIFICATIONS_WRITE],
+    }),
   },
   {
     id: 'camps',
-    label: 'In-House Camp Management',
-    description: 'Camp requests, status tracking, and approvals',
-    readKey: PERMISSIONS.CAMPS_READ,
-    writeKey: PERMISSIONS.CAMPS_REQUEST,
-    writeIncludes: [PERMISSIONS.CAMPS_APPROVE],
+    label: 'Camp Management',
+    description: 'Schedule, approve, and monitor camps',
+    actions: withAll({
+      view: [PERMISSIONS.CAMPS_READ],
+      request: [PERMISSIONS.CAMPS_REQUEST],
+      approve: [PERMISSIONS.CAMPS_APPROVE],
+    }),
   },
   {
-    id: 'movements',
-    label: 'Movements',
-    description: 'Request and approve asset moves',
-    readKey: PERMISSIONS.MOVEMENTS_READ,
-    writeKey: PERMISSIONS.MOVEMENTS_REQUEST,
-    writeIncludes: [PERMISSIONS.MOVEMENTS_APPROVE],
+    id: 'assetRequests',
+    label: 'The Request Center',
+    description: 'Repair, maintenance, logistics, training, and reimbursement requests',
+    actions: withAll({
+      view: [
+        PERMISSIONS.ASSET_REQUESTS_READ,
+        PERMISSIONS.MOVEMENTS_READ,
+        PERMISSIONS.REPAIRS_READ,
+      ],
+      request: [
+        PERMISSIONS.ASSET_REQUESTS_REQUEST,
+        PERMISSIONS.MOVEMENTS_REQUEST,
+        PERMISSIONS.REPAIRS_WRITE,
+        PERMISSIONS.MAINTENANCE_WRITE,
+      ],
+      approve: [PERMISSIONS.ASSET_REQUESTS_APPROVE, PERMISSIONS.MOVEMENTS_APPROVE],
+    }),
   },
   {
-    id: 'repairs',
-    label: 'Repairs & maintenance',
-    description: 'Repair tickets and maintenance work',
-    readKey: PERMISSIONS.REPAIRS_READ,
-    writeKey: PERMISSIONS.REPAIRS_WRITE,
-    writeIncludes: [PERMISSIONS.MAINTENANCE_WRITE],
-  },
-  {
-    id: 'masters',
-    label: 'Catalog sync',
-    description: 'Register and update assets (catalog + inventory sync)',
-    readKey: PERMISSIONS.MASTERS_READ,
-    writeKey: PERMISSIONS.DEVICES_WRITE,
-    writeIncludes: [PERMISSIONS.HCWS_WRITE],
-  },
-  {
-    id: 'imports',
-    label: 'Excel imports',
-    description: 'Bulk data import jobs',
-    readKey: null,
-    writeKey: PERMISSIONS.IMPORTS_EXECUTE,
-  },
-  {
-    id: 'users',
-    label: 'Roles & Permissions',
-    description: 'Create users and manage roles',
-    readKey: PERMISSIONS.USERS_READ,
-    writeKey: PERMISSIONS.USERS_WRITE,
-  },
-  {
-    id: 'audit',
-    label: 'Audit log',
-    description: 'Security and change history',
-    readKey: PERMISSIONS.AUDIT_READ,
-    writeKey: null,
+    id: 'logistics',
+    label: 'Inventory & Logistics',
+    description: 'Stock, vendors, transfers, and procurement',
+    actions: {
+      ...withAll({
+        view: [PERMISSIONS.LOGISTICS_READ],
+        add: [PERMISSIONS.LOGISTICS_WRITE],
+        delete: [PERMISSIONS.LOGISTICS_WRITE],
+      }),
+      all: [
+        PERMISSIONS.LOGISTICS_READ,
+        PERMISSIONS.LOGISTICS_WRITE,
+        PERMISSIONS.LOGISTICS_MASTER,
+      ],
+    },
   },
   {
     id: 'platform',
-    label: 'Dashboards & alerts',
+    label: 'Dashboard, Alerts & Notifications',
     description: 'Home dashboards and notifications',
-    readKey: PERMISSIONS.DASHBOARDS_READ,
-    writeKey: null,
-    readIncludes: [PERMISSIONS.NOTIFICATIONS_READ],
+    actions: withAll({
+      view: [PERMISSIONS.DASHBOARDS_READ, PERMISSIONS.NOTIFICATIONS_READ],
+    }),
   },
 ];
 
 /** Flat checkbox catalog (legacy / advanced) */
 export const PERMISSION_CATALOG = MODULE_ACCESS_CATALOG.map((m) => ({
   group: m.label,
-  items: [
-    ...(m.readKey ? [{ key: m.readKey, label: 'Read', access: 'read' }] : []),
-    ...(m.writeKey ? [{ key: m.writeKey, label: 'Write', access: 'write' }] : []),
-  ],
+  items: ACCESS_ACTIONS.filter((a) => m.actions?.[a.id]?.length).map((a) => ({
+    key: `${m.id}:${a.id}`,
+    label: a.label,
+    access: a.id,
+    permissionKeys: m.actions[a.id],
+  })),
 })).concat([
   {
     group: 'Administration',
-    items: [{ key: PERMISSIONS.ALL, label: 'Full access (Admin)', access: 'all' }],
+    items: [{ key: PERMISSIONS.ALL, label: 'Admin all Access', access: 'all' }],
   },
 ]);
 
 export const ALL_PERMISSION_KEYS = [
   ...new Set(
     [
-      ...MODULE_ACCESS_CATALOG.flatMap((m) => [
-        m.readKey,
-        m.writeKey,
-        ...(m.readIncludes || []),
-        ...(m.writeIncludes || []),
-      ]),
+      ...MODULE_ACCESS_CATALOG.flatMap((m) => Object.values(m.actions || {}).flat()),
       PERMISSIONS.ALL,
-      PERMISSIONS.NOTIFICATIONS_READ,
-      PERMISSIONS.DOCUMENTS_WRITE,
-      PERMISSIONS.MAINTENANCE_WRITE,
-      PERMISSIONS.MOVEMENTS_APPROVE,
-      PERMISSIONS.HCWS_WRITE,
-      PERMISSIONS.ASSETS_TRANSITION,
-      PERMISSIONS.ASSETS_VIEW_VALUE,
+      PERMISSIONS.USERS_READ,
+      PERMISSIONS.USERS_WRITE,
+      PERMISSIONS.AUDIT_READ,
+      PERMISSIONS.IMPORTS_EXECUTE,
+      PERMISSIONS.MASTERS_READ,
     ].filter(Boolean)
   ),
 ];

@@ -30,11 +30,37 @@ const upload = multer({
   limits: { fileSize: env.uploadMaxBytes },
   fileFilter: (_req, file, cb) => {
     if (!String(file.mimetype || '').startsWith('image/')) {
-      return cb(new AppError('GPS photo must be an image', 400, 'VALIDATION_ERROR'));
+      return cb(new AppError('Verification photo must be an image', 400, 'VALIDATION_ERROR'));
     }
     cb(null, true);
   },
 });
+
+const photoUpload = upload.fields([
+  { name: 'photoFull', maxCount: 1 },
+  { name: 'photoSerial', maxCount: 1 },
+  { name: 'photosExtra', maxCount: 8 },
+]);
+
+function photosFromUpload(req) {
+  const full = req.files?.photoFull?.[0];
+  const serial = req.files?.photoSerial?.[0];
+  const extras = req.files?.photosExtra || [];
+  const photos = [];
+  if (full) {
+    photos.push({ kind: 'FULL_DEVICE', filename: full.filename, name: full.originalname });
+  }
+  if (serial) {
+    photos.push({ kind: 'SERIAL_VISIBLE', filename: serial.filename, name: serial.originalname });
+  }
+  for (const f of extras) {
+    photos.push({ kind: 'ADDITIONAL', filename: f.filename, name: f.originalname });
+  }
+  if (!photos.length && req.file) {
+    photos.push({ kind: 'FULL_DEVICE', filename: req.file.filename, name: req.file.originalname });
+  }
+  return photos;
+}
 
 const router = Router();
 
@@ -110,7 +136,7 @@ router.get(
 
 router.post(
   '/:token',
-  upload.single('photo'),
+  photoUpload,
   asyncHandler(async (req, res) => {
     const { invite, record, asset } = await resolveInvite(req.params.token);
 
@@ -127,8 +153,7 @@ router.post(
       record,
       roundNum: invite.round,
       payload: {
-        photoFilename: req.file?.filename,
-        photoName: req.file?.originalname,
+        photos: photosFromUpload(req),
         latitude: lat,
         longitude: lng,
         accuracy: req.body.accuracy,

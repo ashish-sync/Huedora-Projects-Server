@@ -40,11 +40,38 @@ const upload = multer({
   limits: { fileSize: env.uploadMaxBytes },
   fileFilter: (_req, file, cb) => {
     if (!String(file.mimetype || '').startsWith('image/')) {
-      return cb(new AppError('GPS photo must be an image', 400, 'VALIDATION_ERROR'));
+      return cb(new AppError('Verification photo must be an image', 400, 'VALIDATION_ERROR'));
     }
     cb(null, true);
   },
 });
+
+const photoUpload = upload.fields([
+  { name: 'photoFull', maxCount: 1 },
+  { name: 'photoSerial', maxCount: 1 },
+  { name: 'photosExtra', maxCount: 8 },
+]);
+
+function photosFromUpload(req) {
+  const full = req.files?.photoFull?.[0];
+  const serial = req.files?.photoSerial?.[0];
+  const extras = req.files?.photosExtra || [];
+  const photos = [];
+  if (full) {
+    photos.push({ kind: 'FULL_DEVICE', filename: full.filename, name: full.originalname });
+  }
+  if (serial) {
+    photos.push({ kind: 'SERIAL_VISIBLE', filename: serial.filename, name: serial.originalname });
+  }
+  for (const f of extras) {
+    photos.push({ kind: 'ADDITIONAL', filename: f.filename, name: f.originalname });
+  }
+  // Legacy single-file clients
+  if (!photos.length && req.file) {
+    photos.push({ kind: 'FULL_DEVICE', filename: req.file.filename, name: req.file.originalname });
+  }
+  return photos;
+}
 
 const router = Router();
 router.use(authenticate);
@@ -285,7 +312,7 @@ router.get(
 router.post(
   '/records/:id/rounds/:round',
   requirePermission(PERMISSIONS.VERIFICATIONS_WRITE),
-  upload.single('photo'),
+  photoUpload,
   asyncHandler(async (req, res) => {
     const roundNum = Number(req.params.round);
     const record = await VerificationRecord.findOne({ _id: req.params.id, isDeleted: false });
@@ -299,8 +326,7 @@ router.post(
       record,
       roundNum,
       payload: {
-        photoFilename: req.file?.filename,
-        photoName: req.file?.originalname,
+        photos: photosFromUpload(req),
         latitude: lat,
         longitude: lng,
         accuracy: req.body.accuracy,
@@ -342,6 +368,7 @@ router.post(
       roundNum,
       actor: req.user,
       requestId: req.requestId,
+      validForDays: req.body.validForDays ?? req.body.expiresInDays,
     });
 
     res.json({
@@ -352,6 +379,7 @@ router.post(
           accessToken: invite.accessToken,
           round: invite.round,
           expiresAt: invite.expiresAt,
+          validForDays: invite.validForDays,
           holderName: contact.name,
           holderEmail: contact.email,
           holderPhone: contact.contact || contact.mobile,

@@ -296,6 +296,15 @@ router.post(
     row.decidedByEmail = req.user.email || '';
     await row.save();
 
+    if (status === 'Approved') {
+      try {
+        const { syncUsageFromCamps } = await import('../logistics/logistics.usage.js');
+        await syncUsageFromCamps();
+      } catch {
+        /* non-blocking */
+      }
+    }
+
     await writeAudit({
       actorId: req.user._id,
       actorEmail: req.user.email,

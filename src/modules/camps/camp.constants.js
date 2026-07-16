@@ -1,4 +1,4 @@
-/** In-House Camp Management — process mapping & slot rules */
+/** Camp Management — process mapping & slot rules */
 
 export const CAMP_METHODS = ['Diagnostic', 'Physio & Neuro', 'BMD', 'Uroflow', 'Dietitian'];
 

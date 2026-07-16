@@ -285,7 +285,7 @@ router.get(
         d.custodianState,
         d.description,
       ]),
-      { sheetName: 'Asset Inventory' }
+      { sheetName: 'Asset Registry' }
     );
   })
 );
@@ -353,7 +353,7 @@ router.get(
       ['Custodian State options (28 states + 8 UTs)'],
       ...INDIAN_STATES_AND_UTS.map((o) => [o]),
     ]);
-    XLSX.utils.book_append_sheet(wb, ws, 'Asset Inventory');
+    XLSX.utils.book_append_sheet(wb, ws, 'Asset Registry');
     XLSX.utils.book_append_sheet(wb, help, 'Options');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader(
@@ -707,7 +707,7 @@ router.delete(
     });
     if (inUse > 0) {
       throw new AppError(
-        `Cannot delete “${device.name}” — ${inUse} Asset Inventory item${inUse === 1 ? '' : 's'} still use this asset. Retire or reassign those items first.`,
+        `Cannot delete “${device.name}” — ${inUse} Asset Registry item${inUse === 1 ? '' : 's'} still use this asset. Retire or reassign those items first.`,
         400,
         'ASSET_IN_USE'
       );
