@@ -55,11 +55,11 @@ export const PERMISSIONS = {
   CAMPS_READ: 'camps:read',
   CAMPS_REQUEST: 'camps:request',
   CAMPS_APPROVE: 'camps:approve',
-  /** The Request Center (Repair / Maintenance / Movement) */
+  /** The Request Center (Repair / Maintenance / Logistics / Training / Reimbursement) */
   ASSET_REQUESTS_READ: 'asset-requests:read',
   ASSET_REQUESTS_REQUEST: 'asset-requests:request',
   ASSET_REQUESTS_APPROVE: 'asset-requests:approve',
-  /** Logistics & Inventory */
+  /** Inventory & Logistics */
   LOGISTICS_READ: 'logistics:read',
   LOGISTICS_WRITE: 'logistics:write',
   LOGISTICS_MASTER: 'logistics:master',

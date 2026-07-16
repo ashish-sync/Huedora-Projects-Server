@@ -110,6 +110,7 @@ export const LogisticsStockItem = defineCollection('logistics_stock_items', {
   ...softDelete,
   sku: '',
   name: '',
+  productId: null,
   serialNumber: null,
   imei: null,
   batchNumber: null,
@@ -189,7 +190,7 @@ export const LogisticsInOutEntry = defineCollection('logistics_in_out_entries', 
   createdBy: '',
   createdById: null,
 
-  /** Inventory & Vendor Master links */
+  /** Inventory masters + Request Center link */
   productId: null,
   productName: '',
   programProject: '',
@@ -197,6 +198,7 @@ export const LogisticsInOutEntry = defineCollection('logistics_in_out_entries', 
   processName: '',
   supplierId: null,
   transporterId: null,
+  assetRequestId: null,
 
   /** Tracking */
   expiryApplicable: false,

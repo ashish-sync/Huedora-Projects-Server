@@ -11,8 +11,9 @@ const OUTWARD_TYPES = new Set([
   'Outward',
   'Outward from Warehouse',
   'Outward from Lotus',
-  'Transfer',
 ]);
+
+const RETURN_TYPES = new Set(['Return', 'Returns']);
 
 export function isInwardEntry(entryType) {
   const t = String(entryType || '').trim();
@@ -24,6 +25,16 @@ export function isOutwardEntry(entryType) {
   const t = String(entryType || '').trim();
   if (OUTWARD_TYPES.has(t)) return true;
   return /^outward/i.test(t);
+}
+
+export function isReturnEntry(entryType) {
+  const t = String(entryType || '').trim();
+  if (RETURN_TYPES.has(t)) return true;
+  return /^return/i.test(t);
+}
+
+export function isAdjustmentEntry(entryType) {
+  return /^stock\s*adjustment$/i.test(String(entryType || '').trim());
 }
 
 export function lineQty(row) {
@@ -60,11 +71,11 @@ export function monthKey(d) {
 }
 
 /**
- * Field-balance expiry categories (product rule):
+ * Field-balance expiry categories:
  * - Expired: past date
  * - Safe: 12+ months remaining
- * - Critical: 6–12 months remaining
- * - Caution: less than 6 months remaining
+ * - Caution: 6–12 months remaining
+ * - Critical: less than 6 months remaining
  */
 export function expiryStatus(expiryDate, asOf = new Date()) {
   if (!expiryDate) return null;
@@ -110,8 +121,8 @@ export function expiryStatus(expiryDate, asOf = new Date()) {
   const monthsLeft =
     (e.getFullYear() - today.getFullYear()) * 12 + (e.getMonth() - today.getMonth());
   if (monthsLeft >= 12) return 'Safe';
-  if (monthsLeft >= 6) return 'Critical';
-  return 'Caution';
+  if (monthsLeft >= 6) return 'Caution';
+  return 'Critical';
 }
 
 function usageQty(row, key) {
@@ -157,8 +168,8 @@ function filterRows(rows, query, labelFn = productLabel) {
     }
 
     if (inventoryType && inventoryType !== 'all') {
-      const label = labelFn(row);
-      if (label.toLowerCase() !== inventoryType.toLowerCase()) return false;
+      const cat = String(row.productType || row.inventoryType || '').trim() || labelFn(row);
+      if (cat.toLowerCase() !== inventoryType.toLowerCase()) return false;
     }
     if (hcwId && hcwId !== 'all') {
       const eid = String(row.empId || row.hcwId || '').trim();
@@ -178,8 +189,8 @@ function filterRows(rows, query, labelFn = productLabel) {
  * - Outward = all issues from warehouse
  * - Balance (warehouse) = Inward − Outward
  * - Used / Wastage = from Usage (camp-linked)
- * - Field Balance = Outward − Used − Wastage (stock still with field)
- * - Safe / Critical / Caution / Expired = Field Balance split by expiry on outward lines
+ * - Field Balance = Outward − Returns − Used − Wastage (stock still with field)
+ * - Safe / Caution / Critical / Expired = Field Balance split by expiry on outward lines
  */
 export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
   const months = new Set();
@@ -190,8 +201,8 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
     const d = parseTxnDate(row);
     const mk = monthKey(d);
     if (mk) months.add(mk);
-    const label = productLabel(row);
-    if (label && label !== 'Unknown') inventoryTypes.add(label);
+    const cat = String(row.productType || row.inventoryType || '').trim();
+    if (cat) inventoryTypes.add(cat);
     const eid = String(row.empId || '').trim();
     if (eid) {
       hcws.set(eid, String(row.employeeName || row.name || row.recipientName || eid).trim());
@@ -202,8 +213,8 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
     const d = parseTxnDate(row);
     const mk = monthKey(d);
     if (mk) months.add(mk);
-    const label = String(row.inventoryType || row.productName || '').trim();
-    if (label) inventoryTypes.add(label);
+    const cat = String(row.productType || row.inventoryType || '').trim();
+    if (cat) inventoryTypes.add(cat);
     const eid = String(row.hcwId || row.empId || '').trim();
     if (eid) {
       hcws.set(eid, String(row.hcwName || row.employeeName || eid).trim());
@@ -212,29 +223,47 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
 
   const filteredLedger = filterRows(ledgerRows, query);
   const filteredUsage = filterRows(usageRows, query, (row) =>
-    String(row.inventoryType || row.productName || '').trim() || 'Unknown'
+    String(row.productType || row.inventoryType || row.productName || '').trim() || 'Unknown'
   );
 
   let inwardQty = 0;
   let inwardAmount = 0;
   let outwardQty = 0;
   let outwardAmount = 0;
+  let returnQty = 0;
+  let returnAmount = 0;
   const expiryBuckets = { Safe: 0, Caution: 0, Critical: 0, Expired: 0 };
   const expiryBucketsAmt = { Safe: 0, Caution: 0, Critical: 0, Expired: 0 };
   const byCity = new Map();
   const byInventoryType = new Map();
+  const byHcw = new Map();
+
+  const bumpHcw = (row, qtyDelta, amtDelta) => {
+    const id = String(row.empId || row.hcwId || '').trim();
+    if (!id) return;
+    const name = String(row.employeeName || row.recipientName || row.name || row.hcwName || id).trim();
+    const agg = byHcw.get(id) || { id, name, qty: 0, amount: 0, lastAt: null };
+    agg.qty += qtyDelta;
+    agg.amount += amtDelta;
+    const at = parseTxnDate(row);
+    if (at && (!agg.lastAt || at > agg.lastAt)) agg.lastAt = at;
+    byHcw.set(id, agg);
+  };
 
   for (const row of filteredLedger) {
     const qty = lineQty(row);
     const amt = lineAmount(row);
     const city = String(row.city || '').trim() || 'Unknown';
-    const inv = productLabel(row);
+    const inv = String(row.productType || row.inventoryType || '').trim() || productLabel(row);
+    const adjDecrease =
+      isAdjustmentEntry(row.entryType) &&
+      (String(row.adjustmentType || '').toLowerCase() === 'decrease' || Number(row.qty) < 0);
 
-    if (isInwardEntry(row.entryType)) {
+    if (isInwardEntry(row.entryType) || (isAdjustmentEntry(row.entryType) && !adjDecrease)) {
       inwardQty += qty;
       inwardAmount += amt;
     }
-    if (isOutwardEntry(row.entryType)) {
+    if (isOutwardEntry(row.entryType) || adjDecrease) {
       outwardQty += qty;
       outwardAmount += amt;
 
@@ -248,6 +277,8 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
       invAgg.amount += amt;
       byInventoryType.set(inv, invAgg);
 
+      bumpHcw(row, qty, amt);
+
       const tracking = String(row.trackingType || row.trackingKind || '').toLowerCase();
       const expiryApplicable =
         row.expiryApplicable === true ||
@@ -260,6 +291,11 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
           expiryBucketsAmt[status] += amt;
         }
       }
+    }
+    if (isReturnEntry(row.entryType)) {
+      returnQty += qty;
+      returnAmount += amt;
+      bumpHcw(row, -qty, -amt);
     }
   }
 
@@ -275,6 +311,7 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
     wastageQty += waste;
     usedAmount += used * Math.abs(unit);
     wastageAmount += waste * Math.abs(unit);
+    bumpHcw(row, -(used + waste), -(used + waste) * Math.abs(unit));
   }
 
   /** Warehouse remaining */
@@ -282,12 +319,11 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
   const balanceAmount = inwardAmount - outwardAmount;
 
   /**
-   * Field stock still with HCWs:
-   * Outward − Used − Wastage
-   * (When Used/Wastage are 0, Field Balance = Outward.)
+   * Field stock still with field resources:
+   * Outward − Returns − Used − Wastage
    */
-  const fieldBalanceQty = Math.max(0, outwardQty - usedQty - wastageQty);
-  const fieldBalanceAmount = Math.max(0, outwardAmount - usedAmount - wastageAmount);
+  const fieldBalanceQty = Math.max(0, outwardQty - returnQty - usedQty - wastageQty);
+  const fieldBalanceAmount = Math.max(0, outwardAmount - returnAmount - usedAmount - wastageAmount);
 
   /** Split Field Balance across expiry buckets (scale outward expiry composition) */
   const classifiedQty =
@@ -313,7 +349,7 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
     for (const row of filteredLedger) {
       const qty = lineQty(row);
       const amt = lineAmount(row);
-      const inv = productLabel(row);
+      const inv = String(row.productType || row.inventoryType || '').trim() || productLabel(row);
       const invAgg = byInventoryType.get(inv) || { name: inv, qty: 0, amount: 0 };
       invAgg.qty += qty;
       invAgg.amount += amt;
@@ -325,6 +361,16 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
       byCity.set(city, cityAgg);
     }
   }
+
+  const hcwRows = [...byHcw.values()]
+    .map((h) => ({
+      ...h,
+      qty: Math.max(0, h.qty),
+      amount: Math.max(0, h.amount),
+      lastAt: h.lastAt ? h.lastAt.toISOString() : null,
+    }))
+    .filter((h) => h.qty > 0 || h.amount > 0)
+    .sort((a, b) => b.qty - a.qty);
 
   return {
     filters: {
@@ -339,6 +385,8 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
       inwardAmount,
       outwardQty,
       outwardAmount,
+      returnQty,
+      returnAmount,
       balanceQty,
       balanceAmount,
       usedQty,
@@ -357,14 +405,15 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
       expiredAmount,
     },
     logic: {
-      balance: 'Inward − Outward (warehouse)',
-      fieldBalance: 'Outward − Used − Wastage (still in field)',
+      balance: 'Inward − Outward (warehouse; transfers excluded)',
+      fieldBalance: 'Outward − Returns − Used − Wastage (still in field)',
       expiry:
-        'Field Balance by expiry: Safe 12+ mo · Critical 6–12 mo · Caution <6 mo · Expired',
+        'Field Balance by expiry: Safe 12+ mo · Caution 6–12 mo · Critical <6 mo · Expired',
       used: 'Usage.screenCount (camp-linked)',
       wastage: 'Usage.wastage (camp-linked)',
     },
     byCity: [...byCity.values()].sort((a, b) => b.qty - a.qty),
     byInventoryType: [...byInventoryType.values()].sort((a, b) => b.qty - a.qty),
+    byHcw: hcwRows,
   };
 }

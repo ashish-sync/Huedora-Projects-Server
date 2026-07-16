@@ -415,24 +415,6 @@ router.post(
         await asset.save();
       } else if (isLogistics(row.requestType)) {
         asset.openMovementId = row._id;
-        if (row.toContactId) {
-          const contact = await Contact.findOne({ _id: row.toContactId, isDeleted: false });
-          if (contact) {
-            asset.contactId = contact._id;
-            asset.custodianName = contact.name || asset.custodianName;
-            asset.custodianContact = contact.contact || contact.mobile || asset.custodianContact;
-            asset.custodianCity = contact.city || asset.custodianCity;
-            asset.custodianState = contact.state || asset.custodianState;
-            asset.location = {
-              ...(asset.location || {}),
-              city: contact.city || asset.location?.city,
-              state: contact.state || asset.location?.state,
-            };
-          }
-        } else if (row.toCity) {
-          asset.custodianCity = row.toCity;
-          asset.location = { ...(asset.location || {}), city: row.toCity };
-        }
         await asset.save();
       }
     }
@@ -530,6 +512,24 @@ router.post(
       }
       if (isLogistics(row.requestType) && String(asset.openMovementId) === String(row._id)) {
         asset.openMovementId = null;
+        if (row.toContactId) {
+          const contact = await Contact.findOne({ _id: row.toContactId, isDeleted: false });
+          if (contact) {
+            asset.contactId = contact._id;
+            asset.custodianName = contact.name || asset.custodianName;
+            asset.custodianContact = contact.contact || contact.mobile || asset.custodianContact;
+            asset.custodianCity = contact.city || asset.custodianCity;
+            asset.custodianState = contact.state || asset.custodianState;
+            asset.location = {
+              ...(asset.location || {}),
+              city: contact.city || asset.location?.city,
+              state: contact.state || asset.location?.state,
+            };
+          }
+        } else if (row.toCity) {
+          asset.custodianCity = row.toCity;
+          asset.location = { ...(asset.location || {}), city: row.toCity };
+        }
         await asset.save();
       }
     }

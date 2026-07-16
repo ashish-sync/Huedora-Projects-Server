@@ -282,7 +282,7 @@ registerMasterCrud({
   Model: LogisticsSupplier,
   entityType: 'LogisticsSupplier',
   searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city'],
-  listFilter: { partyType: { $ne: 'Vendor' } },
+  listFilter: { partyType: 'Supplier' },
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase(),
     name: trimStr(b.name),
@@ -630,7 +630,7 @@ function normalizeInOutBody(body, existing = null, actor = null) {
   );
   const productName = trimStr(body.productName ?? existing?.productName ?? '');
   if (!productName && !body.productId && !existing?.productId) {
-    throw new AppError('Product Name is required — pick from Product Master', 400, 'VALIDATION_ERROR');
+    throw new AppError('Product Name is required — pick from Products in Masters', 400, 'VALIDATION_ERROR');
   }
 
   const deliveryMode =
@@ -705,6 +705,7 @@ function normalizeInOutBody(body, existing = null, actor = null) {
     processName: trimStr(body.processName ?? body.process ?? existing?.processName ?? ''),
     supplierId: body.supplierId || existing?.supplierId || null,
     transporterId: body.transporterId || existing?.transporterId || null,
+    assetRequestId: body.assetRequestId || existing?.assetRequestId || null,
 
     qty,
     perUnitCost: numOr(body.perUnitCost ?? existing?.perUnitCost, 0),
@@ -786,59 +787,194 @@ function normalizeInOutBody(body, existing = null, actor = null) {
   return row;
 }
 
-async function applyInventoryUpdate(txn, actor) {
-  const ledger = entryTypeLedgerDefaults(txn.entryType, txn.qty, txn.adjustmentType);
-  const itemName = displayItemName(txn);
-  const warehouseId =
-    txn.entryType === 'Transfer'
-      ? txn.destinationWarehouseId || txn.warehouseId
-      : txn.warehouseId;
+async function enrichBodyFromProduct(body) {
+  if (!body?.productId) return body;
+  const product = await LogisticsProduct.findOne({ _id: body.productId, isDeleted: false });
+  if (!product) return body;
+  return {
+    ...body,
+    productName: trimStr(body.productName) || product.name,
+    productType: trimStr(body.productType) || product.productType,
+    inventoryType: trimStr(body.inventoryType) || product.productType,
+    sku: trimStr(body.sku) || product.sku || '',
+    partNumber: trimStr(body.partNumber) || product.partNumber || '',
+    brand: trimStr(body.brand) || product.brand || '',
+    model: trimStr(body.model) || product.model || '',
+    programProject: trimStr(body.programProject) || product.programProject || '',
+    perUnitCost:
+      body.perUnitCost !== undefined && body.perUnitCost !== ''
+        ? body.perUnitCost
+        : product.defaultPerUnitCost || 0,
+    trackingKind: trimStr(body.trackingKind) || product.trackingKind || body.trackingKind,
+    expiryApplicable:
+      body.expiryApplicable !== undefined && body.expiryApplicable !== ''
+        ? body.expiryApplicable
+        : product.expiryApplicable,
+  };
+}
 
-  let stockItem = null;
+async function findStockForTxn(txn, warehouseId) {
   if (txn.serialNumber) {
-    stockItem = await LogisticsStockItem.findOne({
+    const bySerial = await LogisticsStockItem.findOne({
       serialNumber: txn.serialNumber,
       isDeleted: false,
     });
+    if (bySerial) return bySerial;
   }
-  if (!stockItem && txn.sku && txn.batchNumber) {
-    stockItem = await LogisticsStockItem.findOne({
-      sku: txn.sku,
+
+  const wh = warehouseId || null;
+  const base = { isDeleted: false };
+  if (wh) base.warehouseId = wh;
+
+  if (txn.productId) {
+    const withBatch = txn.batchNumber
+      ? await LogisticsStockItem.findOne({ ...base, productId: txn.productId, batchNumber: txn.batchNumber })
+      : null;
+    if (withBatch) return withBatch;
+    const byProduct = await LogisticsStockItem.findOne({ ...base, productId: txn.productId });
+    if (byProduct) return byProduct;
+  }
+
+  if (txn.sku) {
+    const withBatch = txn.batchNumber
+      ? await LogisticsStockItem.findOne({ ...base, sku: txn.sku, batchNumber: txn.batchNumber })
+      : null;
+    if (withBatch) return withBatch;
+    const bySku = await LogisticsStockItem.findOne({ ...base, sku: txn.sku });
+    if (bySku) return bySku;
+  }
+
+  const name = displayItemName(txn);
+  if (txn.batchNumber) {
+    const byNameBatch = await LogisticsStockItem.findOne({
+      ...base,
+      name,
       batchNumber: txn.batchNumber,
-      warehouseId: warehouseId || undefined,
-      isDeleted: false,
     });
+    if (byNameBatch) return byNameBatch;
+  }
+  return LogisticsStockItem.findOne({ ...base, name });
+}
+
+async function applyQtyDeltaToStock(txn, warehouseId, quantityDelta, actor) {
+  const itemName = displayItemName(txn);
+  let stockItem = await findStockForTxn(txn, warehouseId);
+
+  if (quantityDelta < 0) {
+    if (!stockItem) {
+      throw new AppError(
+        `No stock on hand for “${itemName}” in the selected warehouse`,
+        400,
+        'INSUFFICIENT_STOCK'
+      );
+    }
+    const nextQty = (Number(stockItem.quantity) || 0) + quantityDelta;
+    if (nextQty < 0) {
+      throw new AppError(
+        `Insufficient stock for “${itemName}” (on hand ${stockItem.quantity})`,
+        400,
+        'INSUFFICIENT_STOCK'
+      );
+    }
+    stockItem.quantity = nextQty;
+    stockItem.status = txn.status || stockItem.status;
+    stockItem.locationId = txn.toLocationId || stockItem.locationId;
+    stockItem.unitValue = txn.perUnitCost || stockItem.unitValue;
+    stockItem.productType = txn.productType || stockItem.productType;
+    if (txn.productId) stockItem.productId = txn.productId;
+    if (txn.expiryDate) stockItem.expiryDate = txn.expiryDate;
+    await stockItem.save();
+    return stockItem;
   }
 
   if (stockItem) {
-    const nextQty = Math.max(0, (Number(stockItem.quantity) || 0) + ledger.quantityDelta);
-    stockItem.quantity = nextQty;
+    stockItem.quantity = (Number(stockItem.quantity) || 0) + quantityDelta;
     stockItem.status = txn.status || stockItem.status;
     stockItem.warehouseId = warehouseId || stockItem.warehouseId;
     stockItem.locationId = txn.toLocationId || stockItem.locationId;
     stockItem.unitValue = txn.perUnitCost || stockItem.unitValue;
-    stockItem.productType = txn.productType;
+    stockItem.productType = txn.productType || stockItem.productType;
+    if (txn.productId) stockItem.productId = txn.productId;
+    if (txn.sku) stockItem.sku = txn.sku;
     if (txn.expiryDate) stockItem.expiryDate = txn.expiryDate;
     await stockItem.save();
-  } else if (ledger.quantityDelta > 0 || txn.entryType === 'Inward') {
-    stockItem = await LogisticsStockItem.create({
-      sku: txn.sku || txn.partNumber || txn.uniqueKey,
-      name: itemName,
-      serialNumber: txn.serialNumber || null,
-      imei: txn.imei || null,
-      batchNumber: txn.batchNumber || null,
-      warehouseId: warehouseId || null,
-      locationId: txn.toLocationId || txn.fromLocationId || null,
-      productType: txn.productType,
-      status: txn.status || 'Available',
-      quantity: Math.abs(ledger.quantityDelta) || txn.qty || 1,
-      unitValue: txn.perUnitCost || 0,
-      expiryDate: txn.expiryDate || '',
-      dhubAssetId: txn.assetId || null,
-      remarks: txn.remark || '',
-      isActive: true,
-    });
+    return stockItem;
   }
+
+  return LogisticsStockItem.create({
+    sku: txn.sku || txn.partNumber || '',
+    productId: txn.productId || null,
+    name: itemName,
+    serialNumber: txn.serialNumber || null,
+    imei: txn.imei || null,
+    batchNumber: txn.batchNumber || null,
+    warehouseId: warehouseId || null,
+    locationId: txn.toLocationId || txn.fromLocationId || null,
+    productType: txn.productType,
+    status: txn.status || 'Available',
+    quantity: Math.abs(quantityDelta) || txn.qty || 1,
+    unitValue: txn.perUnitCost || 0,
+    expiryDate: txn.expiryDate || '',
+    dhubAssetId: txn.assetId || null,
+    remarks: txn.remark || '',
+    isActive: true,
+  });
+}
+
+async function applyInventoryUpdate(txn, actor) {
+  const ledger = entryTypeLedgerDefaults(txn.entryType, txn.qty, txn.adjustmentType);
+  const itemName = displayItemName(txn);
+
+  let stockItem = null;
+  let warehouseId = txn.warehouseId;
+
+  if (txn.entryType === 'Transfer') {
+    const sourceId = txn.sourceWarehouseId || txn.warehouseId;
+    const destId = txn.destinationWarehouseId;
+    if (!sourceId || !destId) {
+      throw new AppError('Transfer requires source and destination warehouses', 400, 'VALIDATION_ERROR');
+    }
+    const abs = Math.abs(Number(txn.qty) || 0);
+    await applyQtyDeltaToStock(txn, sourceId, -abs, actor);
+    stockItem = await applyQtyDeltaToStock(txn, destId, abs, actor);
+    warehouseId = destId;
+
+    await LogisticsLedgerEntry.create({
+      stockItemId: stockItem?._id || null,
+      movementTypeCode: 'TRF_OUT',
+      direction: 'OUT',
+      quantityDelta: -abs,
+      warehouseId: sourceId,
+      locationId: txn.fromLocationId || null,
+      fromWarehouseId: sourceId,
+      toWarehouseId: destId,
+      referenceType: 'IN_OUT',
+      referenceId: txn._id,
+      remarks: txn.remark || `Transfer · ${itemName}`,
+      actorId: actor?._id || null,
+      actorEmail: actor?.email || null,
+      at: txn.transactionDateTime || txn.transactionDate || new Date().toISOString(),
+    });
+    await LogisticsLedgerEntry.create({
+      stockItemId: stockItem?._id || null,
+      movementTypeCode: 'TRF_IN',
+      direction: 'IN',
+      quantityDelta: abs,
+      warehouseId: destId,
+      locationId: txn.toLocationId || null,
+      fromWarehouseId: sourceId,
+      toWarehouseId: destId,
+      referenceType: 'IN_OUT',
+      referenceId: txn._id,
+      remarks: txn.remark || `Transfer · ${itemName}`,
+      actorId: actor?._id || null,
+      actorEmail: actor?.email || null,
+      at: txn.transactionDateTime || txn.transactionDate || new Date().toISOString(),
+    });
+    return stockItem;
+  }
+
+  stockItem = await applyQtyDeltaToStock(txn, warehouseId, ledger.quantityDelta, actor);
 
   await LogisticsLedgerEntry.create({
     stockItemId: stockItem?._id || null,
@@ -867,7 +1003,15 @@ router.get(
   asyncHandler(async (req, res) => {
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
-    if (req.query.entryType) {
+    if (req.query.entryTypes) {
+      const parts = String(req.query.entryTypes)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const types = [...new Set(parts.flatMap((t) => entryTypeFilterValues(t)))];
+      if (types.length === 1) filter.entryType = types[0];
+      else if (types.length > 1) filter.entryType = { $in: types };
+    } else if (req.query.entryType) {
       const types = entryTypeFilterValues(req.query.entryType);
       filter.entryType = types.length > 1 ? { $in: types } : types[0];
     }
@@ -916,11 +1060,8 @@ router.post(
   },
   asyncHandler(async (req, res) => {
     const filesMeta = attachmentsFromUpload(req, null);
-    const body = normalizeInOutBody(
-      { ...req.body, ...filesMeta },
-      null,
-      req.user
-    );
+    const enriched = await enrichBodyFromProduct({ ...req.body, ...filesMeta });
+    const body = normalizeInOutBody(enriched, null, req.user);
     const clash = await LogisticsInOutEntry.findOne({
       uniqueKey: body.uniqueKey,
       isDeleted: false,
@@ -1071,23 +1212,29 @@ router.get(
     await syncUsageFromCamps();
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
+    const andParts = [];
     if (req.query.hcw) {
       const re = new RegExp(String(req.query.hcw), 'i');
-      filter.$or = [{ hcwName: re }, { hcwId: re }];
+      andParts.push({ $or: [{ hcwName: re }, { hcwId: re }] });
     }
     if (req.query.location || req.query.city) {
       filter.machineCity = new RegExp(String(req.query.location || req.query.city), 'i');
     }
     if (req.query.q) {
       const re = new RegExp(String(req.query.q), 'i');
-      filter.$or = [
-        ...(filter.$or || []),
-        { inventoryType: re },
-        { processName: re },
-        { doctorName: re },
-        { clientName: re },
-      ];
+      andParts.push({
+        $or: [
+          { inventoryType: re },
+          { processName: re },
+          { doctorName: re },
+          { clientName: re },
+          { hcwName: re },
+          { productName: re },
+        ],
+      });
     }
+    if (andParts.length === 1) Object.assign(filter, andParts[0]);
+    else if (andParts.length > 1) filter.$and = andParts;
     const [data, total] = await Promise.all([
       LogisticsUsageEntry.find(filter)
         .sort(sort || '-campDate')
@@ -1221,14 +1368,14 @@ router.get(
         { batchNumber: re },
       ];
     }
-    const [data, total, all] = await Promise.all([
+    const [data, total, filteredAll] = await Promise.all([
       LogisticsStockItem.find(filter).sort(sort || '-updatedAt').skip(skip).limit(limit),
       LogisticsStockItem.countDocuments(filter),
-      LogisticsStockItem.find({ isDeleted: false }),
+      LogisticsStockItem.find(filter),
     ]);
     res.json({
       ...paginated(data, total, page, limit),
-      summary: computeKpis(all),
+      summary: computeKpis(filteredAll),
     });
   })
 );
