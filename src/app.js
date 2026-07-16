@@ -85,13 +85,14 @@ export function createApp() {
   app.use('/api/v1/verifications', verificationRoutes);
   app.use('/api/v1/self-verify', selfVerifyRoutes);
   app.use('/api/v1/movements', movementRoutes);
-  app.use('/api/v1', repairRoutes);
   app.use('/api/v1/documents', documentRoutes);
   app.use('/api/v1/notifications', notificationRoutes);
   app.use('/api/v1/dashboards', dashboardRoutes);
   app.use('/api/v1/audit-logs', auditRoutes);
   app.use('/api/v1/imports', importRoutes);
   app.use('/api/v1/camps', campRoutes);
+  // Mount last: this router applies auth to its own paths under /api/v1 (e.g. /repairs)
+  app.use('/api/v1', repairRoutes);
 
   app.use(notFound);
   app.use(errorHandler);
