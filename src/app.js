@@ -92,6 +92,7 @@ export function createApp() {
   app.use('/api/v1/dashboards', dashboardRoutes);
   app.use('/api/v1/audit-logs', auditRoutes);
   app.use('/api/v1/imports', importRoutes);
+  // Keep feature routers ahead of the catch-all repair router so these API paths resolve.
   app.use('/api/v1/camps', campRoutes);
   app.use('/api/v1/asset-requests', assetRequestRoutes);
   app.use('/api/v1/logistics', logisticsRoutes);
