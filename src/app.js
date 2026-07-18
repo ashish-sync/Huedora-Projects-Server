@@ -21,7 +21,7 @@ import recipientRoutes from './modules/agreements/recipient.routes.js';
 import verificationRoutes from './modules/verifications/verification.routes.js';
 import selfVerifyRoutes from './modules/verifications/selfVerify.routes.js';
 import movementRoutes from './modules/movements/movement.routes.js';
-import repairRoutes from './modules/repairs/repair.routes.js';
+import { repairRoutes, maintenanceRoutes } from './modules/repairs/repair.routes.js';
 import documentRoutes from './modules/documents/document.routes.js';
 import notificationRoutes from './modules/notifications/notification.routes.js';
 import dashboardRoutes from './modules/dashboards/dashboard.routes.js';
@@ -99,12 +99,12 @@ export function createApp() {
   app.use('/api/v1/dashboards', dashboardRoutes);
   app.use('/api/v1/audit-logs', auditRoutes);
   app.use('/api/v1/imports', importRoutes);
-  // Keep feature routers ahead of the catch-all repair router so these API paths resolve.
   app.use('/api/v1/camps', campRoutes);
   app.use('/api/v1/asset-requests', assetRequestRoutes);
   app.use('/api/v1/logistics', logisticsRoutes);
-  // Mount last: this router applies auth to its own paths under /api/v1 (e.g. /repairs)
-  app.use('/api/v1', repairRoutes);
+  // Scoped mounts only — never mount repairs as a /api/v1 catch-all (it hid missing routes).
+  app.use('/api/v1/repairs', repairRoutes);
+  app.use('/api/v1/maintenance', maintenanceRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

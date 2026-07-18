@@ -9,11 +9,12 @@ import { Asset } from '../assets/asset.model.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
 
-const router = Router();
-router.use(authenticate);
+/** Mounted at /api/v1/repairs — do not mount under /api/v1 catch-all. */
+export const repairRoutes = Router();
+repairRoutes.use(authenticate);
 
-router.get(
-  '/repairs/export',
+repairRoutes.get(
+  '/export',
   asyncHandler(async (_req, res) => {
     const rows = await RepairTicket.find({ isDeleted: false })
       .populate('assetId', 'assetTag serialNumber deviceNameSnapshot')
@@ -46,8 +47,8 @@ router.get(
   })
 );
 
-router.get(
-  '/repairs',
+repairRoutes.get(
+  '/',
   asyncHandler(async (req, res) => {
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
@@ -60,8 +61,8 @@ router.get(
   })
 );
 
-router.post(
-  '/repairs',
+repairRoutes.post(
+  '/',
   requirePermission(PERMISSIONS.REPAIRS_WRITE),
   asyncHandler(async (req, res) => {
     if (!req.body.assetId || !req.body.faultDescription) {
@@ -95,8 +96,8 @@ router.post(
   })
 );
 
-router.post(
-  '/repairs/:id/status',
+repairRoutes.post(
+  '/:id/status',
   requirePermission(PERMISSIONS.REPAIRS_WRITE),
   asyncHandler(async (req, res) => {
     const ticket = await RepairTicket.findOne({ _id: req.params.id, isDeleted: false });
@@ -128,8 +129,12 @@ router.post(
   })
 );
 
-router.get(
-  '/maintenance',
+/** Mounted at /api/v1/maintenance — do not mount under /api/v1 catch-all. */
+export const maintenanceRoutes = Router();
+maintenanceRoutes.use(authenticate);
+
+maintenanceRoutes.get(
+  '/',
   asyncHandler(async (req, res) => {
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
@@ -146,8 +151,8 @@ router.get(
   })
 );
 
-router.post(
-  '/maintenance',
+maintenanceRoutes.post(
+  '/',
   requirePermission(PERMISSIONS.MAINTENANCE_WRITE),
   asyncHandler(async (req, res) => {
     if (!req.body.assetId) throw new AppError('assetId required', 400, 'VALIDATION_ERROR');
@@ -170,8 +175,8 @@ router.post(
   })
 );
 
-router.post(
-  '/maintenance/:id/status',
+maintenanceRoutes.post(
+  '/:id/status',
   requirePermission(PERMISSIONS.MAINTENANCE_WRITE),
   asyncHandler(async (req, res) => {
     const order = await MaintenanceOrder.findOne({ _id: req.params.id, isDeleted: false });
@@ -196,5 +201,3 @@ router.post(
     res.json({ data: order });
   })
 );
-
-export default router;
