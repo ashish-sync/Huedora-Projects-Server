@@ -17,6 +17,7 @@ import {
 } from './agreement.model.js';
 import { Asset } from '../assets/asset.model.js';
 import { Contact } from '../contacts/contact.model.js';
+import { resolveOrCreateContact } from '../contacts/contactIdentity.js';
 import { DocumentTemplate } from '../templates/template.model.js';
 import { SignatureMaster } from '../signatures/signature.model.js';
 import { previewStore } from '../templates/previewStore.js';
@@ -297,26 +298,21 @@ router.post(
       if (!email && !mobile) {
         throw new AppError('Recipient email or contact is required for delivery', 400, 'VALIDATION_ERROR');
       }
-      if (email) {
-        contact = await Contact.findOne({
-          email: String(email).toLowerCase().trim(),
-          isDeleted: false,
-        });
-      }
-      if (!contact) {
-        contact = await Contact.create({
+      const resolved = await resolveOrCreateContact(
+        {
           name: String(name).trim(),
-          email: email ? String(email).toLowerCase().trim() : '',
-          contact: mobile ? String(mobile).trim() : '',
-          mobile: mobile ? String(mobile).trim() : '',
+          email,
+          contact: mobile,
+          mobile,
           resourceType: String(resourceType).trim(),
           profession: String(profession).trim(),
           state: body.contactState || body.state || '',
           city: body.contactCity || body.city || '',
-          createdBy: req.user._id,
-          updatedBy: req.user._id,
-        });
-      }
+          district: body.contactDistrict || body.district || '',
+        },
+        req.user._id
+      );
+      contact = resolved.contact;
     }
 
     const partyName = contact?.name || body.partyName;

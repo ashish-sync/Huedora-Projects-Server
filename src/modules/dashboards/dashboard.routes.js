@@ -11,7 +11,7 @@ import { DocumentTemplate } from '../templates/template.model.js';
 import { SignatureMaster } from '../signatures/signature.model.js';
 import { Role } from '../users/role.model.js';
 import { User } from '../users/user.model.js';
-import { sendMultiSheetExcel } from '../../utils/excelExport.js';
+import { sendExcel, sendMultiSheetExcel } from '../../utils/excelExport.js';
 import {
   ASSET_STATUS_OPTIONS,
   AGREEMENT_SIGNED_EQUIVALENTS,
@@ -21,10 +21,47 @@ import {
   periodKeyFromDate,
 } from '../verifications/verification.condition.js';
 import { VerificationCampaign, VerificationRecord } from '../verifications/verification.model.js';
+import { listReviewModulesForUser, runModuleReview } from './moduleReview.js';
 
 const router = Router();
 router.use(authenticate);
 router.use(requirePermission(PERMISSIONS.DASHBOARDS_READ));
+
+/** Catalog of modules the current user can review */
+router.get(
+  '/modules',
+  asyncHandler(async (req, res) => {
+    res.json({ data: listReviewModulesForUser(req) });
+  })
+);
+
+/**
+ * Module review: select module + date range → summary KPIs + rows.
+ * Query: module (required), from, to (YYYY-MM-DD)
+ */
+router.get(
+  '/module-review',
+  asyncHandler(async (req, res) => {
+    const data = await runModuleReview(req);
+    res.json({ data });
+  })
+);
+
+router.get(
+  '/module-review/export',
+  asyncHandler(async (req, res) => {
+    const data = await runModuleReview(req);
+    const headers = (data.columns || []).map((c) => c.label);
+    const keys = (data.columns || []).map((c) => c.key);
+    const rows = (data.rows || []).map((row) => keys.map((k) => row[k] ?? ''));
+    const safeName = String(data.moduleLabel || data.module || 'Module')
+      .replace(/[^\w.\- ]+/g, '_')
+      .replace(/\s+/g, '_');
+    sendExcel(res, `TYLO_One_${safeName}_Review.xlsx`, headers, rows, {
+      sheetName: data.moduleLabel || 'Review',
+    });
+  })
+);
 
 async function ensureCampaign(periodKey, userId) {
   let campaign = await VerificationCampaign.findOne({ periodKey, isDeleted: false });

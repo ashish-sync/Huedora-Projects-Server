@@ -7,6 +7,7 @@ import { User } from './modules/users/user.model.js';
 import { DocumentTemplate } from './modules/templates/template.model.js';
 import { Contact } from './modules/contacts/contact.model.js';
 import { ensureLogisticsSeed } from './modules/logistics/logistics.seed.js';
+import { ensureGeoSeed } from './modules/geo/geo.seed.js';
 
 const LEASE_TEMPLATE = `ASSET LEASE AGREEMENT
 
@@ -115,12 +116,19 @@ export async function ensureSeed() {
 
   // First-run admin only when credentials are explicitly provided
   if (canBootstrapAdmin() && adminRole) {
-    const existing = await User.findOne({ email: env.bootstrapAdminEmail });
+    const bootstrapEmail = env.bootstrapAdminEmail;
+    const legacyEmail = bootstrapEmail.endsWith('@tylo.local')
+      ? `${bootstrapEmail.slice(0, -'@tylo.local'.length)}@dhub.local`
+      : null;
+    let existing =
+      (await User.findOne({ email: bootstrapEmail })) ||
+      (legacyEmail ? await User.findOne({ email: legacyEmail }) : null);
+
     if (!existing) {
       const passwordHash = await bcrypt.hash(env.bootstrapAdminPassword, 12);
       await User.create({
-        email: env.bootstrapAdminEmail,
-        username: env.bootstrapAdminEmail.split('@')[0] || 'admin',
+        email: bootstrapEmail,
+        username: bootstrapEmail.split('@')[0] || 'admin',
         fullName: env.bootstrapAdminName || 'Administrator',
         passwordHash,
         roleIds: [adminRole._id],
@@ -128,20 +136,27 @@ export async function ensureSeed() {
         failedLoginAttempts: 0,
         lockUntil: null,
       });
-      console.log(`[seed] Bootstrap admin created: ${env.bootstrapAdminEmail}`);
+      console.log(`[seed] Bootstrap admin created: ${bootstrapEmail}`);
     } else if (env.bootstrapAdminReset) {
       // One-shot recovery: set BOOTSTRAP_ADMIN_RESET=true, redeploy, then turn it off.
       existing.passwordHash = await bcrypt.hash(env.bootstrapAdminPassword, 12);
+      existing.email = bootstrapEmail;
       existing.isActive = true;
       existing.isDeleted = false;
       existing.failedLoginAttempts = 0;
       existing.lockUntil = null;
       existing.passwordChangedAt = new Date();
+      existing.tokenVersion = (existing.tokenVersion || 0) + 1;
       if (!existing.roleIds?.length) existing.roleIds = [adminRole._id];
       await existing.save();
       console.warn(
-        `[seed] Bootstrap admin password RESET for ${env.bootstrapAdminEmail}: set BOOTSTRAP_ADMIN_RESET=false now`
+        `[seed] Bootstrap admin password RESET for ${bootstrapEmail}: set BOOTSTRAP_ADMIN_RESET=false now`
       );
+    } else if (existing.email !== bootstrapEmail && legacyEmail && existing.email === legacyEmail) {
+      // Quietly migrate leftover rebrand email without changing password
+      existing.email = bootstrapEmail;
+      await existing.save();
+      console.log(`[seed] Migrated bootstrap admin email ${legacyEmail} → ${bootstrapEmail}`);
     }
   } else {
     const anyUser = await User.countDocuments({ isDeleted: false });
@@ -225,6 +240,7 @@ export async function ensureSeed() {
   }
 
   await ensureLogisticsSeed();
+  await ensureGeoSeed();
 
   return {};
 }

@@ -9,6 +9,7 @@ import { Asset } from '../assets/asset.model.js';
 import { createAsset } from '../assets/asset.service.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
+import { notifyImportFailures } from '../imports/importErrorReport.js';
 import {
   ASSET_TYPE_OPTIONS,
   AGREEMENT_STATUS_OPTIONS,
@@ -304,7 +305,7 @@ router.get(
         125000,
         '07/2026',
         'Not Initiated',
-        'TCPL - Mumbai Warehouse',
+        'TPCL - Warehouse',
         'Ravi Kumar',
         '9876543210',
         'Mumbai',
@@ -502,6 +503,19 @@ router.post(
       requestId: req.requestId,
     });
 
+    let errorReport = null;
+    if (errors.length) {
+      errorReport = await notifyImportFailures({
+        userId: req.user._id,
+        importType: 'ASSET_MASTER',
+        sourceFileName: req.file.originalname,
+        totalRows: rows.length,
+        successRows: created.length,
+        errors,
+        entityType: 'DeviceMaster',
+      });
+    }
+
     res.json({
       data: {
         totalRows: rows.length,
@@ -510,6 +524,13 @@ router.post(
         errorRows: errors.length,
         rows: created,
         errors: errors.slice(0, 200),
+        errorReport: errorReport
+          ? {
+              fileName: errorReport.fileName,
+              downloadPath: errorReport.downloadPath,
+              notificationId: errorReport.notificationId,
+            }
+          : null,
       },
     });
   })

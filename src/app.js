@@ -31,6 +31,7 @@ import campRoutes from './modules/camps/camp.routes.js';
 import assetRequestRoutes from './modules/assetRequests/assetRequest.routes.js';
 import requestUploadRoutes from './modules/assetRequests/requestUpload.routes.js';
 import logisticsRoutes from './modules/logistics/logistics.routes.js';
+import geoRoutes from './modules/geo/geo.routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsRoot = path.resolve(__dirname, '../uploads');
@@ -108,6 +109,7 @@ export function createApp() {
   app.use('/api/v1/camps', campRoutes);
   app.use('/api/v1/asset-requests', assetRequestRoutes);
   app.use('/api/v1/logistics', logisticsRoutes);
+  app.use('/api/v1/geo', geoRoutes);
   // Scoped mounts only. never mount repairs as a /api/v1 catch-all (it hid missing routes).
   app.use('/api/v1/repairs', repairRoutes);
   app.use('/api/v1/maintenance', maintenanceRoutes);

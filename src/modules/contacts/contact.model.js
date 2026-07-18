@@ -1,6 +1,7 @@
 import { defineCollection } from '../../store/filedb.js';
 import { softDelete } from '../common/counter.model.js';
 import { matchPicklist, RESOURCE_TYPES, PROFESSIONS } from './contact.constants.js';
+import { normalizeEmail } from '../../utils/identityNormalize.js';
 
 /** Contact directory fields (Excel + form parity) */
 export const Contact = defineCollection('contacts', {
@@ -17,14 +18,17 @@ export const Contact = defineCollection('contacts', {
   address: '',
   organization: '',
   notes: '',
+  district: '',
+  stateId: null,
+  districtId: null,
+  cityId: null,
 });
 
 export function normalizeContactPayload(body = {}) {
   const contact = String(body.contact || body.mobile || body.Contact || '').trim();
-  const email = body.email || body.Email || '';
   return {
     name: String(body.name || body.Name || '').trim(),
-    email: email ? String(email).toLowerCase().trim() : '',
+    email: normalizeEmail(body.email || body.Email || ''),
     resourceType: matchPicklist(
       body.resourceType || body['Resource Type'] || body.resource_type || '',
       RESOURCE_TYPES
@@ -40,5 +44,9 @@ export function normalizeContactPayload(body = {}) {
     address: String(body.address || body.Address || '').trim(),
     organization: String(body.organization || '').trim(),
     notes: String(body.notes || '').trim(),
+    district: String(body.district || body.District || '').trim(),
+    stateId: body.stateId || null,
+    districtId: body.districtId || null,
+    cityId: body.cityId || null,
   };
 }

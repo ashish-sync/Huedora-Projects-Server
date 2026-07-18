@@ -17,12 +17,10 @@ export const ASSET_STATUS_OPTIONS = AGREEMENT_STATUS_OPTIONS;
 /** Sheet label: Asset Custody */
 export const DEVICE_CUSTODY_OPTIONS = [
   'Client / Rented',
-  'TCPL - Mumbai Warehouse',
-  'TCPL - Hyderabad Warehouse',
+  'TCPL - Head Office',
+  'TPCL - Warehouse',
   'Individual',
   'Service Provider',
-  'TCPL - HO',
-  'TCPL - Delhi Warehouse',
 ];
 
 export const ASSET_CUSTODY_OPTIONS = DEVICE_CUSTODY_OPTIONS;
@@ -101,6 +99,16 @@ export function isAgreementSignedStatus(raw) {
 export function normalizeDeviceCustody(raw) {
   const v = String(raw || '').trim();
   if (!v) return null;
+  const aliases = {
+    'tcpl - mumbai warehouse': 'TPCL - Warehouse',
+    'tcpl - hyderabad warehouse': 'TPCL - Warehouse',
+    'tcpl - delhi warehouse': 'TPCL - Warehouse',
+    'tcpl - ho': 'TCPL - Head Office',
+    'tcpl - head office': 'TCPL - Head Office',
+    'tpcl - warehouse': 'TPCL - Warehouse',
+  };
+  const alias = aliases[v.toLowerCase()];
+  if (alias) return alias;
   const hit = DEVICE_CUSTODY_OPTIONS.find((o) => o.toLowerCase() === v.toLowerCase());
   return hit || null;
 }

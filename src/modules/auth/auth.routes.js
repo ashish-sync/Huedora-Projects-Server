@@ -111,4 +111,20 @@ router.post(
   })
 );
 
+router.post(
+  '/reset-password',
+  loginLimiter,
+  asyncHandler(async (req, res) => {
+    await authService.resetPasswordWithCurrent({
+      email: req.body.email,
+      currentPassword: req.body.currentPassword,
+      newPassword: req.body.newPassword,
+      requestId: req.requestId,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+    res.json({ data: { ok: true } });
+  })
+);
+
 export default router;

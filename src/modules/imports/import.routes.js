@@ -6,6 +6,7 @@ import { asyncHandler, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { ImportJob } from './importJob.model.js';
 import { Contact } from '../contacts/contact.model.js';
+import { findContactByIdentity, resolveOrCreateContact } from '../contacts/contactIdentity.js';
 import { DeviceMaster } from '../devices/device.model.js';
 import { Asset } from '../assets/asset.model.js';
 import { createAsset } from '../assets/asset.service.js';
@@ -18,6 +19,8 @@ import {
   VerificationRecord,
 } from '../verifications/verification.model.js';
 import { writeAudit } from '../../utils/audit.js';
+import { notifyImportFailures } from './importErrorReport.js';
+import { normalizeEmail, normalizePhone } from '../../utils/identityNormalize.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const router = Router();
@@ -67,33 +70,41 @@ async function processInventory(rows, mode, user) {
       }
 
       if (mode === 'COMMIT') {
-        const email = String(normKey(row, ['Email', 'email'])).trim().toLowerCase();
-        const phone = String(normKey(row, ['HCW Contact', 'Contact', 'Phone', 'Mobile'])).trim();
+        const email =
+          normalizeEmail(normKey(row, ['Email', 'email'])) ||
+          (String(custodianKey).includes('@') ? normalizeEmail(custodianKey) : '');
+        const phone =
+          String(normKey(row, ['HCW Contact', 'Contact', 'Phone', 'Mobile'])).trim() ||
+          (normalizePhone(custodianKey) ? String(custodianKey).trim() : '');
         const city = String(normKey(row, ['City'])).trim();
 
-        let contact = null;
-        if (email) contact = await Contact.findOne({ email, isDeleted: false });
-        if (!contact && custodianKey.includes('@')) {
-          contact = await Contact.findOne({ email: custodianKey.toLowerCase(), isDeleted: false });
-        }
-        if (!contact && custodianKey) {
-          contact = await Contact.findOne({ contact: custodianKey, isDeleted: false });
-        }
-        if (!contact && name) {
-          contact = await Contact.findOne({ name, city: city || undefined, isDeleted: false });
+        let contact = await findContactByIdentity({ email, phone });
+        if (!contact && custodianKey && !email && !normalizePhone(custodianKey)) {
+          contact = await Contact.findOne({ _id: custodianKey, isDeleted: false });
         }
         if (!contact) {
-          contact = await Contact.create({
-            name,
-            email: email || (custodianKey.includes('@') ? custodianKey.toLowerCase() : undefined),
-            contact: phone || undefined,
-            mobile: phone || undefined,
-            city: city || undefined,
-            resourceType: String(normKey(row, ['HCW Type', 'Resource Type']) || 'Full Timer'),
-            profession: String(normKey(row, ['Profession']) || ''),
-            createdBy: user._id,
-          });
-          summary.contacts += 1;
+          if (!email && !phone) {
+            errors.push({
+              row: rowNum,
+              field: 'Email/Contact',
+              message: 'Email or phone required to create or match a contact',
+            });
+            continue;
+          }
+          const resolved = await resolveOrCreateContact(
+            {
+              name,
+              email,
+              contact: phone,
+              mobile: phone,
+              city: city || undefined,
+              resourceType: String(normKey(row, ['HCW Type', 'Resource Type']) || 'Full Timer'),
+              profession: String(normKey(row, ['Profession']) || ''),
+            },
+            user._id
+          );
+          contact = resolved.contact;
+          if (resolved.created) summary.contacts += 1;
         }
 
         const agreementStatus =
@@ -300,6 +311,27 @@ async function runImport(type, mode, req) {
       after: { type, summary: result.summary, errors: result.errors.length },
       requestId: req.requestId,
     });
+
+    if (result.errors.length) {
+      const report = await notifyImportFailures({
+        userId: req.user._id,
+        importType: `${type}_${mode}`,
+        sourceFileName: req.file.originalname,
+        totalRows: rows.length,
+        successRows: result.success,
+        errors: result.errors,
+        entityType: 'ImportJob',
+        entityId: job._id,
+      });
+      if (report) {
+        job.errorReport = {
+          fileName: report.fileName,
+          downloadPath: report.downloadPath,
+          notificationId: report.notificationId,
+        };
+        await job.save();
+      }
+    }
 
     return job;
   } catch (err) {

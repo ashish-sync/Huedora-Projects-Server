@@ -62,12 +62,27 @@ function normalizeLoginEmail(email) {
   return value;
 }
 
-export async function login({ email, password, ip, userAgent, requestId }) {
+/** Resolve user by current or legacy local email (tylo ↔ dhub). */
+async function findUserByLoginEmail(email) {
   const normalizedEmail = normalizeLoginEmail(email);
-  const user = await User.findOne({
+  let user = await User.findOne({
     email: normalizedEmail,
     isDeleted: false,
   }).populate('roleIds');
+
+  if (!user && normalizedEmail.endsWith('@tylo.local')) {
+    const legacyEmail = `${normalizedEmail.slice(0, -'@tylo.local'.length)}@dhub.local`;
+    user = await User.findOne({
+      email: legacyEmail,
+      isDeleted: false,
+    }).populate('roleIds');
+  }
+
+  return { user, normalizedEmail };
+}
+
+export async function login({ email, password, ip, userAgent, requestId }) {
+  const { user, normalizedEmail } = await findUserByLoginEmail(email);
 
   if (!user || !user.isActive) {
     await writeAudit({
@@ -110,6 +125,10 @@ export async function login({ email, password, ip, userAgent, requestId }) {
   user.failedLoginAttempts = 0;
   user.lockUntil = null;
   user.lastLoginAt = new Date();
+  // Migrate leftover rebrand emails so future lookups use @tylo.local
+  if (user.email !== normalizedEmail && normalizedEmail.endsWith('@tylo.local')) {
+    user.email = normalizedEmail;
+  }
   await user.save();
 
   const accessToken = signAccess(user);
@@ -215,6 +234,82 @@ export async function changePassword({ user, currentPassword, newPassword, reque
     actorEmail: fresh.email,
     action: 'USER.PASSWORD_CHANGE',
     ip,
+    requestId,
+  });
+}
+
+/** Self-service reset from the login screen (requires current password). */
+export async function resetPasswordWithCurrent({
+  email,
+  currentPassword,
+  newPassword,
+  requestId,
+  ip,
+  userAgent,
+}) {
+  const { user, normalizedEmail } = await findUserByLoginEmail(email);
+
+  if (!user || !user.isActive) {
+    await writeAudit({
+      actorType: 'USER',
+      actorEmail: email,
+      action: 'USER.PASSWORD_RESET_FAILURE',
+      ip,
+      userAgent,
+      requestId,
+      result: 'FAILURE',
+      message: 'Unknown or inactive account',
+    });
+    throw new AppError('Invalid email or current password', 401, 'INVALID_CREDENTIALS');
+  }
+
+  if (user.lockUntil && user.lockUntil > new Date()) {
+    throw new AppError('Account locked. Try again later.', 423, 'ACCOUNT_LOCKED');
+  }
+
+  const ok = await bcrypt.compare(currentPassword, user.passwordHash);
+  if (!ok) {
+    user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+    if (user.failedLoginAttempts >= 5) {
+      user.lockUntil = new Date(Date.now() + 15 * 60 * 1000);
+      user.failedLoginAttempts = 0;
+    }
+    await user.save();
+    await writeAudit({
+      actorId: user._id,
+      actorEmail: user.email,
+      action: 'USER.PASSWORD_RESET_FAILURE',
+      ip,
+      userAgent,
+      requestId,
+      result: 'FAILURE',
+    });
+    throw new AppError('Invalid email or current password', 401, 'INVALID_CREDENTIALS');
+  }
+
+  if (!newPassword || newPassword.length < 12) {
+    throw new AppError('New password must be at least 12 characters', 400, 'VALIDATION_ERROR');
+  }
+  if (newPassword === currentPassword) {
+    throw new AppError('New password must be different from the current password', 400, 'VALIDATION_ERROR');
+  }
+
+  user.passwordHash = await bcrypt.hash(newPassword, 12);
+  user.passwordChangedAt = new Date();
+  user.tokenVersion += 1;
+  user.failedLoginAttempts = 0;
+  user.lockUntil = null;
+  if (user.email !== normalizedEmail && normalizedEmail.endsWith('@tylo.local')) {
+    user.email = normalizedEmail;
+  }
+  await user.save();
+  await RefreshToken.updateMany({ userId: user._id, revokedAt: null }, { $set: { revokedAt: new Date() } });
+  await writeAudit({
+    actorId: user._id,
+    actorEmail: user.email,
+    action: 'USER.PASSWORD_RESET',
+    ip,
+    userAgent,
     requestId,
   });
 }

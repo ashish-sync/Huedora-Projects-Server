@@ -9,8 +9,25 @@ import { PERMISSION_CATALOG, MODULE_ACCESS_CATALOG, ALL_PERMISSION_KEYS, ACCESS_
 import { writeAudit } from '../../utils/audit.js';
 import { publicUser } from '../auth/auth.service.js';
 import { sendExcel } from '../../utils/excelExport.js';
+import { normalizeEmail, normalizePhone, throwIfIdentityClash } from '../../utils/identityNormalize.js';
 
 const router = Router();
+
+async function assertUserIdentityAvailable({ email, phone, excludeId } = {}) {
+  const emailKey = normalizeEmail(email);
+  const phoneKey = normalizePhone(phone);
+  if (!emailKey && !phoneKey) return { emailKey, phoneKey };
+  const users = await User.find({ isDeleted: false }).limit(20000);
+  throwIfIdentityClash(users, {
+    email: emailKey,
+    phone: phoneKey,
+    excludeId,
+    emailFields: ['email'],
+    phoneFields: ['phone'],
+    label: 'User',
+  });
+  return { emailKey, phoneKey };
+}
 
 function asRoleIdList(roleIds) {
   if (!Array.isArray(roleIds)) return [];
@@ -230,12 +247,16 @@ router.post(
       throw new AppError('Missing required fields', 400, 'VALIDATION_ERROR');
     }
     if (password.length < 12) throw new AppError('Password must be at least 12 characters', 400, 'VALIDATION_ERROR');
+    const { emailKey, phoneKey } = await assertUserIdentityAvailable({ email, phone });
+    const usernameKey = String(username).trim();
+    const usernameClash = await User.findOne({ username: usernameKey, isDeleted: false });
+    if (usernameClash) throw new AppError('A user with this username already exists', 409, 'DUPLICATE_USERNAME');
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await User.create({
-      email: email.toLowerCase().trim(),
-      username: username.trim(),
+      email: emailKey,
+      username: usernameKey,
       fullName,
-      phone,
+      phone: phoneKey || String(phone || '').trim(),
       roleIds: asRoleIdList(roleIds),
       passwordHash,
       passwordChangedAt: new Date().toISOString(),
@@ -271,7 +292,17 @@ router.patch(
     user.roleIds = asRoleIdList(user.roleIds);
 
     if (req.body.fullName !== undefined) user.fullName = req.body.fullName;
-    if (req.body.phone !== undefined) user.phone = req.body.phone;
+    if (req.body.phone !== undefined || req.body.email !== undefined) {
+      const nextEmail = req.body.email !== undefined ? req.body.email : user.email;
+      const nextPhone = req.body.phone !== undefined ? req.body.phone : user.phone;
+      const { emailKey, phoneKey } = await assertUserIdentityAvailable({
+        email: nextEmail,
+        phone: nextPhone,
+        excludeId: user._id,
+      });
+      if (req.body.email !== undefined) user.email = emailKey;
+      if (req.body.phone !== undefined) user.phone = phoneKey || String(nextPhone || '').trim();
+    }
     if (req.body.isActive !== undefined) {
       if (String(req.user._id) === String(user._id) && req.body.isActive === false) {
         throw new AppError('You cannot deactivate your own account', 400, 'LOCKED');

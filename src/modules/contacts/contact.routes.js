@@ -8,6 +8,13 @@ import { Contact, normalizeContactPayload } from './contact.model.js';
 import { RESOURCE_TYPES, PROFESSIONS } from './contact.constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
+import { notifyImportFailures } from '../imports/importErrorReport.js';
+import {
+  assertContactIdentityAvailable,
+  findContactByIdentity,
+  resolveOrCreateContact,
+} from './contactIdentity.js';
+import { normalizePhone } from '../../utils/identityNormalize.js';
 
 const router = Router();
 router.use(authenticate);
@@ -19,6 +26,7 @@ const CONTACT_HEADERS = [
   'Profession',
   'Contact',
   'City',
+  'District',
   'State',
   'Pin Code',
   'Address',
@@ -96,6 +104,7 @@ router.get(
         c.profession,
         c.contact || c.mobile,
         c.city,
+        c.district,
         c.state,
         c.pinCode,
         c.address,
@@ -119,38 +128,22 @@ router.post(
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
   asyncHandler(async (req, res) => {
     const payload = normalizeContactPayload(req.body);
-    if (!payload.name) throw new AppError('Name is required', 400, 'VALIDATION_ERROR');
-    if (!payload.email && !payload.contact) {
-      throw new AppError('Email or Contact is required for delivery', 400, 'VALIDATION_ERROR');
-    }
+    const { contact, created, reused } = await resolveOrCreateContact(payload, req.user._id);
 
-    if (payload.email) {
-      const existingEmail = await Contact.findOne({
-        email: payload.email,
-        isDeleted: false,
+    if (created) {
+      await writeAudit({
+        actorId: req.user._id,
+        actorEmail: req.user.email,
+        action: 'CONTACT.CREATE',
+        entityType: 'Contact',
+        entityId: contact._id,
+        after: contact.toObject(),
+        requestId: req.requestId,
       });
-      if (existingEmail) {
-        return res.status(200).json({ data: existingEmail, meta: { reused: true } });
-      }
+      return res.status(201).json({ data: contact });
     }
 
-    const contact = await Contact.create({
-      ...payload,
-      createdBy: req.user._id,
-      updatedBy: req.user._id,
-    });
-
-    await writeAudit({
-      actorId: req.user._id,
-      actorEmail: req.user.email,
-      action: 'CONTACT.CREATE',
-      entityType: 'Contact',
-      entityId: contact._id,
-      after: contact.toObject(),
-      requestId: req.requestId,
-    });
-
-    res.status(201).json({ data: contact });
+    res.status(200).json({ data: contact, meta: { reused: Boolean(reused) } });
   })
 );
 
@@ -173,10 +166,24 @@ router.patch(
             : contact.contact || contact.mobile,
       city: req.body.city !== undefined ? req.body.city : contact.city,
       state: req.body.state !== undefined ? req.body.state : contact.state,
+      district: req.body.district !== undefined ? req.body.district : contact.district,
+      pinCode: req.body.pinCode !== undefined ? req.body.pinCode : contact.pinCode,
+      address: req.body.address !== undefined ? req.body.address : contact.address,
       organization: req.body.organization !== undefined ? req.body.organization : contact.organization,
       notes: req.body.notes !== undefined ? req.body.notes : contact.notes,
+      stateId: req.body.stateId !== undefined ? req.body.stateId : contact.stateId,
+      districtId: req.body.districtId !== undefined ? req.body.districtId : contact.districtId,
+      cityId: req.body.cityId !== undefined ? req.body.cityId : contact.cityId,
     });
     if (!payload.name) throw new AppError('Name is required', 400, 'VALIDATION_ERROR');
+    if (!payload.email && !payload.contact) {
+      throw new AppError('Email or Contact is required for delivery', 400, 'VALIDATION_ERROR');
+    }
+    await assertContactIdentityAvailable({
+      email: payload.email,
+      phone: payload.contact,
+      excludeId: contact._id,
+    });
     Object.assign(contact, payload, { updatedBy: req.user._id });
     await contact.save();
     res.json({ data: contact });
@@ -195,6 +202,8 @@ router.post(
     let created = 0;
     let updated = 0;
     let skipped = 0;
+    const seenEmails = new Set();
+    const seenPhones = new Set();
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -218,31 +227,46 @@ router.post(
         continue;
       }
 
+      const emailKey = payload.email;
+      const phoneKey = normalizePhone(payload.contact);
+      if (emailKey && seenEmails.has(emailKey)) {
+        errors.push({
+          row: rowNum,
+          field: 'Email',
+          message: 'Duplicate email in this file',
+        });
+        continue;
+      }
+      if (phoneKey && seenPhones.has(phoneKey)) {
+        errors.push({
+          row: rowNum,
+          field: 'Contact',
+          message: 'Duplicate phone number in this file',
+        });
+        continue;
+      }
+      if (emailKey) seenEmails.add(emailKey);
+      if (phoneKey) seenPhones.add(phoneKey);
+
       try {
         if (mode === 'COMMIT') {
-          let existing = null;
-          if (payload.email) {
-            existing = await Contact.findOne({ email: payload.email, isDeleted: false });
-          }
-          if (!existing && payload.contact) {
-            const all = await Contact.find({ isDeleted: false }).limit(5000);
-            existing = all.find(
-              (c) =>
-                String(c.contact || '') === payload.contact ||
-                String(c.mobile || '') === payload.contact
-            );
-          }
+          const existing = await findContactByIdentity({
+            email: payload.email,
+            phone: payload.contact,
+          });
           if (existing) {
+            await assertContactIdentityAvailable({
+              email: payload.email,
+              phone: payload.contact,
+              excludeId: existing._id,
+            });
             Object.assign(existing, payload, { updatedBy: req.user._id });
             await existing.save();
             updated += 1;
           } else {
-            await Contact.create({
-              ...payload,
-              createdBy: req.user._id,
-              updatedBy: req.user._id,
-            });
-            created += 1;
+            const resolved = await resolveOrCreateContact(payload, req.user._id);
+            if (resolved.created) created += 1;
+            else updated += 1;
           }
         } else {
           skipped += 1;
@@ -263,6 +287,19 @@ router.post(
       });
     }
 
+    let errorReport = null;
+    if (errors.length) {
+      errorReport = await notifyImportFailures({
+        userId: req.user._id,
+        importType: `CONTACT_${mode}`,
+        sourceFileName: req.file.originalname,
+        totalRows: rows.length,
+        successRows: mode === 'DRY_RUN' ? rows.length - errors.length : created + updated,
+        errors,
+        entityType: 'Contact',
+      });
+    }
+
     res.json({
       data: {
         mode,
@@ -272,6 +309,13 @@ router.post(
         validated: mode === 'DRY_RUN' ? rows.length - errors.length : created + updated,
         errorRows: errors.length,
         errors: errors.slice(0, 200),
+        errorReport: errorReport
+          ? {
+              fileName: errorReport.fileName,
+              downloadPath: errorReport.downloadPath,
+              notificationId: errorReport.notificationId,
+            }
+          : null,
       },
     });
   })

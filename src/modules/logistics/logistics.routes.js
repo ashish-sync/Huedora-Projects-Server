@@ -8,6 +8,7 @@ import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { env } from '../../config/env.js';
+import { throwIfIdentityClash } from '../../utils/identityNormalize.js';
 import { AssetRequest } from '../assetRequests/assetRequest.model.js';
 import {
   LOCATION_LEVELS,
@@ -137,7 +138,22 @@ function registerMasterCrud({
   normalize,
   systemProtected = false,
   listFilter = null,
+  checkIdentity = false,
 }) {
+  async function assertPartyIdentity(body, excludeId) {
+    if (!checkIdentity) return;
+    if (!body.email && !body.phone) return;
+    const rows = await Model.find({ isDeleted: false, ...(listFilter || {}) }).limit(20000);
+    throwIfIdentityClash(rows, {
+      email: body.email,
+      phone: body.phone,
+      excludeId,
+      emailFields: ['email'],
+      phoneFields: ['phone'],
+      label: entityType.replace(/^Logistics/, '') || 'Record',
+    });
+  }
+
   router.get(
     `/${path}`,
     canRead,
@@ -175,6 +191,7 @@ function registerMasterCrud({
         const clash = await Model.findOne({ code: body.code, isDeleted: false });
         if (clash) throw new AppError(`Code “${body.code}” already exists`, 400, 'DUPLICATE');
       }
+      await assertPartyIdentity(body);
       const row = await Model.create({ ...body, isActive: body.isActive !== false });
       await writeAudit({
         actorId: req.user._id,
@@ -199,6 +216,13 @@ function registerMasterCrud({
         throw new AppError('System codes cannot be changed', 400, 'LOCKED');
       }
       const body = normalize ? normalize(req.body, row) : { ...req.body };
+      await assertPartyIdentity(
+        {
+          email: body.email !== undefined ? body.email : row.email,
+          phone: body.phone !== undefined ? body.phone : row.phone,
+        },
+        row._id
+      );
       Object.assign(row, body);
       row.updatedBy = req.user._id;
       await row.save();
@@ -286,6 +310,7 @@ registerMasterCrud({
   entityType: 'LogisticsSupplier',
   searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city'],
   listFilter: { partyType: 'Supplier' },
+  checkIdentity: true,
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase(),
     name: trimStr(b.name),
@@ -306,6 +331,7 @@ registerMasterCrud({
   entityType: 'LogisticsVendor',
   searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city'],
   listFilter: { partyType: 'Vendor' },
+  checkIdentity: true,
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase(),
     name: trimStr(b.name),
@@ -325,6 +351,7 @@ registerMasterCrud({
   Model: LogisticsTransporter,
   entityType: 'LogisticsTransporter',
   searchFields: ['name', 'code', 'email', 'phone', 'contactName'],
+  checkIdentity: true,
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase(),
     name: trimStr(b.name),
