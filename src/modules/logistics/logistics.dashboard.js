@@ -205,7 +205,16 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
     if (cat) inventoryTypes.add(cat);
     const eid = String(row.empId || '').trim();
     if (eid) {
-      hcws.set(eid, String(row.employeeName || row.name || row.recipientName || eid).trim());
+      const existing = hcws.get(eid) || {};
+      hcws.set(eid, {
+        name: String(
+          row.employeeName || row.name || row.recipientName || existing.name || eid
+        ).trim(),
+        city: String(row.city || row.recipientCity || row.toCity || existing.city || '').trim(),
+        state: String(
+          row.state || row.recipientState || row.toState || existing.state || ''
+        ).trim(),
+      });
     }
   }
 
@@ -217,7 +226,14 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
     if (cat) inventoryTypes.add(cat);
     const eid = String(row.hcwId || row.empId || '').trim();
     if (eid) {
-      hcws.set(eid, String(row.hcwName || row.employeeName || eid).trim());
+      const existing = hcws.get(eid) || {};
+      hcws.set(eid, {
+        name: String(row.hcwName || row.employeeName || existing.name || eid).trim(),
+        city: String(row.city || row.recipientCity || row.toCity || existing.city || '').trim(),
+        state: String(
+          row.state || row.recipientState || row.toState || existing.state || ''
+        ).trim(),
+      });
     }
   }
 
@@ -253,7 +269,8 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
   for (const row of filteredLedger) {
     const qty = lineQty(row);
     const amt = lineAmount(row);
-    const city = String(row.city || '').trim() || 'Unknown';
+    const city = String(row.city || row.recipientCity || row.toCity || '').trim() || 'Unknown';
+    const state = String(row.state || row.recipientState || row.toState || '').trim();
     const inv = String(row.productType || row.inventoryType || '').trim() || productLabel(row);
     const adjDecrease =
       isAdjustmentEntry(row.entryType) &&
@@ -267,10 +284,11 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
       outwardQty += qty;
       outwardAmount += amt;
 
-      const cityAgg = byCity.get(city) || { city, qty: 0, amount: 0 };
+      const cityKey = `${city}|${state}`;
+      const cityAgg = byCity.get(cityKey) || { city, state, qty: 0, amount: 0 };
       cityAgg.qty += qty;
       cityAgg.amount += amt;
-      byCity.set(city, cityAgg);
+      byCity.set(cityKey, cityAgg);
 
       const invAgg = byInventoryType.get(inv) || { name: inv, qty: 0, amount: 0 };
       invAgg.qty += qty;
@@ -354,11 +372,14 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
       invAgg.qty += qty;
       invAgg.amount += amt;
       byInventoryType.set(inv, invAgg);
-      const city = String(row.city || '').trim() || 'Unknown';
-      const cityAgg = byCity.get(city) || { city, qty: 0, amount: 0 };
+      const city =
+        String(row.city || row.recipientCity || row.toCity || '').trim() || 'Unknown';
+      const state = String(row.state || row.recipientState || row.toState || '').trim();
+      const cityKey = `${city}|${state}`;
+      const cityAgg = byCity.get(cityKey) || { city, state, qty: 0, amount: 0 };
       cityAgg.qty += qty;
       cityAgg.amount += amt;
-      byCity.set(city, cityAgg);
+      byCity.set(cityKey, cityAgg);
     }
   }
 
@@ -377,7 +398,7 @@ export function buildDashboard(ledgerRows = [], usageRows = [], query = {}) {
       months: [...months].sort().reverse(),
       inventoryTypes: [...inventoryTypes].sort((a, b) => a.localeCompare(b)),
       hcws: [...hcws.entries()]
-        .map(([id, name]) => ({ id, name }))
+        .map(([id, details]) => ({ id, ...details }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     },
     kpis: {

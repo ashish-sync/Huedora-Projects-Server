@@ -106,6 +106,14 @@ export const LogisticsReasonCode = defineCollection('logistics_reason_codes', {
   isActive: true,
 });
 
+export const LogisticsExpenseCategory = defineCollection('logistics_expense_categories', {
+  ...softDelete,
+  code: '',
+  name: '',
+  isSystem: false,
+  isActive: true,
+});
+
 export const LogisticsStockItem = defineCollection('logistics_stock_items', {
   ...softDelete,
   sku: '',
@@ -199,6 +207,7 @@ export const LogisticsInOutEntry = defineCollection('logistics_in_out_entries', 
   supplierId: null,
   transporterId: null,
   assetRequestId: null,
+  assetRequestLineId: null,
 
   /** Tracking */
   expiryApplicable: false,

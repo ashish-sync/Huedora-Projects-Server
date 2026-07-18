@@ -39,8 +39,20 @@ function match(doc, filter = {}) {
     if (key === '$or') return val.some((f) => match(doc, f));
     if (key === '$and') return val.every((f) => match(doc, f));
     if (val && typeof val === 'object' && !(val instanceof Date) && !Array.isArray(val)) {
-      if (val.$in) return val.$in.map(String).includes(String(get(doc, key)));
-      if (val.$nin) return !val.$nin.map(String).includes(String(get(doc, key)));
+      if (val.$in) {
+        const current = get(doc, key);
+        const values = val.$in.map(String);
+        return Array.isArray(current)
+          ? current.some((item) => values.includes(String(item)))
+          : values.includes(String(current));
+      }
+      if (val.$nin) {
+        const current = get(doc, key);
+        const values = val.$nin.map(String);
+        return Array.isArray(current)
+          ? current.every((item) => !values.includes(String(item)))
+          : !values.includes(String(current));
+      }
       if (val.$ne) return String(get(doc, key)) !== String(val.$ne);
       if (val.$gte || val.$gt || val.$lte || val.$lt) {
         const cur = get(doc, key);
@@ -91,6 +103,66 @@ function setPath(obj, key, value) {
   cur[parts[parts.length - 1]] = value;
 }
 
+const SENSITIVE_POPULATE_FIELDS = new Set([
+  'passwordHash',
+  'refreshToken',
+  'refreshTokens',
+  'refreshTokenHash',
+  'accessToken',
+  'tokenHash',
+  'secret',
+  'secrets',
+]);
+
+function unsetPath(obj, key) {
+  const parts = key.split('.');
+  const leaf = parts.pop();
+  const parent = parts.reduce((value, part) => value?.[part], obj);
+  if (parent && leaf) delete parent[leaf];
+}
+
+function sanitizePopulated(value) {
+  if (Array.isArray(value)) return value.map(sanitizePopulated);
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (SENSITIVE_POPULATE_FIELDS.has(key) || /password|secret|^refresh/i.test(key)) continue;
+    out[key] = sanitizePopulated(child);
+  }
+  return out;
+}
+
+function project(doc, select, { sanitize = false } = {}) {
+  const source = sanitize ? sanitizePopulated(clone(doc)) : clone(doc);
+  if (!select) return source;
+
+  const spec =
+    typeof select === 'string'
+      ? Object.fromEntries(
+          select
+            .split(/\s+/)
+            .filter(Boolean)
+            .map((field) => [field.replace(/^-/, ''), field.startsWith('-') ? 0 : 1])
+        )
+      : select;
+  const entries = Object.entries(spec || {});
+  const included = entries.filter(([, flag]) => Boolean(flag)).map(([field]) => field);
+  const excluded = entries.filter(([, flag]) => !flag).map(([field]) => field);
+
+  if (included.length) {
+    const out = {};
+    if (source._id != null && spec._id !== 0) out._id = source._id;
+    for (const field of included) {
+      if (field === '_id') continue;
+      const value = get(source, field);
+      if (value !== undefined) setPath(out, field, value);
+    }
+    return sanitize ? sanitizePopulated(out) : out;
+  }
+  for (const field of excluded) unsetPath(source, field);
+  return sanitize ? sanitizePopulated(source) : source;
+}
+
 class Query {
   constructor(model, filter = {}) {
     this.model = model;
@@ -99,6 +171,7 @@ class Query {
     this._skip = 0;
     this._limit = null;
     this._populate = [];
+    this._select = null;
   }
 
   sort(s) {
@@ -121,7 +194,8 @@ class Query {
     return this;
   }
 
-  select() {
+  select(fields) {
+    this._select = fields;
     return this;
   }
 
@@ -156,8 +230,9 @@ class Query {
     if (this._skip) rows = rows.slice(this._skip);
     if (this._limit != null) rows = rows.slice(0, this._limit);
     for (const p of this._populate) {
-      for (const row of rows) await this.model._populateOne(row, p.field);
+      for (const row of rows) await this.model._populateOne(row, p.field, p.select);
     }
+    if (this._select) rows = rows.map((row) => project(row, this._select));
     return rows.map((r) => this.model._wrap(r));
   }
 }
@@ -188,16 +263,19 @@ export function defineCollection(name, defaults = {}) {
         Object.assign(o, plain);
         return o;
       };
-      o.populate = async (field) => {
-        await model._populateOne(o, field);
+      o.populate = async (field, select) => {
+        await model._populateOne(o, field, select);
         return o;
       };
       return o;
     },
-    async _populateOne(row, field) {
+    async _populateOne(row, field, select) {
       if (field === 'roleIds' && Array.isArray(row.roleIds)) {
         const all = load('roles');
-        row.roleIds = row.roleIds.map((id) => all.find((x) => String(x._id) === String(id?._id || id)) || id);
+        row.roleIds = row.roleIds.map((id) => {
+          const found = all.find((x) => String(x._id) === String(id?._id || id));
+          return found ? project(found, select, { sanitize: true }) : id;
+        });
         return;
       }
       if (field === 'assets' || field === 'assets.assetId') {
@@ -205,7 +283,10 @@ export function defineCollection(name, defaults = {}) {
         const assets = load('assets');
         row.assets = row.assets.map((a) => ({
           ...a,
-          assetId: assets.find((x) => String(x._id) === String(a.assetId?._id || a.assetId)) || a.assetId,
+          assetId: (() => {
+            const found = assets.find((x) => String(x._id) === String(a.assetId?._id || a.assetId));
+            return found ? project(found, select, { sanitize: true }) : a.assetId;
+          })(),
         }));
         return;
       }
@@ -214,17 +295,23 @@ export function defineCollection(name, defaults = {}) {
         const all = load('hcws');
         const id = row.to.hcwId?._id || row.to.hcwId;
         const found = all.find((x) => String(x._id) === String(id));
-        if (found) row.to = { ...row.to, hcwId: clone(found) };
+        if (found) row.to = { ...row.to, hcwId: project(found, select, { sanitize: true }) };
         return;
       }
       const map = {
         deviceMasterId: 'device_masters',
         hcwId: 'hcws',
         contactId: 'contacts',
+        fromContactId: 'contacts',
+        toContactId: 'contacts',
+        preferredVendorContactId: 'contacts',
+        traineeContactId: 'contacts',
         activeAgreementId: 'agreements',
         assetId: 'assets',
         requestorId: 'users',
         approverId: 'users',
+        createdById: 'users',
+        requestId: 'asset_requests',
         campaignId: 'verification_campaigns',
         userId: 'users',
         reportedByUserId: 'users',
@@ -236,7 +323,7 @@ export function defineCollection(name, defaults = {}) {
       if (val == null) return;
       const all = load(col);
       const found = all.find((x) => String(x._id) === String(val?._id || val));
-      if (found) row[field] = clone(found);
+      if (found) row[field] = project(found, select, { sanitize: true });
     },
     find(filter = {}) {
       return new Query(model, filter);

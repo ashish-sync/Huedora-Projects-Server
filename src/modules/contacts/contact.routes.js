@@ -20,6 +20,8 @@ const CONTACT_HEADERS = [
   'Contact',
   'City',
   'State',
+  'Pin Code',
+  'Address',
 ];
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -67,6 +69,8 @@ router.get(
         { profession: new RegExp(q, 'i') },
         { city: new RegExp(q, 'i') },
         { state: new RegExp(q, 'i') },
+        { pinCode: new RegExp(q, 'i') },
+        { address: new RegExp(q, 'i') },
       ];
     }
     const [data, total] = await Promise.all([
@@ -93,6 +97,8 @@ router.get(
         c.contact || c.mobile,
         c.city,
         c.state,
+        c.pinCode,
+        c.address,
       ]),
       { sheetName: 'Contacts' }
     );

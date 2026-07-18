@@ -29,6 +29,7 @@ import auditRoutes from './modules/audit/audit.routes.js';
 import importRoutes from './modules/imports/import.routes.js';
 import campRoutes from './modules/camps/camp.routes.js';
 import assetRequestRoutes from './modules/assetRequests/assetRequest.routes.js';
+import requestUploadRoutes from './modules/assetRequests/requestUpload.routes.js';
 import logisticsRoutes from './modules/logistics/logistics.routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -49,6 +50,10 @@ export function createApp() {
   app.use(express.urlencoded({ extended: true }));
   app.use(cookieParser());
   app.use(correlationId);
+  // Request product images are only available through authenticated request routes.
+  app.use('/uploads/asset-requests', (_req, res) => {
+    res.status(404).json({ error: { code: 'NOT_FOUND', message: 'File not found' } });
+  });
   app.use('/uploads', express.static(uploadsRoot));
 
   app.get('/api/v1/health', (_req, res) => {
@@ -74,6 +79,8 @@ export function createApp() {
     });
   });
 
+  // Public, token-gated custodian upload flow. Keep before the /api/v1 catch-all router.
+  app.use('/api/v1/request-upload', requestUploadRoutes);
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/users', userRoutes);
   app.use('/api/v1/hcws', hcwRoutes);

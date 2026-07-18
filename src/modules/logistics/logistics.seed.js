@@ -7,6 +7,7 @@ import {
 } from './logistics.constants.js';
 import {
   LogisticsCategory,
+  LogisticsExpenseCategory,
   LogisticsMovementType,
   LogisticsProduct,
   LogisticsReasonCode,
@@ -65,6 +66,27 @@ export async function ensureLogisticsSeed() {
       await LogisticsReasonCode.create({
         code: r.code,
         name: r.name,
+        isSystem: true,
+        isActive: true,
+      });
+    }
+  }
+
+  const defaultExpenseCategories = [
+    'Travel',
+    'Meals',
+    'Parts',
+    'Shipping',
+    'Service',
+    'Miscellaneous',
+  ];
+  for (const name of defaultExpenseCategories) {
+    const code = name.toUpperCase().replace(/\s+/g, '_');
+    const existing = await LogisticsExpenseCategory.findOne({ code, isDeleted: false });
+    if (!existing) {
+      await LogisticsExpenseCategory.create({
+        code,
+        name,
         isSystem: true,
         isActive: true,
       });

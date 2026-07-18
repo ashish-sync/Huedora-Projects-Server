@@ -13,6 +13,8 @@ export const Contact = defineCollection('contacts', {
   mobile: '',
   city: '',
   state: '',
+  pinCode: '',
+  address: '',
   organization: '',
   notes: '',
 });
@@ -32,6 +34,10 @@ export function normalizeContactPayload(body = {}) {
     mobile: contact,
     city: String(body.city || body.City || '').trim(),
     state: String(body.state || body.State || '').trim(),
+    pinCode: String(
+      body.pinCode || body.pincode || body['Pin Code'] || body.Pincode || body.PIN || ''
+    ).trim(),
+    address: String(body.address || body.Address || '').trim(),
     organization: String(body.organization || '').trim(),
     notes: String(body.notes || '').trim(),
   };

@@ -184,14 +184,29 @@ export const IN_OUT_STATUSES = [...new Set(Object.values(PRODUCT_STATUS_OPTIONS)
 /** Delivery Mode */
 export const DELIVERY_MODES = [
   'Hand Delivery',
+  'Regular Courier',
+  'Apex',
   'Porter',
+  'Other',
   'Blue Dart',
   'DTDC',
   'Other Courier',
 ];
 
+export const DELIVERY_MODE_ALIASES = {
+  Courier: 'Regular Courier',
+  'Hand-carry': 'Hand Delivery',
+  Road: 'Other',
+};
+
 /** Modes that require AWB */
-export const COURIER_DELIVERY_MODES = ['Blue Dart', 'DTDC', 'Other Courier'];
+export const COURIER_DELIVERY_MODES = [
+  'Regular Courier',
+  'Apex',
+  'Blue Dart',
+  'DTDC',
+  'Other Courier',
+];
 
 export const IN_OUT_MODES = DELIVERY_MODES;
 

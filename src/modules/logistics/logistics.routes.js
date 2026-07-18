@@ -8,6 +8,7 @@ import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { env } from '../../config/env.js';
+import { AssetRequest } from '../assetRequests/assetRequest.model.js';
 import {
   LOCATION_LEVELS,
   IN_OUT_ENTRY_TYPES,
@@ -31,6 +32,7 @@ import {
   INSPECTION_STATUSES,
   DOCUMENT_TYPES,
   DELIVERY_MODES,
+  DELIVERY_MODE_ALIASES,
   COURIER_DELIVERY_MODES,
   DEFAULT_WAREHOUSE_NAME,
 } from './logistics.constants.js';
@@ -45,6 +47,7 @@ import {
   LogisticsStockStatus,
   LogisticsMovementType,
   LogisticsReasonCode,
+  LogisticsExpenseCategory,
   LogisticsStockItem,
   LogisticsLedgerEntry,
   LogisticsInOutEntry,
@@ -437,11 +440,22 @@ registerMasterCrud({
   }),
 });
 
+registerMasterCrud({
+  path: 'expense-categories',
+  Model: LogisticsExpenseCategory,
+  entityType: 'LogisticsExpenseCategory',
+  normalize: (b) => ({
+    code: trimStr(b.code).toUpperCase().replace(/\s+/g, '_'),
+    name: trimStr(b.name),
+    isActive: b.isActive !== false,
+  }),
+});
+
 router.get(
   '/meta',
   canRead,
   asyncHandler(async (_req, res) => {
-    const [warehouses, categories, uoms, statuses, movementTypes, reasonCodes, products, parties, transporters] =
+    const [warehouses, categories, uoms, statuses, movementTypes, reasonCodes, expenseCategories, products, parties, transporters] =
       await Promise.all([
         LogisticsWarehouse.find({ isDeleted: false, isActive: true }).sort('name'),
         LogisticsCategory.find({ isDeleted: false, isActive: true }).sort('name'),
@@ -449,6 +463,7 @@ router.get(
         LogisticsStockStatus.find({ isDeleted: false, isActive: true }).sort('name'),
         LogisticsMovementType.find({ isDeleted: false, isActive: true }).sort('name'),
         LogisticsReasonCode.find({ isDeleted: false, isActive: true }).sort('name'),
+        LogisticsExpenseCategory.find({ isDeleted: false, isActive: true }).sort('name'),
         LogisticsProduct.find({ isDeleted: false, isActive: true }).sort('name'),
         LogisticsSupplier.find({ isDeleted: false, isActive: true }).sort('name'),
         LogisticsTransporter.find({ isDeleted: false, isActive: true }).sort('name'),
@@ -464,6 +479,7 @@ router.get(
         statuses,
         movementTypes,
         reasonCodes,
+        expenseCategories,
         products,
         suppliers,
         vendors,
@@ -510,6 +526,18 @@ function resolveEntryType(raw) {
 function resolveProductType(raw) {
   const v = trimStr(raw);
   return IN_OUT_PRODUCT_TYPE_ALIASES[v] || v;
+}
+
+function resolveDeliveryMode(raw) {
+  const value = trimStr(raw);
+  const canonical = DELIVERY_MODES.find(
+    (mode) => mode.toLowerCase() === value.toLowerCase()
+  );
+  if (canonical) return canonical;
+  const alias = Object.entries(DELIVERY_MODE_ALIASES).find(
+    ([key]) => key.toLowerCase() === value.toLowerCase()
+  );
+  return alias?.[1] || value;
 }
 
 function entryTypeFilterValues(entryType) {
@@ -634,8 +662,9 @@ function normalizeInOutBody(body, existing = null, actor = null) {
   }
 
   const deliveryMode =
-    trimStr(body.deliveryMode ?? body.mode ?? existing?.deliveryMode ?? existing?.mode ?? '') ||
-    'Hand Delivery';
+    resolveDeliveryMode(
+      body.deliveryMode ?? body.mode ?? existing?.deliveryMode ?? existing?.mode ?? ''
+    ) || 'Hand Delivery';
   if (deliveryMode && !DELIVERY_MODES.includes(deliveryMode)) {
     throw new AppError(
       `Delivery Mode must be one of: ${DELIVERY_MODES.join(', ')}`,
@@ -706,6 +735,8 @@ function normalizeInOutBody(body, existing = null, actor = null) {
     supplierId: body.supplierId || existing?.supplierId || null,
     transporterId: body.transporterId || existing?.transporterId || null,
     assetRequestId: body.assetRequestId || existing?.assetRequestId || null,
+    assetRequestLineId:
+      body.assetRequestLineId || existing?.assetRequestLineId || null,
 
     qty,
     perUnitCost: numOr(body.perUnitCost ?? existing?.perUnitCost, 0),
@@ -996,6 +1027,205 @@ async function applyInventoryUpdate(txn, actor) {
   return stockItem;
 }
 
+function requestLineId(line, index) {
+  return line?.lineId || `legacy-line-${index + 1}`;
+}
+
+async function prepareRequestFulfillment(inputBody) {
+  const assetRequestId = inputBody.assetRequestId || null;
+  if (!assetRequestId || resolveEntryType(inputBody.entryType) !== 'Outward') {
+    return { body: inputBody, context: null };
+  }
+
+  const request = await AssetRequest.findOne({
+    _id: assetRequestId,
+    isDeleted: false,
+  });
+  if (!request || !['LOGISTICS', 'MOVEMENT'].includes(request.requestType)) {
+    throw new AppError('Linked Logistics request not found', 404);
+  }
+  if (request.status !== 'APPROVED') {
+    throw new AppError(
+      'Only APPROVED Logistics requests can be fulfilled',
+      409,
+      'INVALID_STATUS'
+    );
+  }
+
+  const lines = Array.isArray(request.logisticsProducts)
+    ? request.logisticsProducts
+    : [];
+  let lineId = trimStr(inputBody.assetRequestLineId);
+  let line = null;
+  if (lines.length) {
+    if (!lineId && lines.length > 1) {
+      throw new AppError(
+        'assetRequestLineId is required for multi-product requests',
+        400,
+        'ASSET_REQUEST_LINE_REQUIRED'
+      );
+    }
+    if (!lineId) lineId = requestLineId(lines[0], 0);
+    const index = lines.findIndex(
+      (item, itemIndex) => requestLineId(item, itemIndex) === lineId
+    );
+    if (index < 0) {
+      throw new AppError(
+        'assetRequestLineId does not belong to this request',
+        400,
+        'INVALID_ASSET_REQUEST_LINE'
+      );
+    }
+    line = lines[index];
+  } else {
+    lineId = lineId || 'legacy-line-1';
+  }
+
+  if ((request.fulfilledLineIds || []).includes(lineId)) {
+    throw new AppError(
+      'This request product line has already been dispatched',
+      409,
+      'DUPLICATE_FULFILLMENT'
+    );
+  }
+  const duplicateFilter = {
+    assetRequestId: request._id,
+    entryType: 'Outward',
+    isDeleted: false,
+  };
+  if (lines.length) duplicateFilter.assetRequestLineId = lineId;
+  const duplicate = await LogisticsInOutEntry.findOne(duplicateFilter);
+  if (duplicate) {
+    throw new AppError(
+      'This request product line has already been dispatched',
+      409,
+      'DUPLICATE_FULFILLMENT'
+    );
+  }
+
+  return {
+    body: {
+      ...inputBody,
+      assetRequestId: request._id,
+      assetRequestLineId: lineId,
+      ...(line
+        ? {
+            productId: line.productId || null,
+            productName: line.productName,
+            productType: line.productType,
+            inventoryType: line.productType,
+            qty: line.qty,
+          }
+        : {}),
+    },
+    context: {
+      requestId: request._id,
+      lineId,
+      totalLines: lines.length || 1,
+      allLineIds: lines.length
+        ? lines.map(requestLineId)
+        : [lineId],
+    },
+  };
+}
+
+async function finalizeRequestFulfillment(context) {
+  if (!context) return null;
+  const request = await AssetRequest.findOne({
+    _id: context.requestId,
+    isDeleted: false,
+  });
+  if (!request || request.status !== 'APPROVED') {
+    throw new AppError('Request is no longer approved', 409, 'INVALID_STATUS');
+  }
+  const fulfilledLineIds = [
+    ...new Set([...(request.fulfilledLineIds || []), context.lineId]),
+  ];
+  const updated = await AssetRequest.findOneAndUpdate(
+    {
+      _id: request._id,
+      isDeleted: false,
+      status: 'APPROVED',
+      fulfillmentPendingLineIds: { $in: [context.lineId] },
+    },
+    {
+      $set: {
+        fulfilledLineIds,
+        fulfillmentPendingLineIds: (request.fulfillmentPendingLineIds || []).filter(
+          (lineId) => String(lineId) !== String(context.lineId)
+        ),
+      },
+    }
+  );
+  if (!updated) throw new AppError('Request status changed', 409, 'INVALID_STATUS');
+  const allProductLinesFulfilled = context.allLineIds.every((lineId) =>
+    fulfilledLineIds.includes(lineId)
+  );
+  return {
+    assetRequestId: request._id,
+    assetRequestLineId: context.lineId,
+    fulfilledLineIds,
+    fulfilledCount: fulfilledLineIds.length,
+    totalLines: context.totalLines,
+    allProductLinesFulfilled,
+    canCompleteRequest: allProductLinesFulfilled,
+    requestStatus: updated.status,
+    completionRequired: allProductLinesFulfilled,
+  };
+}
+
+async function reserveRequestFulfillment(context) {
+  if (!context) return false;
+  const request = await AssetRequest.findOne({
+    _id: context.requestId,
+    isDeleted: false,
+    status: 'APPROVED',
+  });
+  if (!request) throw new AppError('Request is no longer approved', 409, 'INVALID_STATUS');
+  const pending = request.fulfillmentPendingLineIds || [];
+  const reserved = await AssetRequest.findOneAndUpdate(
+    {
+      _id: request._id,
+      isDeleted: false,
+      status: 'APPROVED',
+      fulfilledLineIds: { $nin: [context.lineId] },
+      fulfillmentPendingLineIds: { $nin: [context.lineId] },
+    },
+    {
+      $set: {
+        fulfillmentPendingLineIds: [...pending, context.lineId],
+      },
+    }
+  );
+  if (!reserved) {
+    throw new AppError(
+      'This request product line is already dispatched or being dispatched',
+      409,
+      'DUPLICATE_FULFILLMENT'
+    );
+  }
+  return true;
+}
+
+async function releaseRequestFulfillmentReservation(context) {
+  if (!context) return;
+  const request = await AssetRequest.findOne({
+    _id: context.requestId,
+    isDeleted: false,
+  });
+  if (!request) return;
+  await AssetRequest.findOneAndUpdate(
+    { _id: request._id },
+    {
+      $set: {
+        fulfillmentPendingLineIds: (request.fulfillmentPendingLineIds || []).filter(
+          (lineId) => String(lineId) !== String(context.lineId)
+        ),
+      },
+    }
+  );
+}
+
 /** Dynamic Inventory Transaction CRUD */
 router.get(
   '/in-out',
@@ -1060,7 +1290,11 @@ router.post(
   },
   asyncHandler(async (req, res) => {
     const filesMeta = attachmentsFromUpload(req, null);
-    const enriched = await enrichBodyFromProduct({ ...req.body, ...filesMeta });
+    const prepared = await prepareRequestFulfillment({
+      ...req.body,
+      ...filesMeta,
+    });
+    const enriched = await enrichBodyFromProduct(prepared.body);
     const body = normalizeInOutBody(enriched, null, req.user);
     const clash = await LogisticsInOutEntry.findOne({
       uniqueKey: body.uniqueKey,
@@ -1070,20 +1304,28 @@ router.post(
       throw new AppError(`Transaction ID “${body.uniqueKey}” already exists`, 400, 'DUPLICATE');
     }
 
-    const row = await LogisticsInOutEntry.create(body);
-    await applyInventoryUpdate(row, req.user);
+    let reserved = false;
+    try {
+      reserved = await reserveRequestFulfillment(prepared.context);
+      const row = await LogisticsInOutEntry.create(body);
+      await applyInventoryUpdate(row, req.user);
+      const fulfillment = await finalizeRequestFulfillment(prepared.context);
 
-    await writeAudit({
-      actorId: req.user._id,
-      actorEmail: req.user.email,
-      action: 'LogisticsInOutEntry.CREATE',
-      entityType: 'LogisticsInOutEntry',
-      entityId: row._id,
-      after: row.toObject ? row.toObject() : row,
-      requestId: req.requestId,
-    });
+      await writeAudit({
+        actorId: req.user._id,
+        actorEmail: req.user.email,
+        action: 'LogisticsInOutEntry.CREATE',
+        entityType: 'LogisticsInOutEntry',
+        entityId: row._id,
+        after: row.toObject ? row.toObject() : row,
+        requestId: req.requestId,
+      });
 
-    res.status(201).json({ data: row });
+      res.status(201).json({ data: row, fulfillment });
+    } catch (error) {
+      if (reserved) await releaseRequestFulfillmentReservation(prepared.context);
+      throw error;
+    }
   })
 );
 
@@ -1099,6 +1341,18 @@ router.patch(
   asyncHandler(async (req, res) => {
     const row = await LogisticsInOutEntry.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Transaction not found', 404);
+    if (
+      (req.body.assetRequestId &&
+        String(req.body.assetRequestId) !== String(row.assetRequestId || '')) ||
+      (req.body.assetRequestLineId &&
+        String(req.body.assetRequestLineId) !== String(row.assetRequestLineId || ''))
+    ) {
+      throw new AppError(
+        'Request fulfillment links are immutable; create a new outward transaction',
+        409,
+        'FULFILLMENT_LINK_IMMUTABLE'
+      );
+    }
 
     const filesMeta = attachmentsFromUpload(req, row);
     const body = normalizeInOutBody({ ...req.body, ...filesMeta }, row, req.user);

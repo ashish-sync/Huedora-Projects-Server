@@ -84,7 +84,7 @@ export const MODULE_ACCESS_CATALOG = [
   {
     id: 'assetRequests',
     label: 'The Request Center',
-    description: 'Repair, maintenance, logistics, training, and reimbursement requests',
+    description: 'Repair, maintenance, logistics, training, reimbursement, and hiring requests',
     actions: withAll({
       view: [
         PERMISSIONS.ASSET_REQUESTS_READ,
