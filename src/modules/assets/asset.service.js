@@ -95,7 +95,7 @@ export async function transitionAsset({
 
 export async function createAsset(payload, actor) {
   const assetTag = payload.assetTag || (await nextSequence('assetTag', 'AST'));
-  const qrCode = payload.qrCode || `DHUB-${assetTag.replace(/^AST-/, '')}`;
+  const qrCode = payload.qrCode || `TYLO-${assetTag.replace(/^AST-/, '')}`;
   const asset = await Asset.create({
     ...payload,
     assetTag,

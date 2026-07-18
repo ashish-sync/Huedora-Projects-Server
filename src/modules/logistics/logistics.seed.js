@@ -17,7 +17,7 @@ import {
   LogisticsWarehouse,
 } from './logistics.model.js';
 
-/** Seed logistics lookup rows — idempotent, does not touch DHub lifecycle data */
+/** Seed logistics lookup rows. idempotent, does not touch TYLO One lifecycle data */
 export async function ensureLogisticsSeed() {
   const mum = await LogisticsWarehouse.findOne({
     $or: [{ code: DEFAULT_WAREHOUSE_CODE }, { name: DEFAULT_WAREHOUSE_NAME }],

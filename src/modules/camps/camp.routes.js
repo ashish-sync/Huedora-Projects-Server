@@ -114,7 +114,7 @@ function normalizeRequestBody(body, existing = null) {
     startTime,
     endTime,
     campSlot,
-    /** Technician / HCW is assigned by approver on Approve — not on request create */
+    /** Technician / HCW is assigned by approver on Approve. not on request create */
     technicianName: trimStr(body.technicianName ?? existing?.technicianName ?? ''),
     technicianNumber: trimStr(body.technicianNumber ?? existing?.technicianNumber ?? ''),
     technicianContactId: body.technicianContactId || existing?.technicianContactId || null,

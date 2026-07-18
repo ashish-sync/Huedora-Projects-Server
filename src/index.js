@@ -8,7 +8,7 @@ async function main() {
   await ensureSeed();
   const app = createApp();
   app.listen(env.port, () => {
-    console.log(`[api] DHub listening on http://localhost:${env.port}`);
+    console.log(`[api] TYLO One listening on http://localhost:${env.port}`);
   });
 }
 

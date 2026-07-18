@@ -178,7 +178,7 @@ async function processVerification(rows, mode, user) {
         if (serial) {
           asset = await Asset.findOne({ serialNumber: serial, isDeleted: false });
           if (!asset) {
-            // try match by device name without serial enrichment create — skip create
+            // try match by device name without serial enrichment create. skip create
           }
         }
 

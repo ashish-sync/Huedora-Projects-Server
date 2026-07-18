@@ -38,7 +38,7 @@ const uploadsRoot = path.resolve(__dirname, '../uploads');
 export function createApp() {
   const app = express();
 
-  // Render / Cloudflare sit behind a reverse proxy — needed for correct client IPs
+  // Render / Cloudflare sit behind a reverse proxy. needed for correct client IPs
   // (login rate limiting, audit logs). Without this, many users share one proxy IP.
   if (env.isProd) {
     app.set('trust proxy', 1);
@@ -67,19 +67,19 @@ export function createApp() {
       data: {
         status: 'ok',
         live: true,
-        service: 'dhub-api',
+        service: 'tylo-one-api',
         ts: new Date().toISOString(),
       },
     });
   });
 
-  /** Liveness probe — same payload as /health for load balancers / frontend boot gate */
+  /** Liveness probe. same payload as /health for load balancers / frontend boot gate */
   app.get('/api/v1/live', (_req, res) => {
     res.status(200).json({
       data: {
         status: 'ok',
         live: true,
-        service: 'dhub-api',
+        service: 'tylo-one-api',
         ts: new Date().toISOString(),
       },
     });
@@ -108,7 +108,7 @@ export function createApp() {
   app.use('/api/v1/camps', campRoutes);
   app.use('/api/v1/asset-requests', assetRequestRoutes);
   app.use('/api/v1/logistics', logisticsRoutes);
-  // Scoped mounts only — never mount repairs as a /api/v1 catch-all (it hid missing routes).
+  // Scoped mounts only. never mount repairs as a /api/v1 catch-all (it hid missing routes).
   app.use('/api/v1/repairs', repairRoutes);
   app.use('/api/v1/maintenance', maintenanceRoutes);
 

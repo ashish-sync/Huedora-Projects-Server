@@ -83,7 +83,7 @@ export const MODULE_ACCESS_CATALOG = [
   },
   {
     id: 'assetRequests',
-    label: 'The Request Center',
+    label: 'Request Center',
     description: 'Repair, maintenance, logistics, training, reimbursement, and hiring requests',
     actions: withAll({
       view: [

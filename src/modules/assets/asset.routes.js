@@ -289,7 +289,7 @@ router.post(
 
     const title =
       String(req.body.title || '').trim() ||
-      `Signed agreement — ${asset.deviceNameSnapshot || asset.assetTag || asset.serialNumber || 'asset'}`;
+      `Signed agreement: ${asset.deviceNameSnapshot || asset.assetTag || asset.serialNumber || 'asset'}`;
 
     const agreement = await Agreement.create({
       agreementNumber: await nextSequence('agreementNumber', 'AGR'),

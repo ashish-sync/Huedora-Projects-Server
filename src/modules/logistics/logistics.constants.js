@@ -1,4 +1,4 @@
-/** Inventory & Logistics — Inventory Ledger transaction config */
+/** Inventory & Logistics. Inventory Ledger transaction config */
 
 export const LOCATION_LEVELS = ['Zone', 'Room', 'Rack', 'Shelf', 'Bin'];
 
@@ -123,7 +123,7 @@ export const IN_OUT_PRODUCT_TYPE_ALIASES = {
   Other: 'Miscellaneous',
 };
 
-/** How items are tracked — from Product Master */
+/** How items are tracked. from Product Master */
 export const PRODUCT_TRACKING_KINDS = ['None', 'Serial', 'Batch', 'Batch + Serial'];
 
 /**

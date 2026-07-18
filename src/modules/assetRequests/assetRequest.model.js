@@ -1,7 +1,7 @@
 import { defineCollection } from '../../store/filedb.js';
 import { softDelete } from '../common/counter.model.js';
 
-/** Canonical request types for The Request Center */
+/** Canonical request types for Request Center */
 export const REQUEST_TYPES = [
   'REPAIR',
   'MAINTENANCE',

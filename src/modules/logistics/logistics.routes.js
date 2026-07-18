@@ -658,7 +658,7 @@ function normalizeInOutBody(body, existing = null, actor = null) {
   );
   const productName = trimStr(body.productName ?? existing?.productName ?? '');
   if (!productName && !body.productId && !existing?.productId) {
-    throw new AppError('Product Name is required — pick from Products in Masters', 400, 'VALIDATION_ERROR');
+    throw new AppError('Product Name is required. Select a product from Masters.', 400, 'VALIDATION_ERROR');
   }
 
   const deliveryMode =
@@ -946,7 +946,7 @@ async function applyQtyDeltaToStock(txn, warehouseId, quantityDelta, actor) {
     quantity: Math.abs(quantityDelta) || txn.qty || 1,
     unitValue: txn.perUnitCost || 0,
     expiryDate: txn.expiryDate || '',
-    dhubAssetId: txn.assetId || null,
+    tyloAssetId: txn.assetId || null,
     remarks: txn.remark || '',
     isActive: true,
   });
@@ -1667,7 +1667,7 @@ router.post(
       quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
       unitValue: Number(req.body.unitValue) || 0,
       lowStockThreshold: Number(req.body.lowStockThreshold) || 0,
-      dhubAssetId: null,
+      tyloAssetId: null,
       remarks: trimStr(req.body.remarks),
       isActive: true,
     });

@@ -315,7 +315,7 @@ router.get(
 
     const exportedAt = new Date().toISOString();
 
-    sendMultiSheetExcel(res, 'DHub_Dashboard_Summary.xlsx', [
+    sendMultiSheetExcel(res, 'TYLO_One_Dashboard_Summary.xlsx', [
       {
         name: 'Summary',
         headers: ['Metric', 'Count'],
@@ -336,22 +336,22 @@ router.get(
       {
         name: 'Assets by Status',
         headers: ['Status', 'Count'],
-        rows: assetsByStatus.map((x) => [x._id || '—', x.count]),
+        rows: assetsByStatus.map((x) => [x._id || '-', x.count]),
       },
       {
         name: 'Agreements by Status',
         headers: ['Status', 'Count'],
-        rows: agreementsByStatus.map((x) => [x._id || '—', x.count]),
+        rows: agreementsByStatus.map((x) => [x._id || '-', x.count]),
       },
       {
         name: 'Movements by Status',
         headers: ['Status', 'Count'],
-        rows: movementsByStatus.map((x) => [x._id || '—', x.count]),
+        rows: movementsByStatus.map((x) => [x._id || '-', x.count]),
       },
       {
         name: 'Verifications by Status',
         headers: ['Status', 'Count'],
-        rows: verificationByStatus.map((x) => [x._id || '—', x.count]),
+        rows: verificationByStatus.map((x) => [x._id || '-', x.count]),
       },
     ]);
   })

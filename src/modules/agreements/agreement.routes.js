@@ -514,7 +514,7 @@ router.post(
       });
     }
 
-    // Delivery stubs (email/SMS) — queued + activity logged; SMTP/SMS providers wired later
+    // Delivery stubs (email/SMS). queued + activity logged; SMTP/SMS providers wired later
     const deliveryNotes = [];
     if (deliverEmail && partyEmail) {
       agreement.deliveryStatus = {
@@ -744,7 +744,7 @@ router.post(
     const { signerId, signatureType: rawType, signatureData: rawData, typedName, signatureMasterId } =
       req.body;
 
-    // Staff may only apply the owner/sender signature — never the receiver's
+    // Staff may only apply the owner/sender signature. never the receiver's
     if (signerId && String(signerId) !== String(sender.id)) {
       throw new AppError(
         'You cannot sign on behalf of the receiver. Share their signing link instead.',

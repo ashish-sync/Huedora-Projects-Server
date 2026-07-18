@@ -9,7 +9,7 @@ import { Asset } from '../assets/asset.model.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
 
-/** Mounted at /api/v1/repairs — do not mount under /api/v1 catch-all. */
+/** Mounted at /api/v1/repairs. do not mount under /api/v1 catch-all. */
 export const repairRoutes = Router();
 repairRoutes.use(authenticate);
 
@@ -129,7 +129,7 @@ repairRoutes.post(
   })
 );
 
-/** Mounted at /api/v1/maintenance — do not mount under /api/v1 catch-all. */
+/** Mounted at /api/v1/maintenance. do not mount under /api/v1 catch-all. */
 export const maintenanceRoutes = Router();
 maintenanceRoutes.use(authenticate);
 

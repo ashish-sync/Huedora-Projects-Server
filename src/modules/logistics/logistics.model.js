@@ -132,7 +132,7 @@ export const LogisticsStockItem = defineCollection('logistics_stock_items', {
   unitValue: 0,
   lowStockThreshold: 0,
   expiryDate: '',
-  dhubAssetId: null,
+  tyloAssetId: null,
   remarks: '',
   isActive: true,
 });
@@ -167,7 +167,7 @@ export const LogisticsLedgerEntry = defineCollection('logistics_ledger_entries',
 });
 
 /**
- * Dynamic inventory transaction — single engine for all Entry Type × Product Type.
+ * Dynamic inventory transaction. single engine for all Entry Type × Product Type.
  */
 export const LogisticsInOutEntry = defineCollection('logistics_in_out_entries', {
   ...softDelete,
@@ -300,7 +300,7 @@ export const LogisticsInOutEntry = defineCollection('logistics_in_out_entries', 
   isActive: true,
 });
 
-/** Camp-linked consumption — Screen Count = Used; Wastage feeds dashboard */
+/** Camp-linked consumption. Screen Count = Used; Wastage feeds dashboard */
 export const LogisticsUsageEntry = defineCollection('logistics_usage_entries', {
   ...softDelete,
   hcwId: '',

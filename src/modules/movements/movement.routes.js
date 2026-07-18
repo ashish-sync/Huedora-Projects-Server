@@ -238,7 +238,7 @@ router.post(
     if (movement.to?.contactId) {
       toContact = await Contact.findById(movement.to.contactId);
     } else if (movement.to?.hcwId) {
-      // Legacy movements that still store to.hcwId — leave without remapping on receive
+      // Legacy movements that still store to.hcwId. leave without remapping on receive
       toContact = null;
     }
 

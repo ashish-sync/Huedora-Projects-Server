@@ -1,8 +1,8 @@
 export const ASSET_TYPE_OPTIONS = ['Rented', 'Owned', 'Hybrid'];
 
-/** Sheet label: Asset Status — 8 inventory types */
+/** Sheet label: Asset Status. 8 inventory types */
 export const AGREEMENT_STATUS_OPTIONS = [
-  'With Kartavya',
+  'With TCPL',
   'Not Applicable',
   'Lost/Stolen',
   'Agreement Signed',
@@ -17,12 +17,12 @@ export const ASSET_STATUS_OPTIONS = AGREEMENT_STATUS_OPTIONS;
 /** Sheet label: Asset Custody */
 export const DEVICE_CUSTODY_OPTIONS = [
   'Client / Rented',
-  'KHPL - Mumbai Warehouse',
-  'KHPL - Hyderabad Warehouse',
+  'TCPL - Mumbai Warehouse',
+  'TCPL - Hyderabad Warehouse',
   'Individual',
   'Service Provider',
-  'KHPL - HO',
-  'KHPL - Delhi Warehouse',
+  'TCPL - HO',
+  'TCPL - Delhi Warehouse',
 ];
 
 export const ASSET_CUSTODY_OPTIONS = DEVICE_CUSTODY_OPTIONS;

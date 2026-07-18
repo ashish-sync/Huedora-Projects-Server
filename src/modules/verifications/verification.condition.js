@@ -29,9 +29,9 @@ export function latestVerifiedAt(asset, record) {
 }
 
 /**
- * SAFE — both monthly rounds done
- * CAUTION — one round done, OR not verified within the last 1 day
- * DANGER — no rounds done and missing for >= days in current month
+ * SAFE. both monthly rounds done
+ * CAUTION. one round done, OR not verified within the last 1 day
+ * DANGER. no rounds done and missing for >= days in current month
  */
 export function computeDeviceCondition(asset, record, now = new Date()) {
   const done = roundCount(record);
@@ -49,7 +49,7 @@ export function computeDeviceCondition(asset, record, now = new Date()) {
     reason = 'Both monthly verifications complete';
   } else if (done === 1) {
     condition = 'CAUTION';
-    reason = 'One verification complete — second due this month';
+    reason = 'One verification complete. Second due this month.';
   } else if (daysSince >= dim) {
     condition = 'DANGER';
     reason = `No verification for ${Number.isFinite(daysSince) ? daysSince : dim}+ days (month has ${dim} days)`;

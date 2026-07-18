@@ -330,7 +330,7 @@ export async function logCallAttempt({
 
   let remark = `${outcomeKey}: ${whenLabel}`;
   if (callbackLabel) remark += ` · remind ${callbackLabel}`;
-  if (noteText) remark += ` — ${noteText}`;
+  if (noteText) remark += `: ${noteText}`;
 
   record.callRemark = remark;
   record.callbackAt = callbackIso;
@@ -396,7 +396,7 @@ export async function logCallAttempt({
     round: roundNum,
     action: 'CALL_ATTEMPT',
     actor,
-    message: messageParts.join(' — '),
+    message: messageParts.join('. '),
     meta: {
       outcome: outcomeKey,
       note: noteText || null,

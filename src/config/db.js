@@ -12,7 +12,7 @@ export async function connectDb() {
     let uri = env.mongoUri;
     if (env.useMemoryDb) {
       const memoryServer = await MongoMemoryServer.create();
-      uri = memoryServer.getUri('dhub');
+      uri = memoryServer.getUri('tylo-one');
       console.log('[db] Using in-memory MongoDB');
     }
     mongoose.set('strictQuery', true);

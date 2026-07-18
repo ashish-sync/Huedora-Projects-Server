@@ -22,9 +22,9 @@ function strongSecret(name, value) {
       `[config] ${name} must be set to a strong secret (32+ characters) in production`
     );
   }
-  const weakHints = ['change-me', 'dev-access', 'dev-refresh', 'dhub-dev-', 'password123'];
+  const weakHints = ['change-me', 'dev-access', 'dev-refresh', 'tylo-one-dev-', 'password123'];
   if (weakHints.some((w) => v.toLowerCase().includes(w))) {
-    throw new Error(`[config] ${name} looks like a placeholder — set a real secret in production`);
+    throw new Error(`[config] ${name} looks like a placeholder. set a real secret in production`);
   }
   return v;
 }
@@ -37,12 +37,12 @@ export const env = {
   useMemoryDb: String(process.env.USE_MEMORY_DB || 'false').toLowerCase() === 'true',
   /** Prefer file DB locally unless USE_MONGOOSE=true */
   useMongoose: String(process.env.USE_MONGOOSE || 'false').toLowerCase() === 'true',
-  mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/dhub',
+  mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/tylo-one',
   jwtAccessSecret: strongSecret('JWT_ACCESS_SECRET', process.env.JWT_ACCESS_SECRET),
   jwtRefreshSecret: strongSecret('JWT_REFRESH_SECRET', process.env.JWT_REFRESH_SECRET),
   jwtAccessExpires: process.env.JWT_ACCESS_EXPIRES || '15m',
   jwtRefreshExpiresDays: Number(process.env.JWT_REFRESH_EXPIRES_DAYS || 7),
-  /** Optional first-run admin — both must be set; never defaults to a public demo password */
+  /** Optional first-run admin. both must be set; never defaults to a public demo password */
   bootstrapAdminEmail: String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase(),
   bootstrapAdminPassword: String(process.env.BOOTSTRAP_ADMIN_PASSWORD || ''),
   bootstrapAdminName: String(process.env.BOOTSTRAP_ADMIN_NAME || 'Administrator').trim(),
@@ -52,7 +52,7 @@ export const env = {
    */
   bootstrapAdminReset:
     String(process.env.BOOTSTRAP_ADMIN_RESET || 'false').toLowerCase() === 'true',
-  /** Dev-only: create manager@ / verifier@ demo accounts — ignored in production */
+  /** Dev-only: create manager@ / verifier@ demo accounts. ignored in production */
   seedDemoUsers: !isProd && String(process.env.SEED_DEMO_USERS || 'false').toLowerCase() === 'true',
   uploadMaxBytes: Number(process.env.UPLOAD_MAX_BYTES || 10485760),
   smtpEnabled: String(process.env.SMTP_ENABLED || 'false').toLowerCase() === 'true',

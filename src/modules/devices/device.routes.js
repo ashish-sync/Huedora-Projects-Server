@@ -304,7 +304,7 @@ router.get(
         125000,
         '07/2026',
         'Not Initiated',
-        'KHPL - Mumbai Warehouse',
+        'TCPL - Mumbai Warehouse',
         'Ravi Kumar',
         '9876543210',
         'Mumbai',
@@ -707,7 +707,7 @@ router.delete(
     });
     if (inUse > 0) {
       throw new AppError(
-        `Cannot delete “${device.name}” — ${inUse} Asset Registry item${inUse === 1 ? '' : 's'} still use this asset. Retire or reassign those items first.`,
+        `Cannot delete “${device.name}”: ${inUse} Asset Registry item${inUse === 1 ? '' : 's'} still use this asset. Retire or reassign those items first.`,
         400,
         'ASSET_IN_USE'
       );

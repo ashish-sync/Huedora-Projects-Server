@@ -261,7 +261,7 @@ router.patch(
     const user = await User.findOne({ _id: req.params.id, isDeleted: false });
     if (!user) throw new AppError('User not found', 404);
 
-    // Snapshot before mutating — and always keep roleIds as string ids in the DB
+    // Snapshot before mutating, and always keep roleIds as string ids in the DB
     // (populate() would otherwise persist nested role docs and break later loads).
     const beforeDoc = await User.findOne({ _id: user._id, isDeleted: false });
     await beforeDoc.populate('roleIds');

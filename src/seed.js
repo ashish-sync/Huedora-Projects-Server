@@ -56,7 +56,7 @@ function canBootstrapAdmin() {
   if (!email || !password) return false;
   if (password.length < 12) {
     console.warn(
-      '[seed] BOOTSTRAP_ADMIN_PASSWORD ignored — must be at least 12 characters'
+      '[seed] BOOTSTRAP_ADMIN_PASSWORD ignored. must be at least 12 characters'
     );
     return false;
   }
@@ -64,7 +64,7 @@ function canBootstrapAdmin() {
 }
 
 export async function ensureSeed() {
-  // Create built-in roles once. Never overwrite permissions on restart —
+  // Create built-in roles once. Never overwrite permissions on restart -
   // admins customize access in Roles & Permissions and those edits must stick.
   for (const [name, permissions] of Object.entries(ROLE_PERMISSIONS)) {
     const existing = await Role.findOne({ name });
@@ -140,7 +140,7 @@ export async function ensureSeed() {
       if (!existing.roleIds?.length) existing.roleIds = [adminRole._id];
       await existing.save();
       console.warn(
-        `[seed] Bootstrap admin password RESET for ${env.bootstrapAdminEmail} — set BOOTSTRAP_ADMIN_RESET=false now`
+        `[seed] Bootstrap admin password RESET for ${env.bootstrapAdminEmail}: set BOOTSTRAP_ADMIN_RESET=false now`
       );
     }
   } else {
@@ -152,18 +152,18 @@ export async function ensureSeed() {
     }
   }
 
-  // Optional local demo accounts — never in production
+  // Optional local demo accounts. never in production
   if (env.seedDemoUsers && managerRole && verifierRole && approverRole && canBootstrapAdmin()) {
     const passwordHash = await bcrypt.hash(env.bootstrapAdminPassword, 12);
     const extras = [
       {
-        email: 'manager@dhub.local',
+        email: 'manager@tylo.local',
         username: 'manager',
         fullName: 'Asset Manager',
         roleIds: [managerRole._id, approverRole._id],
       },
       {
-        email: 'verifier@dhub.local',
+        email: 'verifier@tylo.local',
         username: 'verifier',
         fullName: 'Field Verifier',
         roleIds: [verifierRole._id],

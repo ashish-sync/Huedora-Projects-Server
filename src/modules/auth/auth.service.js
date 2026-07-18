@@ -53,9 +53,19 @@ export function publicUser(user) {
   };
 }
 
+/** Normalize login email; map legacy @dhub.local to @tylo.local after rebrand. */
+function normalizeLoginEmail(email) {
+  let value = String(email || '').toLowerCase().trim();
+  if (value.endsWith('@dhub.local')) {
+    value = `${value.slice(0, -'@dhub.local'.length)}@tylo.local`;
+  }
+  return value;
+}
+
 export async function login({ email, password, ip, userAgent, requestId }) {
+  const normalizedEmail = normalizeLoginEmail(email);
   const user = await User.findOne({
-    email: String(email || '').toLowerCase().trim(),
+    email: normalizedEmail,
     isDeleted: false,
   }).populate('roleIds');
 

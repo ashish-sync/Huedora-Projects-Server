@@ -572,7 +572,7 @@ async function notifyApprovers({ request, actorId, reason }) {
       userId: a._id,
       type: 'ASSET_REQUEST_APPROVAL',
       title: `${label} request ${request.requestNumber} needs approval`,
-      body: reason || `${subject} · ${request.custodianName || '—'}`,
+      body: reason || `${subject} · ${request.custodianName || '-'}`,
       entityType: 'AssetRequest',
       entityId: request._id,
     });
@@ -749,7 +749,7 @@ router.get(
         r.approverId?.fullName || r.approverId?.email || '',
         r.createdAt,
       ]),
-      { sheetName: 'The Request Center' }
+      { sheetName: 'Request Center' }
     );
   })
 );
