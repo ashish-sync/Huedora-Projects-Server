@@ -9,9 +9,20 @@ const router = Router();
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: env.isProd ? 10 : 30,
+  // Only failed attempts count; successful logins do not burn the budget.
+  max: env.isProd ? 20 : 60,
+  skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
+  // Key by IP + email so one address/email pair cannot lock out the whole site
+  // when many clients share a proxy egress IP.
+  keyGenerator: (req) => {
+    const email = String(req.body?.email || '')
+      .toLowerCase()
+      .trim()
+      .slice(0, 120);
+    return `${req.ip || 'unknown'}:${email || 'none'}`;
+  },
   message: { error: { message: 'Too many login attempts. Try again later.', code: 'RATE_LIMIT' } },
 });
 

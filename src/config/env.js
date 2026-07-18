@@ -46,6 +46,12 @@ export const env = {
   bootstrapAdminEmail: String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase(),
   bootstrapAdminPassword: String(process.env.BOOTSTRAP_ADMIN_PASSWORD || ''),
   bootstrapAdminName: String(process.env.BOOTSTRAP_ADMIN_NAME || 'Administrator').trim(),
+  /**
+   * When true (and bootstrap email/password are set), update that admin's password on boot.
+   * Use once to recover a locked/forgotten production admin, then set back to false.
+   */
+  bootstrapAdminReset:
+    String(process.env.BOOTSTRAP_ADMIN_RESET || 'false').toLowerCase() === 'true',
   /** Dev-only: create manager@ / verifier@ demo accounts — ignored in production */
   seedDemoUsers: !isProd && String(process.env.SEED_DEMO_USERS || 'false').toLowerCase() === 'true',
   uploadMaxBytes: Number(process.env.UPLOAD_MAX_BYTES || 10485760),

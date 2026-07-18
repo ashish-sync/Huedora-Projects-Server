@@ -125,8 +125,23 @@ export async function ensureSeed() {
         passwordHash,
         roleIds: [adminRole._id],
         isActive: true,
+        failedLoginAttempts: 0,
+        lockUntil: null,
       });
       console.log(`[seed] Bootstrap admin created: ${env.bootstrapAdminEmail}`);
+    } else if (env.bootstrapAdminReset) {
+      // One-shot recovery: set BOOTSTRAP_ADMIN_RESET=true, redeploy, then turn it off.
+      existing.passwordHash = await bcrypt.hash(env.bootstrapAdminPassword, 12);
+      existing.isActive = true;
+      existing.isDeleted = false;
+      existing.failedLoginAttempts = 0;
+      existing.lockUntil = null;
+      existing.passwordChangedAt = new Date();
+      if (!existing.roleIds?.length) existing.roleIds = [adminRole._id];
+      await existing.save();
+      console.warn(
+        `[seed] Bootstrap admin password RESET for ${env.bootstrapAdminEmail} — set BOOTSTRAP_ADMIN_RESET=false now`
+      );
     }
   } else {
     const anyUser = await User.countDocuments({ isDeleted: false });

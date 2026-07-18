@@ -38,6 +38,12 @@ const uploadsRoot = path.resolve(__dirname, '../uploads');
 export function createApp() {
   const app = express();
 
+  // Render / Cloudflare sit behind a reverse proxy — needed for correct client IPs
+  // (login rate limiting, audit logs). Without this, many users share one proxy IP.
+  if (env.isProd) {
+    app.set('trust proxy', 1);
+  }
+
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(
     cors({
