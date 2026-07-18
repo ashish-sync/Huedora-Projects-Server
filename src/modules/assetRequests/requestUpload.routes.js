@@ -112,6 +112,7 @@ router.post(
     }
 
     const image = imageMetadata(req.file, 'CUSTODIAN_INVITE');
+    const previousImage = req.assetRequest.productImage;
     const completedAt = new Date().toISOString();
 
     const completedInvite = await AssetRequestUploadInvite.findOneAndUpdate(
@@ -139,6 +140,9 @@ router.post(
       );
       removeImageFile(image);
       throw new AppError('Request is no longer active', 410, 'LINK_REVOKED');
+    }
+    if (previousImage?.filename && previousImage.filename !== image.filename) {
+      removeImageFile(previousImage);
     }
 
     await writeAudit({

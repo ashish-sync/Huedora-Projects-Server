@@ -17,6 +17,7 @@ npm-debug.log*
 data/
 uploads/
 tmp/
+tmp-*.json
 
 # OS / IDE
 .DS_Store

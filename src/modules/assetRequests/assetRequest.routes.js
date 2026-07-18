@@ -787,6 +787,7 @@ router.post(
       throw new AppError('productPhoto is required', 400, 'VALIDATION_ERROR');
     }
     const image = imageMetadata(req.file, 'MANUAL', req.user._id);
+    const previousImage = req.assetRequest.productImage;
     const updated = await AssetRequest.findOneAndUpdate(
       {
         _id: req.assetRequest._id,
@@ -799,6 +800,9 @@ router.post(
     if (!updated) {
       removeImageFile(image);
       throw new AppError('Request is no longer active', 409, 'INVALID_STATUS');
+    }
+    if (previousImage?.filename && previousImage.filename !== image.filename) {
+      removeImageFile(previousImage);
     }
     await writeAudit({
       actorId: req.user._id,
