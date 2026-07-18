@@ -17,37 +17,37 @@ import { User } from '../users/user.model.js';
 export const REVIEW_MODULES = [
   {
     id: 'assets',
-    label: 'Asset Registry',
-    linkTo: '/assets',
+    label: 'Asset One',
+    linkTo: '/asset-inventory',
     permissions: [PERMISSIONS.ASSETS_READ, PERMISSIONS.ASSETS_WRITE, PERMISSIONS.DEVICES_WRITE],
   },
   {
     id: 'agreements',
-    label: 'Document Center',
+    label: 'Document One',
     linkTo: '/agreements',
     permissions: [PERMISSIONS.AGREEMENTS_READ, PERMISSIONS.AGREEMENTS_WRITE],
   },
   {
     id: 'contacts',
-    label: 'Contact Directory',
-    linkTo: '/agreements/contacts',
+    label: 'Business Partners',
+    linkTo: '/master-data?scope=document&entity=contacts',
     permissions: [PERMISSIONS.AGREEMENTS_READ, PERMISSIONS.AGREEMENTS_WRITE],
   },
   {
     id: 'verifications',
-    label: 'Asset Verification',
+    label: 'Verification One',
     linkTo: '/verifications',
     permissions: [PERMISSIONS.VERIFICATIONS_READ, PERMISSIONS.VERIFICATIONS_WRITE],
   },
   {
     id: 'camps',
-    label: 'Camp Management',
+    label: 'Camp One',
     linkTo: '/camps',
     permissions: [PERMISSIONS.CAMPS_READ, PERMISSIONS.CAMPS_REQUEST, PERMISSIONS.CAMPS_APPROVE],
   },
   {
     id: 'asset-requests',
-    label: 'Request Center',
+    label: 'Request One',
     linkTo: '/asset-requests',
     permissions: [
       PERMISSIONS.ASSET_REQUESTS_READ,
@@ -57,13 +57,19 @@ export const REVIEW_MODULES = [
   },
   {
     id: 'logistics',
-    label: 'Inventory & Logistics',
+    label: 'Movement One',
     linkTo: '/logistics',
     permissions: [PERMISSIONS.LOGISTICS_READ, PERMISSIONS.LOGISTICS_WRITE, PERMISSIONS.LOGISTICS_MASTER],
   },
   {
+    id: 'master-data',
+    label: 'Master One',
+    linkTo: '/master-data',
+    permissions: [PERMISSIONS.LOGISTICS_MASTER, PERMISSIONS.LOGISTICS_WRITE, PERMISSIONS.AGREEMENTS_WRITE],
+  },
+  {
     id: 'movements',
-    label: 'Movements',
+    label: 'Stock Transfer Requests',
     linkTo: '/asset-requests',
     permissions: [PERMISSIONS.MOVEMENTS_READ, PERMISSIONS.MOVEMENTS_REQUEST, PERMISSIONS.MOVEMENTS_APPROVE],
   },

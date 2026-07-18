@@ -1,7 +1,7 @@
 import { defineCollection } from '../../store/filedb.js';
 import { softDelete } from '../common/counter.model.js';
 
-/** Canonical request types for Request Center */
+/** Canonical request types for Request One */
 export const REQUEST_TYPES = [
   'REPAIR',
   'MAINTENANCE',
@@ -10,6 +10,7 @@ export const REQUEST_TYPES = [
   'REIMBURSEMENT',
   'HIRING',
   'OTHER',
+  'MASTER_ADD',
 ];
 
 /** Legacy type still accepted / displayed as Logistics */
@@ -20,12 +21,13 @@ export const ALL_REQUEST_TYPES = [...REQUEST_TYPES, ...LEGACY_REQUEST_TYPES];
 export const REQUEST_TYPE_LABELS = {
   REPAIR: 'Repair',
   MAINTENANCE: 'Maintenance',
-  LOGISTICS: 'Logistics',
-  MOVEMENT: 'Logistics',
+  LOGISTICS: 'Stock Transfer',
+  MOVEMENT: 'Stock Transfer',
   TRAINING: 'Training',
   REIMBURSEMENT: 'Reimbursement',
   HIRING: 'Hiring',
   OTHER: 'Others',
+  MASTER_ADD: 'Master One Request',
 };
 
 export const OTHER_REQUEST_OPTIONS = {
@@ -142,6 +144,11 @@ export const AssetRequest = defineCollection('asset_requests', {
   toNumber: '',
   toPinCode: '',
   toAddress: '',
+  masterModule: '',
+  masterEntity: '',
+  masterPayload: null,
+  createdMasterId: null,
+  createdMasterCode: '',
 });
 
 /** Single-use, hashed upload invitation for a request custodian. */

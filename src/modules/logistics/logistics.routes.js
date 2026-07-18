@@ -9,6 +9,7 @@ import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { env } from '../../config/env.js';
 import { throwIfIdentityClash } from '../../utils/identityNormalize.js';
+import { nextSequence } from '../../utils/counters.js';
 import { AssetRequest } from '../assetRequests/assetRequest.model.js';
 import {
   LOCATION_LEVELS,
@@ -21,12 +22,15 @@ import {
   IN_OUT_TRACKING_TYPES,
   IN_OUT_PRODUCT_TYPES,
   IN_OUT_PRODUCT_TYPE_ALIASES,
+  PRODUCT_TYPE_CODE_PREFIX,
+  PRODUCT_INVENTORY_TYPES,
   PRODUCT_TRACKING_TYPE,
   PRODUCT_TRACKING_KINDS,
   PRODUCT_CATEGORY_DEFAULTS,
   PRODUCT_STATUS_OPTIONS,
   PRODUCT_REQUIRED_FIELDS,
   ENTRY_REQUIRED_FIELDS,
+  DEFAULT_EXPENSE_CATEGORIES,
   ADJUSTMENT_TYPES,
   ADJUSTMENT_REASONS,
   DEVICE_CONDITIONS,
@@ -74,11 +78,78 @@ const inwardUpload = multer({
   limits: { fileSize: env.uploadMaxBytes },
 });
 
-const inwardFiles = inwardUpload.fields([
-  { name: 'productPhoto', maxCount: 1 },
-  { name: 'invoiceDoc', maxCount: 1 },
-  { name: 'docsExtra', maxCount: 5 },
+const productUploadRoot = path.resolve(__dirname, '../../../uploads/logistics/products');
+fs.mkdirSync(productUploadRoot, { recursive: true });
+
+const productUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, productUploadRoot),
+    filename: (_req, file, cb) => {
+      const safe = String(file.originalname || 'file')
+        .replace(/[^a-zA-Z0-9._-]/g, '_')
+        .slice(0, 80);
+      cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`);
+    },
+  }),
+  limits: { fileSize: env.uploadMaxBytes },
+});
+
+const productFiles = productUpload.fields([
+  { name: 'file', maxCount: 1 },
+  { name: 'images', maxCount: 8 },
 ]);
+
+function fileRefFromMulter(file) {
+  if (!file) return null;
+  return {
+    filename: file.filename,
+    name: file.originalname,
+    url: `/uploads/logistics/products/${file.filename}`,
+    mimeType: file.mimetype,
+  };
+}
+
+function asBool(v, fallback = false) {
+  if (v === true || v === 'true' || v === 'yes' || v === '1') return true;
+  if (v === false || v === 'false' || v === 'no' || v === '0') return false;
+  if (v == null || v === '') return fallback;
+  return Boolean(v);
+}
+
+function toNum(v, fallback = 0) {
+  if (v === '' || v == null) return fallback;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function asIdList(v) {
+  if (Array.isArray(v)) return v.map((x) => String(x || '').trim()).filter(Boolean);
+  if (typeof v === 'string' && v.trim()) {
+    try {
+      const parsed = JSON.parse(v);
+      if (Array.isArray(parsed)) return asIdList(parsed);
+    } catch {
+      /* ignore */
+    }
+    return v
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function asFileRef(v) {
+  if (!v || typeof v !== 'object') return null;
+  const url = trimStr(v.url);
+  if (!url) return null;
+  return {
+    filename: trimStr(v.filename),
+    name: trimStr(v.name) || trimStr(v.filename),
+    url,
+    mimeType: trimStr(v.mimeType),
+  };
+}
 
 function attachmentsFromUpload(req, existing = null) {
   const productPhotoFile = req.files?.productPhoto?.[0];
@@ -139,6 +210,9 @@ function registerMasterCrud({
   systemProtected = false,
   listFilter = null,
   checkIdentity = false,
+  codePrefix,
+  resolveCodePrefix = null,
+  skuPrefix,
 }) {
   async function assertPartyIdentity(body, excludeId) {
     if (!checkIdentity) return;
@@ -164,7 +238,15 @@ function registerMasterCrud({
       if (req.query.parentId === 'null') filter.parentId = null;
       else if (req.query.parentId) filter.parentId = req.query.parentId;
       if (req.query.level) filter.level = req.query.level;
-      if (req.query.productType) filter.productType = String(req.query.productType);
+      if (req.query.productType) {
+        const want = resolveProductType(req.query.productType) || String(req.query.productType);
+        const aliases = Object.entries(IN_OUT_PRODUCT_TYPE_ALIASES)
+          .filter(([, v]) => v === want)
+          .map(([k]) => k);
+        filter.productType = { $in: [...new Set([want, String(req.query.productType), ...aliases])] };
+      }
+      if (req.query.isActive === 'true') filter.isActive = true;
+      if (req.query.isActive === 'false') filter.isActive = false;
       if (req.query.q) {
         const re = new RegExp(String(req.query.q), 'i');
         filter.$or = searchFields.map((f) => ({ [f]: re }));
@@ -187,9 +269,45 @@ function registerMasterCrud({
           throw new AppError(`${key} is required`, 400, 'VALIDATION_ERROR');
         }
       }
-      if (body.code) {
+      const prefix =
+        (typeof resolveCodePrefix === 'function' ? resolveCodePrefix(body) : null) || codePrefix;
+      if (prefix) {
+        let allocated = '';
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          allocated = await nextSequence(`logistics.${path}.${prefix}`, prefix);
+          const clash = await Model.findOne({
+            code: allocated,
+            isDeleted: false,
+            ...(listFilter || {}),
+          });
+          if (!clash) break;
+          allocated = '';
+        }
+        if (!allocated) {
+          throw new AppError('Could not allocate a unique code', 500, 'CODE_ALLOCATION');
+        }
+        body.code = allocated;
+      } else if (body.code) {
+        body.code = trimStr(body.code).toUpperCase();
         const clash = await Model.findOne({ code: body.code, isDeleted: false });
         if (clash) throw new AppError(`Code “${body.code}” already exists`, 400, 'DUPLICATE');
+      }
+      if (skuPrefix) {
+        let allocatedSku = '';
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          allocatedSku = await nextSequence(`logistics.${path}.sku`, skuPrefix);
+          const clash = await Model.findOne({
+            sku: allocatedSku,
+            isDeleted: false,
+            ...(listFilter || {}),
+          });
+          if (!clash) break;
+          allocatedSku = '';
+        }
+        if (!allocatedSku) {
+          throw new AppError('Could not allocate a unique SKU', 500, 'SKU_ALLOCATION');
+        }
+        body.sku = allocatedSku;
       }
       await assertPartyIdentity(body);
       const row = await Model.create({ ...body, isActive: body.isActive !== false });
@@ -216,6 +334,9 @@ function registerMasterCrud({
         throw new AppError('System codes cannot be changed', 400, 'LOCKED');
       }
       const body = normalize ? normalize(req.body, row) : { ...req.body };
+      // Codes and SKUs are assigned on create and stay fixed.
+      delete body.code;
+      delete body.sku;
       await assertPartyIdentity(
         {
           email: body.email !== undefined ? body.email : row.email,
@@ -268,6 +389,7 @@ registerMasterCrud({
   path: 'warehouses',
   Model: LogisticsWarehouse,
   entityType: 'LogisticsWarehouse',
+  codePrefix: 'WH',
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase(),
     name: trimStr(b.name),
@@ -284,6 +406,7 @@ registerMasterCrud({
   entityType: 'LogisticsLocation',
   searchFields: ['name', 'code', 'level'],
   required: ['name', 'warehouseId', 'level'],
+  codePrefix: 'LOC',
   normalize: (b) => {
     const level = trimStr(b.level);
     if (level && !LOCATION_LEVELS.includes(level)) {
@@ -311,6 +434,7 @@ registerMasterCrud({
   searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city'],
   listFilter: { partyType: 'Supplier' },
   checkIdentity: true,
+  codePrefix: 'SUP',
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase(),
     name: trimStr(b.name),
@@ -332,6 +456,7 @@ registerMasterCrud({
   searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city'],
   listFilter: { partyType: 'Vendor' },
   checkIdentity: true,
+  codePrefix: 'VEN',
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase(),
     name: trimStr(b.name),
@@ -352,6 +477,7 @@ registerMasterCrud({
   entityType: 'LogisticsTransporter',
   searchFields: ['name', 'code', 'email', 'phone', 'contactName'],
   checkIdentity: true,
+  codePrefix: 'TRN',
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase(),
     name: trimStr(b.name),
@@ -366,6 +492,7 @@ registerMasterCrud({
   path: 'categories',
   Model: LogisticsCategory,
   entityType: 'LogisticsCategory',
+  codePrefix: 'CAT',
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase(),
     name: trimStr(b.name),
@@ -378,10 +505,22 @@ registerMasterCrud({
   path: 'products',
   Model: LogisticsProduct,
   entityType: 'LogisticsProduct',
-  searchFields: ['name', 'code', 'sku', 'brand', 'model', 'productType', 'programProject'],
-  required: ['name', 'productType'],
-  normalize: (b) => {
-    const productType = resolveProductType(b.productType) || 'Miscellaneous';
+  searchFields: [
+    'name',
+    'code',
+    'sku',
+    'brand',
+    'manufacturer',
+    'productType',
+    'hsnCode',
+    'programProject',
+  ],
+  required: ['name', 'productType', 'categoryId', 'brand', 'manufacturer'],
+  resolveCodePrefix: (body) =>
+    PRODUCT_TYPE_CODE_PREFIX[body.productType] || PRODUCT_TYPE_CODE_PREFIX.Misc || 'MSC',
+  skuPrefix: 'SKU',
+  normalize: (b, existing) => {
+    const productType = resolveProductType(b.productType ?? existing?.productType) || 'Misc';
     if (!IN_OUT_PRODUCT_TYPES.includes(productType)) {
       throw new AppError(
         `productType must be one of: ${IN_OUT_PRODUCT_TYPES.join(', ')}`,
@@ -393,36 +532,167 @@ registerMasterCrud({
       expiryApplicable: false,
       trackingKind: 'None',
     };
-    let trackingKind = trimStr(b.trackingKind) || defaults.trackingKind;
+    let trackingKind = trimStr(b.trackingKind ?? existing?.trackingKind) || defaults.trackingKind;
     if (!PRODUCT_TRACKING_KINDS.includes(trackingKind)) trackingKind = defaults.trackingKind;
+
+    let inventoryType = trimStr(b.inventoryType ?? existing?.inventoryType) || 'Inventory Item';
+    if (!PRODUCT_INVENTORY_TYPES.includes(inventoryType)) {
+      inventoryType = productType === 'Device' ? 'Asset' : 'Inventory Item';
+    }
+
     const expiryApplicable =
-      b.expiryApplicable === true ||
-      b.expiryApplicable === 'true' ||
-      b.expiryApplicable === 'yes' ||
-      (b.expiryApplicable == null && defaults.expiryApplicable);
+      b.expiryApplicable != null
+        ? asBool(b.expiryApplicable, defaults.expiryApplicable)
+        : existing?.expiryApplicable != null
+          ? !!existing.expiryApplicable
+          : defaults.expiryApplicable;
+
+    const incomingDocs = b.documents && typeof b.documents === 'object' ? b.documents : {};
+    const prevDocs = existing?.documents && typeof existing.documents === 'object' ? existing.documents : {};
+    const documents = {
+      datasheet:
+        b.documents !== undefined ? asFileRef(incomingDocs.datasheet) : asFileRef(prevDocs.datasheet),
+      userManual:
+        b.documents !== undefined ? asFileRef(incomingDocs.userManual) : asFileRef(prevDocs.userManual),
+      warranty:
+        b.documents !== undefined ? asFileRef(incomingDocs.warranty) : asFileRef(prevDocs.warranty),
+      compliance:
+        b.documents !== undefined ? asFileRef(incomingDocs.compliance) : asFileRef(prevDocs.compliance),
+      sop: b.documents !== undefined ? asFileRef(incomingDocs.sop) : asFileRef(prevDocs.sop),
+      images:
+        b.documents !== undefined
+          ? (Array.isArray(incomingDocs.images) ? incomingDocs.images : [])
+              .map(asFileRef)
+              .filter(Boolean)
+          : Array.isArray(prevDocs.images)
+            ? prevDocs.images.map(asFileRef).filter(Boolean)
+            : [],
+    };
+
+    const standardCost = toNum(b.standardCost ?? existing?.standardCost, 0);
+    const legacyUnit = toNum(b.defaultPerUnitCost ?? existing?.defaultPerUnitCost, standardCost);
+
     return {
-      code: trimStr(b.code).toUpperCase(),
-      name: trimStr(b.name),
+      name: trimStr(b.name ?? existing?.name),
+      categoryId: b.categoryId || existing?.categoryId || null,
+      brand: trimStr(b.brand ?? existing?.brand),
+      manufacturer: trimStr(b.manufacturer ?? existing?.manufacturer),
+      description: trimStr(b.description ?? existing?.description ?? ''),
+      image: b.image !== undefined ? asFileRef(b.image) : asFileRef(existing?.image),
+      isActive: b.isActive !== undefined ? asBool(b.isActive, true) : existing?.isActive !== false,
       productType,
-      programProject: trimStr(b.programProject),
-      brand: trimStr(b.brand),
-      model: trimStr(b.model),
-      sku: trimStr(b.sku).toUpperCase(),
-      partNumber: trimStr(b.partNumber),
-      description: trimStr(b.description),
-      expiryApplicable: !!expiryApplicable,
+      inventoryType,
       trackingKind,
-      defaultPerUnitCost: Number(b.defaultPerUnitCost) || 0,
-      defaultInvoiceAmount: Number(b.defaultInvoiceAmount) || 0,
-      isActive: b.isActive !== false,
+      uomId: b.uomId !== undefined ? b.uomId || null : existing?.uomId || null,
+      hsnCode: trimStr(b.hsnCode ?? existing?.hsnCode ?? ''),
+      gstRate: toNum(b.gstRate ?? existing?.gstRate, 0),
+      minStock: toNum(b.minStock ?? existing?.minStock, 0),
+      maxStock: toNum(b.maxStock ?? existing?.maxStock, 0),
+      reorderLevel: toNum(b.reorderLevel ?? existing?.reorderLevel, 0),
+      shelfLifeDays: toNum(b.shelfLifeDays ?? existing?.shelfLifeDays, 0),
+      expiryApplicable: !!expiryApplicable,
+      qcRequired: asBool(b.qcRequired ?? existing?.qcRequired, false),
+      returnable: asBool(b.returnable ?? existing?.returnable, false),
+      disposable: asBool(b.disposable ?? existing?.disposable, false),
+      preferredSupplierId:
+        b.preferredSupplierId !== undefined
+          ? b.preferredSupplierId || null
+          : existing?.preferredSupplierId || null,
+      defaultVendorId:
+        b.defaultVendorId !== undefined
+          ? b.defaultVendorId || null
+          : existing?.defaultVendorId || null,
+      leadTimeDays: toNum(b.leadTimeDays ?? existing?.leadTimeDays, 0),
+      standardCost,
+      averageCost: toNum(b.averageCost ?? existing?.averageCost, 0),
+      lastPurchaseCost: toNum(b.lastPurchaseCost ?? existing?.lastPurchaseCost, 0),
+      compatibleDeviceIds:
+        b.compatibleDeviceIds !== undefined
+          ? asIdList(b.compatibleDeviceIds)
+          : Array.isArray(existing?.compatibleDeviceIds)
+            ? existing.compatibleDeviceIds
+            : [],
+      compatibilityRelationship: trimStr(
+        b.compatibilityRelationship ?? existing?.compatibilityRelationship ?? ''
+      ),
+      qtyPerDevice: toNum(b.qtyPerDevice ?? existing?.qtyPerDevice, 0),
+      warrantyPeriodMonths: toNum(b.warrantyPeriodMonths ?? existing?.warrantyPeriodMonths, 0),
+      amc: asBool(b.amc ?? existing?.amc, false),
+      calibrationRequired: asBool(b.calibrationRequired ?? existing?.calibrationRequired, false),
+      calibrationFrequency: trimStr(
+        b.calibrationFrequency ?? existing?.calibrationFrequency ?? ''
+      ),
+      pmFrequency: trimStr(b.pmFrequency ?? existing?.pmFrequency ?? ''),
+      storageTemperature: trimStr(b.storageTemperature ?? existing?.storageTemperature ?? ''),
+      storageCondition: trimStr(b.storageCondition ?? existing?.storageCondition ?? ''),
+      hazardous: asBool(b.hazardous ?? existing?.hazardous, false),
+      fragile: asBool(b.fragile ?? existing?.fragile, false),
+      coldChainRequired: asBool(b.coldChainRequired ?? existing?.coldChainRequired, false),
+      documents,
+      internalRemarks: trimStr(b.internalRemarks ?? existing?.internalRemarks ?? ''),
+      programProject: trimStr(b.programProject ?? existing?.programProject ?? ''),
+      model: trimStr(b.model ?? existing?.model ?? ''),
+      partNumber: trimStr(b.partNumber ?? existing?.partNumber ?? ''),
+      defaultPerUnitCost: legacyUnit,
+      defaultInvoiceAmount: toNum(
+        b.defaultInvoiceAmount ?? existing?.defaultInvoiceAmount,
+        0
+      ),
     };
   },
 });
+
+router.post(
+  '/products/:id/files',
+  canMaster,
+  productFiles,
+  asyncHandler(async (req, res) => {
+    const row = await LogisticsProduct.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Product not found', 404);
+    const slot = trimStr(req.body.slot || 'image');
+    const docs = row.documents && typeof row.documents === 'object' ? { ...row.documents } : {};
+    if (!Array.isArray(docs.images)) docs.images = [];
+
+    const single = fileRefFromMulter(req.files?.file?.[0]);
+    const extras = (req.files?.images || []).map(fileRefFromMulter).filter(Boolean);
+
+    if (slot === 'image') {
+      if (!single) throw new AppError('file is required', 400, 'VALIDATION_ERROR');
+      row.image = single;
+    } else if (slot === 'images') {
+      if (!extras.length && !single) {
+        throw new AppError('images are required', 400, 'VALIDATION_ERROR');
+      }
+      docs.images = [...docs.images, ...(extras.length ? extras : [single])];
+      row.documents = docs;
+    } else if (['datasheet', 'userManual', 'warranty', 'compliance', 'sop'].includes(slot)) {
+      if (!single) throw new AppError('file is required', 400, 'VALIDATION_ERROR');
+      docs[slot] = single;
+      row.documents = docs;
+    } else {
+      throw new AppError(`Unknown file slot: ${slot}`, 400, 'VALIDATION_ERROR');
+    }
+
+    row.updatedBy = req.user._id;
+    await row.save();
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'LogisticsProduct.FILE_UPLOAD',
+      entityType: 'LogisticsProduct',
+      entityId: row._id,
+      after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+    res.json({ data: row });
+  })
+);
 
 registerMasterCrud({
   path: 'uoms',
   Model: LogisticsUom,
   entityType: 'LogisticsUom',
+  codePrefix: 'UOM',
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase(),
     name: trimStr(b.name),
@@ -435,6 +705,7 @@ registerMasterCrud({
   Model: LogisticsStockStatus,
   entityType: 'LogisticsStockStatus',
   systemProtected: true,
+  codePrefix: 'STS',
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase().replace(/\s+/g, '_'),
     name: trimStr(b.name),
@@ -447,6 +718,7 @@ registerMasterCrud({
   Model: LogisticsMovementType,
   entityType: 'LogisticsMovementType',
   systemProtected: true,
+  codePrefix: 'MVT',
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase(),
     name: trimStr(b.name),
@@ -460,6 +732,7 @@ registerMasterCrud({
   Model: LogisticsReasonCode,
   entityType: 'LogisticsReasonCode',
   systemProtected: true,
+  codePrefix: 'RSN',
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase(),
     name: trimStr(b.name),
@@ -471,9 +744,12 @@ registerMasterCrud({
   path: 'expense-categories',
   Model: LogisticsExpenseCategory,
   entityType: 'LogisticsExpenseCategory',
+  searchFields: ['name', 'code', 'covers'],
+  codePrefix: 'EXP',
   normalize: (b) => ({
     code: trimStr(b.code).toUpperCase().replace(/\s+/g, '_'),
     name: trimStr(b.name),
+    covers: trimStr(b.covers),
     isActive: b.isActive !== false,
   }),
 });
@@ -497,6 +773,19 @@ router.get(
       ]);
     const suppliers = parties.filter((p) => p.partyType !== 'Vendor');
     const vendors = parties.filter((p) => p.partyType === 'Vendor');
+    const expenseOrder = new Map(
+      DEFAULT_EXPENSE_CATEGORIES.map((c, i) => [c.name.toLowerCase(), i])
+    );
+    expenseCategories.sort((a, b) => {
+      const ai = expenseOrder.has(String(a.name || '').toLowerCase())
+        ? expenseOrder.get(String(a.name || '').toLowerCase())
+        : 999;
+      const bi = expenseOrder.has(String(b.name || '').toLowerCase())
+        ? expenseOrder.get(String(b.name || '').toLowerCase())
+        : 999;
+      if (ai !== bi) return ai - bi;
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
     res.json({
       data: {
         locationLevels: LOCATION_LEVELS,
@@ -514,6 +803,7 @@ router.get(
         inOut: {
           entryTypes: IN_OUT_ENTRY_TYPES,
           productTypes: IN_OUT_PRODUCT_TYPES,
+          inventoryTypes: PRODUCT_INVENTORY_TYPES,
           trackingByProduct: PRODUCT_TRACKING_TYPE,
           categoryDefaults: PRODUCT_CATEGORY_DEFAULTS,
           trackingKinds: PRODUCT_TRACKING_KINDS,
@@ -552,7 +842,14 @@ function resolveEntryType(raw) {
 
 function resolveProductType(raw) {
   const v = trimStr(raw);
-  return IN_OUT_PRODUCT_TYPE_ALIASES[v] || v;
+  if (!v) return '';
+  if (IN_OUT_PRODUCT_TYPE_ALIASES[v]) return IN_OUT_PRODUCT_TYPE_ALIASES[v];
+  const hit = Object.entries(IN_OUT_PRODUCT_TYPE_ALIASES).find(
+    ([k]) => k.toLowerCase() === v.toLowerCase()
+  );
+  if (hit) return hit[1];
+  if (IN_OUT_PRODUCT_TYPES.includes(v)) return v;
+  return v;
 }
 
 function resolveDeliveryMode(raw) {

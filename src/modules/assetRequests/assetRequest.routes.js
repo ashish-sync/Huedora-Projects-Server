@@ -46,6 +46,13 @@ import {
   removeImageFile,
   removeAttachmentFile,
 } from './productImage.js';
+import { createMasterFromPayload, assertMasterWritePermission } from '../masters/createMaster.js';
+import {
+  moduleForEntity,
+  validateMasterAddPayload,
+  MASTER_ENTITY_IDS,
+} from '../masters/masterCatalog.js';
+import fs from 'fs';
 
 const router = Router();
 router.use(authenticate);
@@ -129,9 +136,9 @@ function assertBillAccess(req, row) {
 }
 
 function assertOtherAttachmentAccess(req, row) {
-  if (row.requestType !== 'OTHER') {
+  if (!['OTHER', 'MASTER_ADD'].includes(row.requestType)) {
     throw new AppError(
-      'Attachments are only available here for Others requests',
+      'Attachments are only available here for Others and Add to master requests',
       400,
       'INVALID_REQUEST_TYPE'
     );
@@ -442,6 +449,12 @@ function pickDetails(body = {}) {
     budgetMax: num(body.budgetMax),
     otherCategory: body.otherCategory?.trim() || '',
     otherSubcategory: body.otherSubcategory?.trim() || '',
+    masterModule: body.masterModule?.trim() || '',
+    masterEntity: body.masterEntity?.trim() || '',
+    masterPayload:
+      body.masterPayload && typeof body.masterPayload === 'object' && !Array.isArray(body.masterPayload)
+        ? body.masterPayload
+        : null,
   };
 }
 
@@ -540,6 +553,21 @@ function validateTypeDetails(requestType, details) {
         400,
         'VALIDATION_ERROR'
       );
+    }
+  }
+  if (requestType === 'MASTER_ADD') {
+    if (!MASTER_ENTITY_IDS.includes(details.masterEntity)) {
+      throw new AppError('Select a valid master to add', 400, 'VALIDATION_ERROR');
+    }
+    const expectedModule = moduleForEntity(details.masterEntity);
+    if (details.masterModule && details.masterModule !== expectedModule) {
+      throw new AppError('Master module does not match the selected master', 400, 'VALIDATION_ERROR');
+    }
+    details.masterModule = expectedModule;
+    const payloadErr = validateMasterAddPayload(details.masterEntity, details.masterPayload || {});
+    if (payloadErr) throw new AppError(payloadErr, 400, 'VALIDATION_ERROR');
+    if (details.masterEntity === 'templates') {
+      // DOCX uploaded after create via /attachment
     }
   }
 }
@@ -749,7 +777,7 @@ router.get(
         r.approverId?.fullName || r.approverId?.email || '',
         r.createdAt,
       ]),
-      { sheetName: 'Request Center' }
+      { sheetName: 'Request One' }
     );
   })
 );
@@ -887,7 +915,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
-    if (row.requestType !== 'OTHER') {
+    if (row.requestType !== 'OTHER' && row.requestType !== 'MASTER_ADD') {
       throw new AppError('Attachment is not available for this request type', 400);
     }
     const filePath = existingAttachmentFilePath(row.requestAttachment);
@@ -1040,7 +1068,7 @@ router.post(
     const rawType = String(req.body.requestType || '').toUpperCase();
     if (!ALL_REQUEST_TYPES.includes(rawType) && !ALL_REQUEST_TYPES.includes(normalizeRequestType(rawType))) {
       throw new AppError(
-        'requestType must be Repair, Maintenance, Logistics, Training, Reimbursement, Hiring, or Others',
+        'requestType must be Repair, Maintenance, Logistics, Training, Reimbursement, Hiring, Others, or Add to master',
         400,
         'VALIDATION_ERROR'
       );
@@ -1318,6 +1346,76 @@ router.post(
     }
 
     const approvedAt = new Date().toISOString();
+
+    if (row.requestType === 'MASTER_ADD') {
+      assertMasterWritePermission(req.permissions || req.user?.permissions, row.masterEntity);
+      let fileBuffer = null;
+      let fileName = '';
+      if (row.masterEntity === 'templates') {
+        const filePath = existingAttachmentFilePath(row.requestAttachment);
+        if (!filePath) {
+          throw new AppError(
+            'Upload a Word (.docx) template before approving this request',
+            409,
+            'ATTACHMENT_REQUIRED'
+          );
+        }
+        fileBuffer = fs.readFileSync(filePath);
+        fileName = row.requestAttachment?.name || path.basename(filePath);
+      }
+      const created = await createMasterFromPayload({
+        entityId: row.masterEntity,
+        payload: row.masterPayload || {},
+        actor: { ...req.user, permissions: req.permissions },
+        requestId: req.requestId,
+        fileBuffer,
+        fileName,
+        ownerUser: row.requestorId ? { _id: row.requestorId } : req.user,
+      });
+
+      row = await AssetRequest.findOneAndUpdate(
+        { _id: row._id, isDeleted: false, status: 'REQUESTED' },
+        {
+          $set: {
+            status: 'COMPLETED',
+            approverId: req.user._id,
+            approvedAt,
+            completedAt: approvedAt,
+            createdMasterId: created.id,
+            createdMasterCode: created.code,
+          },
+        }
+      );
+      if (!row) throw new AppError('Request status changed', 409, 'INVALID_STATUS');
+
+      await writeAudit({
+        actorId: req.user._id,
+        actorEmail: req.user.email,
+        action: 'ASSET_REQUEST.APPROVE',
+        entityType: 'AssetRequest',
+        entityId: row._id,
+        after: {
+          createdMasterId: created.id,
+          createdMasterCode: created.code,
+          masterEntity: row.masterEntity,
+        },
+        requestId: req.requestId,
+      });
+
+      if (row.requestorId) {
+        await Notification.create({
+          userId: row.requestorId,
+          type: 'ASSET_REQUEST_APPROVAL',
+          title: `Request ${row.requestNumber} approved`,
+          body: `Master created · ${created.code}`,
+          entityType: 'AssetRequest',
+          entityId: row._id,
+        });
+      }
+
+      return res.json({ data: row });
+    }
+
     row = await AssetRequest.findOneAndUpdate(
       { _id: row._id, isDeleted: false, status: 'REQUESTED' },
       {

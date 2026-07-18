@@ -102,25 +102,50 @@ export const IN_OUT_PROCESSES = [
 ];
 
 /**
- * Product Category (Product Master + Ledger)
+ * Product types (Product Master + Ledger)
  */
 export const IN_OUT_PRODUCT_TYPES = [
-  'Medical Device',
-  'Non-Medical Device',
+  'Device',
   'Consumable',
-  'Spare Part / Accessory',
+  'Accessory',
+  'Spare Part',
   'Document',
-  'Miscellaneous',
+  'Misc',
 ];
 
+/** Type-based product code prefixes (DEV-000001, CON-000001, …) */
+export const PRODUCT_TYPE_CODE_PREFIX = {
+  Device: 'DEV',
+  Consumable: 'CON',
+  Accessory: 'ACC',
+  'Spare Part': 'SPR',
+  Document: 'DOC',
+  Misc: 'MSC',
+};
+
+export const PRODUCT_INVENTORY_TYPES = ['Asset', 'Inventory Item'];
+
+export const PRODUCT_COMPATIBILITY_TYPES = ['Consumable', 'Accessory', 'Spare Part'];
+
 export const IN_OUT_PRODUCT_TYPE_ALIASES = {
-  Documents: 'Document',
+  // Canonical short names
+  Device: 'Device',
+  Consumable: 'Consumable',
+  Accessory: 'Accessory',
+  'Spare Part': 'Spare Part',
   Document: 'Document',
-  'Devices Parts': 'Spare Part / Accessory',
-  'Device Part': 'Spare Part / Accessory',
-  Accessory: 'Spare Part / Accessory',
-  Others: 'Miscellaneous',
-  Other: 'Miscellaneous',
+  Misc: 'Misc',
+  // Legacy catalog values
+  'Medical Device': 'Device',
+  'Non-Medical Device': 'Device',
+  'Spare Part / Accessory': 'Spare Part',
+  Miscellaneous: 'Misc',
+  // Common variants
+  Documents: 'Document',
+  'Devices Parts': 'Spare Part',
+  'Device Part': 'Spare Part',
+  Others: 'Misc',
+  Other: 'Misc',
 };
 
 /** How items are tracked. from Product Master */
@@ -131,12 +156,12 @@ export const PRODUCT_TRACKING_KINDS = ['None', 'Serial', 'Batch', 'Batch + Seria
  * expiryApplicable, trackingKind
  */
 export const PRODUCT_CATEGORY_DEFAULTS = {
-  'Medical Device': { expiryApplicable: false, trackingKind: 'Serial' },
-  'Non-Medical Device': { expiryApplicable: false, trackingKind: 'Serial' },
+  Device: { expiryApplicable: false, trackingKind: 'Serial' },
   Consumable: { expiryApplicable: true, trackingKind: 'Batch' },
-  'Spare Part / Accessory': { expiryApplicable: false, trackingKind: 'Batch + Serial' },
+  Accessory: { expiryApplicable: false, trackingKind: 'Serial' },
+  'Spare Part': { expiryApplicable: false, trackingKind: 'Batch + Serial' },
   Document: { expiryApplicable: false, trackingKind: 'None' },
-  Miscellaneous: { expiryApplicable: false, trackingKind: 'None' },
+  Misc: { expiryApplicable: false, trackingKind: 'None' },
 };
 
 /** @deprecated alias for older meta consumers */
@@ -147,6 +172,15 @@ export const PRODUCT_TRACKING_TYPE = Object.fromEntries(
 export const IN_OUT_TRACKING_TYPES = PRODUCT_TRACKING_KINDS;
 
 export const PRODUCT_STATUS_OPTIONS = {
+  Device: [
+    'Available',
+    'Assigned',
+    'In Transit',
+    'Under Repair',
+    'Returned',
+    'Retired',
+    'Disposed',
+  ],
   Consumable: [
     'Available',
     'Reserved',
@@ -156,27 +190,10 @@ export const PRODUCT_STATUS_OPTIONS = {
     'Damaged',
     'Disposed',
   ],
-  'Medical Device': [
-    'Available',
-    'Assigned',
-    'In Transit',
-    'Under Repair',
-    'Returned',
-    'Retired',
-    'Disposed',
-  ],
-  'Non-Medical Device': [
-    'Available',
-    'Assigned',
-    'In Transit',
-    'Under Repair',
-    'Returned',
-    'Retired',
-    'Disposed',
-  ],
+  Accessory: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
+  'Spare Part': ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
   Document: ['Draft', 'Active', 'Expired', 'Archived', 'Cancelled'],
-  'Spare Part / Accessory': ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
-  Miscellaneous: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
+  Misc: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
 };
 
 export const IN_OUT_STATUSES = [...new Set(Object.values(PRODUCT_STATUS_OPTIONS).flat())];
@@ -233,12 +250,12 @@ export const DOCUMENT_TYPES = [
 
 /** Simplified required rules for new ledger form */
 export const PRODUCT_REQUIRED_FIELDS = {
-  'Medical Device': ['qty'],
-  'Non-Medical Device': ['qty'],
+  Device: ['qty'],
   Consumable: ['qty'],
-  'Spare Part / Accessory': ['qty'],
+  Accessory: ['qty'],
+  'Spare Part': ['qty'],
   Document: ['qty'],
-  Miscellaneous: ['qty'],
+  Misc: ['qty'],
 };
 
 export const ENTRY_REQUIRED_FIELDS = {
@@ -248,3 +265,57 @@ export const ENTRY_REQUIRED_FIELDS = {
   Return: ['contactId'],
   'Stock Adjustment': [],
 };
+
+/** Finance master. Expense Categories (Request Center reimbursements) */
+export const DEFAULT_EXPENSE_CATEGORIES = [
+  {
+    code: 'EMP_EXP',
+    name: 'Employee Expenses',
+    covers: 'Salaries, benefits, reimbursements, training',
+  },
+  {
+    code: 'MED_OPS',
+    name: 'Medical Operations',
+    covers: 'Devices, consumables, medicines, diagnostics, camps',
+  },
+  {
+    code: 'OFF_FAC',
+    name: 'Office & Facilities',
+    covers: 'Rent, utilities, housekeeping, office supplies',
+  },
+  {
+    code: 'IT_TECH',
+    name: 'IT & Technology',
+    covers: 'Hardware, software, SaaS, cloud, telecom',
+  },
+  {
+    code: 'LOG_TRV',
+    name: 'Logistics & Travel',
+    covers: 'Courier, freight, vehicles, travel, accommodation',
+  },
+  {
+    code: 'SALES_MKT',
+    name: 'Sales & Marketing',
+    covers: 'Advertising, branding, events, promotions',
+  },
+  {
+    code: 'PROF_SVC',
+    name: 'Professional Services',
+    covers: 'Consultants, legal, audit, recruitment',
+  },
+  {
+    code: 'FIN_COMP',
+    name: 'Finance & Compliance',
+    covers: 'Taxes, insurance, bank charges, licenses',
+  },
+  {
+    code: 'ASSET_MNT',
+    name: 'Asset & Maintenance',
+    covers: 'Purchase, AMC, repairs, rentals',
+  },
+  {
+    code: 'MISC',
+    name: 'Miscellaneous',
+    covers: 'Petty cash, internal transfers, uncategorized',
+  },
+];

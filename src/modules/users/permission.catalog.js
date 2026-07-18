@@ -30,8 +30,8 @@ function withAll(actions) {
 export const MODULE_ACCESS_CATALOG = [
   {
     id: 'assets',
-    label: 'Asset Registry',
-    description: 'Ownership, lifecycle, and status tracking',
+    label: 'Asset One',
+    description: 'Asset register and stock overview',
     actions: withAll({
       view: [PERMISSIONS.ASSETS_READ],
       add: [
@@ -52,8 +52,8 @@ export const MODULE_ACCESS_CATALOG = [
   },
   {
     id: 'agreements',
-    label: 'Document Center',
-    description: 'Contracts, approvals, and digital records',
+    label: 'Document One',
+    description: 'Contracts, approvals, and signed records',
     actions: withAll({
       view: [PERMISSIONS.AGREEMENTS_READ],
       add: [PERMISSIONS.AGREEMENTS_WRITE],
@@ -63,7 +63,7 @@ export const MODULE_ACCESS_CATALOG = [
   },
   {
     id: 'verifications',
-    label: 'Asset Verification',
+    label: 'Verification One',
     description: 'Photo, GPS, and audit checks',
     actions: withAll({
       view: [PERMISSIONS.VERIFICATIONS_READ],
@@ -73,8 +73,8 @@ export const MODULE_ACCESS_CATALOG = [
   },
   {
     id: 'camps',
-    label: 'Camp Management',
-    description: 'Schedule, approve, and monitor camps',
+    label: 'Camp One',
+    description: 'Request, approve, and monitor camps',
     actions: withAll({
       view: [PERMISSIONS.CAMPS_READ],
       request: [PERMISSIONS.CAMPS_REQUEST],
@@ -83,8 +83,8 @@ export const MODULE_ACCESS_CATALOG = [
   },
   {
     id: 'assetRequests',
-    label: 'Request Center',
-    description: 'Repair, maintenance, logistics, training, reimbursement, and hiring requests',
+    label: 'Request One',
+    description: 'Repair, maintenance, stock transfer, training, reimbursement, and hiring',
     actions: withAll({
       view: [
         PERMISSIONS.ASSET_REQUESTS_READ,
@@ -102,8 +102,8 @@ export const MODULE_ACCESS_CATALOG = [
   },
   {
     id: 'logistics',
-    label: 'Inventory & Logistics',
-    description: 'Stock, vendors, transfers, and procurement',
+    label: 'Movement One',
+    description: 'Goods receipt, goods issue, consumption, and output',
     actions: {
       ...withAll({
         view: [PERMISSIONS.LOGISTICS_READ],
@@ -118,9 +118,19 @@ export const MODULE_ACCESS_CATALOG = [
     },
   },
   {
+    id: 'masterData',
+    label: 'Master One',
+    description: 'Shared reference data across modules',
+    actions: withAll({
+      view: [PERMISSIONS.LOGISTICS_READ, PERMISSIONS.AGREEMENTS_READ],
+      add: [PERMISSIONS.LOGISTICS_MASTER, PERMISSIONS.LOGISTICS_WRITE, PERMISSIONS.AGREEMENTS_WRITE],
+      delete: [PERMISSIONS.LOGISTICS_MASTER, PERMISSIONS.LOGISTICS_WRITE, PERMISSIONS.AGREEMENTS_WRITE],
+    }),
+  },
+  {
     id: 'platform',
-    label: 'Dashboard, Alerts & Notifications',
-    description: 'Home dashboards and notifications',
+    label: 'Operations Dashboard & Notifications',
+    description: 'Cross-module review and alerts',
     actions: withAll({
       view: [PERMISSIONS.DASHBOARDS_READ, PERMISSIONS.NOTIFICATIONS_READ],
     }),

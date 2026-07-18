@@ -1,4 +1,5 @@
 import {
+  DEFAULT_EXPENSE_CATEGORIES,
   DEFAULT_MOVEMENT_TYPES,
   DEFAULT_REASON_CODES,
   DEFAULT_STOCK_STATUSES,
@@ -72,24 +73,41 @@ export async function ensureLogisticsSeed() {
     }
   }
 
-  const defaultExpenseCategories = [
-    'Travel',
-    'Meals',
-    'Parts',
-    'Shipping',
-    'Service',
-    'Miscellaneous',
-  ];
-  for (const name of defaultExpenseCategories) {
-    const code = name.toUpperCase().replace(/\s+/g, '_');
-    const existing = await LogisticsExpenseCategory.findOne({ code, isDeleted: false });
+  const canonicalExpenseNames = new Set(
+    DEFAULT_EXPENSE_CATEGORIES.map((c) => c.name.toLowerCase())
+  );
+  for (const cat of DEFAULT_EXPENSE_CATEGORIES) {
+    const existing = await LogisticsExpenseCategory.findOne({
+      $or: [{ code: cat.code }, { name: cat.name }],
+      isDeleted: false,
+    });
     if (!existing) {
       await LogisticsExpenseCategory.create({
-        code,
-        name,
+        code: cat.code,
+        name: cat.name,
+        covers: cat.covers,
         isSystem: true,
         isActive: true,
       });
+    } else {
+      existing.code = cat.code;
+      existing.name = cat.name;
+      existing.covers = cat.covers;
+      existing.isSystem = true;
+      existing.isActive = true;
+      await existing.save();
+    }
+  }
+  // Soft-delete legacy seeded expense categories not in the finance master list
+  const legacyNames = new Set(['travel', 'meals', 'parts', 'shipping', 'service']);
+  const legacyExpense = await LogisticsExpenseCategory.find({ isDeleted: false });
+  for (const row of legacyExpense) {
+    const nameKey = String(row.name || '').toLowerCase();
+    if (canonicalExpenseNames.has(nameKey)) continue;
+    if (legacyNames.has(nameKey) || legacyNames.has(String(row.code || '').toLowerCase())) {
+      row.isDeleted = true;
+      row.isActive = false;
+      await row.save();
     }
   }
 
@@ -118,21 +136,29 @@ export async function ensureLogisticsSeed() {
 
   const defaultProducts = [
     {
-      code: 'GLUCOSTRIP',
+      code: 'CON-SEED01',
       name: 'Glucose Test Strips',
       productType: 'Consumable',
-      sku: 'GLUCOSTRIP',
+      inventoryType: 'Inventory Item',
+      sku: 'SKU-SEED01',
+      brand: 'Generic',
+      manufacturer: 'Generic',
       expiryApplicable: true,
       trackingKind: 'Batch',
+      standardCost: 12,
       defaultPerUnitCost: 12,
     },
     {
-      code: 'BP-MONITOR',
+      code: 'DEV-SEED01',
       name: 'BP Monitor',
-      productType: 'Medical Device',
-      sku: 'BP-MONITOR',
+      productType: 'Device',
+      inventoryType: 'Asset',
+      sku: 'SKU-SEED02',
+      brand: 'Generic',
+      manufacturer: 'Generic',
       expiryApplicable: false,
       trackingKind: 'Serial',
+      standardCost: 2500,
       defaultPerUnitCost: 2500,
     },
   ];
