@@ -69,7 +69,7 @@ export const REVIEW_MODULES = [
   },
   {
     id: 'movements',
-    label: 'Stock Transfer Requests',
+    label: 'Goods Issue Requests',
     linkTo: '/asset-requests',
     permissions: [PERMISSIONS.MOVEMENTS_READ, PERMISSIONS.MOVEMENTS_REQUEST, PERMISSIONS.MOVEMENTS_APPROVE],
   },

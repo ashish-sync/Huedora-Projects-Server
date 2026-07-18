@@ -33,6 +33,8 @@ export const LogisticsSupplier = defineCollection('logistics_suppliers', {
   phone: '',
   city: '',
   state: '',
+  gstin: '',
+  panCard: '',
   isActive: true,
 });
 
@@ -66,18 +68,20 @@ export const LogisticsProduct = defineCollection('logistics_products', {
   description: '',
   image: null, // { url, name }
   isActive: true,
-  /** Device | Consumable | Accessory | Spare Part | Document | Misc */
-  productType: 'Device',
-  /** Asset | Inventory Item */
-  inventoryType: 'Inventory Item',
+  /** Medical Device | Non-Medical Device | Peripheral Device | Accessory | Spare Part | Consumable | Document | Other */
+  productType: 'Medical Device',
+  /** Replacement Part for Asset | Accessory of Asset | Consumed by Device | Multi-use */
+  inventoryType: 'Multi-use',
   trackingKind: 'None', // None | Serial | Batch | Batch + Serial
   uomId: null,
+  unitsPerPack: 1,
   hsnCode: '',
   gstRate: 0,
   minStock: 0,
   maxStock: 0,
   reorderLevel: 0,
   shelfLifeDays: 0,
+  shelfLifeMonths: 0,
   expiryApplicable: false,
   qcRequired: false,
   returnable: false,
@@ -88,6 +92,7 @@ export const LogisticsProduct = defineCollection('logistics_products', {
   standardCost: 0,
   averageCost: 0,
   lastPurchaseCost: 0,
+  linkedDeviceId: null,
   compatibleDeviceIds: [],
   compatibilityRelationship: '',
   qtyPerDevice: 0,
@@ -263,6 +268,7 @@ export const LogisticsInOutEntry = defineCollection('logistics_in_out_entries', 
 
   /** Shared qty / cost */
   qty: 1,
+  uomId: null,
   perUnitCost: 0,
   invoiceAmount: 0,
 
@@ -314,6 +320,26 @@ export const LogisticsInOutEntry = defineCollection('logistics_in_out_entries', 
   city: '',
   expectedReturn: '',
   acknowledgementRequired: false,
+  /** Open until AWB / delivery marked Delivered, RTO, or Closed */
+  dispatchStatus: '',
+  deliveryOutcome: '',
+  deliveredAt: '',
+  closedAt: '',
+  deliveryMarkedBy: '',
+  /** Matches Request One Goods Issue kinds */
+  logisticsKind: '',
+  priority: '',
+  preferredDate: '',
+  fromContactId: null,
+  fromName: '',
+  fromNumber: '',
+  fromAddress: '',
+  fromPinCode: '',
+  fromCity: '',
+  fromState: '',
+  toAddress: '',
+  pinCode: '',
+  address: '',
 
   /** Transfer */
   sourceWarehouseId: null,

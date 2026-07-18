@@ -21,7 +21,11 @@ import {
 /** Seed logistics lookup rows. idempotent, does not touch TYLO One lifecycle data */
 export async function ensureLogisticsSeed() {
   const mum = await LogisticsWarehouse.findOne({
-    $or: [{ code: DEFAULT_WAREHOUSE_CODE }, { name: DEFAULT_WAREHOUSE_NAME }],
+    $or: [
+      { code: DEFAULT_WAREHOUSE_CODE },
+      { name: DEFAULT_WAREHOUSE_NAME },
+      { name: 'Mumbai Warehouse' },
+    ],
     isDeleted: false,
   });
   if (!mum) {
@@ -33,6 +37,25 @@ export async function ensureLogisticsSeed() {
       address: '',
       isActive: true,
     });
+  } else {
+    let changed = false;
+    if (mum.name !== DEFAULT_WAREHOUSE_NAME) {
+      mum.name = DEFAULT_WAREHOUSE_NAME;
+      changed = true;
+    }
+    if (mum.code !== DEFAULT_WAREHOUSE_CODE) {
+      mum.code = DEFAULT_WAREHOUSE_CODE;
+      changed = true;
+    }
+    if (!mum.city) {
+      mum.city = 'Mumbai';
+      changed = true;
+    }
+    if (mum.isActive === false) {
+      mum.isActive = true;
+      changed = true;
+    }
+    if (changed) await mum.save();
   }
 
   for (const name of DEFAULT_STOCK_STATUSES) {
@@ -112,14 +135,25 @@ export async function ensureLogisticsSeed() {
   }
 
   const defaultUoms = [
-    { code: 'EA', name: 'Each' },
+    { code: 'PCS', name: 'Piece' },
     { code: 'BOX', name: 'Box' },
+    { code: 'PACK', name: 'Pack' },
+    { code: 'KIT', name: 'Kit' },
+    { code: 'CTN', name: 'Carton' },
+    { code: 'ROLL', name: 'Roll' },
+    { code: 'BTL', name: 'Bottle' },
     { code: 'SET', name: 'Set' },
+    { code: 'PAIR', name: 'Pair' },
+    { code: 'DOC', name: 'Document' },
   ];
   for (const u of defaultUoms) {
     const existing = await LogisticsUom.findOne({ code: u.code, isDeleted: false });
     if (!existing) {
       await LogisticsUom.create({ ...u, isActive: true });
+    } else if (existing.name !== u.name) {
+      existing.name = u.name;
+      existing.isActive = true;
+      await existing.save();
     }
   }
 
@@ -136,30 +170,35 @@ export async function ensureLogisticsSeed() {
 
   const defaultProducts = [
     {
-      code: 'CON-SEED01',
+      code: 'OT0001',
       name: 'Glucose Test Strips',
-      productType: 'Consumable',
-      inventoryType: 'Inventory Item',
+      productType: 'Other',
+      inventoryType: 'Multi-use',
       sku: 'SKU-SEED01',
       brand: 'Generic',
       manufacturer: 'Generic',
       expiryApplicable: true,
+      shelfLifeMonths: 24,
       trackingKind: 'Batch',
+      unitsPerPack: 100,
       standardCost: 12,
       defaultPerUnitCost: 12,
+      gstRate: 12,
     },
     {
-      code: 'DEV-SEED01',
+      code: 'MD0001',
       name: 'BP Monitor',
-      productType: 'Device',
-      inventoryType: 'Asset',
+      productType: 'Medical Device',
+      inventoryType: 'Multi-use',
       sku: 'SKU-SEED02',
       brand: 'Generic',
       manufacturer: 'Generic',
       expiryApplicable: false,
       trackingKind: 'Serial',
+      unitsPerPack: 1,
       standardCost: 2500,
       defaultPerUnitCost: 2500,
+      gstRate: 18,
     },
   ];
   for (const p of defaultProducts) {

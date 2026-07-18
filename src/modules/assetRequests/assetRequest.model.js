@@ -21,8 +21,8 @@ export const ALL_REQUEST_TYPES = [...REQUEST_TYPES, ...LEGACY_REQUEST_TYPES];
 export const REQUEST_TYPE_LABELS = {
   REPAIR: 'Repair',
   MAINTENANCE: 'Maintenance',
-  LOGISTICS: 'Stock Transfer',
-  MOVEMENT: 'Stock Transfer',
+  LOGISTICS: 'Goods Issue',
+  MOVEMENT: 'Goods Issue',
   TRAINING: 'Training',
   REIMBURSEMENT: 'Reimbursement',
   HIRING: 'Hiring',
@@ -82,15 +82,37 @@ export const REQUEST_STATUSES = ['REQUESTED', 'APPROVED', 'REJECTED', 'CANCELLED
 /** Types that always require a linked Asset Registry asset. */
 export const ASSET_REQUIRED_TYPES = ['REPAIR', 'MAINTENANCE'];
 
-/** Canonical values accepted for newly-created Logistics requests. */
-export const LOGISTICS_KINDS = ['Inter Transfer', 'Fresh Dispatch', 'Recall / Pickup'];
+/** Canonical values accepted for newly-created Goods Issue requests. */
+export const LOGISTICS_KINDS = ['Fresh Dispatch', 'Inter Transfer', 'Recall / Pickup'];
+/** Legacy kind still accepted and normalized to Fresh Dispatch */
+export const LOGISTICS_KIND_ALIASES = {
+  'Goods Issue': 'Fresh Dispatch',
+  Dispatch: 'Fresh Dispatch',
+  Delivery: 'Fresh Dispatch',
+};
 export const LOGISTICS_MODES = [
   'Hand Delivery',
   'Regular Courier',
   'Apex',
   'Porter',
   'Other',
+  'Blue Dart',
+  'DTDC',
+  'Other Courier',
 ];
+
+export function normalizeLogisticsKind(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if (LOGISTICS_KINDS.includes(s)) return s;
+  if (LOGISTICS_KIND_ALIASES[s]) return LOGISTICS_KIND_ALIASES[s];
+  const hit = Object.entries(LOGISTICS_KIND_ALIASES).find(
+    ([k]) => k.toLowerCase() === s.toLowerCase()
+  );
+  if (hit) return hit[1];
+  const canon = LOGISTICS_KINDS.find((k) => k.toLowerCase() === s.toLowerCase());
+  return canon || s;
+}
 
 export function normalizeRequestType(raw) {
   const t = String(raw || '').toUpperCase();

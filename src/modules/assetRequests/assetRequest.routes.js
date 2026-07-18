@@ -17,6 +17,7 @@ import {
   HIRING_CAMP_TYPES,
   HIRING_METHODS,
   normalizeRequestType,
+  normalizeLogisticsKind,
   typeLabel,
 } from './assetRequest.model.js';
 import { Asset } from '../assets/asset.model.js';
@@ -237,11 +238,13 @@ function hasEndpoint(snapshot, prefix) {
 }
 
 function logisticsFlow(kind) {
-  const normalized = trim(kind).toLowerCase().replace(/[^a-z]/g, '');
+  const normalized = trim(normalizeLogisticsKind(kind)).toLowerCase().replace(/[^a-z]/g, '');
   if (['intertransfer', 'transfer', 'interlocationtransfer'].includes(normalized)) {
     return 'INTER_TRANSFER';
   }
-  if (['freshdispatch', 'dispatch', 'delivery'].includes(normalized)) {
+  if (
+    ['freshdispatch', 'goodsissue', 'dispatch', 'delivery'].includes(normalized)
+  ) {
     return 'FRESH_DISPATCH';
   }
   if (['recallpickup', 'recall', 'pickup', 'return'].includes(normalized)) {
@@ -283,7 +286,7 @@ async function normalizeLogisticsProducts(rawProducts) {
     const input = rawProducts[index];
     if (!input || typeof input !== 'object' || Array.isArray(input)) {
       throw new AppError(
-        `Logistics product ${index + 1} is invalid`,
+        `Goods issue product ${index + 1} is invalid`,
         400,
         'VALIDATION_ERROR'
       );
@@ -293,7 +296,7 @@ async function normalizeLogisticsProducts(rawProducts) {
     const qty = Number(input.qty);
     if (!Number.isFinite(qty) || qty <= 0) {
       throw new AppError(
-        `Logistics product ${index + 1} quantity must be greater than zero`,
+        `Goods issue product ${index + 1} quantity must be greater than zero`,
         400,
         'VALIDATION_ERROR'
       );
@@ -310,7 +313,7 @@ async function normalizeLogisticsProducts(rawProducts) {
       });
       if (!product) {
         throw new AppError(
-          `Logistics product ${index + 1} references an invalid product`,
+          `Goods issue product ${index + 1} references an invalid product`,
           400,
           'VALIDATION_ERROR'
         );
@@ -325,14 +328,14 @@ async function normalizeLogisticsProducts(rawProducts) {
 
     if (!productType || !IN_OUT_PRODUCT_TYPES.includes(productType)) {
       throw new AppError(
-        `Logistics product ${index + 1} type must be one of: ${IN_OUT_PRODUCT_TYPES.join(', ')}`,
+        `Goods issue product ${index + 1} type must be one of: ${IN_OUT_PRODUCT_TYPES.join(', ')}`,
         400,
         'VALIDATION_ERROR'
       );
     }
     if (!productName) {
       throw new AppError(
-        `Logistics product ${index + 1} requires a product name or valid productId`,
+        `Goods issue product ${index + 1} requires a product name or valid productId`,
         400,
         'VALIDATION_ERROR'
       );
@@ -353,7 +356,7 @@ async function normalizeLogisticsProducts(rawProducts) {
     const lineId = trim(input.lineId) || randomBytes(12).toString('hex');
     if (lineIds.has(lineId)) {
       throw new AppError(
-        `Logistics product ${index + 1} has a duplicate lineId`,
+        `Goods issue product ${index + 1} has a duplicate lineId`,
         400,
         'VALIDATION_ERROR'
       );
@@ -420,7 +423,7 @@ function pickDetails(body = {}) {
     priority: body.priority?.trim() || '',
     issueCategory: body.issueCategory?.trim() || '',
     maintenanceKind: body.maintenanceKind?.trim() || '',
-    logisticsKind: body.logisticsKind?.trim() || '',
+    logisticsKind: normalizeLogisticsKind(body.logisticsKind) || body.logisticsKind?.trim() || '',
     preferredVendor: body.preferredVendor?.trim() || '',
     serviceProvider: body.serviceProvider?.trim() || '',
     expectedDate: body.expectedDate?.trim() || '',
@@ -466,16 +469,18 @@ function validateTypeDetails(requestType, details) {
     throw new AppError('Maintenance kind is required', 400, 'VALIDATION_ERROR');
   }
   if (requestType === 'LOGISTICS') {
-    if (!LOGISTICS_KINDS.includes(details.logisticsKind)) {
+    const logisticsKind = normalizeLogisticsKind(details.logisticsKind);
+    details.logisticsKind = logisticsKind;
+    if (!LOGISTICS_KINDS.includes(logisticsKind)) {
       throw new AppError(
-        `Logistics kind must be one of: ${LOGISTICS_KINDS.join(', ')}`,
+        `Issue kind must be one of: ${LOGISTICS_KINDS.join(', ')}`,
         400,
         'VALIDATION_ERROR'
       );
     }
     if (!LOGISTICS_MODES.includes(details.transportMode)) {
       throw new AppError(
-        `Transport mode must be one of: ${LOGISTICS_MODES.join(', ')}`,
+        `Delivery mode must be one of: ${LOGISTICS_MODES.join(', ')}`,
         400,
         'VALIDATION_ERROR'
       );
@@ -1068,7 +1073,7 @@ router.post(
     const rawType = String(req.body.requestType || '').toUpperCase();
     if (!ALL_REQUEST_TYPES.includes(rawType) && !ALL_REQUEST_TYPES.includes(normalizeRequestType(rawType))) {
       throw new AppError(
-        'requestType must be Repair, Maintenance, Logistics, Training, Reimbursement, Hiring, Others, or Add to master',
+        'requestType must be Repair, Maintenance, Goods Issue, Training, Reimbursement, Hiring, Others, or Add to master',
         400,
         'VALIDATION_ERROR'
       );
@@ -1221,10 +1226,16 @@ router.post(
         );
       }
       if (flow === 'FRESH_DISPATCH' && !hasEndpoint(logisticsEndpoints, 'to')) {
-        throw new AppError('Fresh Dispatch requires To', 400, 'VALIDATION_ERROR');
+        throw new AppError('Fresh Dispatch requires To / Recipient', 400, 'VALIDATION_ERROR');
       }
-      if (flow === 'RECALL_PICKUP' && !hasEndpoint(logisticsEndpoints, 'from')) {
-        throw new AppError('Recall / Pickup requires From', 400, 'VALIDATION_ERROR');
+      if (flow === 'RECALL_PICKUP') {
+        if (!hasEndpoint(logisticsEndpoints, 'from') || !hasEndpoint(logisticsEndpoints, 'to')) {
+          throw new AppError(
+            'Recall / Pickup requires both Sender and Send to / Recipient',
+            400,
+            'VALIDATION_ERROR'
+          );
+        }
       }
     }
 
@@ -1546,7 +1557,7 @@ router.post(
     }
     if ((current.fulfillmentPendingLineIds || []).length) {
       throw new AppError(
-        'Request has a dispatch in progress',
+        'Request has a goods issue in progress',
         409,
         'FULFILLMENT_IN_PROGRESS'
       );
@@ -1606,7 +1617,7 @@ router.post(
       const remainingLineIds = lineIds.filter((lineId) => !fulfilled.has(lineId));
       if (remainingLineIds.length) {
         throw new AppError(
-          'All logistics product lines must be dispatched before completion',
+          'All goods issue product lines must be issued before completion',
           409,
           'FULFILLMENT_INCOMPLETE',
           {

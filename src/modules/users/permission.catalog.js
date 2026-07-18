@@ -84,7 +84,7 @@ export const MODULE_ACCESS_CATALOG = [
   {
     id: 'assetRequests',
     label: 'Request One',
-    description: 'Repair, maintenance, stock transfer, training, reimbursement, and hiring',
+    description: 'Repair, maintenance, goods issue, training, reimbursement, and hiring',
     actions: withAll({
       view: [
         PERMISSIONS.ASSET_REQUESTS_READ,

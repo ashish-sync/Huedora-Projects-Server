@@ -2,7 +2,7 @@
 
 export const LOCATION_LEVELS = ['Zone', 'Room', 'Rack', 'Shelf', 'Bin'];
 
-export const DEFAULT_WAREHOUSE_NAME = 'Mumbai Warehouse';
+export const DEFAULT_WAREHOUSE_NAME = 'Mumbai';
 export const DEFAULT_WAREHOUSE_CODE = 'WH-MUM';
 
 export const DEFAULT_STOCK_STATUSES = [
@@ -105,47 +105,74 @@ export const IN_OUT_PROCESSES = [
  * Product types (Product Master + Ledger)
  */
 export const IN_OUT_PRODUCT_TYPES = [
-  'Device',
-  'Consumable',
+  'Medical Device',
+  'Non-Medical Device',
+  'Peripheral Device',
   'Accessory',
   'Spare Part',
+  'Consumable',
   'Document',
-  'Misc',
+  'Other',
 ];
 
-/** Type-based product code prefixes (DEV-000001, CON-000001, …) */
+/** Type-based product code prefixes (MD0001, NM0001, PD0001, …) */
 export const PRODUCT_TYPE_CODE_PREFIX = {
-  Device: 'DEV',
-  Consumable: 'CON',
-  Accessory: 'ACC',
-  'Spare Part': 'SPR',
-  Document: 'DOC',
-  Misc: 'MSC',
+  'Medical Device': 'MD',
+  'Non-Medical Device': 'NM',
+  'Peripheral Device': 'PD',
+  Accessory: 'AC',
+  'Spare Part': 'SP',
+  Consumable: 'CN',
+  Document: 'DC',
+  Other: 'OT',
 };
 
-export const PRODUCT_INVENTORY_TYPES = ['Asset', 'Inventory Item'];
+export const PRODUCT_CODE_FORMAT = { digits: 4, separator: '' };
 
-export const PRODUCT_COMPATIBILITY_TYPES = ['Consumable', 'Accessory', 'Spare Part'];
+export const PRODUCT_INVENTORY_TYPES = [
+  'Replacement Part for Asset',
+  'Accessory of Asset',
+  'Consumed by Device',
+  'Multi-use',
+];
+
+/** Legacy inventory labels → current Product Master set */
+export const PRODUCT_INVENTORY_TYPE_ALIASES = {
+  'Replacement Part for Asset': 'Replacement Part for Asset',
+  'Accessory of Asset': 'Accessory of Asset',
+  'Consumed by Device': 'Consumed by Device',
+  'Multi-use': 'Multi-use',
+  'Associated to Asset': 'Replacement Part for Asset',
+  'Used by Device': 'Consumed by Device',
+  Asset: 'Replacement Part for Asset',
+  'Inventory Item': 'Multi-use',
+  'Inventory item': 'Multi-use',
+};
+
+export const PRODUCT_COMPATIBILITY_TYPES = ['Accessory', 'Spare Part', 'Other'];
+
+export const GST_RATE_PRESETS = [0, 5, 12, 18, 28];
 
 export const IN_OUT_PRODUCT_TYPE_ALIASES = {
-  // Canonical short names
-  Device: 'Device',
-  Consumable: 'Consumable',
+  'Medical Device': 'Medical Device',
+  'Non-Medical Device': 'Non-Medical Device',
+  'Peripheral Device': 'Peripheral Device',
   Accessory: 'Accessory',
   'Spare Part': 'Spare Part',
+  Consumable: 'Consumable',
+  Consumables: 'Consumable',
   Document: 'Document',
-  Misc: 'Misc',
+  Other: 'Other',
   // Legacy catalog values
-  'Medical Device': 'Device',
-  'Non-Medical Device': 'Device',
+  Device: 'Medical Device',
+  Peripheral: 'Peripheral Device',
+  Misc: 'Other',
+  Miscellaneous: 'Other',
   'Spare Part / Accessory': 'Spare Part',
-  Miscellaneous: 'Misc',
-  // Common variants
   Documents: 'Document',
   'Devices Parts': 'Spare Part',
   'Device Part': 'Spare Part',
-  Others: 'Misc',
-  Other: 'Misc',
+  Others: 'Other',
 };
 
 /** How items are tracked. from Product Master */
@@ -153,15 +180,49 @@ export const PRODUCT_TRACKING_KINDS = ['None', 'Serial', 'Batch', 'Batch + Seria
 
 /**
  * Defaults by category (Product Master can override)
- * expiryApplicable, trackingKind
+ * expiryApplicable, trackingKind, inventoryType
  */
 export const PRODUCT_CATEGORY_DEFAULTS = {
-  Device: { expiryApplicable: false, trackingKind: 'Serial' },
-  Consumable: { expiryApplicable: true, trackingKind: 'Batch' },
-  Accessory: { expiryApplicable: false, trackingKind: 'Serial' },
-  'Spare Part': { expiryApplicable: false, trackingKind: 'Batch + Serial' },
-  Document: { expiryApplicable: false, trackingKind: 'None' },
-  Misc: { expiryApplicable: false, trackingKind: 'None' },
+  'Medical Device': {
+    expiryApplicable: false,
+    trackingKind: 'Serial',
+    inventoryType: 'Multi-use',
+  },
+  'Non-Medical Device': {
+    expiryApplicable: false,
+    trackingKind: 'Serial',
+    inventoryType: 'Multi-use',
+  },
+  'Peripheral Device': {
+    expiryApplicable: false,
+    trackingKind: 'Serial',
+    inventoryType: 'Multi-use',
+  },
+  Accessory: {
+    expiryApplicable: false,
+    trackingKind: 'Serial',
+    inventoryType: 'Accessory of Asset',
+  },
+  'Spare Part': {
+    expiryApplicable: false,
+    trackingKind: 'Batch + Serial',
+    inventoryType: 'Replacement Part for Asset',
+  },
+  Consumable: {
+    expiryApplicable: true,
+    trackingKind: 'Batch',
+    inventoryType: 'Consumed by Device',
+  },
+  Document: {
+    expiryApplicable: false,
+    trackingKind: 'None',
+    inventoryType: 'Multi-use',
+  },
+  Other: {
+    expiryApplicable: false,
+    trackingKind: 'None',
+    inventoryType: 'Consumed by Device',
+  },
 };
 
 /** @deprecated alias for older meta consumers */
@@ -172,7 +233,7 @@ export const PRODUCT_TRACKING_TYPE = Object.fromEntries(
 export const IN_OUT_TRACKING_TYPES = PRODUCT_TRACKING_KINDS;
 
 export const PRODUCT_STATUS_OPTIONS = {
-  Device: [
+  'Medical Device': [
     'Available',
     'Assigned',
     'In Transit',
@@ -181,22 +242,55 @@ export const PRODUCT_STATUS_OPTIONS = {
     'Retired',
     'Disposed',
   ],
-  Consumable: [
+  'Non-Medical Device': [
     'Available',
-    'Reserved',
-    'Issued',
-    'Expired',
-    'Near Expiry',
-    'Damaged',
+    'Assigned',
+    'In Transit',
+    'Under Repair',
+    'Returned',
+    'Retired',
+    'Disposed',
+  ],
+  'Peripheral Device': [
+    'Available',
+    'Assigned',
+    'In Transit',
+    'Under Repair',
+    'Returned',
+    'Retired',
     'Disposed',
   ],
   Accessory: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
   'Spare Part': ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
+  Consumable: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed', 'Expired'],
   Document: ['Draft', 'Active', 'Expired', 'Archived', 'Cancelled'],
-  Misc: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
+  Other: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
 };
 
 export const IN_OUT_STATUSES = [...new Set(Object.values(PRODUCT_STATUS_OPTIONS).flat())];
+
+/** Inward with remaining life shorter than this requires Approved By */
+export const SHORT_EXPIRY_APPROVAL_MONTHS = 12;
+
+/**
+ * Whole months remaining from `fromDate` (default today) until `expiryDate`.
+ * Returns null when dates are invalid.
+ */
+export function monthsUntilExpiry(expiryDate, fromDate = new Date()) {
+  const exp = new Date(String(expiryDate || '').slice(0, 10));
+  const from = new Date(String(fromDate || '').slice(0, 10));
+  if (Number.isNaN(exp.getTime()) || Number.isNaN(from.getTime())) return null;
+  let months = (exp.getFullYear() - from.getFullYear()) * 12 + (exp.getMonth() - from.getMonth());
+  if (exp.getDate() < from.getDate()) months -= 1;
+  return months;
+}
+
+/** True when expiry is set and remaining life is under SHORT_EXPIRY_APPROVAL_MONTHS. */
+export function requiresShortExpiryApproval(expiryDate, fromDate = new Date()) {
+  const months = monthsUntilExpiry(expiryDate, fromDate);
+  if (months == null) return false;
+  return months < SHORT_EXPIRY_APPROVAL_MONTHS;
+}
 
 /** Delivery Mode */
 export const DELIVERY_MODES = [
@@ -225,6 +319,15 @@ export const COURIER_DELIVERY_MODES = [
   'Other Courier',
 ];
 
+/**
+ * Outward / goods-issue lifecycle (separate from product stock `status`).
+ * Stays Open after dispatch until AWB / delivery is marked Delivered, RTO, or Closed.
+ */
+export const OUTWARD_DISPATCH_STATUSES = ['Open', 'Delivered', 'RTO', 'Closed'];
+export const OUTWARD_OPEN_DISPATCH_STATUS = 'Open';
+export const OUTWARD_TERMINAL_DISPATCH_STATUSES = ['Delivered', 'RTO', 'Closed'];
+export const OUTWARD_DELIVERY_OUTCOMES = ['Delivered', 'RTO', 'Closed'];
+
 export const IN_OUT_MODES = DELIVERY_MODES;
 
 export const ADJUSTMENT_TYPES = ['Increase', 'Decrease'];
@@ -250,11 +353,16 @@ export const DOCUMENT_TYPES = [
 
 /** Simplified required rules for new ledger form */
 export const PRODUCT_REQUIRED_FIELDS = {
-  Device: ['qty'],
-  Consumable: ['qty'],
+  'Medical Device': ['qty'],
+  'Non-Medical Device': ['qty'],
+  'Peripheral Device': ['qty'],
   Accessory: ['qty'],
   'Spare Part': ['qty'],
+  Consumable: ['qty'],
   Document: ['qty'],
+  Other: ['qty'],
+  // Legacy keys still present on older stock / txn rows
+  Device: ['qty'],
   Misc: ['qty'],
 };
 

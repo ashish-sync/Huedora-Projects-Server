@@ -11,7 +11,9 @@ import {
   IN_OUT_PRODUCT_TYPES,
   IN_OUT_PRODUCT_TYPE_ALIASES,
   PRODUCT_TYPE_CODE_PREFIX,
+  PRODUCT_CODE_FORMAT,
   PRODUCT_INVENTORY_TYPES,
+  PRODUCT_INVENTORY_TYPE_ALIASES,
   PRODUCT_TRACKING_KINDS,
   PRODUCT_CATEGORY_DEFAULTS,
 } from '../logistics/logistics.constants.js';
@@ -68,10 +70,21 @@ function resolveProductType(raw) {
   return IN_OUT_PRODUCT_TYPE_ALIASES[s] || '';
 }
 
-async function allocateCode(pathKey, prefix, Model, listFilter = {}) {
+function resolveInventoryType(raw) {
+  const s = trimStr(raw);
+  if (!s) return '';
+  if (PRODUCT_INVENTORY_TYPES.includes(s)) return s;
+  return PRODUCT_INVENTORY_TYPE_ALIASES[s] || '';
+}
+
+async function allocateCode(pathKey, prefix, Model, listFilter = {}, codeFormat = null) {
   let allocated = '';
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    allocated = await nextSequence(`logistics.${pathKey}.${prefix}`, prefix);
+    allocated = await nextSequence(
+      `logistics.${pathKey}.${prefix}`,
+      prefix,
+      codeFormat || undefined
+    );
     const clash = await Model.findOne({
       code: allocated,
       isDeleted: false,
@@ -139,6 +152,7 @@ async function createLogisticsRow({
   required,
   codePrefix,
   resolveCodePrefix,
+  codeFormat = null,
   skuPrefix,
   listFilter,
   checkIdentity,
@@ -156,7 +170,7 @@ async function createLogisticsRow({
   const prefix =
     (typeof resolveCodePrefix === 'function' ? resolveCodePrefix(body) : null) || codePrefix;
   if (prefix) {
-    body.code = await allocateCode(pathKey, prefix, Model, listFilter || {});
+    body.code = await allocateCode(pathKey, prefix, Model, listFilter || {}, codeFormat);
   }
   if (skuPrefix) {
     body.sku = await allocateSku(Model);
@@ -178,7 +192,7 @@ async function createLogisticsRow({
 }
 
 function normalizeProduct(b) {
-  const productType = resolveProductType(b.productType) || 'Misc';
+  const productType = resolveProductType(b.productType) || 'Other';
   if (!IN_OUT_PRODUCT_TYPES.includes(productType)) {
     throw new AppError(
       `productType must be one of: ${IN_OUT_PRODUCT_TYPES.join(', ')}`,
@@ -189,31 +203,46 @@ function normalizeProduct(b) {
   const defaults = PRODUCT_CATEGORY_DEFAULTS[productType] || {
     expiryApplicable: false,
     trackingKind: 'None',
+    inventoryType: 'Multi-use',
   };
   let trackingKind = trimStr(b.trackingKind) || defaults.trackingKind;
   if (!PRODUCT_TRACKING_KINDS.includes(trackingKind)) trackingKind = defaults.trackingKind;
-  let inventoryType = trimStr(b.inventoryType) || 'Inventory Item';
+  let inventoryType =
+    resolveInventoryType(b.inventoryType) || defaults.inventoryType || 'Multi-use';
   if (!PRODUCT_INVENTORY_TYPES.includes(inventoryType)) {
-    inventoryType = productType === 'Device' ? 'Asset' : 'Inventory Item';
+    inventoryType = defaults.inventoryType || 'Multi-use';
   }
+  const brand = trimStr(b.brand) || trimStr(b.manufacturer);
+  const manufacturer = trimStr(b.manufacturer) || brand;
+  const modelOrPart = trimStr(b.model || b.partNumber || b.name || '');
+  const standardCost = toNum(b.purchaseCost ?? b.standardCost, 0);
+  const shelfLifeMonths = toNum(b.shelfLifeMonths, 0);
   return {
-    name: trimStr(b.name),
+    name: modelOrPart,
     categoryId: b.categoryId || null,
-    brand: trimStr(b.brand),
-    manufacturer: trimStr(b.manufacturer),
+    brand,
+    manufacturer,
     description: trimStr(b.description || ''),
     image: null,
-    isActive: true,
+    isActive: b.isActive !== false,
     productType,
     inventoryType,
     trackingKind,
     uomId: b.uomId || null,
+    unitsPerPack: Math.max(1, toNum(b.unitsPerPack, 1)),
+    gstRate: toNum(b.gstRate, 0),
+    minStock: toNum(b.minStock, 0),
+    maxStock: toNum(b.maxStock, 0),
+    shelfLifeMonths,
+    shelfLifeDays: Math.round(shelfLifeMonths * 30),
     expiryApplicable: asBool(b.expiryApplicable, defaults.expiryApplicable),
-    standardCost: toNum(b.standardCost, 0),
-    defaultPerUnitCost: toNum(b.defaultPerUnitCost, 0),
+    linkedDeviceId: b.linkedDeviceId || null,
+    standardCost,
+    lastPurchaseCost: standardCost,
+    defaultPerUnitCost: toNum(b.defaultPerUnitCost, standardCost),
     defaultInvoiceAmount: toNum(b.defaultInvoiceAmount, 0),
-    model: trimStr(b.model || ''),
-    partNumber: trimStr(b.partNumber || ''),
+    model: modelOrPart,
+    partNumber: modelOrPart,
     programProject: trimStr(b.programProject || ''),
     documents: {
       datasheet: null,
@@ -452,23 +481,34 @@ export async function createMasterFromPayload({
         requestId,
       });
       break;
+    case 'parties':
     case 'suppliers':
+    case 'vendors': {
+      const wantType =
+        entityId === 'vendors'
+          ? 'Vendor'
+          : entityId === 'suppliers'
+            ? 'Supplier'
+            : trimStr(payload.partyType) === 'Vendor'
+              ? 'Vendor'
+              : 'Supplier';
       row = await createLogisticsRow({
-        pathKey: 'suppliers',
+        pathKey: 'parties',
         Model: LogisticsSupplier,
-        entityType: 'LogisticsSupplier',
+        entityType: wantType === 'Vendor' ? 'LogisticsVendor' : 'LogisticsSupplier',
         required: ['name'],
-        codePrefix: 'SUP',
-        listFilter: { partyType: 'Supplier' },
+        resolveCodePrefix: () => (wantType === 'Vendor' ? 'VEN' : 'SUP'),
         checkIdentity: true,
         normalize: (b) => ({
           name: trimStr(b.name),
-          partyType: 'Supplier',
+          partyType: wantType,
           contactName: trimStr(b.contactName),
           email: trimStr(b.email).toLowerCase(),
           phone: trimStr(b.phone),
           city: trimStr(b.city),
           state: trimStr(b.state),
+          gstin: trimStr(b.gstin).toUpperCase(),
+          panCard: trimStr(b.panCard).toUpperCase(),
           isActive: true,
         }),
         payload,
@@ -476,30 +516,7 @@ export async function createMasterFromPayload({
         requestId,
       });
       break;
-    case 'vendors':
-      row = await createLogisticsRow({
-        pathKey: 'vendors',
-        Model: LogisticsSupplier,
-        entityType: 'LogisticsVendor',
-        required: ['name'],
-        codePrefix: 'VEN',
-        listFilter: { partyType: 'Vendor' },
-        checkIdentity: true,
-        normalize: (b) => ({
-          name: trimStr(b.name),
-          partyType: 'Vendor',
-          contactName: trimStr(b.contactName),
-          email: trimStr(b.email).toLowerCase(),
-          phone: trimStr(b.phone),
-          city: trimStr(b.city),
-          state: trimStr(b.state),
-          isActive: true,
-        }),
-        payload,
-        actor,
-        requestId,
-      });
-      break;
+    }
     case 'transporters':
       row = await createLogisticsRow({
         pathKey: 'transporters',
@@ -542,9 +559,10 @@ export async function createMasterFromPayload({
         pathKey: 'products',
         Model: LogisticsProduct,
         entityType: 'LogisticsProduct',
-        required: ['name', 'productType', 'categoryId', 'brand', 'manufacturer'],
+        required: ['name', 'productType', 'brand'],
         resolveCodePrefix: (body) =>
-          PRODUCT_TYPE_CODE_PREFIX[body.productType] || PRODUCT_TYPE_CODE_PREFIX.Misc || 'MSC',
+          PRODUCT_TYPE_CODE_PREFIX[body.productType] || PRODUCT_TYPE_CODE_PREFIX.Other || 'OT',
+        codeFormat: PRODUCT_CODE_FORMAT,
         skuPrefix: 'SKU',
         normalize: normalizeProduct,
         payload,

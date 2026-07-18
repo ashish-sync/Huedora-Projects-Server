@@ -23,7 +23,10 @@ import {
   IN_OUT_PRODUCT_TYPES,
   IN_OUT_PRODUCT_TYPE_ALIASES,
   PRODUCT_TYPE_CODE_PREFIX,
+  PRODUCT_CODE_FORMAT,
   PRODUCT_INVENTORY_TYPES,
+  PRODUCT_INVENTORY_TYPE_ALIASES,
+  GST_RATE_PRESETS,
   PRODUCT_TRACKING_TYPE,
   PRODUCT_TRACKING_KINDS,
   PRODUCT_CATEGORY_DEFAULTS,
@@ -40,6 +43,12 @@ import {
   DELIVERY_MODE_ALIASES,
   COURIER_DELIVERY_MODES,
   DEFAULT_WAREHOUSE_NAME,
+  requiresShortExpiryApproval,
+  SHORT_EXPIRY_APPROVAL_MONTHS,
+  OUTWARD_DISPATCH_STATUSES,
+  OUTWARD_OPEN_DISPATCH_STATUS,
+  OUTWARD_TERMINAL_DISPATCH_STATUSES,
+  OUTWARD_DELIVERY_OUTCOMES,
 } from './logistics.constants.js';
 import {
   LogisticsWarehouse,
@@ -97,6 +106,12 @@ const productUpload = multer({
 const productFiles = productUpload.fields([
   { name: 'file', maxCount: 1 },
   { name: 'images', maxCount: 8 },
+]);
+
+const inwardFiles = inwardUpload.fields([
+  { name: 'productPhoto', maxCount: 1 },
+  { name: 'invoiceDoc', maxCount: 1 },
+  { name: 'docsExtra', maxCount: 5 },
 ]);
 
 function fileRefFromMulter(file) {
@@ -212,8 +227,25 @@ function registerMasterCrud({
   checkIdentity = false,
   codePrefix,
   resolveCodePrefix = null,
+  codeFormat = null,
   skuPrefix,
+  uniqueFields = [],
 }) {
+  async function assertUniqueFields(body, excludeId) {
+    for (const field of uniqueFields) {
+      const val = trimStr(body[field]);
+      if (!val) continue;
+      const clash = await Model.findOne({
+        isDeleted: false,
+        ...(listFilter || {}),
+        ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+        [field]: new RegExp(`^${val.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+      });
+      if (clash) {
+        throw new AppError(`${field} “${val}” already exists`, 400, 'DUPLICATE');
+      }
+    }
+  }
   async function assertPartyIdentity(body, excludeId) {
     if (!checkIdentity) return;
     if (!body.email && !body.phone) return;
@@ -274,7 +306,7 @@ function registerMasterCrud({
       if (prefix) {
         let allocated = '';
         for (let attempt = 0; attempt < 8; attempt += 1) {
-          allocated = await nextSequence(`logistics.${path}.${prefix}`, prefix);
+          allocated = await nextSequence(`logistics.${path}.${prefix}`, prefix, codeFormat || undefined);
           const clash = await Model.findOne({
             code: allocated,
             isDeleted: false,
@@ -310,6 +342,7 @@ function registerMasterCrud({
         body.sku = allocatedSku;
       }
       await assertPartyIdentity(body);
+      await assertUniqueFields(body);
       const row = await Model.create({ ...body, isActive: body.isActive !== false });
       await writeAudit({
         actorId: req.user._id,
@@ -344,6 +377,7 @@ function registerMasterCrud({
         },
         row._id
       );
+      await assertUniqueFields(body, row._id);
       Object.assign(row, body);
       row.updatedBy = req.user._id;
       await row.save();
@@ -428,24 +462,53 @@ registerMasterCrud({
 });
 
 registerMasterCrud({
+  path: 'parties',
+  Model: LogisticsSupplier,
+  entityType: 'LogisticsParty',
+  searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city', 'gstin', 'panCard', 'partyType'],
+  checkIdentity: true,
+  resolveCodePrefix: (body) => (trimStr(body.partyType) === 'Vendor' ? 'VEN' : 'SUP'),
+  normalize: (b, existing) => {
+    const partyType = trimStr(b.partyType ?? existing?.partyType) === 'Vendor' ? 'Vendor' : 'Supplier';
+    return {
+      code: trimStr(b.code ?? existing?.code).toUpperCase(),
+      name: trimStr(b.name ?? existing?.name),
+      partyType,
+      contactId:
+        b.contactId !== undefined ? b.contactId || null : existing?.contactId || null,
+      contactName: trimStr(b.contactName ?? existing?.contactName ?? ''),
+      email: trimStr(b.email ?? existing?.email ?? '').toLowerCase(),
+      phone: trimStr(b.phone ?? existing?.phone ?? ''),
+      city: trimStr(b.city ?? existing?.city ?? ''),
+      state: trimStr(b.state ?? existing?.state ?? ''),
+      gstin: trimStr(b.gstin ?? existing?.gstin ?? '').toUpperCase(),
+      panCard: trimStr(b.panCard ?? existing?.panCard ?? '').toUpperCase(),
+      isActive: b.isActive !== undefined ? b.isActive !== false : existing?.isActive !== false,
+    };
+  },
+});
+
+registerMasterCrud({
   path: 'suppliers',
   Model: LogisticsSupplier,
   entityType: 'LogisticsSupplier',
-  searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city'],
+  searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city', 'gstin', 'panCard'],
   listFilter: { partyType: 'Supplier' },
   checkIdentity: true,
   codePrefix: 'SUP',
-  normalize: (b) => ({
-    code: trimStr(b.code).toUpperCase(),
-    name: trimStr(b.name),
+  normalize: (b, existing) => ({
+    code: trimStr(b.code ?? existing?.code).toUpperCase(),
+    name: trimStr(b.name ?? existing?.name),
     partyType: 'Supplier',
-    contactId: b.contactId || null,
-    contactName: trimStr(b.contactName),
-    email: trimStr(b.email).toLowerCase(),
-    phone: trimStr(b.phone),
-    city: trimStr(b.city),
-    state: trimStr(b.state),
-    isActive: b.isActive !== false,
+    contactId: b.contactId !== undefined ? b.contactId || null : existing?.contactId || null,
+    contactName: trimStr(b.contactName ?? existing?.contactName ?? ''),
+    email: trimStr(b.email ?? existing?.email ?? '').toLowerCase(),
+    phone: trimStr(b.phone ?? existing?.phone ?? ''),
+    city: trimStr(b.city ?? existing?.city ?? ''),
+    state: trimStr(b.state ?? existing?.state ?? ''),
+    gstin: trimStr(b.gstin ?? existing?.gstin ?? '').toUpperCase(),
+    panCard: trimStr(b.panCard ?? existing?.panCard ?? '').toUpperCase(),
+    isActive: b.isActive !== undefined ? b.isActive !== false : existing?.isActive !== false,
   }),
 });
 
@@ -453,21 +516,23 @@ registerMasterCrud({
   path: 'vendors',
   Model: LogisticsSupplier,
   entityType: 'LogisticsVendor',
-  searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city'],
+  searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city', 'gstin', 'panCard'],
   listFilter: { partyType: 'Vendor' },
   checkIdentity: true,
   codePrefix: 'VEN',
-  normalize: (b) => ({
-    code: trimStr(b.code).toUpperCase(),
-    name: trimStr(b.name),
+  normalize: (b, existing) => ({
+    code: trimStr(b.code ?? existing?.code).toUpperCase(),
+    name: trimStr(b.name ?? existing?.name),
     partyType: 'Vendor',
-    contactId: b.contactId || null,
-    contactName: trimStr(b.contactName),
-    email: trimStr(b.email).toLowerCase(),
-    phone: trimStr(b.phone),
-    city: trimStr(b.city),
-    state: trimStr(b.state),
-    isActive: b.isActive !== false,
+    contactId: b.contactId !== undefined ? b.contactId || null : existing?.contactId || null,
+    contactName: trimStr(b.contactName ?? existing?.contactName ?? ''),
+    email: trimStr(b.email ?? existing?.email ?? '').toLowerCase(),
+    phone: trimStr(b.phone ?? existing?.phone ?? ''),
+    city: trimStr(b.city ?? existing?.city ?? ''),
+    state: trimStr(b.state ?? existing?.state ?? ''),
+    gstin: trimStr(b.gstin ?? existing?.gstin ?? '').toUpperCase(),
+    panCard: trimStr(b.panCard ?? existing?.panCard ?? '').toUpperCase(),
+    isActive: b.isActive !== undefined ? b.isActive !== false : existing?.isActive !== false,
   }),
 });
 
@@ -512,15 +577,18 @@ registerMasterCrud({
     'brand',
     'manufacturer',
     'productType',
-    'hsnCode',
+    'model',
+    'partNumber',
     'programProject',
   ],
-  required: ['name', 'productType', 'categoryId', 'brand', 'manufacturer'],
+  required: ['name', 'productType', 'brand'],
   resolveCodePrefix: (body) =>
-    PRODUCT_TYPE_CODE_PREFIX[body.productType] || PRODUCT_TYPE_CODE_PREFIX.Misc || 'MSC',
+    PRODUCT_TYPE_CODE_PREFIX[body.productType] || PRODUCT_TYPE_CODE_PREFIX.Other || 'OT',
+  codeFormat: PRODUCT_CODE_FORMAT,
   skuPrefix: 'SKU',
+  uniqueFields: ['name'],
   normalize: (b, existing) => {
-    const productType = resolveProductType(b.productType ?? existing?.productType) || 'Misc';
+    const productType = resolveProductType(b.productType ?? existing?.productType) || 'Other';
     if (!IN_OUT_PRODUCT_TYPES.includes(productType)) {
       throw new AppError(
         `productType must be one of: ${IN_OUT_PRODUCT_TYPES.join(', ')}`,
@@ -531,14 +599,27 @@ registerMasterCrud({
     const defaults = PRODUCT_CATEGORY_DEFAULTS[productType] || {
       expiryApplicable: false,
       trackingKind: 'None',
+      inventoryType: 'Multi-use',
     };
     let trackingKind = trimStr(b.trackingKind ?? existing?.trackingKind) || defaults.trackingKind;
     if (!PRODUCT_TRACKING_KINDS.includes(trackingKind)) trackingKind = defaults.trackingKind;
 
-    let inventoryType = trimStr(b.inventoryType ?? existing?.inventoryType) || 'Inventory Item';
+    let inventoryType =
+      resolveInventoryType(b.inventoryType ?? existing?.inventoryType) ||
+      defaults.inventoryType ||
+      'Multi-use';
     if (!PRODUCT_INVENTORY_TYPES.includes(inventoryType)) {
-      inventoryType = productType === 'Device' ? 'Asset' : 'Inventory Item';
+      inventoryType = defaults.inventoryType || 'Multi-use';
     }
+
+    const needsLinkedDevice =
+      inventoryType === 'Replacement Part for Asset' ||
+      inventoryType === 'Accessory of Asset' ||
+      inventoryType === 'Consumed by Device';
+    const linkedDeviceId =
+      b.linkedDeviceId !== undefined
+        ? b.linkedDeviceId || null
+        : existing?.linkedDeviceId || null;
 
     const expiryApplicable =
       b.expiryApplicable != null
@@ -569,14 +650,37 @@ registerMasterCrud({
             : [],
     };
 
-    const standardCost = toNum(b.standardCost ?? existing?.standardCost, 0);
+    const brand = trimStr(b.brand ?? existing?.brand);
+    const manufacturer = trimStr(b.manufacturer ?? existing?.manufacturer) || brand;
+    const modelOrPart = trimStr(
+      b.model ?? b.partNumber ?? b.name ?? existing?.model ?? existing?.partNumber ?? existing?.name ?? ''
+    );
+    const standardCost = toNum(b.purchaseCost ?? b.standardCost ?? existing?.standardCost, 0);
     const legacyUnit = toNum(b.defaultPerUnitCost ?? existing?.defaultPerUnitCost, standardCost);
+    const shelfLifeMonths = toNum(
+      b.shelfLifeMonths ?? existing?.shelfLifeMonths,
+      existing?.shelfLifeDays ? Math.round(Number(existing.shelfLifeDays) / 30) : 0
+    );
+    const shelfLifeDays =
+      b.shelfLifeMonths != null
+        ? Math.round(shelfLifeMonths * 30)
+        : toNum(b.shelfLifeDays ?? existing?.shelfLifeDays, shelfLifeMonths * 30);
+
+    const compatibleDeviceIds =
+      b.compatibleDeviceIds !== undefined
+        ? asIdList(b.compatibleDeviceIds)
+        : Array.isArray(existing?.compatibleDeviceIds)
+          ? [...existing.compatibleDeviceIds]
+          : [];
+    if (linkedDeviceId && !compatibleDeviceIds.map(String).includes(String(linkedDeviceId))) {
+      compatibleDeviceIds.unshift(linkedDeviceId);
+    }
 
     return {
-      name: trimStr(b.name ?? existing?.name),
-      categoryId: b.categoryId || existing?.categoryId || null,
-      brand: trimStr(b.brand ?? existing?.brand),
-      manufacturer: trimStr(b.manufacturer ?? existing?.manufacturer),
+      name: modelOrPart || trimStr(b.name ?? existing?.name),
+      categoryId: b.categoryId !== undefined ? b.categoryId || null : existing?.categoryId || null,
+      brand,
+      manufacturer,
       description: trimStr(b.description ?? existing?.description ?? ''),
       image: b.image !== undefined ? asFileRef(b.image) : asFileRef(existing?.image),
       isActive: b.isActive !== undefined ? asBool(b.isActive, true) : existing?.isActive !== false,
@@ -584,12 +688,13 @@ registerMasterCrud({
       inventoryType,
       trackingKind,
       uomId: b.uomId !== undefined ? b.uomId || null : existing?.uomId || null,
-      hsnCode: trimStr(b.hsnCode ?? existing?.hsnCode ?? ''),
+      unitsPerPack: Math.max(1, toNum(b.unitsPerPack ?? existing?.unitsPerPack, 1)),
       gstRate: toNum(b.gstRate ?? existing?.gstRate, 0),
       minStock: toNum(b.minStock ?? existing?.minStock, 0),
       maxStock: toNum(b.maxStock ?? existing?.maxStock, 0),
       reorderLevel: toNum(b.reorderLevel ?? existing?.reorderLevel, 0),
-      shelfLifeDays: toNum(b.shelfLifeDays ?? existing?.shelfLifeDays, 0),
+      shelfLifeMonths,
+      shelfLifeDays,
       expiryApplicable: !!expiryApplicable,
       qcRequired: asBool(b.qcRequired ?? existing?.qcRequired, false),
       returnable: asBool(b.returnable ?? existing?.returnable, false),
@@ -605,13 +710,9 @@ registerMasterCrud({
       leadTimeDays: toNum(b.leadTimeDays ?? existing?.leadTimeDays, 0),
       standardCost,
       averageCost: toNum(b.averageCost ?? existing?.averageCost, 0),
-      lastPurchaseCost: toNum(b.lastPurchaseCost ?? existing?.lastPurchaseCost, 0),
-      compatibleDeviceIds:
-        b.compatibleDeviceIds !== undefined
-          ? asIdList(b.compatibleDeviceIds)
-          : Array.isArray(existing?.compatibleDeviceIds)
-            ? existing.compatibleDeviceIds
-            : [],
+      lastPurchaseCost: toNum(b.lastPurchaseCost ?? existing?.lastPurchaseCost, standardCost),
+      linkedDeviceId: needsLinkedDevice ? linkedDeviceId : null,
+      compatibleDeviceIds,
       compatibilityRelationship: trimStr(
         b.compatibilityRelationship ?? existing?.compatibilityRelationship ?? ''
       ),
@@ -631,8 +732,8 @@ registerMasterCrud({
       documents,
       internalRemarks: trimStr(b.internalRemarks ?? existing?.internalRemarks ?? ''),
       programProject: trimStr(b.programProject ?? existing?.programProject ?? ''),
-      model: trimStr(b.model ?? existing?.model ?? ''),
-      partNumber: trimStr(b.partNumber ?? existing?.partNumber ?? ''),
+      model: modelOrPart,
+      partNumber: modelOrPart,
       defaultPerUnitCost: legacyUnit,
       defaultInvoiceAmount: toNum(
         b.defaultInvoiceAmount ?? existing?.defaultInvoiceAmount,
@@ -804,6 +905,7 @@ router.get(
           entryTypes: IN_OUT_ENTRY_TYPES,
           productTypes: IN_OUT_PRODUCT_TYPES,
           inventoryTypes: PRODUCT_INVENTORY_TYPES,
+          gstRatePresets: GST_RATE_PRESETS,
           trackingByProduct: PRODUCT_TRACKING_TYPE,
           categoryDefaults: PRODUCT_CATEGORY_DEFAULTS,
           trackingKinds: PRODUCT_TRACKING_KINDS,
@@ -819,10 +921,14 @@ router.get(
           trackingTypes: IN_OUT_TRACKING_TYPES,
           adjustmentTypes: ADJUSTMENT_TYPES,
           adjustmentReasons: ADJUSTMENT_REASONS,
+          shortExpiryApprovalMonths: SHORT_EXPIRY_APPROVAL_MONTHS,
           deviceConditions: DEVICE_CONDITIONS,
           inspectionStatuses: INSPECTION_STATUSES,
           documentTypes: DOCUMENT_TYPES,
           defaultWarehouseName: DEFAULT_WAREHOUSE_NAME,
+          outwardDispatchStatuses: OUTWARD_DISPATCH_STATUSES,
+          outwardDeliveryOutcomes: OUTWARD_DELIVERY_OUTCOMES,
+          goodsIssueKinds: ['Fresh Dispatch', 'Inter Transfer', 'Recall / Pickup'],
         },
       },
     });
@@ -850,6 +956,17 @@ function resolveProductType(raw) {
   if (hit) return hit[1];
   if (IN_OUT_PRODUCT_TYPES.includes(v)) return v;
   return v;
+}
+
+function resolveInventoryType(raw) {
+  const v = trimStr(raw);
+  if (!v) return '';
+  if (PRODUCT_INVENTORY_TYPES.includes(v)) return v;
+  if (PRODUCT_INVENTORY_TYPE_ALIASES[v]) return PRODUCT_INVENTORY_TYPE_ALIASES[v];
+  const hit = Object.entries(PRODUCT_INVENTORY_TYPE_ALIASES).find(
+    ([k]) => k.toLowerCase() === v.toLowerCase()
+  );
+  return hit?.[1] || v;
 }
 
 function resolveDeliveryMode(raw) {
@@ -1019,6 +1136,21 @@ function normalizeInOutBody(body, existing = null, actor = null) {
     throw new AppError('Expiry Date is required when Expiry Applicable is Yes', 400, 'VALIDATION_ERROR');
   }
 
+  const isInbound =
+    entryType === 'Inward' ||
+    entryType === 'Return' ||
+    /^inward/i.test(entryType);
+  const needsShortExpiryApproval =
+    isInbound && expiryDate && requiresShortExpiryApproval(expiryDate, transactionDate);
+  const approvedBy = trimStr(body.approvedBy ?? existing?.approvedBy ?? '');
+  if (needsShortExpiryApproval && !approvedBy) {
+    throw new AppError(
+      `Expiry is under ${SHORT_EXPIRY_APPROVAL_MONTHS} months. Inward requires approval (Approved By).`,
+      400,
+      'SHORT_EXPIRY_APPROVAL_REQUIRED'
+    );
+  }
+
   const serialNumber =
     trackingKind === 'Serial' || trackingKind === 'Batch + Serial' ? batchOrSerial : '';
   const batchNumber =
@@ -1063,6 +1195,7 @@ function normalizeInOutBody(body, existing = null, actor = null) {
       body.assetRequestLineId || existing?.assetRequestLineId || null,
 
     qty,
+    uomId: body.uomId || existing?.uomId || null,
     perUnitCost: numOr(body.perUnitCost ?? existing?.perUnitCost, 0),
     invoiceAmount: numOr(body.invoiceAmount ?? existing?.invoiceAmount, 0),
 
@@ -1110,6 +1243,30 @@ function normalizeInOutBody(body, existing = null, actor = null) {
       body.acknowledgementRequired ?? existing?.acknowledgementRequired,
       false
     ),
+    dispatchStatus: (() => {
+      const incoming = trimStr(body.dispatchStatus ?? '');
+      if (incoming && OUTWARD_DISPATCH_STATUSES.includes(incoming)) return incoming;
+      if (existing?.dispatchStatus) return existing.dispatchStatus;
+      if (entryType === 'Outward' || entryType === 'Return') return OUTWARD_OPEN_DISPATCH_STATUS;
+      return '';
+    })(),
+    deliveryOutcome: trimStr(body.deliveryOutcome ?? existing?.deliveryOutcome ?? ''),
+    deliveredAt: trimStr(body.deliveredAt ?? existing?.deliveredAt ?? ''),
+    closedAt: trimStr(body.closedAt ?? existing?.closedAt ?? ''),
+    deliveryMarkedBy: trimStr(body.deliveryMarkedBy ?? existing?.deliveryMarkedBy ?? ''),
+    logisticsKind: trimStr(body.logisticsKind ?? existing?.logisticsKind ?? ''),
+    priority: trimStr(body.priority ?? existing?.priority ?? ''),
+    preferredDate: trimStr(body.preferredDate ?? existing?.preferredDate ?? ''),
+    fromContactId: body.fromContactId || existing?.fromContactId || null,
+    fromName: trimStr(body.fromName ?? existing?.fromName ?? ''),
+    fromNumber: trimStr(body.fromNumber ?? existing?.fromNumber ?? ''),
+    fromAddress: trimStr(body.fromAddress ?? existing?.fromAddress ?? ''),
+    fromPinCode: trimStr(body.fromPinCode ?? existing?.fromPinCode ?? ''),
+    fromCity: trimStr(body.fromCity ?? existing?.fromCity ?? ''),
+    fromState: trimStr(body.fromState ?? existing?.fromState ?? ''),
+    address: trimStr(body.address ?? body.toAddress ?? existing?.address ?? ''),
+    pinCode: trimStr(body.pinCode ?? body.toPinCode ?? existing?.pinCode ?? ''),
+    toAddress: trimStr(body.toAddress ?? existing?.toAddress ?? ''),
 
     destinationWarehouseId: body.destinationWarehouseId || existing?.destinationWarehouseId || null,
     transferReason: trimStr(body.transferReason ?? existing?.transferReason ?? ''),
@@ -1122,7 +1279,7 @@ function normalizeInOutBody(body, existing = null, actor = null) {
 
     adjustmentType: trimStr(body.adjustmentType ?? existing?.adjustmentType ?? ''),
     adjustmentReason: trimStr(body.adjustmentReason ?? existing?.adjustmentReason ?? ''),
-    approvedBy: trimStr(body.approvedBy ?? existing?.approvedBy ?? ''),
+    approvedBy: needsShortExpiryApproval || approvedBy ? approvedBy : '',
 
     process: trimStr(
       body.processName ?? body.process ?? existing?.process ?? IN_OUT_DEFAULT_PROCESS[entryType] ?? ''
@@ -1573,6 +1730,15 @@ router.get(
       filter.productType = resolveProductType(req.query.productType);
     }
     if (req.query.status) filter.status = String(req.query.status);
+    if (req.query.dispatchStatus) {
+      const ds = String(req.query.dispatchStatus).trim();
+      if (ds === OUTWARD_OPEN_DISPATCH_STATUS) {
+        // Include legacy outward rows with no dispatchStatus yet
+        filter.dispatchStatus = { $nin: OUTWARD_TERMINAL_DISPATCH_STATUSES };
+      } else {
+        filter.dispatchStatus = ds;
+      }
+    }
     if (req.query.q) {
       const re = new RegExp(String(req.query.q), 'i');
       filter.$or = [
@@ -1696,6 +1862,68 @@ router.patch(
       actorId: req.user._id,
       actorEmail: req.user.email,
       action: 'LogisticsInOutEntry.UPDATE',
+      entityType: 'LogisticsInOutEntry',
+      entityId: row._id,
+      after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+
+    res.json({ data: row });
+  })
+);
+
+router.patch(
+  '/in-out/:id/delivery',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const row = await LogisticsInOutEntry.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Transaction not found', 404);
+    if (String(row.entryType || '') !== 'Outward' && String(row.entryType || '') !== 'Return') {
+      throw new AppError('Delivery status applies only to goods issue / recall transactions', 400, 'VALIDATION_ERROR');
+    }
+
+    const current = trimStr(row.dispatchStatus) || OUTWARD_OPEN_DISPATCH_STATUS;
+    if (OUTWARD_TERMINAL_DISPATCH_STATUSES.includes(current)) {
+      throw new AppError(
+        `Dispatch is already ${current}. Open status cannot be changed again.`,
+        409,
+        'DISPATCH_ALREADY_CLOSED'
+      );
+    }
+
+    const outcome = trimStr(req.body.outcome ?? req.body.deliveryOutcome ?? req.body.dispatchStatus);
+    if (!OUTWARD_DELIVERY_OUTCOMES.includes(outcome)) {
+      throw new AppError(
+        `outcome must be one of: ${OUTWARD_DELIVERY_OUTCOMES.join(', ')}`,
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+
+    const now = new Date().toISOString();
+    const markedBy = req.user?.email || req.user?.fullName || '';
+    row.dispatchStatus = outcome;
+    row.deliveryOutcome = outcome;
+    row.closedAt = now;
+    row.deliveryMarkedBy = markedBy;
+    if (outcome === 'Delivered') {
+      row.deliveredAt = trimStr(req.body.deliveredAt) || now;
+    } else if (req.body.deliveredAt) {
+      row.deliveredAt = trimStr(req.body.deliveredAt);
+    }
+    if (req.body.remark || req.body.deliveryRemark) {
+      const note = trimStr(req.body.remark || req.body.deliveryRemark);
+      row.remark = row.remark ? `${row.remark} | ${outcome}: ${note}` : `${outcome}: ${note}`;
+    }
+    if (req.body.awbNumber != null && trimStr(req.body.awbNumber)) {
+      row.awbNumber = trimStr(req.body.awbNumber);
+    }
+    await row.save();
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'LogisticsInOutEntry.DELIVERY',
       entityType: 'LogisticsInOutEntry',
       entityId: row._id,
       after: row.toObject ? row.toObject() : row,
