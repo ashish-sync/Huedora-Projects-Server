@@ -63,6 +63,9 @@ export const PERMISSIONS = {
   LOGISTICS_READ: 'logistics:read',
   LOGISTICS_WRITE: 'logistics:write',
   LOGISTICS_MASTER: 'logistics:master',
+  /** Finance One */
+  FINANCE_READ: 'finance:read',
+  FINANCE_WRITE: 'finance:write',
 };
 
 export const ROLE_PERMISSIONS = {
@@ -85,6 +88,8 @@ export const ROLE_PERMISSIONS = {
     PERMISSIONS.IMPORTS_EXECUTE,
     PERMISSIONS.CAMPS_READ,
     PERMISSIONS.CAMPS_REQUEST,
+    PERMISSIONS.FINANCE_READ,
+    PERMISSIONS.FINANCE_WRITE,
     PERMISSIONS.DASHBOARDS_READ,
     PERMISSIONS.NOTIFICATIONS_READ,
   ],

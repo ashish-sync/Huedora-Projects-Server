@@ -1106,12 +1106,8 @@ function normalizeInOutBody(body, existing = null, actor = null) {
     resolveDeliveryMode(
       body.deliveryMode ?? body.mode ?? existing?.deliveryMode ?? existing?.mode ?? ''
     ) || 'Hand Delivery';
-  if (deliveryMode && !DELIVERY_MODES.includes(deliveryMode)) {
-    throw new AppError(
-      `Delivery Mode must be one of: ${DELIVERY_MODES.join(', ')}`,
-      400,
-      'VALIDATION_ERROR'
-    );
+  if (deliveryMode && /^other$/i.test(deliveryMode)) {
+    throw new AppError('Enter a specific Delivery Mode instead of Other', 400, 'VALIDATION_ERROR');
   }
 
   const awbNumber = trimStr(body.awbNumber ?? existing?.awbNumber ?? '');
@@ -1325,22 +1321,33 @@ async function enrichBodyFromProduct(body) {
   };
 }
 
-async function findStockForTxn(txn, warehouseId) {
+async function findStockForTxn(txn, warehouseId, { availableOnly = false } = {}) {
+  const statusFilter = availableOnly ? { status: 'Available' } : {};
   if (txn.serialNumber) {
     const bySerial = await LogisticsStockItem.findOne({
       serialNumber: txn.serialNumber,
       isDeleted: false,
+      ...statusFilter,
     });
     if (bySerial) return bySerial;
+    if (availableOnly) return null;
+    return LogisticsStockItem.findOne({
+      serialNumber: txn.serialNumber,
+      isDeleted: false,
+    });
   }
 
   const wh = warehouseId || null;
-  const base = { isDeleted: false };
+  const base = { isDeleted: false, ...statusFilter };
   if (wh) base.warehouseId = wh;
 
   if (txn.productId) {
     const withBatch = txn.batchNumber
-      ? await LogisticsStockItem.findOne({ ...base, productId: txn.productId, batchNumber: txn.batchNumber })
+      ? await LogisticsStockItem.findOne({
+          ...base,
+          productId: txn.productId,
+          batchNumber: txn.batchNumber,
+        })
       : null;
     if (withBatch) return withBatch;
     const byProduct = await LogisticsStockItem.findOne({ ...base, productId: txn.productId });
@@ -1368,36 +1375,107 @@ async function findStockForTxn(txn, warehouseId) {
   return LogisticsStockItem.findOne({ ...base, name });
 }
 
+/** Sum Available qty for matching product/serial/batch in warehouse (goods issue guard). */
+async function sumAvailableQty(txn, warehouseId) {
+  const statusFilter = { status: 'Available' };
+  if (txn.serialNumber) {
+    const rows = await LogisticsStockItem.find({
+      serialNumber: txn.serialNumber,
+      isDeleted: false,
+      ...statusFilter,
+    });
+    return rows.reduce((sum, row) => sum + (Number(row.quantity) || 0), 0);
+  }
+
+  const wh = warehouseId || null;
+  const base = { isDeleted: false, ...statusFilter };
+  if (wh) base.warehouseId = wh;
+
+  let filter = null;
+  if (txn.productId) {
+    filter = { ...base, productId: txn.productId };
+    if (txn.batchNumber) filter.batchNumber = txn.batchNumber;
+  } else if (txn.sku) {
+    filter = { ...base, sku: txn.sku };
+    if (txn.batchNumber) filter.batchNumber = txn.batchNumber;
+  } else {
+    const name = displayItemName(txn);
+    if (!name) return 0;
+    filter = { ...base, name };
+    if (txn.batchNumber) filter.batchNumber = txn.batchNumber;
+  }
+
+  const rows = await LogisticsStockItem.find(filter);
+  return rows.reduce((sum, row) => sum + (Number(row.quantity) || 0), 0);
+}
+
 async function applyQtyDeltaToStock(txn, warehouseId, quantityDelta, actor) {
   const itemName = displayItemName(txn);
-  let stockItem = await findStockForTxn(txn, warehouseId);
+  const need = Math.abs(Number(quantityDelta) || 0);
 
   if (quantityDelta < 0) {
-    if (!stockItem) {
+    const available = await sumAvailableQty(txn, warehouseId);
+    if (available < need) {
       throw new AppError(
-        `No stock on hand for “${itemName}” in the selected warehouse`,
+        `Insufficient available stock for “${itemName}” (available ${available}, requested ${need})`,
         400,
         'INSUFFICIENT_STOCK'
       );
     }
-    const nextQty = (Number(stockItem.quantity) || 0) + quantityDelta;
-    if (nextQty < 0) {
+
+    let remaining = need;
+    const lots = [];
+    if (txn.serialNumber) {
+      const row = await findStockForTxn(txn, warehouseId, { availableOnly: true });
+      if (row) lots.push(row);
+    } else {
+      const wh = warehouseId || null;
+      const base = { isDeleted: false, status: 'Available' };
+      if (wh) base.warehouseId = wh;
+      let filter = { ...base };
+      if (txn.productId) {
+        filter.productId = txn.productId;
+        if (txn.batchNumber) filter.batchNumber = txn.batchNumber;
+      } else if (txn.sku) {
+        filter.sku = txn.sku;
+        if (txn.batchNumber) filter.batchNumber = txn.batchNumber;
+      } else {
+        filter.name = displayItemName(txn);
+        if (txn.batchNumber) filter.batchNumber = txn.batchNumber;
+      }
+      const found = await LogisticsStockItem.find(filter).sort('createdAt');
+      lots.push(...found);
+    }
+
+    let last = null;
+    for (const stockItem of lots) {
+      if (remaining <= 0) break;
+      const onHand = Number(stockItem.quantity) || 0;
+      if (onHand <= 0) continue;
+      const take = Math.min(onHand, remaining);
+      stockItem.quantity = onHand - take;
+      stockItem.status = txn.status || stockItem.status;
+      stockItem.locationId = txn.toLocationId || stockItem.locationId;
+      stockItem.unitValue = txn.perUnitCost || stockItem.unitValue;
+      stockItem.productType = txn.productType || stockItem.productType;
+      if (txn.productId) stockItem.productId = txn.productId;
+      if (txn.expiryDate) stockItem.expiryDate = txn.expiryDate;
+      await stockItem.save();
+      remaining -= take;
+      last = stockItem;
+    }
+
+    if (remaining > 0) {
       throw new AppError(
-        `Insufficient stock for “${itemName}” (on hand ${stockItem.quantity})`,
+        `Insufficient available stock for “${itemName}” (could not allocate remaining ${remaining})`,
         400,
         'INSUFFICIENT_STOCK'
       );
     }
-    stockItem.quantity = nextQty;
-    stockItem.status = txn.status || stockItem.status;
-    stockItem.locationId = txn.toLocationId || stockItem.locationId;
-    stockItem.unitValue = txn.perUnitCost || stockItem.unitValue;
-    stockItem.productType = txn.productType || stockItem.productType;
-    if (txn.productId) stockItem.productId = txn.productId;
-    if (txn.expiryDate) stockItem.expiryDate = txn.expiryDate;
-    await stockItem.save();
-    return stockItem;
+    return last;
   }
+
+  let stockItem = await findStockForTxn(txn, warehouseId);
 
   if (stockItem) {
     stockItem.quantity = (Number(stockItem.quantity) || 0) + quantityDelta;
@@ -2119,6 +2197,25 @@ router.patch(
 );
 
 router.get(
+  '/inventory/availability',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const txn = {
+      productId: req.query.productId || null,
+      sku: trimStr(req.query.sku),
+      serialNumber: trimStr(req.query.serialNumber),
+      batchNumber: trimStr(req.query.batchNumber),
+      productName: trimStr(req.query.productName || req.query.name),
+      itemName: trimStr(req.query.productName || req.query.name),
+      deviceName: trimStr(req.query.productName || req.query.name),
+    };
+    const warehouseId = req.query.warehouseId || null;
+    const available = await sumAvailableQty(txn, warehouseId);
+    res.json({ data: { availableQty: available, warehouseId, productId: txn.productId } });
+  })
+);
+
+router.get(
   '/inventory/summary',
   canRead,
   asyncHandler(async (_req, res) => {
@@ -2164,6 +2261,14 @@ router.get(
     if (req.query.warehouseId) filter.warehouseId = req.query.warehouseId;
     if (req.query.status) filter.status = req.query.status;
     if (req.query.categoryId) filter.categoryId = req.query.categoryId;
+    if (req.query.productId) filter.productId = req.query.productId;
+    if (req.query.productType) {
+      const want = resolveProductType(req.query.productType) || String(req.query.productType);
+      const aliases = Object.entries(IN_OUT_PRODUCT_TYPE_ALIASES)
+        .filter(([, canonical]) => canonical === want)
+        .map(([alias]) => alias);
+      filter.productType = { $in: [...new Set([want, String(req.query.productType), ...aliases])] };
+    }
     if (req.query.q) {
       const re = new RegExp(String(req.query.q), 'i');
       filter.$or = [
@@ -2205,6 +2310,8 @@ router.post(
       if (clash) throw new AppError(`IMEI “${imei}” already exists`, 400, 'DUPLICATE_IMEI');
     }
     const quantity = Number(req.body.quantity);
+    const productType =
+      resolveProductType(req.body.productType) || trimStr(req.body.productType) || '';
     const row = await LogisticsStockItem.create({
       sku: trimStr(req.body.sku).toUpperCase(),
       name,
@@ -2215,6 +2322,7 @@ router.post(
       uomId: req.body.uomId || null,
       warehouseId: req.body.warehouseId || null,
       locationId: req.body.locationId || null,
+      productType,
       status: trimStr(req.body.status) || 'Available',
       quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
       unitValue: Number(req.body.unitValue) || 0,

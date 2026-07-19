@@ -5,7 +5,14 @@ import { authenticate, requirePermission } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { Contact, normalizeContactPayload } from './contact.model.js';
-import { RESOURCE_TYPES, PROFESSIONS } from './contact.constants.js';
+import {
+  CONTACT_CATEGORIES,
+  RESOURCE_TYPES,
+  PROFESSIONS,
+  CLIENT_PROFESSIONS,
+  VENDOR_PROFESSIONS,
+  SUPPLY_CATEGORIES,
+} from './contact.constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { notifyImportFailures } from '../imports/importErrorReport.js';
@@ -22,14 +29,20 @@ router.use(authenticate);
 const CONTACT_HEADERS = [
   'Name',
   'Email',
+  'Contact Category',
   'Resource Type',
-  'Profession',
+  'Profession / Role',
+  'Organization Name',
+  'Supply Category',
   'Contact',
   'City',
-  'District',
   'State',
-  'Pin Code',
   'Address',
+  'PIN Code',
+  'PAN Number',
+  'IFSC Code',
+  'Bank Name',
+  'Account Number',
 ];
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -57,7 +70,16 @@ function cell(row, names) {
 router.get(
   '/meta/picklists',
   asyncHandler(async (_req, res) => {
-    res.json({ data: { resourceTypes: RESOURCE_TYPES, professions: PROFESSIONS } });
+    res.json({
+      data: {
+        contactCategories: CONTACT_CATEGORIES,
+        resourceTypes: RESOURCE_TYPES,
+        professions: PROFESSIONS,
+        clientProfessions: CLIENT_PROFESSIONS,
+        vendorProfessions: VENDOR_PROFESSIONS,
+        supplyCategories: SUPPLY_CATEGORIES,
+      },
+    });
   })
 );
 
@@ -74,7 +96,13 @@ router.get(
         { contact: new RegExp(q, 'i') },
         { mobile: new RegExp(q, 'i') },
         { resourceType: new RegExp(q, 'i') },
+        { contactCategory: new RegExp(q, 'i') },
+        { organization: new RegExp(q, 'i') },
+        { supplyCategory: new RegExp(q, 'i') },
         { profession: new RegExp(q, 'i') },
+        { panNumber: new RegExp(q, 'i') },
+        { bankName: new RegExp(q, 'i') },
+        { ifscCode: new RegExp(q, 'i') },
         { city: new RegExp(q, 'i') },
         { state: new RegExp(q, 'i') },
         { pinCode: new RegExp(q, 'i') },
@@ -100,14 +128,20 @@ router.get(
       rows.map((c) => [
         c.name,
         c.email,
+        c.contactCategory,
         c.resourceType,
         c.profession,
+        c.organization,
+        c.supplyCategory,
         c.contact || c.mobile,
         c.city,
-        c.district,
         c.state,
-        c.pinCode,
         c.address,
+        c.pinCode,
+        c.panNumber,
+        c.ifscCode,
+        c.bankName,
+        c.accountNumber,
       ]),
       { sheetName: 'Contacts' }
     );
@@ -127,7 +161,7 @@ router.post(
   '/',
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
   asyncHandler(async (req, res) => {
-    const payload = normalizeContactPayload(req.body);
+    const payload = normalizeContactPayload(req.body, { validate: true });
     const { contact, created, reused } = await resolveOrCreateContact(payload, req.user._id);
 
     if (created) {
@@ -153,32 +187,40 @@ router.patch(
   asyncHandler(async (req, res) => {
     const contact = await Contact.findOne({ _id: req.params.id, isDeleted: false });
     if (!contact) throw new AppError('Contact not found', 404);
-    const payload = normalizeContactPayload({
-      name: req.body.name !== undefined ? req.body.name : contact.name,
-      email: req.body.email !== undefined ? req.body.email : contact.email,
-      resourceType: req.body.resourceType !== undefined ? req.body.resourceType : contact.resourceType,
-      profession: req.body.profession !== undefined ? req.body.profession : contact.profession,
-      contact:
-        req.body.contact !== undefined
-          ? req.body.contact
-          : req.body.mobile !== undefined
-            ? req.body.mobile
-            : contact.contact || contact.mobile,
-      city: req.body.city !== undefined ? req.body.city : contact.city,
-      state: req.body.state !== undefined ? req.body.state : contact.state,
-      district: req.body.district !== undefined ? req.body.district : contact.district,
-      pinCode: req.body.pinCode !== undefined ? req.body.pinCode : contact.pinCode,
-      address: req.body.address !== undefined ? req.body.address : contact.address,
-      organization: req.body.organization !== undefined ? req.body.organization : contact.organization,
-      notes: req.body.notes !== undefined ? req.body.notes : contact.notes,
-      stateId: req.body.stateId !== undefined ? req.body.stateId : contact.stateId,
-      districtId: req.body.districtId !== undefined ? req.body.districtId : contact.districtId,
-      cityId: req.body.cityId !== undefined ? req.body.cityId : contact.cityId,
-    });
-    if (!payload.name) throw new AppError('Name is required', 400, 'VALIDATION_ERROR');
-    if (!payload.email && !payload.contact) {
-      throw new AppError('Email or Contact is required for delivery', 400, 'VALIDATION_ERROR');
-    }
+    const payload = normalizeContactPayload(
+      {
+        name: req.body.name !== undefined ? req.body.name : contact.name,
+        email: req.body.email !== undefined ? req.body.email : contact.email,
+        contactCategory:
+          req.body.contactCategory !== undefined ? req.body.contactCategory : contact.contactCategory,
+        resourceType: req.body.resourceType !== undefined ? req.body.resourceType : contact.resourceType,
+        profession: req.body.profession !== undefined ? req.body.profession : contact.profession,
+        contact:
+          req.body.contact !== undefined
+            ? req.body.contact
+            : req.body.mobile !== undefined
+              ? req.body.mobile
+              : contact.contact || contact.mobile,
+        city: req.body.city !== undefined ? req.body.city : contact.city,
+        state: req.body.state !== undefined ? req.body.state : contact.state,
+        district: req.body.district !== undefined ? req.body.district : contact.district,
+        pinCode: req.body.pinCode !== undefined ? req.body.pinCode : contact.pinCode,
+        address: req.body.address !== undefined ? req.body.address : contact.address,
+        organization: req.body.organization !== undefined ? req.body.organization : contact.organization,
+        supplyCategory:
+          req.body.supplyCategory !== undefined ? req.body.supplyCategory : contact.supplyCategory,
+        panNumber: req.body.panNumber !== undefined ? req.body.panNumber : contact.panNumber,
+        ifscCode: req.body.ifscCode !== undefined ? req.body.ifscCode : contact.ifscCode,
+        bankName: req.body.bankName !== undefined ? req.body.bankName : contact.bankName,
+        accountNumber:
+          req.body.accountNumber !== undefined ? req.body.accountNumber : contact.accountNumber,
+        notes: req.body.notes !== undefined ? req.body.notes : contact.notes,
+        stateId: req.body.stateId !== undefined ? req.body.stateId : contact.stateId,
+        districtId: req.body.districtId !== undefined ? req.body.districtId : contact.districtId,
+        cityId: req.body.cityId !== undefined ? req.body.cityId : contact.cityId,
+      },
+      { validate: true }
+    );
     await assertContactIdentityAvailable({
       email: payload.email,
       phone: payload.contact,
@@ -208,22 +250,45 @@ router.post(
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const rowNum = i + 2;
-      const payload = normalizeContactPayload({
-        name: cell(row, ['Name', 'name']),
-        email: cell(row, ['Email', 'email']),
-        resourceType: cell(row, ['Resource Type', 'ResourceType', 'resourceType']),
-        profession: cell(row, ['Profession', 'profession']),
-        contact: cell(row, ['Contact', 'contact', 'Mobile', 'Phone']),
-        city: cell(row, ['City', 'city']),
-        state: cell(row, ['State', 'state']),
-      });
-
-      if (!payload.name) {
-        errors.push({ row: rowNum, field: 'Name', message: 'Name is required' });
-        continue;
-      }
-      if (!payload.email && !payload.contact) {
-        errors.push({ row: rowNum, field: 'Email/Contact', message: 'Email or Contact required' });
+      let payload;
+      try {
+        payload = normalizeContactPayload(
+          {
+            name: cell(row, ['Name', 'name']),
+            email: cell(row, ['Email', 'email']),
+            contactCategory: cell(row, [
+              'Contact Category',
+              'ContactCategory',
+              'contactCategory',
+              'Category',
+            ]),
+            resourceType: cell(row, ['Resource Type', 'ResourceType', 'resourceType']),
+            profession: cell(row, ['Profession / Role', 'Profession', 'profession']),
+            organization: cell(row, [
+              'Organization Name',
+              'Organization',
+              'organization',
+              'Org',
+            ]),
+            supplyCategory: cell(row, [
+              'Supply Category',
+              'SupplyCategory',
+              'supplyCategory',
+            ]),
+            contact: cell(row, ['Contact', 'contact', 'Mobile', 'Phone']),
+            city: cell(row, ['City', 'city']),
+            state: cell(row, ['State', 'state']),
+            address: cell(row, ['Address', 'address']),
+            pinCode: cell(row, ['PIN Code', 'Pin Code', 'pinCode', 'PIN']),
+            panNumber: cell(row, ['PAN Number', 'PAN', 'panNumber']),
+            ifscCode: cell(row, ['IFSC Code', 'IFSC', 'ifscCode']),
+            bankName: cell(row, ['Bank Name', 'bankName']),
+            accountNumber: cell(row, ['Account Number', 'accountNumber', 'Account']),
+          },
+          { validate: true }
+        );
+      } catch (err) {
+        errors.push({ row: rowNum, field: 'import', message: err.message });
         continue;
       }
 

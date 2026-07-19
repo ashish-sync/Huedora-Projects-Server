@@ -8,6 +8,7 @@ import { VerificationRecord } from '../verifications/verification.model.js';
 import { CampRequest } from '../camps/camp.model.js';
 import { AssetRequest, REQUEST_TYPE_LABELS } from '../assetRequests/assetRequest.model.js';
 import { LogisticsInOutEntry } from '../logistics/logistics.model.js';
+import { FinanceExpense, FinanceInvoice } from '../finance/finance.model.js';
 import { Movement } from '../movements/movement.model.js';
 import { ImportJob } from '../imports/importJob.model.js';
 import { Notification } from '../notifications/notification.model.js';
@@ -60,6 +61,12 @@ export const REVIEW_MODULES = [
     label: 'Movement One',
     linkTo: '/logistics',
     permissions: [PERMISSIONS.LOGISTICS_READ, PERMISSIONS.LOGISTICS_WRITE, PERMISSIONS.LOGISTICS_MASTER],
+  },
+  {
+    id: 'finance',
+    label: 'Finance One',
+    linkTo: '/finance',
+    permissions: [PERMISSIONS.FINANCE_READ, PERMISSIONS.FINANCE_WRITE],
   },
   {
     id: 'master-data',
@@ -385,6 +392,57 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
           when: fmtDate(getDateValue(r, ['transactionDateTime', 'transactionDate', 'createdAt'])),
         })),
         total: filtered.length,
+      };
+    }
+    case 'finance': {
+      const [expenses, invoices] = await Promise.all([
+        activeOnly(await FinanceExpense.find({ isDeleted: false }).limit(20000)),
+        activeOnly(await FinanceInvoice.find({ isDeleted: false }).limit(20000)),
+      ]);
+      const expenseFiltered = expenses.filter((r) =>
+        inRange(getDateValue(r, ['expenseDate', 'createdAt']), fromDate, toDate)
+      );
+      const invoiceFiltered = invoices.filter((r) =>
+        inRange(getDateValue(r, ['invoiceDate', 'createdAt']), fromDate, toDate)
+      );
+      const combined = [
+        ...expenseFiltered.map((r) => ({
+          id: r._id,
+          kind: 'Expense',
+          ref: r.expenseKey || '-',
+          party: r.payeeName || r.title || '-',
+          amount: r.amount,
+          status: r.status || '-',
+          when: fmtDate(getDateValue(r, ['expenseDate', 'createdAt'])),
+        })),
+        ...invoiceFiltered.map((r) => ({
+          id: r._id,
+          kind: 'Invoice',
+          ref: r.invoiceNumber || r.invoiceKey || '-',
+          party: r.vendorName || '-',
+          amount: r.totalAmount,
+          status: r.status || '-',
+          when: fmtDate(getDateValue(r, ['invoiceDate', 'createdAt'])),
+        })),
+      ];
+      return {
+        dateFieldLabel: 'Expense / invoice date',
+        summary: {
+          total: combined.length,
+          expenses: expenseFiltered.length,
+          invoices: invoiceFiltered.length,
+          byStatus: countBy(combined, 'status'),
+        },
+        columns: [
+          { key: 'kind', label: 'Type' },
+          { key: 'ref', label: 'Reference' },
+          { key: 'party', label: 'Party' },
+          { key: 'amount', label: 'Amount' },
+          { key: 'status', label: 'Status' },
+          { key: 'when', label: 'Date' },
+        ],
+        rows: combined.slice(0, limit),
+        total: combined.length,
       };
     }
     case 'movements': {

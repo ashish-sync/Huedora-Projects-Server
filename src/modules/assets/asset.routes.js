@@ -22,6 +22,7 @@ import {
 import { nextSequence } from '../../utils/counters.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
+import { assertValidPhoneOrEmail } from '../../utils/identityNormalize.js';
 import {
   ASSET_TYPE_OPTIONS,
   AGREEMENT_STATUS_OPTIONS,
@@ -104,6 +105,25 @@ router.get(
     if (req.query.custody) filter.custody = req.query.custody;
     if (req.query.hcwId) filter.hcwId = req.query.hcwId;
     if (req.query.contactId) filter.contactId = req.query.contactId;
+    if (req.query.productType) {
+      const want = String(req.query.productType).trim();
+      if (want === 'Medical Device') {
+        // Legacy rows without productType count as Medical Device
+        filter.$and = [
+          ...(filter.$and || []),
+          {
+            $or: [
+              { productType: 'Medical Device' },
+              { productType: { $exists: false } },
+              { productType: null },
+              { productType: '' },
+            ],
+          },
+        ];
+      } else {
+        filter.productType = want;
+      }
+    }
     if (req.query.q) {
       const q = String(req.query.q);
       const regex = new RegExp(q, 'i');
@@ -530,6 +550,19 @@ router.patch(
       masterPatch.assetType = assetType;
     }
 
+    if (req.body.productType != null) {
+      const productType = String(req.body.productType).trim();
+      const allowed = ['Medical Device', 'Non-Medical Device'];
+      if (!allowed.includes(productType)) {
+        throw new AppError(
+          `Product type for the asset register must be one of: ${allowed.join(', ')}`,
+          400,
+          'VALIDATION_ERROR'
+        );
+      }
+      asset.productType = productType;
+    }
+
     if (req.body.serialNumber != null) {
       const serialNumber = String(req.body.serialNumber).trim();
       if (!serialNumber) throw new AppError('Serial Number is required', 400, 'VALIDATION_ERROR');
@@ -628,6 +661,7 @@ router.patch(
       if (!custodianContact) {
         throw new AppError('Custodian Contact is required', 400, 'VALIDATION_ERROR');
       }
+      assertValidPhoneOrEmail(custodianContact, 'Custodian Contact');
       asset.custodianContact = custodianContact;
       masterPatch.custodianContact = custodianContact;
     }

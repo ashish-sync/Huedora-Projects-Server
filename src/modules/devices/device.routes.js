@@ -10,6 +10,7 @@ import { createAsset } from '../assets/asset.service.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { notifyImportFailures } from '../imports/importErrorReport.js';
+import { assertValidPhoneOrEmail } from '../../utils/identityNormalize.js';
 import {
   ASSET_TYPE_OPTIONS,
   AGREEMENT_STATUS_OPTIONS,
@@ -147,6 +148,7 @@ function parseMasterFields(input) {
 
   const custodianContact = String(input.custodianContact || '').trim();
   if (!custodianContact) throw new AppError('Custodian Contact is required', 400, 'VALIDATION_ERROR');
+  assertValidPhoneOrEmail(custodianContact, 'Custodian Contact');
 
   const custodianCity = String(input.custodianCity || input.city || '').trim();
   if (!custodianCity) throw new AppError('Custodian City is required', 400, 'VALIDATION_ERROR');
@@ -157,6 +159,16 @@ function parseMasterFields(input) {
   }
 
   const description = String(input.description || '').trim() || null;
+
+  const registerTypes = ['Medical Device', 'Non-Medical Device'];
+  let productType = String(input.productType || '').trim() || 'Medical Device';
+  if (!registerTypes.includes(productType)) {
+    throw new AppError(
+      `Product type for the asset register must be one of: ${registerTypes.join(', ')}`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
 
   return {
     name,
@@ -171,6 +183,7 @@ function parseMasterFields(input) {
     custodianCity,
     custodianState,
     description,
+    productType,
   };
 }
 
@@ -185,7 +198,18 @@ async function createDeviceRecord(input, user, requestId) {
   const purchaseDate = purchaseMonthToDate(fields.purchaseMonth);
 
   const device = await DeviceMaster.create({
-    ...fields,
+    name: fields.name,
+    assetType: fields.assetType,
+    serialNumber: fields.serialNumber,
+    cost: fields.cost,
+    purchaseMonth: fields.purchaseMonth,
+    agreementStatus: fields.agreementStatus,
+    custody: fields.custody,
+    custodianName: fields.custodianName,
+    custodianContact: fields.custodianContact,
+    custodianCity: fields.custodianCity,
+    custodianState: fields.custodianState,
+    description: fields.description,
     quantity: 1,
     isActive: true,
   });
@@ -204,6 +228,7 @@ async function createDeviceRecord(input, user, requestId) {
       agreementStatus: fields.agreementStatus,
       custody: fields.custody,
       assetType: fields.assetType,
+      productType: fields.productType || 'Medical Device',
       custodianName: fields.custodianName,
       custodianContact: fields.custodianContact,
       location: {

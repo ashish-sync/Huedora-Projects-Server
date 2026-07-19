@@ -5,6 +5,8 @@ export const Asset = defineCollection('assets', {
   ...softDelete,
   quantity: 1,
   status: 'Purchased',
+  /** Product Master type — agreements/custody only for Medical / Non-Medical Device */
+  productType: 'Medical Device',
   location: {},
   currency: 'INR',
   hcwId: null,

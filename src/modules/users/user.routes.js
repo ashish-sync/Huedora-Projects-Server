@@ -9,11 +9,13 @@ import { PERMISSION_CATALOG, MODULE_ACCESS_CATALOG, ALL_PERMISSION_KEYS, ACCESS_
 import { writeAudit } from '../../utils/audit.js';
 import { publicUser } from '../auth/auth.service.js';
 import { sendExcel } from '../../utils/excelExport.js';
-import { normalizeEmail, normalizePhone, throwIfIdentityClash } from '../../utils/identityNormalize.js';
+import { normalizeEmail, normalizePhone, throwIfIdentityClash, assertValidEmail, assertValidPhone } from '../../utils/identityNormalize.js';
 
 const router = Router();
 
 async function assertUserIdentityAvailable({ email, phone, excludeId } = {}) {
+  if (email) assertValidEmail(email, 'Email');
+  if (phone) assertValidPhone(phone, 'Mobile number');
   const emailKey = normalizeEmail(email);
   const phoneKey = normalizePhone(phone);
   if (!emailKey && !phoneKey) return { emailKey, phoneKey };

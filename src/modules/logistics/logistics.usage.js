@@ -33,7 +33,9 @@ export async function syncUsageFromCamps() {
 
     const inventoryType =
       PROCESS_INVENTORY[camp.process] || camp.process || 'Camp consumable';
-    const screenCount = Number(camp.screenCount ?? camp.expectedPatients ?? camp.patients ?? 0) || 0;
+    const screenCount =
+      Number(camp.screenCount ?? camp.actualPatients ?? camp.expectedPatients ?? camp.patients ?? 0) ||
+      0;
     const wastage = Number(camp.wastage ?? camp.wastageQty ?? 0) || 0;
 
     const payload = {

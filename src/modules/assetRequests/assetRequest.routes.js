@@ -23,6 +23,7 @@ import {
 import { Asset } from '../assets/asset.model.js';
 import { AssetEvent } from '../assets/assetEvent.model.js';
 import { Contact } from '../contacts/contact.model.js';
+import { isVendorContact } from '../contacts/contact.constants.js';
 import {
   LogisticsExpenseCategory,
   LogisticsProduct,
@@ -400,7 +401,7 @@ async function preferredVendorSnapshot(body) {
     };
   }
   const contact = await Contact.findOne({ _id: id, isDeleted: false });
-  if (!contact || trim(contact.resourceType).toLowerCase() !== 'vendor') {
+  if (!contact || !isVendorContact(contact)) {
     throw new AppError(
       'Preferred vendor must reference an active Vendor contact',
       400,
@@ -669,11 +670,16 @@ router.get(
     const filter = { isDeleted: false };
     if (req.query.status) filter.status = req.query.status;
     if (req.query.requestType) {
-      const t = normalizeRequestType(req.query.requestType);
-      if (t === 'LOGISTICS') {
-        filter.requestType = { $in: ['LOGISTICS', 'MOVEMENT'] };
+      const raw = String(req.query.requestType).trim().toUpperCase();
+      if (raw === 'SERVICE') {
+        filter.requestType = { $in: ['REPAIR', 'MAINTENANCE'] };
       } else {
-        filter.requestType = t;
+        const t = normalizeRequestType(req.query.requestType);
+        if (t === 'LOGISTICS') {
+          filter.requestType = { $in: ['LOGISTICS', 'MOVEMENT'] };
+        } else {
+          filter.requestType = t;
+        }
       }
     }
     const [data, total] = await Promise.all([

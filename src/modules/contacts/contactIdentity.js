@@ -4,6 +4,8 @@ import {
   normalizeEmail,
   normalizePhone,
   phonesEqual,
+  assertValidEmail,
+  assertValidPhone,
 } from '../../utils/identityNormalize.js';
 import { AppError } from '../../utils/helpers.js';
 
@@ -41,6 +43,8 @@ export async function findContactByIdentity({ email, phone, excludeId } = {}) {
  * Prefer findContactByIdentity + reuse for create flows that should soft-reuse.
  */
 export async function assertContactIdentityAvailable({ email, phone, excludeId } = {}) {
+  if (email) assertValidEmail(email, 'Email');
+  if (phone) assertValidPhone(phone, 'Mobile number');
   const contacts = await listActiveContacts();
   throwIfContactClash(contacts, { email, phone, excludeId });
 }
@@ -71,6 +75,8 @@ export async function resolveOrCreateContact(payload, actorId) {
   if (!email && !displayPhone) {
     throw new AppError('Email or Contact is required for delivery', 400, 'VALIDATION_ERROR');
   }
+  if (email) assertValidEmail(email, 'Email');
+  if (displayPhone) assertValidPhone(displayPhone, 'Mobile number');
 
   const contacts = await listActiveContacts();
   let byEmail = null;

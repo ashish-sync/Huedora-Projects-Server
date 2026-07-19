@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import { v4 as uuid } from 'uuid';
 import { AppError } from '../../utils/helpers.js';
 import { nextSequence } from '../../utils/counters.js';
-import { throwIfIdentityClash } from '../../utils/identityNormalize.js';
+import { throwIfIdentityClash, assertValidEmail, assertValidPhone, normalizePhone } from '../../utils/identityNormalize.js';
 import { writeAudit } from '../../utils/audit.js';
 import {
   LOCATION_LEVELS,
@@ -256,15 +256,19 @@ function normalizeProduct(b) {
 }
 
 async function createContact(payload, actor, requestId) {
-  const normalized = normalizeContactPayload(payload);
+  const normalized = normalizeContactPayload(payload, { validate: true });
+  if (normalized.email) {
+    assertValidEmail(normalized.email, 'Email');
+  }
+  if (normalized.contact) {
+    assertValidPhone(normalized.contact, 'Mobile number');
+    normalized.contact = normalizePhone(normalized.contact);
+    normalized.mobile = normalized.contact;
+  }
   await assertContactIdentityAvailable({
     email: normalized.email,
     phone: normalized.contact || normalized.mobile,
   });
-  if (!normalized.name) throw new AppError('Name is required', 400, 'VALIDATION_ERROR');
-  if (!normalized.email && !normalized.contact) {
-    throw new AppError('Email or Contact is required', 400, 'VALIDATION_ERROR');
-  }
   const contact = await Contact.create({
     ...normalized,
     createdBy: actor._id,

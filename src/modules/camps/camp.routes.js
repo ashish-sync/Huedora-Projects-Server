@@ -8,9 +8,14 @@ import {
   CAMP_PROCESS_MAP,
   CAMP_STATUSES,
   CAMP_SLOTS,
+  CAMP_DURATION_OPTIONS,
+  CAMP_CANCEL_SOURCES,
   resolveCampType,
   processesForMethod,
   resolveCampSlot,
+  resolveCampSchedule,
+  isCampScheduleOverdue,
+  canTransitionCamp,
 } from './camp.constants.js';
 import { CampRequest } from './camp.model.js';
 
@@ -39,7 +44,13 @@ function nextRequestKey() {
   return `CAMP-${stamp}-${rand}`;
 }
 
-function normalizeRequestBody(body, existing = null) {
+function enrichCamp(row) {
+  const obj = row.toObject ? row.toObject() : { ...row };
+  obj.isScheduleOverdue = isCampScheduleOverdue(obj);
+  return obj;
+}
+
+function normalizeRequestBody(body, existing = null, { relaxDate = false } = {}) {
   const method = trimStr(body.method ?? existing?.method ?? '');
   const process = trimStr(body.process ?? existing?.process ?? '');
   if (!CAMP_METHODS.includes(method)) {
@@ -58,8 +69,24 @@ function normalizeRequestBody(body, existing = null) {
     throw new AppError('Unable to resolve Camp Type for Method/Process', 400, 'VALIDATION_ERROR');
   }
 
-  const startTime = trimStr(body.startTime ?? existing?.startTime ?? '');
-  const endTime = trimStr(body.endTime ?? existing?.endTime ?? '');
+  const rawDuration = body.durationHours ?? existing?.durationHours ?? 3;
+  const durationHours = Number(rawDuration) || 3;
+  if (!CAMP_DURATION_OPTIONS.includes(durationHours) && (durationHours < 1 || durationHours > 12)) {
+    throw new AppError(
+      `Duration must be one of: ${CAMP_DURATION_OPTIONS.join(', ')} hours`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+
+  const schedule = resolveCampSchedule({
+    startTime: body.startTime ?? existing?.startTime ?? '09:00',
+    endTime: body.endTime ?? existing?.endTime ?? '',
+    durationHours,
+  });
+
+  const startTime = schedule.startTime;
+  const endTime = schedule.endTime;
   const campSlot = resolveCampSlot(startTime);
   if (!campSlot) {
     throw new AppError(
@@ -72,35 +99,39 @@ function normalizeRequestBody(body, existing = null) {
   const campDate = trimStr(body.campDate ?? existing?.campDate ?? '');
   if (!campDate) throw new AppError('Camp Date is required', 400, 'VALIDATION_ERROR');
 
-  // Must be at least 2 calendar days ahead (e.g. if today is 15th, earliest is 17th)
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const minDate = new Date(today);
-  minDate.setDate(minDate.getDate() + 2);
-  const camp = new Date(`${campDate}T00:00:00`);
-  if (Number.isNaN(camp.getTime()) || camp < minDate) {
-    const minStr = minDate.toISOString().slice(0, 10);
-    throw new AppError(
-      `Camp Date must be on or after ${minStr}`,
-      400,
-      'VALIDATION_ERROR'
-    );
+  if (!relaxDate) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const minDate = new Date(today);
+    minDate.setDate(minDate.getDate() + 2);
+    const camp = new Date(`${campDate}T00:00:00`);
+    if (Number.isNaN(camp.getTime()) || camp < minDate) {
+      const minStr = minDate.toISOString().slice(0, 10);
+      throw new AppError(`Camp Date must be on or after ${minStr}`, 400, 'VALIDATION_ERROR');
+    }
   }
 
   const doctorName = trimStr(body.doctorName ?? existing?.doctorName ?? '');
   if (!doctorName) throw new AppError('Doctor Name is required', 400, 'VALIDATION_ERROR');
 
-  if (startTime && endTime) {
+  const a = schedule.startTime;
+  const b = schedule.endTime;
+  if (a && b) {
     const toMins = (t) => {
       const m = String(t).match(/^(\d{1,2}):(\d{2})/);
       return m ? Number(m[1]) * 60 + Number(m[2]) : null;
     };
-    const a = toMins(startTime);
-    const b = toMins(endTime);
-    if (a != null && b != null && b <= a) {
+    const sa = toMins(a);
+    const sb = toMins(b);
+    if (sa != null && sb != null && sb <= sa) {
       throw new AppError('End Time must be after Start Time', 400, 'VALIDATION_ERROR');
     }
   }
+
+  const expectedPatients = Math.max(
+    0,
+    Number(body.expectedPatients ?? existing?.expectedPatients ?? 0) || 0
+  );
 
   return {
     method,
@@ -114,7 +145,10 @@ function normalizeRequestBody(body, existing = null) {
     startTime,
     endTime,
     campSlot,
-    /** Technician / HCW is assigned by approver on Approve. not on request create */
+    durationHours: schedule.durationHours,
+    expectedPatients,
+    fieldPersonName: trimStr(body.fieldPersonName ?? existing?.fieldPersonName ?? ''),
+    fieldPersonPhone: trimStr(body.fieldPersonPhone ?? existing?.fieldPersonPhone ?? ''),
     technicianName: trimStr(body.technicianName ?? existing?.technicianName ?? ''),
     technicianNumber: trimStr(body.technicianNumber ?? existing?.technicianNumber ?? ''),
     technicianContactId: body.technicianContactId || existing?.technicianContactId || null,
@@ -132,6 +166,8 @@ router.get(
         processMap: CAMP_PROCESS_MAP,
         statuses: CAMP_STATUSES,
         slots: CAMP_SLOTS,
+        durationOptions: CAMP_DURATION_OPTIONS,
+        cancelSources: CAMP_CANCEL_SOURCES,
       },
     });
   })
@@ -161,12 +197,18 @@ router.get(
         { state: re },
         { process: re },
         { requesterEmail: re },
+        { fieldPersonName: re },
       ];
     }
-    const [data, total] = await Promise.all([
+    let [data, total] = await Promise.all([
       CampRequest.find(filter).sort(sort || '-requestedAt').skip(skip).limit(limit),
       CampRequest.countDocuments(filter),
     ]);
+    data = data.map(enrichCamp);
+    if (req.query.overdue === '1') {
+      data = data.filter((r) => r.isScheduleOverdue);
+      total = data.length;
+    }
     res.json(paginated(data, total, page, limit));
   })
 );
@@ -180,7 +222,7 @@ router.get(
     if (!canSeeAll(req) && String(row.requesterId) !== String(req.user._id)) {
       throw new AppError('Forbidden', 403, 'FORBIDDEN');
     }
-    res.json({ data: row });
+    res.json({ data: enrichCamp(row) });
   })
 );
 
@@ -197,6 +239,13 @@ router.post(
       decidedAt: null,
       decidedById: null,
       decidedByEmail: '',
+      cancelledBy: '',
+      cancelledAt: null,
+      completedAt: null,
+      completedById: null,
+      completedByEmail: '',
+      actualPatients: 0,
+      screenCount: 0,
       requestedAt: new Date().toISOString(),
       requesterId: req.user._id,
       requesterEmail: req.user.email || '',
@@ -214,7 +263,7 @@ router.post(
       requestId: req.requestId,
     });
 
-    res.status(201).json({ data: row });
+    res.status(201).json({ data: enrichCamp(row) });
   })
 );
 
@@ -227,10 +276,12 @@ router.patch(
     if (String(row.requesterId) !== String(req.user._id) && !canSeeAll(req)) {
       throw new AppError('Forbidden', 403, 'FORBIDDEN');
     }
-    if (row.status !== 'Pending') {
-      throw new AppError('Only Pending requests can be edited', 400, 'LOCKED');
+    if (row.status !== 'Pending' && !(canSeeAll(req) && row.status === 'Approved')) {
+      throw new AppError('Only Pending requests can be edited (approvers may adjust Approved)', 400, 'LOCKED');
     }
-    const fields = normalizeRequestBody(req.body, row);
+    const fields = normalizeRequestBody(req.body, row, {
+      relaxDate: row.status === 'Approved',
+    });
     Object.assign(row, fields);
     await row.save();
 
@@ -244,7 +295,7 @@ router.patch(
       requestId: req.requestId,
     });
 
-    res.json({ data: row });
+    res.json({ data: enrichCamp(row) });
   })
 );
 
@@ -265,6 +316,10 @@ router.post(
       status = 'Declined';
     } else {
       throw new AppError('decision must be Approve or Decline', 400, 'VALIDATION_ERROR');
+    }
+
+    if (!canTransitionCamp('Pending', status)) {
+      throw new AppError('Invalid status transition', 400, 'VALIDATION_ERROR');
     }
 
     const reason = trimStr(req.body.reason || req.body.decisionReason);
@@ -315,7 +370,101 @@ router.post(
       requestId: req.requestId,
     });
 
-    res.json({ data: row });
+    res.json({ data: enrichCamp(row) });
+  })
+);
+
+/** Mark approved camp as Completed (executed) — capture actual patients / screens */
+router.post(
+  '/:id/complete',
+  canApprove,
+  asyncHandler(async (req, res) => {
+    const row = await CampRequest.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Camp request not found', 404);
+    if (!canTransitionCamp(row.status, 'Completed')) {
+      throw new AppError('Only Approved camps can be marked Completed', 400, 'LOCKED');
+    }
+
+    const actualPatients = Math.max(0, Number(req.body.actualPatients ?? 0) || 0);
+    const screenCount = Math.max(
+      0,
+      Number(req.body.screenCount ?? req.body.actualPatients ?? row.expectedPatients ?? 0) || 0
+    );
+
+    row.status = 'Completed';
+    row.actualPatients = actualPatients || screenCount;
+    row.screenCount = screenCount || actualPatients;
+    row.completedAt = new Date().toISOString();
+    row.completedById = req.user._id;
+    row.completedByEmail = req.user.email || '';
+    if (trimStr(req.body.remarks)) {
+      row.remarks = [row.remarks, trimStr(req.body.remarks)].filter(Boolean).join(' · ');
+    }
+    await row.save();
+
+    try {
+      const { syncUsageFromCamps } = await import('../logistics/logistics.usage.js');
+      await syncUsageFromCamps();
+    } catch {
+      /* non-blocking */
+    }
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'CampRequest.COMPLETED',
+      entityType: 'CampRequest',
+      entityId: row._id,
+      after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+
+    res.json({ data: enrichCamp(row) });
+  })
+);
+
+/** Cancel an approved camp (Brand or Ops + remark) */
+router.post(
+  '/:id/cancel',
+  canApprove,
+  asyncHandler(async (req, res) => {
+    const row = await CampRequest.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Camp request not found', 404);
+    if (!canTransitionCamp(row.status, 'Cancelled')) {
+      throw new AppError('Only Approved camps can be cancelled', 400, 'LOCKED');
+    }
+
+    const cancelledBy = trimStr(req.body.cancelledBy);
+    const remarks = trimStr(req.body.remarks || req.body.reason);
+    if (!CAMP_CANCEL_SOURCES.includes(cancelledBy)) {
+      throw new AppError(
+        `cancelledBy must be one of: ${CAMP_CANCEL_SOURCES.join(', ')}`,
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    if (!remarks) {
+      throw new AppError('Remarks are required when cancelling', 400, 'VALIDATION_ERROR');
+    }
+
+    row.status = 'Cancelled';
+    row.cancelledBy = cancelledBy;
+    row.cancelledAt = new Date().toISOString();
+    row.decisionReason = `Cancelled by ${cancelledBy}: ${remarks}`;
+    row.remarks = [row.remarks, remarks].filter(Boolean).join(' · ');
+    await row.save();
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'CampRequest.CANCELLED',
+      entityType: 'CampRequest',
+      entityId: row._id,
+      after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+
+    res.json({ data: enrichCamp(row) });
   })
 );
 
@@ -330,6 +479,9 @@ router.delete(
     }
     if (row.status !== 'Pending' && !canSeeAll(req)) {
       throw new AppError('Only Pending requests can be withdrawn', 400, 'LOCKED');
+    }
+    if (row.status === 'Completed' && !req.permissions.has(PERMISSIONS.ALL)) {
+      throw new AppError('Completed camps cannot be deleted', 400, 'LOCKED');
     }
     row.isDeleted = true;
     row.isActive = false;

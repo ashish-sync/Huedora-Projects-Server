@@ -21,6 +21,61 @@ export function normalizePhone(value) {
   return digits;
 }
 
+/** Email must include @ and a domain with a real suffix (e.g. .com, .in, .net). */
+export function isValidEmail(value) {
+  const email = normalizeEmail(value);
+  if (!email) return false;
+  return /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email);
+}
+
+/** Mobile must normalize to exactly 10 digits. */
+export function isValidPhone(value) {
+  return normalizePhone(value).length === 10;
+}
+
+/** Value is either a valid 10-digit phone or a valid email. */
+export function isValidPhoneOrEmail(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  if (raw.includes('@')) return isValidEmail(raw);
+  return isValidPhone(raw);
+}
+
+export function assertValidEmail(value, label = 'Email') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (!isValidEmail(raw)) {
+    throw new AppError(
+      `${label} must include @ and a valid domain suffix (e.g. .com, .in, .net)`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+  return normalizeEmail(raw);
+}
+
+export function assertValidPhone(value, label = 'Mobile number') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (!isValidPhone(raw)) {
+    throw new AppError(`${label} must be exactly 10 digits`, 400, 'VALIDATION_ERROR');
+  }
+  return normalizePhone(raw);
+}
+
+export function assertValidPhoneOrEmail(value, label = 'Contact') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (!isValidPhoneOrEmail(raw)) {
+    throw new AppError(
+      `${label} must be a 10-digit mobile number or an email with @ and a valid domain suffix`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+  return raw.includes('@') ? normalizeEmail(raw) : normalizePhone(raw);
+}
+
 export function emailsEqual(a, b) {
   const ea = normalizeEmail(a);
   const eb = normalizeEmail(b);

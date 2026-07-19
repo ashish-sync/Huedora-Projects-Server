@@ -118,6 +118,16 @@ export const MODULE_ACCESS_CATALOG = [
     },
   },
   {
+    id: 'finance',
+    label: 'Finance One',
+    description: 'Expenses, invoices, and payment tracking',
+    actions: withAll({
+      view: [PERMISSIONS.FINANCE_READ],
+      add: [PERMISSIONS.FINANCE_WRITE],
+      delete: [PERMISSIONS.FINANCE_WRITE],
+    }),
+  },
+  {
     id: 'masterData',
     label: 'Master One',
     description: 'Shared reference data across modules',

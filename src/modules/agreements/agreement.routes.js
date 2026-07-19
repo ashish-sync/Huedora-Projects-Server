@@ -16,7 +16,7 @@ import {
   AgreementActivity,
 } from './agreement.model.js';
 import { Asset } from '../assets/asset.model.js';
-import { Contact } from '../contacts/contact.model.js';
+import { Contact, normalizeContactPayload } from '../contacts/contact.model.js';
 import { resolveOrCreateContact } from '../contacts/contactIdentity.js';
 import { DocumentTemplate } from '../templates/template.model.js';
 import { SignatureMaster } from '../signatures/signature.model.js';
@@ -292,26 +292,28 @@ router.post(
       const name = body.contactName || body.name || body.partyName;
       const email = body.contactEmail || body.email || body.partyEmail;
       const mobile = body.contactMobile || body.contact || body.mobile || body.partyMobile;
-      const resourceType = body.resourceType || body.contactResourceType || '';
-      const profession = body.profession || body.contactProfession || '';
       if (!name) throw new AppError('Recipient name is required', 400, 'VALIDATION_ERROR');
       if (!email && !mobile) {
         throw new AppError('Recipient email or contact is required for delivery', 400, 'VALIDATION_ERROR');
       }
-      const resolved = await resolveOrCreateContact(
+      const payload = normalizeContactPayload(
         {
           name: String(name).trim(),
           email,
           contact: mobile,
           mobile,
-          resourceType: String(resourceType).trim(),
-          profession: String(profession).trim(),
+          contactCategory: body.contactCategory || body.contact_category || '',
+          resourceType: body.resourceType || body.contactResourceType || '',
+          profession: body.profession || body.contactProfession || '',
+          organization: body.organization || body.contactOrganization || '',
+          supplyCategory: body.supplyCategory || body.contactSupplyCategory || '',
           state: body.contactState || body.state || '',
           city: body.contactCity || body.city || '',
           district: body.contactDistrict || body.district || '',
         },
-        req.user._id
+        { validate: true }
       );
+      const resolved = await resolveOrCreateContact(payload, req.user._id);
       contact = resolved.contact;
     }
 
