@@ -168,6 +168,62 @@ router.get(
         slots: CAMP_SLOTS,
         durationOptions: CAMP_DURATION_OPTIONS,
         cancelSources: CAMP_CANCEL_SOURCES,
+        nav: [
+          { id: 'home', label: 'Home', path: '/camps', ready: true },
+          { id: 'requests', label: 'Requests', path: '/camps/requests', ready: false },
+          { id: 'schedule', label: 'Schedule', path: '/camps/schedule', ready: false },
+          { id: 'reports', label: 'Reports', path: '/camps/reports', ready: false },
+          { id: 'resources', label: 'Resources', path: '/camps/resources', ready: false },
+        ],
+      },
+    });
+  })
+);
+
+/** Camp One home dashboard — KPIs + recent activity (Kartavya-style shell) */
+router.get(
+  '/dashboard',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const filter = { isDeleted: false };
+    if (!canSeeAll(req)) {
+      filter.requesterId = req.user._id;
+    }
+
+    const rows = await CampRequest.find(filter).sort('-updatedAt').limit(200);
+    const enriched = rows.map(enrichCamp);
+
+    const countBy = (status) => enriched.filter((r) => r.status === status).length;
+    const kpis = {
+      total: enriched.length,
+      pending: countBy('Pending'),
+      approved: countBy('Approved'),
+      completed: countBy('Completed'),
+      declined: countBy('Declined'),
+      cancelled: countBy('Cancelled'),
+      overdue: enriched.filter((r) => r.isScheduleOverdue).length,
+    };
+
+    const activity = enriched.slice(0, 15).map((r) => ({
+      id: r._id,
+      at: r.updatedAt || r.completedAt || r.decidedAt || r.requestedAt || r.createdAt,
+      action: r.status,
+      title: r.requestKey || 'Camp request',
+      detail: [r.process || r.method, r.doctorName, r.city].filter(Boolean).join(' · '),
+      status: r.status,
+      campDate: r.campDate || '',
+      requesterName: r.requesterName || r.requesterEmail || '',
+    }));
+
+    res.json({
+      data: {
+        kpis,
+        activity,
+        user: {
+          id: req.user._id,
+          fullName: req.user.fullName || req.user.username || '',
+          email: req.user.email || '',
+        },
       },
     });
   })

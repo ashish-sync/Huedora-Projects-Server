@@ -28,6 +28,7 @@ import dashboardRoutes from './modules/dashboards/dashboard.routes.js';
 import auditRoutes from './modules/audit/audit.routes.js';
 import importRoutes from './modules/imports/import.routes.js';
 import campRoutes from './modules/camps/camp.routes.js';
+import campOpsRoutes from './modules/campOps/campOps.routes.js';
 import assetRequestRoutes from './modules/assetRequests/assetRequest.routes.js';
 import requestUploadRoutes from './modules/assetRequests/requestUpload.routes.js';
 import logisticsRoutes from './modules/logistics/logistics.routes.js';
@@ -109,6 +110,7 @@ export function createApp() {
   app.use('/api/v1/audit-logs', auditRoutes);
   app.use('/api/v1/imports', importRoutes);
   app.use('/api/v1/camps', campRoutes);
+  app.use('/api/v1/camp-ops', campOpsRoutes);
   app.use('/api/v1/asset-requests', assetRequestRoutes);
   app.use('/api/v1/logistics', logisticsRoutes);
   app.use('/api/v1/finance', financeRoutes);
