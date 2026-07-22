@@ -683,7 +683,6 @@ router.delete(
 
 const MASTER_STRING_FIELDS = [
   'programName',
-  'drugTherapyName',
   'campName',
   'campType',
   'coordinatorName',
@@ -1268,7 +1267,12 @@ router.post(
   asyncHandler(async (req, res) => {
     const text = trimStr(req.body?.text);
     if (!text) throw new AppError('Paste text is required', 400, 'VALIDATION_ERROR');
-    const data = await extractManualPastePreview({ text });
+    const defaults = {
+      clientName: trimStr(req.body?.clientName),
+      campaignType: trimStr(req.body?.campaignType),
+      campaignName: trimStr(req.body?.campaignName),
+    };
+    const data = await extractManualPastePreview({ text, defaults });
     res.json({ data });
   })
 );
@@ -1277,10 +1281,16 @@ router.post(
   '/communications/paste/process',
   canRequest,
   asyncHandler(async (req, res) => {
+    const defaults = {
+      clientName: trimStr(req.body?.clientName),
+      campaignType: trimStr(req.body?.campaignType),
+      campaignName: trimStr(req.body?.campaignName),
+    };
     const data = await processManualPaste(
       {
         previewData: req.body?.previewData,
         text: trimStr(req.body?.text),
+        defaults,
       },
       actor(req),
       { resolveClientFromBody, campPayloadFromBody },

@@ -3,6 +3,7 @@ import {
   PROFESSIONS,
   CLIENT_PROFESSIONS,
   VENDOR_PROFESSIONS,
+  HEALTHCARE_WORKER_PROFESSIONS,
   SUPPLY_CATEGORIES,
 } from '../contacts/contact.constants.js';
 import { EXPENSE_CATEGORIES, PAYMENT_MODES } from '../finance/finance.constants.js';
@@ -36,6 +37,11 @@ export const PICKLIST_REGISTRY = {
   'contact.profession.vendor': {
     label: 'Profession / Role (Vendor)',
     staticOptions: VENDOR_PROFESSIONS,
+    otherLabel: 'Other',
+  },
+  'contact.profession.healthcareWorker': {
+    label: 'Profession / Role (Healthcare Worker)',
+    staticOptions: HEALTHCARE_WORKER_PROFESSIONS,
     otherLabel: 'Other',
   },
   'contact.supplyCategory': {

@@ -10,6 +10,7 @@ import {
   captureSubmissionTracking,
   withCampSchedule,
 } from './campOps.helpers.js';
+import { normalizeCampName } from './campOps.constants.js';
 
 const BLOCK_SEPARATOR = /(?:^|\n)\s*(?:---+|===+|\*\*\*+)\s*(?:\n|$)/;
 
@@ -97,12 +98,39 @@ async function resolveClientForRow(row, { allowCreate = true } = {}) {
   });
 }
 
-async function buildBodyPreview(text) {
+function normalizePasteDefaults(defaults = {}) {
+  return {
+    clientName: trimStr(defaults.clientName),
+    campaignType: trimStr(defaults.campaignType),
+    campaignName: normalizeCampName(defaults.campaignName),
+  };
+}
+
+export function validatePasteDefaults(defaults = {}) {
+  const normalized = normalizePasteDefaults(defaults);
+  const errors = [];
+  if (!normalized.clientName) errors.push('Client name is required');
+  if (!normalized.campaignType) errors.push('Division / Therapy is required');
+  if (!normalized.campaignName) errors.push('Method / Camp name is required');
+  return errors;
+}
+
+function applyPasteDefaults(row = {}, defaults = {}) {
+  const context = normalizePasteDefaults(defaults);
+  return {
+    ...row,
+    clientName: trimStr(row.clientName) || context.clientName,
+    campaignType: trimStr(row.campaignType) || context.campaignType,
+    campaignName: normalizeCampName(row.campaignName) || context.campaignName,
+  };
+}
+
+async function buildBodyPreview(text, defaults = {}) {
   const blocks = splitPasteBlocks(text);
 
   return Promise.all(
     blocks.map(async (block, index) => {
-      const extracted = extractFieldsFromText(block);
+      const extracted = applyPasteDefaults(extractFieldsFromText(block), defaults);
       const { validRows, invalidRows } = validateMappedImportRows([extracted]);
       const validRow = validRows[0];
       const invalidRow = invalidRows[0];
@@ -143,13 +171,18 @@ async function buildBodyPreview(text) {
   );
 }
 
-export async function extractManualPastePreview({ text = '' } = {}) {
+export async function extractManualPastePreview({ text = '', defaults = {} } = {}) {
   const bodyText = String(text || '').trim();
   if (!bodyText) {
     throw new AppError('Paste some camp details before extracting', 400, 'VALIDATION_ERROR');
   }
 
-  const bodyPreview = await buildBodyPreview(bodyText);
+  const defaultErrors = validatePasteDefaults(defaults);
+  if (defaultErrors.length) {
+    throw new AppError(defaultErrors.join('. '), 400, 'VALIDATION_ERROR');
+  }
+
+  const bodyPreview = await buildBodyPreview(bodyText, defaults);
 
   return {
     extractedAt: new Date().toISOString(),
@@ -164,7 +197,7 @@ export async function extractManualPastePreview({ text = '' } = {}) {
   };
 }
 
-export async function processManualPaste({ previewData, text = '' }, actor, helpers = {}) {
+export async function processManualPaste({ previewData, text = '', defaults = {} }, actor, helpers = {}) {
   const {
     resolveClientFromBody,
     campPayloadFromBody,
@@ -172,7 +205,7 @@ export async function processManualPaste({ previewData, text = '' }, actor, help
 
   const preview = previewData?.bodyPreview
     ? previewData
-    : await extractManualPastePreview({ text });
+    : await extractManualPastePreview({ text, defaults });
 
   const bodyPreview = preview?.bodyPreview || [];
   if (!bodyPreview.length) {
