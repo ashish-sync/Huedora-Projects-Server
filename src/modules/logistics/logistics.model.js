@@ -1,0 +1,395 @@
+import { defineCollection } from '../../store/filedb.js';
+import { softDelete } from '../common/counter.model.js';
+
+export const LogisticsWarehouse = defineCollection('logistics_warehouses', {
+  ...softDelete,
+  code: '',
+  name: '',
+  city: '',
+  state: '',
+  address: '',
+  isActive: true,
+});
+
+export const LogisticsLocation = defineCollection('logistics_locations', {
+  ...softDelete,
+  warehouseId: null,
+  parentId: null,
+  level: 'Zone',
+  code: '',
+  name: '',
+  isActive: true,
+});
+
+export const LogisticsSupplier = defineCollection('logistics_suppliers', {
+  ...softDelete,
+  code: '',
+  name: '',
+  /** Supplier | Vendor */
+  partyType: 'Supplier',
+  contactId: null,
+  contactName: '',
+  email: '',
+  phone: '',
+  city: '',
+  state: '',
+  gstin: '',
+  panCard: '',
+  isActive: true,
+});
+
+export const LogisticsTransporter = defineCollection('logistics_transporters', {
+  ...softDelete,
+  code: '',
+  name: '',
+  contactName: '',
+  email: '',
+  phone: '',
+  isActive: true,
+});
+
+export const LogisticsCategory = defineCollection('logistics_categories', {
+  ...softDelete,
+  code: '',
+  name: '',
+  description: '',
+  isActive: true,
+});
+
+/** Catalog products for transaction Product Name picker */
+export const LogisticsProduct = defineCollection('logistics_products', {
+  ...softDelete,
+  code: '',
+  name: '',
+  sku: '',
+  categoryId: null,
+  brand: '',
+  manufacturer: '',
+  description: '',
+  image: null, // { url, name }
+  isActive: true,
+  /** Medical Device | Non-Medical Device | Peripheral Device | Accessory | Spare Part | Consumable | Document | Other */
+  productType: 'Medical Device',
+  /** Replacement Part for Asset | Accessory of Asset | Consumed by Device | Multi-use */
+  inventoryType: 'Multi-use',
+  trackingKind: 'None', // None | Serial | Batch | Batch + Serial
+  uomId: null,
+  unitsPerPack: 1,
+  hsnCode: '',
+  gstRate: 0,
+  minStock: 0,
+  maxStock: 0,
+  reorderLevel: 0,
+  shelfLifeDays: 0,
+  shelfLifeMonths: 0,
+  expiryApplicable: false,
+  qcRequired: false,
+  returnable: false,
+  disposable: false,
+  preferredSupplierId: null,
+  defaultVendorId: null,
+  leadTimeDays: 0,
+  standardCost: 0,
+  averageCost: 0,
+  lastPurchaseCost: 0,
+  linkedDeviceId: null,
+  compatibleDeviceIds: [],
+  compatibilityRelationship: '',
+  qtyPerDevice: 0,
+  warrantyPeriodMonths: 0,
+  amc: false,
+  calibrationRequired: false,
+  calibrationFrequency: '',
+  pmFrequency: '',
+  storageTemperature: '',
+  storageCondition: '',
+  hazardous: false,
+  fragile: false,
+  coldChainRequired: false,
+  documents: {
+    datasheet: null,
+    userManual: null,
+    warranty: null,
+    compliance: null,
+    sop: null,
+    images: [],
+  },
+  internalRemarks: '',
+  // Legacy fields retained for older rows / inward defaults
+  programProject: '',
+  model: '',
+  partNumber: '',
+  defaultPerUnitCost: 0,
+  defaultInvoiceAmount: 0,
+});
+
+export const LogisticsUom = defineCollection('logistics_uoms', {
+  ...softDelete,
+  code: '',
+  name: '',
+  isActive: true,
+});
+
+export const LogisticsStockStatus = defineCollection('logistics_stock_statuses', {
+  ...softDelete,
+  code: '',
+  name: '',
+  isSystem: false,
+  isActive: true,
+});
+
+export const LogisticsMovementType = defineCollection('logistics_movement_types', {
+  ...softDelete,
+  code: '',
+  name: '',
+  direction: 'IN',
+  isSystem: false,
+  isActive: true,
+});
+
+export const LogisticsReasonCode = defineCollection('logistics_reason_codes', {
+  ...softDelete,
+  code: '',
+  name: '',
+  isSystem: false,
+  isActive: true,
+});
+
+export const LogisticsExpenseCategory = defineCollection('logistics_expense_categories', {
+  ...softDelete,
+  code: '',
+  name: '',
+  /** What this category covers (shown in masters + reimbursement picker) */
+  covers: '',
+  isSystem: false,
+  isActive: true,
+});
+
+export const LogisticsStockItem = defineCollection('logistics_stock_items', {
+  ...softDelete,
+  sku: '',
+  name: '',
+  productId: null,
+  serialNumber: null,
+  imei: null,
+  batchNumber: null,
+  categoryId: null,
+  uomId: null,
+  warehouseId: null,
+  locationId: null,
+  productType: '',
+  status: 'Available',
+  quantity: 1,
+  unitValue: 0,
+  lowStockThreshold: 0,
+  expiryDate: '',
+  tyloAssetId: null,
+  remarks: '',
+  isActive: true,
+});
+
+export const LogisticsInventoryBalance = defineCollection('logistics_inventory_balances', {
+  ...softDelete,
+  warehouseId: null,
+  locationId: null,
+  categoryId: null,
+  productType: '',
+  status: 'Available',
+  quantity: 0,
+  value: 0,
+});
+
+export const LogisticsLedgerEntry = defineCollection('logistics_ledger_entries', {
+  stockItemId: null,
+  movementTypeCode: '',
+  direction: 'IN',
+  quantityDelta: 0,
+  warehouseId: null,
+  locationId: null,
+  fromWarehouseId: null,
+  toWarehouseId: null,
+  referenceType: null,
+  referenceId: null,
+  reasonCode: null,
+  remarks: '',
+  actorId: null,
+  actorEmail: null,
+  at: null,
+});
+
+/**
+ * Dynamic inventory transaction. single engine for all Entry Type × Product Type.
+ */
+export const LogisticsInOutEntry = defineCollection('logistics_in_out_entries', {
+  ...softDelete,
+  /** Transaction ID */
+  uniqueKey: '',
+  entryType: 'Inward',
+  productType: 'Medical Device',
+  /** Alias kept for older list filters */
+  inventoryType: 'Medical Device',
+  trackingType: 'Serialized',
+  transactionDate: '',
+  transactionDateTime: '',
+  warehouseId: null,
+  fromLocationId: null,
+  toLocationId: null,
+  empId: '',
+  employeeName: '',
+  /** Contact Directory link */
+  contactId: null,
+  number: '',
+  state: '',
+  city: '',
+  recipientName: '',
+  /** Legacy spreadsheet name field */
+  name: '',
+  remark: '',
+  status: 'Available',
+  createdBy: '',
+  createdById: null,
+
+  /** Inventory masters + Request Center link */
+  productId: null,
+  productName: '',
+  programProject: '',
+  processId: null,
+  processName: '',
+  supplierId: null,
+  transporterId: null,
+  assetRequestId: null,
+  assetRequestLineId: null,
+
+  /** Tracking */
+  expiryApplicable: false,
+  trackingKind: 'None',
+  batchOrSerial: '',
+  deliveryMode: 'Hand Delivery',
+
+  /** Shared qty / cost */
+  qty: 1,
+  uomId: null,
+  perUnitCost: 0,
+  invoiceAmount: 0,
+
+  /** Medical Device */
+  deviceName: '',
+  brand: '',
+  model: '',
+  serialNumber: '',
+  assetId: '',
+  imei: '',
+  condition: '',
+  warranty: '',
+
+  /** Consumable / Other */
+  itemName: '',
+  sku: '',
+  batchNumber: '',
+  expiryDate: '',
+  description: '',
+
+  /** Device Part */
+  partName: '',
+  partNumber: '',
+  compatibleDevice: '',
+
+  /** Accessory */
+  accessoryName: '',
+
+  /** Document */
+  documentType: '',
+  documentNumber: '',
+  agreementId: '',
+  version: '',
+  linkedAssetId: '',
+
+  /** Inward */
+  vendor: '',
+  purchaseOrder: '',
+  grnNumber: '',
+  invoiceNumber: '',
+  invoiceDate: '',
+  awbNumber: '',
+  courier: '',
+  receivedBy: '',
+
+  /** Outward */
+  issuedTo: '',
+  department: '',
+  city: '',
+  expectedReturn: '',
+  acknowledgementRequired: false,
+  /** Open until AWB / delivery marked Delivered, RTO, or Closed */
+  dispatchStatus: '',
+  deliveryOutcome: '',
+  deliveredAt: '',
+  closedAt: '',
+  deliveryMarkedBy: '',
+  /** Matches Request One Goods Issue kinds */
+  logisticsKind: '',
+  priority: '',
+  preferredDate: '',
+  fromContactId: null,
+  fromName: '',
+  fromNumber: '',
+  fromAddress: '',
+  fromPinCode: '',
+  fromCity: '',
+  fromState: '',
+  toAddress: '',
+  pinCode: '',
+  address: '',
+
+  /** Transfer */
+  sourceWarehouseId: null,
+  destinationWarehouseId: null,
+  transferReason: '',
+  transferId: '',
+
+  /** Return */
+  returnedFrom: '',
+  returnReason: '',
+  inspectionStatus: '',
+  restock: false,
+
+  /** Stock Adjustment */
+  adjustmentType: '',
+  adjustmentReason: '',
+  approvedBy: '',
+
+  /** Legacy spreadsheet fields (optional) */
+  number: '',
+  process: '',
+  mode: '',
+  expDate: '',
+
+  /** Inward attachments */
+  productPhoto: null,
+  invoiceDoc: null,
+  attachments: [],
+
+  isActive: true,
+});
+
+/** Camp-linked consumption. Screen Count = Used; Wastage feeds dashboard */
+export const LogisticsUsageEntry = defineCollection('logistics_usage_entries', {
+  ...softDelete,
+  hcwId: '',
+  hcwName: '',
+  clientName: '',
+  processName: '',
+  inventoryType: '',
+  productName: '',
+  doctorName: '',
+  machineCity: '',
+  campDate: '',
+  screenCount: 0,
+  usedQty: 0,
+  wastage: 0,
+  perUnitCost: 0,
+  campRequestId: null,
+  source: 'manual',
+  remark: '',
+  isActive: true,
+});
