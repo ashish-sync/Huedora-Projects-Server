@@ -22,6 +22,7 @@ import {
 } from './docxPlaceholders.js';
 import { previewStore } from './previewStore.js';
 import { sendExcel } from '../../utils/excelExport.js';
+import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const templateRoot = path.resolve(__dirname, '../../../uploads/templates');
@@ -93,6 +94,92 @@ router.get(
       ]),
       { sheetName: 'Document Master' }
     );
+  })
+);
+
+const TEMPLATE_HEADERS = [
+  'Name',
+  'Document Type',
+  'Category',
+  'Agreement Type',
+  'Signing Mode',
+  'Active',
+  'Description',
+];
+
+router.get(
+  '/sample',
+  asyncHandler(async (_req, res) => {
+    sendExcel(
+      res,
+      'Document_Master_Sample.xlsx',
+      TEMPLATE_HEADERS,
+      [
+        [
+          'Lease Agreement Sample',
+          'LEASE',
+          'AGREEMENT',
+          'LEASE',
+          'SIGNING',
+          'Yes',
+          'Sample text template — edit body after import',
+        ],
+      ],
+      { sheetName: 'Document Master' }
+    );
+  })
+);
+
+router.post(
+  '/import',
+  requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  excelUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    if (!req.file) throw new AppError('Excel file required', 400, 'VALIDATION_ERROR');
+    const rows = parseSheetRows(req.file.buffer);
+    const errors = [];
+    let created = 0;
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNum = i + 2;
+      try {
+        const name = cellValue(row, ['Name', 'name']);
+        if (!name) continue;
+        const documentType = cellValue(row, ['Document Type', 'documentType']) || 'LEASE';
+        const signingRaw = cellValue(row, ['Signing Mode', 'signingType']).toUpperCase();
+        const signingType = signingRaw.includes('NON') ? 'NON_SIGNING' : 'SIGNING';
+        const bodyHtml = `Document: ${name}\n\nEdit this template body and add placeholders as needed.`;
+        await DocumentTemplate.create({
+          name,
+          category: cellValue(row, ['Category', 'category']) || 'AGREEMENT',
+          agreementType: cellValue(row, ['Agreement Type', 'agreementType']) || documentType,
+          documentType,
+          signingType,
+          description: cellValue(row, ['Description', 'description']) || '',
+          bodyHtml,
+          sourceType: 'TEXT',
+          placeholders: extractPlaceholdersFromText(bodyHtml),
+          isActive: !['no', 'false', '0', 'inactive'].includes(
+            cellValue(row, ['Active', 'isActive']).toLowerCase()
+          ),
+          createdBy: req.user._id,
+        });
+        created += 1;
+      } catch (err) {
+        errors.push({ row: rowNum, field: 'import', message: err.message });
+      }
+    }
+
+    res.json({
+      data: {
+        totalRows: rows.length,
+        created,
+        updated: 0,
+        errorRows: errors.length,
+        errors: errors.slice(0, 200),
+      },
+    });
   })
 );
 
