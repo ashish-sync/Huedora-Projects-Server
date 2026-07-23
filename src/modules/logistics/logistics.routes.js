@@ -69,6 +69,7 @@ import {
 } from './logistics.model.js';
 import { buildDashboard } from './logistics.dashboard.js';
 import { listUsageMerged, syncUsageFromCamps } from './logistics.usage.js';
+import { attachMasterExcelRoutes } from '../../utils/masterExcel.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const inwardUploadRoot = path.resolve(__dirname, '../../../uploads/logistics');
@@ -230,6 +231,7 @@ function registerMasterCrud({
   codeFormat = null,
   skuPrefix,
   uniqueFields = [],
+  excel = null,
 }) {
   async function assertUniqueFields(body, excludeId) {
     for (const field of uniqueFields) {
@@ -417,6 +419,79 @@ function registerMasterCrud({
       res.json({ data: { ok: true } });
     })
   );
+
+  if (excel) {
+    async function allocateImportCode(body) {
+      const prefix =
+        (typeof resolveCodePrefix === 'function' ? resolveCodePrefix(body) : null) || codePrefix;
+      if (!prefix) return;
+      let allocated = '';
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        allocated = await nextSequence(
+          `logistics.${path}.${prefix}`,
+          prefix,
+          codeFormat || undefined
+        );
+        const clash = await Model.findOne({
+          code: allocated,
+          isDeleted: false,
+          ...(listFilter || {}),
+        });
+        if (!clash) break;
+        allocated = '';
+      }
+      if (!allocated) {
+        throw new AppError('Could not allocate a unique code', 500, 'CODE_ALLOCATION');
+      }
+      body.code = allocated;
+    }
+
+    async function allocateImportSku(body) {
+      if (!skuPrefix) return;
+      let allocatedSku = '';
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        allocatedSku = await nextSequence(`logistics.${path}.sku`, skuPrefix);
+        const clash = await Model.findOne({
+          sku: allocatedSku,
+          isDeleted: false,
+          ...(listFilter || {}),
+        });
+        if (!clash) break;
+        allocatedSku = '';
+      }
+      if (!allocatedSku) {
+        throw new AppError('Could not allocate a unique SKU', 500, 'SKU_ALLOCATION');
+      }
+      body.sku = allocatedSku;
+    }
+
+    attachMasterExcelRoutes(router, {
+      path,
+      Model,
+      listFilter,
+      excel,
+      canRead,
+      canImport: canMaster,
+      entityType,
+      writeAudit,
+      createFromImport: async (body) => {
+        for (const key of required) {
+          if (!trimStr(body[key])) {
+            throw new AppError(`${key} is required`, 400, 'VALIDATION_ERROR');
+          }
+        }
+        const normalized = normalize ? normalize(body) : { ...body };
+        delete normalized.code;
+        delete normalized.sku;
+        await allocateImportCode(normalized);
+        await allocateImportSku(normalized);
+        await assertPartyIdentity(normalized);
+        await assertUniqueFields(normalized);
+        await Model.create({ ...normalized, isActive: normalized.isActive !== false });
+        return { created: true };
+      },
+    });
+  }
 }
 
 registerMasterCrud({
@@ -485,6 +560,72 @@ registerMasterCrud({
       panCard: trimStr(b.panCard ?? existing?.panCard ?? '').toUpperCase(),
       isActive: b.isActive !== undefined ? b.isActive !== false : existing?.isActive !== false,
     };
+  },
+  excel: {
+    filename: 'Suppliers_Vendors.xlsx',
+    sheetName: 'Parties',
+    headers: [
+      'Type',
+      'Name',
+      'Contact Name',
+      'Email',
+      'Phone',
+      'City',
+      'State',
+      'GSTIN',
+      'PAN Card',
+      'Active',
+    ],
+    rowFromDoc: (r) => [
+      r.partyType || 'Supplier',
+      r.name,
+      r.contactName,
+      r.email,
+      r.phone,
+      r.city,
+      r.state,
+      r.gstin,
+      r.panCard,
+      r.isActive === false ? 'No' : 'Yes',
+    ],
+    sampleRows: [
+      [
+        'Supplier',
+        'Acme Medical Supplies',
+        'Raj Patel',
+        'raj@acme.example',
+        '9876543210',
+        'Mumbai',
+        'Maharashtra',
+        '27AAAAA0000A1Z5',
+        'ABCDE1234F',
+        'Yes',
+      ],
+      [
+        'Vendor',
+        'City Diagnostics',
+        'Priya Shah',
+        'vendor@citydiag.example',
+        '9123456780',
+        'Pune',
+        'Maharashtra',
+        '',
+        '',
+        'Yes',
+      ],
+    ],
+    importColumns: [
+      { labels: ['Type', 'Party Type'], field: 'partyType' },
+      { labels: ['Name'], field: 'name', required: true },
+      { labels: ['Contact Name', 'Contact'], field: 'contactName', optional: true },
+      { labels: ['Email'], field: 'email', optional: true },
+      { labels: ['Phone', 'Contact Number'], field: 'phone', optional: true },
+      { labels: ['City'], field: 'city', optional: true },
+      { labels: ['State'], field: 'state', optional: true },
+      { labels: ['GSTIN'], field: 'gstin', optional: true },
+      { labels: ['PAN Card', 'PAN'], field: 'panCard', optional: true },
+      { labels: ['Active'], field: 'isActive', type: 'bool', defaultValue: true },
+    ],
   },
 });
 
@@ -741,6 +882,80 @@ registerMasterCrud({
       ),
     };
   },
+  excel: {
+    filename: 'Products.xlsx',
+    sheetName: 'Products',
+    headers: [
+      'Code',
+      'SKU',
+      'Name',
+      'Product Type',
+      'Brand',
+      'Manufacturer',
+      'Model',
+      'Program / Project',
+      'Inventory Type',
+      'Expiry Applicable',
+      'GST Rate',
+      'Active',
+    ],
+    rowFromDoc: (r) => [
+      r.code,
+      r.sku,
+      r.name,
+      r.productType,
+      r.brand,
+      r.manufacturer,
+      r.model || r.partNumber,
+      r.programProject,
+      r.inventoryType,
+      r.expiryApplicable ? 'Yes' : 'No',
+      r.gstRate,
+      r.isActive === false ? 'No' : 'Yes',
+    ],
+    sampleRows: [
+      [
+        '',
+        '',
+        'Ultrasound Gel 250ml',
+        'Consumable',
+        'MediGel',
+        'MediGel',
+        'GEL-250',
+        'Camp One',
+        'Consumed by Device',
+        'Yes',
+        12,
+        'Yes',
+      ],
+      [
+        '',
+        '',
+        'BP Cuff Large',
+        'Accessory',
+        'CarePlus',
+        'CarePlus',
+        'BP-L',
+        '',
+        'Accessory of Asset',
+        'No',
+        18,
+        'Yes',
+      ],
+    ],
+    importColumns: [
+      { labels: ['Name', 'Model', 'Model/Variant/Name'], field: 'name', required: true },
+      { labels: ['Product Type', 'Type'], field: 'productType', required: true },
+      { labels: ['Brand'], field: 'brand', required: true },
+      { labels: ['Manufacturer'], field: 'manufacturer', optional: true },
+      { labels: ['Model', 'Part Number'], field: 'model', optional: true },
+      { labels: ['Program / Project', 'Program'], field: 'programProject', optional: true },
+      { labels: ['Inventory Type'], field: 'inventoryType', optional: true },
+      { labels: ['Expiry Applicable'], field: 'expiryApplicable', type: 'bool', defaultValue: false },
+      { labels: ['GST Rate', 'GST'], field: 'gstRate', type: 'number', defaultValue: 0 },
+      { labels: ['Active'], field: 'isActive', type: 'bool', defaultValue: true },
+    ],
+  },
 });
 
 router.post(
@@ -853,6 +1068,21 @@ registerMasterCrud({
     covers: trimStr(b.covers),
     isActive: b.isActive !== false,
   }),
+  excel: {
+    filename: 'Expense_Categories.xlsx',
+    sheetName: 'Expense Categories',
+    headers: ['Name', 'Covers', 'Active'],
+    rowFromDoc: (r) => [r.name, r.covers, r.isActive === false ? 'No' : 'Yes'],
+    sampleRows: [
+      ['Travel', 'Employee travel and conveyance', 'Yes'],
+      ['Meals', 'Team meals during camps', 'Yes'],
+    ],
+    importColumns: [
+      { labels: ['Name'], field: 'name', required: true },
+      { labels: ['Covers', 'Description'], field: 'covers', optional: true },
+      { labels: ['Active'], field: 'isActive', type: 'bool', defaultValue: true },
+    ],
+  },
 });
 
 router.get(

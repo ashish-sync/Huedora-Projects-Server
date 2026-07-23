@@ -3,6 +3,8 @@ import { authenticate, requirePermission } from '../../middleware/auth.js';
 import { asyncHandler, AppError, parsePagination, paginated } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
+import { sendExcel } from '../../utils/excelExport.js';
+import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState } from './geo.model.js';
 
 const router = Router();
@@ -123,6 +125,154 @@ router.get(
       GeoPinCode.countDocuments(filter),
     ]);
     res.json(paginated(data.map(publicRow), total, page, limit));
+  })
+);
+
+const PIN_HEADERS = ['PIN Code', 'State', 'District', 'City', 'Locality', 'Notes', 'Active'];
+
+router.get(
+  '/pin-codes/export',
+  asyncHandler(async (_req, res) => {
+    const rows = await GeoPinCode.find({ isDeleted: false }).sort('pinCode');
+    sendExcel(
+      res,
+      'Geography_PIN_Codes.xlsx',
+      PIN_HEADERS,
+      rows.map((r) => [
+        r.pinCode,
+        r.stateName,
+        r.districtName,
+        r.cityName,
+        r.locality,
+        r.notes,
+        r.isActive === false ? 'No' : 'Yes',
+      ]),
+      { sheetName: 'PIN Codes' }
+    );
+  })
+);
+
+router.get(
+  '/pin-codes/sample',
+  asyncHandler(async (_req, res) => {
+    sendExcel(
+      res,
+      'Geography_PIN_Codes_Sample.xlsx',
+      PIN_HEADERS,
+      [
+        ['400001', 'Maharashtra', 'Mumbai City', 'Mumbai', 'Fort', 'Sample mapping', 'Yes'],
+        ['500081', 'Telangana', 'Hyderabad', 'Hyderabad', 'Madhapur', '', 'Yes'],
+      ],
+      { sheetName: 'PIN Codes' }
+    );
+  })
+);
+
+async function resolveGeoNames({ stateName, districtName, cityName }) {
+  const state = await GeoState.findOne({
+    isDeleted: false,
+    name: new RegExp(`^${String(stateName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+  });
+  if (!state) throw new AppError(`State not found: ${stateName}`, 400, 'VALIDATION_ERROR');
+
+  let district = null;
+  if (districtName) {
+    district = await GeoDistrict.findOne({
+      isDeleted: false,
+      stateId: state._id,
+      name: new RegExp(`^${String(districtName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+    });
+  }
+
+  const cityFilter = { isDeleted: false, stateId: state._id };
+  const city = await GeoCity.findOne({
+    ...cityFilter,
+    name: new RegExp(`^${String(cityName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+  });
+  if (!city) throw new AppError(`City not found: ${cityName}`, 400, 'VALIDATION_ERROR');
+
+  return resolvePinTargets({
+    cityId: city._id,
+    districtId: district?._id || city.districtId,
+    stateId: state._id,
+  });
+}
+
+router.post(
+  '/pin-codes/import',
+  requirePermission(PERMISSIONS.AGREEMENTS_WRITE, PERMISSIONS.USERS_WRITE, PERMISSIONS.ALL),
+  excelUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    if (!req.file) throw new AppError('Excel file required', 400, 'VALIDATION_ERROR');
+    const rows = parseSheetRows(req.file.buffer);
+    const errors = [];
+    let created = 0;
+    let updated = 0;
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNum = i + 2;
+      try {
+        const pinCode = String(cellValue(row, ['PIN Code', 'PIN', 'pinCode'])).replace(/\D+/g, '');
+        if (!pinCode) continue;
+        if (!/^\d{6}$/.test(pinCode)) {
+          throw new AppError('PIN code must be 6 digits', 400, 'VALIDATION_ERROR');
+        }
+        const stateName = cellValue(row, ['State', 'stateName']);
+        const cityName = cellValue(row, ['City', 'cityName']);
+        if (!stateName || !cityName) {
+          throw new AppError('State and City are required', 400, 'VALIDATION_ERROR');
+        }
+        const districtName = cellValue(row, ['District', 'districtName']);
+        const locality = cellValue(row, ['Locality', 'locality']);
+        const notes = cellValue(row, ['Notes', 'notes']);
+        const activeRaw = cellValue(row, ['Active', 'isActive']);
+        const isActive = !['no', 'false', '0', 'inactive'].includes(activeRaw.toLowerCase());
+
+        const { city, district, state } = await resolveGeoNames({ stateName, districtName, cityName });
+        const existing = await GeoPinCode.findOne({
+          pinCode,
+          cityId: city._id,
+          isDeleted: false,
+        });
+        if (existing) {
+          existing.locality = locality || existing.locality;
+          existing.notes = notes || existing.notes;
+          existing.isActive = isActive;
+          existing.updatedBy = req.user._id;
+          await existing.save();
+          updated += 1;
+        } else {
+          await GeoPinCode.create({
+            pinCode,
+            cityId: city._id,
+            cityName: city.name,
+            districtId: district?._id || city.districtId || null,
+            districtName: district?.name || '',
+            stateId: state._id,
+            stateName: state.name,
+            locality,
+            notes,
+            isActive,
+            createdBy: req.user._id,
+            updatedBy: req.user._id,
+          });
+          created += 1;
+        }
+      } catch (err) {
+        errors.push({ row: rowNum, field: 'import', message: err.message });
+      }
+    }
+
+    res.json({
+      data: {
+        totalRows: rows.length,
+        created,
+        updated,
+        errorRows: errors.length,
+        errors: errors.slice(0, 200),
+      },
+    });
   })
 );
 

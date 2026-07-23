@@ -149,6 +149,56 @@ router.get(
 );
 
 router.get(
+  '/sample',
+  asyncHandler(async (_req, res) => {
+    sendExcel(
+      res,
+      'Contact_Directory_Sample.xlsx',
+      CONTACT_HEADERS,
+      [
+        [
+          'Dr. Ananya Rao',
+          'ananya@example.com',
+          'Resource',
+          'Doctor',
+          'Radiologist',
+          '',
+          '',
+          '9876543210',
+          'Hyderabad',
+          'Telangana',
+          '12 Health Park Road',
+          '500081',
+          'ABCDE1234F',
+          'HDFC0001234',
+          'HDFC Bank',
+          '123456789012',
+        ],
+        [
+          'City Hospital',
+          'ops@cityhospital.example',
+          'Client',
+          '',
+          'Hospital',
+          'City Hospital Group',
+          '',
+          '9123456780',
+          'Mumbai',
+          'Maharashtra',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+        ],
+      ],
+      { sheetName: 'Contacts' }
+    );
+  })
+);
+
+router.get(
   '/:id',
   asyncHandler(async (req, res) => {
     const contact = await Contact.findOne({ _id: req.params.id, isDeleted: false });

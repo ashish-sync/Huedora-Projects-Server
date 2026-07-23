@@ -6,6 +6,7 @@ import { SignatureMaster, normalizeSignaturePayload } from './signature.model.js
 import { SIGNATURE_ROLES } from './signature.constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
+import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
 
 const router = Router();
 router.use(authenticate);
@@ -77,6 +78,99 @@ router.get(
       ]),
       { sheetName: 'Signatures' }
     );
+  })
+);
+
+const SIGNATURE_HEADERS = [
+  'Name',
+  'Role',
+  'Email',
+  'Department',
+  'Signature Type',
+  'Typed Signature',
+  'Active',
+  'Notes',
+];
+
+router.get(
+  '/sample',
+  asyncHandler(async (_req, res) => {
+    sendExcel(
+      res,
+      'Signature_Master_Sample.xlsx',
+      SIGNATURE_HEADERS,
+      [
+        [
+          'Priya Sharma',
+          'HR',
+          'priya@example.com',
+          'Human Resources',
+          'TYPED',
+          'Priya Sharma',
+          'Yes',
+          'Sample typed signature',
+        ],
+      ],
+      { sheetName: 'Signatures' }
+    );
+  })
+);
+
+router.post(
+  '/import',
+  requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  excelUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    if (!req.file) throw new AppError('Excel file required', 400, 'VALIDATION_ERROR');
+    const rows = parseSheetRows(req.file.buffer);
+    const errors = [];
+    let created = 0;
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNum = i + 2;
+      try {
+        const name = cellValue(row, ['Name', 'name']);
+        if (!name) continue;
+        const roleLabel = cellValue(row, ['Role', 'roleLabel']);
+        if (!roleLabel) throw new AppError('Role is required', 400, 'VALIDATION_ERROR');
+        const signatureType = cellValue(row, ['Signature Type', 'signatureType']).toUpperCase() || 'TYPED';
+        if (signatureType !== 'TYPED') {
+          throw new AppError('Excel import supports TYPED signatures only', 400, 'VALIDATION_ERROR');
+        }
+        const typed = cellValue(row, ['Typed Signature', 'signatureData']) || name;
+        const payload = normalizeSignaturePayload({
+          name,
+          roleLabel,
+          email: cellValue(row, ['Email', 'email']),
+          department: cellValue(row, ['Department', 'department']),
+          signatureType: 'TYPED',
+          signatureData: typed,
+          notes: cellValue(row, ['Notes', 'notes']),
+          isActive: !['no', 'false', '0', 'inactive'].includes(
+            cellValue(row, ['Active', 'isActive']).toLowerCase()
+          ),
+        });
+        await SignatureMaster.create({
+          ...payload,
+          createdBy: req.user._id,
+          updatedBy: req.user._id,
+        });
+        created += 1;
+      } catch (err) {
+        errors.push({ row: rowNum, field: 'import', message: err.message });
+      }
+    }
+
+    res.json({
+      data: {
+        totalRows: rows.length,
+        created,
+        updated: 0,
+        errorRows: errors.length,
+        errors: errors.slice(0, 200),
+      },
+    });
   })
 );
 
