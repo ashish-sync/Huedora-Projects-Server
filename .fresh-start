@@ -1,0 +1,2 @@
+# Consumed once on server boot — wipes all app data, then removed from disk.
+# Remove from git after deploy completes so future deploys do not wipe again.
