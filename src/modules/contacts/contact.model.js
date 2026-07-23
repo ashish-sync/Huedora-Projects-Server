@@ -10,6 +10,7 @@ import {
   RESOURCE_TYPES,
   CLIENT_PROFESSIONS,
   VENDOR_PROFESSIONS,
+  HEALTHCARE_WORKER_PROFESSIONS,
   SUPPLY_CATEGORIES,
 } from './contact.constants.js';
 import { normalizeEmail } from '../../utils/identityNormalize.js';
@@ -156,7 +157,9 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
           ? CLIENT_PROFESSIONS
           : contactCategory === 'Vendor'
             ? VENDOR_PROFESSIONS
-            : allowedProfessions;
+            : contactCategory === 'Healthcare Worker'
+              ? HEALTHCARE_WORKER_PROFESSIONS
+              : allowedProfessions;
       throw new AppError(
         `Profession / Role must be one of: ${list.join(', ')}`,
         400,

@@ -10,13 +10,17 @@ import {
   INVOICE_STATUSES,
   PAYMENT_MODES,
 } from './finance.constants.js';
-import { FinanceExpense, FinanceInvoice } from './finance.model.js';
+import { DOCUMENT_NUMBER_STANDARDS } from './documentNumbering.js';
+import { FinanceExpense, FinanceInvoice, FinanceCommercialDocument } from './finance.model.js';
+import financeCommercialRoutes from './financeCommercial.routes.js';
 
 const router = Router();
 router.use(authenticate);
 
 const canRead = requirePermission(PERMISSIONS.FINANCE_READ, PERMISSIONS.FINANCE_WRITE);
 const canWrite = requirePermission(PERMISSIONS.FINANCE_WRITE);
+
+router.use(financeCommercialRoutes);
 
 function trimStr(v) {
   return v == null ? '' : String(v).trim();
@@ -41,6 +45,8 @@ router.get(
         expenseStatuses: EXPENSE_STATUSES,
         invoiceStatuses: INVOICE_STATUSES,
         paymentModes: PAYMENT_MODES,
+        documentNumberStandards: DOCUMENT_NUMBER_STANDARDS,
+        documentNumberFormat: 'PREFIX-YY-MM-SEQ',
       },
     });
   })
@@ -50,9 +56,11 @@ router.get(
   '/summary',
   canRead,
   asyncHandler(async (_req, res) => {
-    const [expenses, invoices] = await Promise.all([
+    const [expenses, invoices, proformas, purchaseOrders] = await Promise.all([
       FinanceExpense.find({ isDeleted: false }),
       FinanceInvoice.find({ isDeleted: false }),
+      FinanceCommercialDocument.find({ isDeleted: false, documentType: 'proforma' }),
+      FinanceCommercialDocument.find({ isDeleted: false, documentType: 'purchase_order' }),
     ]);
 
     const expenseTotal = expenses.reduce((s, r) => s + (Number(r.amount) || 0), 0);
@@ -62,6 +70,12 @@ router.get(
     const invoiceTotal = invoices.reduce((s, r) => s + (Number(r.totalAmount) || 0), 0);
     const invoiceOpen = invoices.filter((r) => r.status === 'Open' || r.status === 'Partially paid')
       .length;
+    const proformaDraft = proformas.filter((r) => r.status === 'Draft' || r.status === 'Uploaded').length;
+    const proformaIssued = proformas.filter((r) => r.status === 'Issued').length;
+    const proformaTotal = proformas.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
+    const poDraft = purchaseOrders.filter((r) => r.status === 'Draft' || r.status === 'Uploaded').length;
+    const poIssued = purchaseOrders.filter((r) => r.status === 'Issued').length;
+    const poTotal = purchaseOrders.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
 
     res.json({
       data: {
@@ -71,6 +85,14 @@ router.get(
         invoiceCount: invoices.length,
         invoiceTotal,
         invoiceOpen,
+        proformaCount: proformas.length,
+        proformaTotal,
+        proformaDraft,
+        proformaIssued,
+        purchaseOrderCount: purchaseOrders.length,
+        purchaseOrderTotal: poTotal,
+        purchaseOrderDraft: poDraft,
+        purchaseOrderIssued: poIssued,
       },
     });
   })

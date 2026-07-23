@@ -1,5 +1,6 @@
 import { hasPermission } from '../../middleware/auth.js';
 import { AppError } from '../../utils/helpers.js';
+import { formatDateTime } from '../../utils/dateFormat.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { Asset } from '../assets/asset.model.js';
 import { Agreement } from '../agreements/agreement.model.js';
@@ -171,9 +172,7 @@ function countBy(rows, field) {
 
 function fmtDate(iso) {
   if (!iso) return '-';
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return String(iso);
-  return d.toLocaleString();
+  return formatDateTime(iso);
 }
 
 function activeOnly(rows) {

@@ -72,7 +72,7 @@ export function parseLocalDateInput(value) {
   if (!text) return null;
 
   const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
-  const dmy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(text);
+  const dmy = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(text);
 
   let year;
   let month;
@@ -86,6 +86,7 @@ export function parseLocalDateInput(value) {
     day = Number(dmy[1]);
     month = Number(dmy[2]);
     year = Number(dmy[3]);
+    if (year < 100) year += 2000;
   } else {
     const parsed = new Date(text);
     if (Number.isNaN(parsed.getTime())) return null;
@@ -236,41 +237,74 @@ export function extractFieldsFromText(text) {
   };
 
   const doctorName = pick([
-    /(?:doctor|dr\.?)\s*[:\-]?\s*([A-Za-z .]+)/i,
-    /hcp\s*[:\-]?\s*([A-Za-z .]+)/i,
+    /(?:dr\.?\s*name|doctor\s*name)\s*[-:=]+\s*(.+?)(?:\n|$)/i,
+    /(?:doctor|dr\.?)\s*[-:=]+\s*([A-Za-z .]+)/i,
+    /hcp\s*[-:=]+\s*([A-Za-z .]+)/i,
+  ]);
+  const doctorCode = pick([
+    /(?:dr\.?\s*code|doctor\s*code)\s*[-:=]+\s*(\S+)/i,
   ]);
   const clientName = pick([
-    /(?:client|brand|pharma)\s*[:\-]?\s*([A-Za-z0-9 &.-]+)/i,
+    /(?:client|brand|pharma)\s*[-:=]+\s*([A-Za-z0-9 &.-]+)/i,
   ]);
-  const city = pick([/city\s*[:\-]?\s*([A-Za-z .]+)/i]);
-  const state = pick([/state\s*[:\-]?\s*([A-Za-z .]+)/i]);
+  const city = pick([
+    /(?:camp\s*)?city\s*[-:=]+\s*([A-Za-z .]+)/i,
+    /city\s*[-:=]+\s*([A-Za-z .]+)/i,
+  ]);
+  const state = pick([/state\s*[-:=]+\s*([A-Za-z .]+)/i]);
+  const pincode = pick([/(?:pin\s*code|pincode)\s*[-:=]+\s*(\d{6})/i, /\b(\d{6})\b/]);
   const campDate = pick([
-    /(?:camp\s*)?date\s*[:\-]?\s*(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4})/i,
+    /(?:date of the camp|camp\s*date|dates?)\s*[-:=]+\s*(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{4}-\d{2}-\d{2})/i,
+    /(?:^|\n)date\s*[-:=]+\s*(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{4}-\d{2}-\d{2})/i,
   ]);
-  const startTime = pick([/start\s*time\s*[:\-]?\s*(\d{1,2}:\d{2})/i]);
-  const endTime = pick([/end\s*time\s*[:\-]?\s*(\d{1,2}:\d{2})/i]);
+  const startTime = pick([
+    /start\s*time\s*[-:=]+\s*(\d{1,2}:\d{2})/i,
+    /in\s*time\s*[-:=]+\s*(\d{1,2}:\d{2})/i,
+    /time\s*[-:=]+\s*(\d{1,2}:\d{2})/i,
+  ]);
+  const endTime = pick([
+    /end\s*time\s*[-:=]+\s*(\d{1,2}:\d{2})/i,
+    /out\s*time\s*[-:=]+\s*(\d{1,2}:\d{2})/i,
+  ]);
   const expectedPatients = pick([
-    /(?:expected\s*)?patients?\s*[:\-]?\s*(\d+)/i,
-    /footfall\s*[:\-]?\s*(\d+)/i,
+    /(?:expected\s*)?patients?\s*[-:=]+\s*(\d+)/i,
+    /footfall\s*[-:=]+\s*(\d+)/i,
   ]);
-  const campAddress = pick([/(?:address|venue)\s*[:\-]?\s*(.+)/i]);
+  const campAddress = pick([
+    /(?:address\*?|camp\s*address|full clinic address|venue|location)\s*[-:=]+\s*(.+?)(?:\n|$)/i,
+  ]);
+  const fieldPersonName = pick([
+    /(?:field\s*person(?:\s*name)?|mr\s*name|rep(?:resentative)?\s*name)\s*[-:=]+\s*(.+?)(?:\n|$)/i,
+  ]);
+  const fieldPersonPhone = pick([
+    /(?:field\s*person\s*(?:contact|phone|mobile)|contact\s*(?:no|number)?)\s*[-:=]+\s*([\d+\s-]{8,})/i,
+    /(?:mobile|phone)\s*[-:=]+\s*([\d+\s-]{8,})/i,
+  ]);
   const campaignName = normalizeCampName(
-    pick([/(?:camp\s*name|campaign)\s*[:\-]?\s*([A-Za-z0-9 &]+)/i])
+    pick([
+      /(?:camp\s*name|camp\s*type|campaign)\s*[-:=]+\s*([A-Za-z0-9 &]+)/i,
+    ])
   );
-  const campaignType = pick([/(?:division|campaign\s*type|program)\s*[:\-]?\s*([A-Za-z0-9 &.-]+)/i]);
+  const campaignType = pick([
+    /(?:division|therapy|campaign\s*type|program)\s*[-:=]+\s*([A-Za-z0-9 &.-]+)/i,
+  ]);
 
   return {
     clientName,
     campaignName: campaignName || 'BMD',
     campaignType: campaignType || 'Screening',
     doctorName,
+    doctorCode,
     campAddress,
     city,
     state,
+    pincode,
     campDate: parseLocalDateInput(campDate) || campDate,
     startTime: startTime || '09:00',
     endTime,
     expectedPatients: expectedPatients ? Number(expectedPatients) : 0,
+    fieldPersonName,
+    fieldPersonPhone,
     remarks: '',
     rawExcerpt: raw.slice(0, 500),
   };

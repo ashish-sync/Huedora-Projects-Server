@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
 import PDFDocument from 'pdfkit';
+import { formatDate } from '../../utils/dateFormat.js';
 
 /** Any [content] bracket is a merge field. Types: name | number | alphanumeric | text */
 export const PLACEHOLDER_REGEX = /\[([^\]]+)\]/g;
@@ -283,7 +284,7 @@ function drawPartyColumn(doc, { x, y, width, label, signer, placeholder, showDat
 
   if (showDate) {
     const when = signer?.acknowledgedAt || signer?.signedAt;
-    const dateStr = done && when ? new Date(when).toLocaleDateString() : '-';
+    const dateStr = done && when ? formatDate(when) : '-';
     doc
       .font('Helvetica')
       .fontSize(6.5)

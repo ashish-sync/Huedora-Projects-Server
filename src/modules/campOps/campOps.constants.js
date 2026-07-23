@@ -28,7 +28,7 @@ export const EDITABLE_CAMP_STATUSES = ['pending_review', 'approved', 'rejected']
 
 export const CAMP_IMPORT_FIELDS = [
   { key: 'clientName', label: 'Client Name', required: true },
-  { key: 'campaignType', label: 'Division / Business', required: false },
+  { key: 'campaignType', label: 'Division / Therapy', required: false },
   { key: 'campaignName', label: 'Camp Name', required: false },
   { key: 'doctorName', label: 'Doctor Name', required: false },
   { key: 'doctorCode', label: 'Doctor Code', required: false },

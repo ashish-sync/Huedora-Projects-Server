@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, AppError } from '../../utils/helpers.js';
+import { formatDateTime } from '../../utils/dateFormat.js';
 import { Agreement, AgreementActivity } from './agreement.model.js';
 import { writeAudit } from '../../utils/audit.js';
 import { findAgreementByAccessKey } from './recipientAccess.js';
@@ -235,7 +236,7 @@ router.post(
       acknowledgedAt,
       signedAt: acknowledgedAt,
       signatureType: 'ACKNOWLEDGE',
-      signatureData: `Acknowledged ${new Date(acknowledgedAt).toLocaleString()}`,
+      signatureData: `Acknowledged ${formatDateTime(acknowledgedAt)}`,
       ip: req.ip,
     };
     agreement.signers = signers;

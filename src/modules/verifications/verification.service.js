@@ -1,4 +1,5 @@
 import { AppError } from '../../utils/helpers.js';
+import { formatDateTime } from '../../utils/dateFormat.js';
 import { writeAudit } from '../../utils/audit.js';
 import {
   VerificationRecord,
@@ -310,23 +311,11 @@ export async function logCallAttempt({
       throw new AppError('Callback reminder must be in the future', 400, 'VALIDATION_ERROR');
     }
     callbackIso = due.toISOString();
-    callbackLabel = due.toLocaleString(undefined, {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+    callbackLabel = formatDateTime(due);
   }
 
   const when = new Date();
-  const whenLabel = when.toLocaleString(undefined, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const whenLabel = formatDateTime(when);
 
   let remark = `${outcomeKey}: ${whenLabel}`;
   if (callbackLabel) remark += ` · remind ${callbackLabel}`;

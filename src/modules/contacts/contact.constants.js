@@ -1,6 +1,6 @@
 /** Canonical picklists for Contact Directory */
 
-export const CONTACT_CATEGORIES = ['Resource', 'Client', 'Vendor'];
+export const CONTACT_CATEGORIES = ['Resource', 'Client', 'Vendor', 'Healthcare Worker'];
 
 /** Employment / engagement type — only when Contact Category is Resource */
 export const RESOURCE_TYPES = [
@@ -50,15 +50,29 @@ export const VENDOR_PROFESSIONS = [
   'Other',
 ];
 
+/** Profession / Role when Contact Category is Healthcare Worker */
+export const HEALTHCARE_WORKER_PROFESSIONS = [
+  'Doctor',
+  'Nurse',
+  'Phlebotomist',
+  'Technician',
+  'Dietitian',
+  'Physio',
+  'Biomedical Engineer',
+  'Other',
+];
+
 export function professionsForCategory(contactCategory) {
   if (contactCategory === 'Client') return CLIENT_PROFESSIONS;
   if (contactCategory === 'Vendor') return VENDOR_PROFESSIONS;
+  if (contactCategory === 'Healthcare Worker') return HEALTHCARE_WORKER_PROFESSIONS;
   return PROFESSIONS;
 }
 
 export function professionPicklistKey(contactCategory) {
   if (contactCategory === 'Client') return 'contact.profession.client';
   if (contactCategory === 'Vendor') return 'contact.profession.vendor';
+  if (contactCategory === 'Healthcare Worker') return 'contact.profession.healthcareWorker';
   return 'contact.profession';
 }
 
@@ -121,6 +135,7 @@ export function matchPicklist(value, options) {
     vendor: 'Vendor',
     client: 'Client',
     resource: 'Resource',
+    healthcareworker: 'Healthcare Worker',
   };
   return aliases[norm] || raw;
 }
@@ -176,6 +191,25 @@ export function normalizeProfession(raw, contactCategory) {
     };
     if (vendorAliases[norm] && vendorAliases[norm] !== 'Other') return vendorAliases[norm];
     if (vendorAliases[norm] === 'Other') return '';
+  }
+
+  if (contactCategory === 'Healthcare Worker') {
+    const norm = value.toLowerCase().replace(/[\s_/-]+/g, '');
+    const hcwAliases = {
+      doctor: 'Doctor',
+      nurse: 'Nurse',
+      phlebotomist: 'Phlebotomist',
+      technician: 'Technician',
+      dietitian: 'Dietitian',
+      dietician: 'Dietitian',
+      physio: 'Physio',
+      physiotherapist: 'Physio',
+      biomedicalengineer: 'Biomedical Engineer',
+      other: 'Other',
+      others: 'Other',
+    };
+    if (hcwAliases[norm] && hcwAliases[norm] !== 'Other') return hcwAliases[norm];
+    if (hcwAliases[norm] === 'Other') return '';
   }
 
   return allowCustomPicklistValue(value, options, 'Other');

@@ -3,6 +3,8 @@ import { authenticate, requirePermission } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
+import { sendExcel } from '../../utils/excelExport.js';
+import { formatDate } from '../../utils/dateFormat.js';
 import { User } from '../users/user.model.js';
 import {
   CAMP_OPS_STATUSES,
@@ -36,10 +38,13 @@ import {
   captureSubmissionTracking,
   buildClientCode,
   groupCount,
-  extractFieldsFromText,
   mapImportRows,
   validateMappedImportRows,
 } from './campOps.helpers.js';
+import {
+  extractManualPastePreview,
+  processManualPaste,
+} from './manualPaste.service.js';
 
 const router = Router();
 router.use(authenticate);
@@ -287,6 +292,39 @@ router.get(
       CampOpsCamp.countDocuments(filter),
     ]);
     res.json(paginated(rows.map(withCampSchedule), total, page, limit));
+  })
+);
+
+router.get(
+  '/camps/export',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const overdueOnly = req.query.overdue === '1' || req.query.overdue === 'true';
+    const filter = buildCampFilter(req.query);
+
+    let camps;
+    if (overdueOnly) {
+      filter.status = 'approved';
+      const approved = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
+      camps = approved.filter(isCampOverdue).map(withCampSchedule);
+    } else {
+      const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
+      camps = rows.map(withCampSchedule);
+    }
+
+    const formatCampExportValue = (key, value) => {
+      if (key === 'campDate' && value) return formatDate(value);
+      return value ?? '';
+    };
+
+    const headers = ['Camp ID', ...CAMP_IMPORT_FIELDS.map((f) => f.label), 'Status'];
+    const rows = camps.map((camp) => [
+      camp.campId || '',
+      ...CAMP_IMPORT_FIELDS.map((f) => formatCampExportValue(f.key, camp[f.key])),
+      camp.status || '',
+    ]);
+
+    sendExcel(res, 'Camps_Export.xlsx', headers, rows, { sheetName: 'Camps' });
   })
 );
 
@@ -645,7 +683,6 @@ router.delete(
 
 const MASTER_STRING_FIELDS = [
   'programName',
-  'drugTherapyName',
   'campName',
   'campType',
   'coordinatorName',
@@ -927,33 +964,45 @@ router.get(
   canRead,
   asyncHandler(async (_req, res) => {
     const headers = CAMP_IMPORT_FIELDS.map((f) => f.label);
-    const sampleRow = {
-      'Client Name': 'Acme Pharma',
-      'Division / Business': 'Screening',
-      'Camp Name': 'BMD',
-      'Doctor Name': 'Dr Example',
-      'Doctor Code': 'D001',
-      'Camp Address': '12 Main Street',
-      City: 'Mumbai',
-      State: 'Maharashtra',
-      Pincode: '400001',
-      'Camp Date': '2026-08-01',
-      'Start Time': '09:00',
-      'End Time': '12:00',
-      'Expected Patients': '40',
-      'Field Person Name': 'Rep One',
-      'Field Person Contact': '9999999999',
-      Remarks: 'Sample',
-    };
-    res.json({
-      data: {
-        fileName: 'camp-import-sample.json',
-        headers,
-        sampleRows: [sampleRow],
-        contentType: 'application/json',
-        note: 'JSON sample for HueDora-Connect import; Excel sample can be generated client-side.',
-      },
-    });
+    const rows = [
+      [
+        'Acme Pharma',
+        'Screening',
+        'BMD',
+        'Dr Example',
+        'D001',
+        '12 Main Street',
+        'Mumbai',
+        'Maharashtra',
+        '400001',
+        '01-08-26',
+        '09:00',
+        '12:00',
+        '40',
+        'Rep One',
+        '9999999999',
+        'Sample camp row',
+      ],
+      [
+        'Acme Pharma',
+        'Oncology',
+        'Physio & Nuero',
+        'Dr Sharma',
+        'D002',
+        '45 Park Avenue',
+        'Pune',
+        'Maharashtra',
+        '411001',
+        '15-08-26',
+        '10:00',
+        '14:00',
+        '25',
+        'Rep Two',
+        '9888888888',
+        '',
+      ],
+    ];
+    sendExcel(res, 'camp-import-sample.xlsx', headers, rows, { sheetName: 'Camps' });
   })
 );
 
@@ -1218,13 +1267,13 @@ router.post(
   asyncHandler(async (req, res) => {
     const text = trimStr(req.body?.text);
     if (!text) throw new AppError('Paste text is required', 400, 'VALIDATION_ERROR');
-    const preview = extractFieldsFromText(text);
-    res.json({
-      data: {
-        previewData: preview,
-        camps: [preview],
-      },
-    });
+    const defaults = {
+      clientName: trimStr(req.body?.clientName),
+      campaignType: trimStr(req.body?.campaignType),
+      campaignName: trimStr(req.body?.campaignName),
+    };
+    const data = await extractManualPastePreview({ text, defaults });
+    res.json({ data });
   })
 );
 
@@ -1232,41 +1281,23 @@ router.post(
   '/communications/paste/process',
   canRequest,
   asyncHandler(async (req, res) => {
-    const preview =
-      req.body?.previewData ||
-      (req.body?.text ? extractFieldsFromText(req.body.text) : null);
-    if (!preview) throw new AppError('previewData or text is required', 400, 'VALIDATION_ERROR');
-
-    const client = await resolveClientFromBody(
-      { clientName: preview.clientName || 'Unassigned' },
-      { allowCreate: true }
-    );
-    const payload = campPayloadFromBody(
+    const defaults = {
+      clientName: trimStr(req.body?.clientName),
+      campaignType: trimStr(req.body?.campaignType),
+      campaignName: trimStr(req.body?.campaignName),
+    };
+    const data = await processManualPaste(
       {
-        ...preview,
-        source: 'paste',
-        clientName: client.name,
+        previewData: req.body?.previewData,
+        text: trimStr(req.body?.text),
+        defaults,
       },
-      null,
-      client
+      actor(req),
+      { resolveClientFromBody, campPayloadFromBody },
     );
-    if (!payload.campDate) {
-      payload.campDate = new Date().toISOString().slice(0, 10);
-    }
-    const a = actor(req);
-    const tracking = captureSubmissionTracking();
-    const camp = await CampOpsCamp.create({
-      ...payload,
-      campId: await generateCampId(payload.campDate),
-      status: 'pending_review',
-      source: 'paste',
-      createdById: a.id,
-      createdByEmail: a.email,
-      ...tracking,
-    });
     res.json({
-      data: { created: 1, camps: [withCampSchedule(camp)] },
-      message: 'Created 1 camp(s) from pasted content',
+      data,
+      message: `Created ${data.created} camp(s) from pasted content`,
     });
   })
 );
