@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
@@ -526,14 +526,11 @@ router.post(
 
 router.delete(
   '/:id',
-  canRequest,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await CampRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Camp request not found', 404);
-    if (String(row.requesterId) !== String(req.user._id) && !canSeeAll(req)) {
-      throw new AppError('Forbidden', 403, 'FORBIDDEN');
-    }
-    if (row.status !== 'Pending' && !canSeeAll(req)) {
+    if (row.status !== 'Pending' && !req.permissions.has(PERMISSIONS.ALL)) {
       throw new AppError('Only Pending requests can be withdrawn', 400, 'LOCKED');
     }
     if (row.status === 'Completed' && !req.permissions.has(PERMISSIONS.ALL)) {

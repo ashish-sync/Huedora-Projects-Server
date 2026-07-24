@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
@@ -346,6 +346,9 @@ router.post(
     };
     const config = configs[action];
     if (!config) throw new AppError('Invalid bulk action', 400, 'VALIDATION_ERROR');
+    if (action === 'delete' && !req.permissions.has(PERMISSIONS.ALL)) {
+      throw new AppError('Only administrators can delete camps', 403, 'FORBIDDEN');
+    }
     if (
       config.needApprove &&
       !req.permissions.has(PERMISSIONS.ALL) &&
@@ -554,7 +557,7 @@ router.post(
 
 router.delete(
   '/camps/:id',
-  canApprove,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
     if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
@@ -663,7 +666,7 @@ router.put(
 
 router.delete(
   '/clients/:id',
-  canApprove,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const client = await CampOpsClient.findOne({ _id: req.params.id, isDeleted: false });
     if (!client) throw new AppError('Client not found', 404, 'NOT_FOUND');
@@ -1011,7 +1014,7 @@ router.put(
 
 router.delete(
   '/client-masters/:id',
-  canApprove,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
@@ -1053,7 +1056,7 @@ router.post(
 
 router.delete(
   '/client-masters/:id/document',
-  canRequest,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
@@ -1108,7 +1111,7 @@ router.post(
 
 router.delete(
   '/import/templates/:id',
-  canRequest,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await CampOpsImportTemplate.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Template not found', 404, 'NOT_FOUND');

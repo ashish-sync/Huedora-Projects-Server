@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, AppError, parsePagination, paginated } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
@@ -405,7 +405,7 @@ router.patch(
 
 router.delete(
   '/pin-codes/:id',
-  requirePermission(PERMISSIONS.AGREEMENTS_WRITE, PERMISSIONS.USERS_WRITE, PERMISSIONS.ALL),
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await GeoPinCode.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('PIN code mapping not found', 404);

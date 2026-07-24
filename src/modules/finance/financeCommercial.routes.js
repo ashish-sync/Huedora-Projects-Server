@@ -4,7 +4,7 @@ import fs from 'fs';
 import multer from 'multer';
 import { fileURLToPath } from 'url';
 import { v4 as uuid } from 'uuid';
-import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { env } from '../../config/env.js';
@@ -325,7 +325,7 @@ router.post(
 
 router.delete(
   '/proformas/:id',
-  canWrite,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await FinanceCommercialDocument.findOne({
       _id: req.params.id,
@@ -582,7 +582,7 @@ router.post(
 
 router.delete(
   '/purchase-orders/:id',
-  canWrite,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await FinanceCommercialDocument.findOne({
       _id: req.params.id,

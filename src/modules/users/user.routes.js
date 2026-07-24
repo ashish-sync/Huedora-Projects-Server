@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { User } from './user.model.js';
@@ -198,7 +198,7 @@ router.patch(
 
 router.delete(
   '/roles/:id',
-  requirePermission(PERMISSIONS.USERS_WRITE),
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const role = await Role.findOne({ _id: req.params.id, isDeleted: false });
     if (!role) throw new AppError('Role not found', 404);
@@ -347,7 +347,7 @@ router.patch(
 
 router.delete(
   '/:id',
-  requirePermission(PERMISSIONS.USERS_WRITE),
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const user = await User.findOne({ _id: req.params.id, isDeleted: false });
     if (!user) throw new AppError('User not found', 404);
