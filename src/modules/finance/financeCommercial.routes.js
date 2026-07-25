@@ -21,11 +21,14 @@ import {
   mergeOrgProfile,
   nextProformaNumber,
   nextPurchaseOrderNumber,
+  normalizeClientInvoicePayload,
   normalizeProformaPayload,
   normalizePurchaseOrderPayload,
+  nextClientInvoiceNumber,
   toAmount,
   todayIso,
   trimStr,
+  validateClientInvoicePayload,
   validateProformaPayload,
   validatePurchaseOrderPayload,
   usesIgst,
@@ -594,6 +597,185 @@ router.delete(
     row.deletedAt = new Date().toISOString();
     await row.save();
     res.json({ data: { ok: true } });
+  })
+);
+
+function clientInvoiceListFilter(req) {
+  const filter = { isDeleted: false, documentType: 'client_invoice' };
+  if (req.query.status) filter.status = String(req.query.status);
+  if (req.query.q) {
+    const re = new RegExp(String(req.query.q), 'i');
+    filter.$or = [
+      { docKey: re },
+      { documentNumber: re },
+      { recipientName: re },
+      { projectName: re },
+    ];
+  }
+  return filter;
+}
+
+router.get(
+  '/client-invoices',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const { page, limit, skip, sort } = parsePagination(req.query);
+    const filter = clientInvoiceListFilter(req);
+    const [data, total] = await Promise.all([
+      FinanceCommercialDocument.find(filter)
+        .sort(sort || '-documentDate')
+        .skip(skip)
+        .limit(limit),
+      FinanceCommercialDocument.countDocuments(filter),
+    ]);
+    res.json(paginated(data, total, page, limit));
+  })
+);
+
+router.get(
+  '/client-invoices/:id',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const row = await FinanceCommercialDocument.findOne({
+      _id: req.params.id,
+      isDeleted: false,
+      documentType: 'client_invoice',
+    });
+    if (!row) throw new AppError('Invoice not found', 404);
+    res.json({ data: row });
+  })
+);
+
+router.post(
+  '/client-invoices/preview',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const orgProfile = await getOrCreateOrgProfile();
+    const payload = normalizeClientInvoicePayload(req.body, orgProfile);
+    if (!payload.recipientName) {
+      payload.recipientName = 'Preview Client';
+    }
+    const docObj = {
+      ...payload,
+      documentType: 'client_invoice',
+      documentNumber: trimStr(req.body.documentNumber) || 'PREVIEW',
+      status: 'Draft',
+      taxMode: usesIgst(payload.recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst',
+    };
+    const pdfBuffer = await buildClientInvoicePdfBuffer(docObj, orgProfile.toObject());
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="invoice-preview.pdf"');
+    res.send(pdfBuffer);
+  })
+);
+
+router.post(
+  '/client-invoices',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const orgProfile = await getOrCreateOrgProfile();
+    const payload = normalizeClientInvoicePayload(req.body, orgProfile);
+    validateClientInvoicePayload(payload);
+
+    let documentNumber = trimStr(req.body.documentNumber);
+    if (documentNumber) {
+      documentNumber = validateManualDocumentNumber(documentNumber, 'client_invoice');
+    }
+
+    const row = await FinanceCommercialDocument.create({
+      docKey: await nextSequence('financeCommercialDoc', 'INV'),
+      documentType: 'client_invoice',
+      documentNumber,
+      status: 'Draft',
+      source: 'generated',
+      createdById: req.user._id,
+      createdByEmail: req.user.email,
+      ...payload,
+    });
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'FINANCE.CLIENT_INVOICE.CREATE',
+      entityType: 'FinanceCommercialDocument',
+      entityId: row._id,
+      after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+
+    res.status(201).json({ data: row });
+  })
+);
+
+router.patch(
+  '/client-invoices/:id',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const row = await FinanceCommercialDocument.findOne({
+      _id: req.params.id,
+      isDeleted: false,
+      documentType: 'client_invoice',
+    });
+    if (!row) throw new AppError('Invoice not found', 404);
+    assertEditableStatus(row.status);
+
+    const orgProfile = await getOrCreateOrgProfile();
+    const merged = {
+      ...row.toObject(),
+      ...req.body,
+      documentDate: req.body.documentDate != null ? req.body.documentDate : row.documentDate,
+      lineItems: req.body.lineItems != null ? req.body.lineItems : row.lineItems,
+    };
+    const payload = normalizeClientInvoicePayload(merged, orgProfile);
+    validateClientInvoicePayload(payload);
+
+    Object.assign(row, payload);
+    if (req.body.documentNumber != null) {
+      const manual = trimStr(req.body.documentNumber);
+      row.documentNumber = manual ? validateManualDocumentNumber(manual, 'client_invoice') : '';
+    }
+    await row.save();
+    res.json({ data: row });
+  })
+);
+
+router.post(
+  '/client-invoices/:id/issue',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const row = await FinanceCommercialDocument.findOne({
+      _id: req.params.id,
+      isDeleted: false,
+      documentType: 'client_invoice',
+    });
+    if (!row) throw new AppError('Invoice not found', 404);
+    assertIssuable(row.status);
+
+    const orgProfile = await getOrCreateOrgProfile();
+    const payload = normalizeClientInvoicePayload(row.toObject(), orgProfile);
+    validateClientInvoicePayload(payload);
+    Object.assign(row, payload);
+
+    if (!trimStr(row.documentNumber)) {
+      row.documentNumber = await nextClientInvoiceNumber(row.documentDate);
+    }
+    row.documentPeriod = documentNumberPeriod(row.documentDate).periodKey;
+    row.status = 'Issued';
+    row.issuedAt = new Date().toISOString();
+    row.source = row.source || 'generated';
+    await row.save();
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'FINANCE.CLIENT_INVOICE.ISSUE',
+      entityType: 'FinanceCommercialDocument',
+      entityId: row._id,
+      after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+
+    res.json({ data: row });
   })
 );
 

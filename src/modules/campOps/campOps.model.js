@@ -87,6 +87,14 @@ export const CampOpsCamp = defineCollection('camp_ops_camps', {
   informationRequestedById: null,
   informationRequestedByEmail: '',
   rejectionReason: '',
+  whatsappMessageId: '',
+  whatsappSenderPhone: '',
+  whatsappRawMessage: '',
+  emailIngestId: '',
+  emailMessageId: '',
+  emailSender: '',
+  emailSubject: '',
+  emailRawBody: '',
   isActive: true,
 });
 
@@ -139,4 +147,45 @@ export const CampOpsImportTemplate = defineCollection('camp_ops_import_templates
   mapping: {},
   createdById: null,
   createdByEmail: '',
+});
+
+export const CampOpsInboundEmail = defineCollection('camp_ops_inbound_emails', {
+  ...softDelete,
+  messageId: '',
+  imapUid: null,
+  from: '',
+  subject: '',
+  bodyText: '',
+  html: '',
+  receivedAt: '',
+  attachments: [],
+  channel: 'imap',
+  status: 'inbox',
+  isCampaignCandidate: false,
+  matchSummary: '',
+  skipReason: '',
+  previewData: null,
+  linkedCampIds: [],
+  processedAt: null,
+  archivedAt: null,
+  archivedById: null,
+  processedById: null,
+});
+
+export const CampOpsEmailIngestConfig = defineCollection('camp_ops_email_ingest_config', {
+  allowedDomains: [],
+  allowedSenders: [],
+  keywords: [],
+  updatedById: null,
+});
+
+export const CampOpsParserAudit = defineCollection('camp_ops_parser_audit', {
+  originalMessage: '',
+  parsed: null,
+  clientId: '',
+  clientName: '',
+  parserUsed: '',
+  timestamp: '',
+  actorId: null,
+  actorEmail: '',
 });

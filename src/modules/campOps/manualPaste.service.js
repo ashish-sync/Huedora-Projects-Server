@@ -11,6 +11,7 @@ import {
 } from './campOps.helpers.js';
 import { normalizeCampName } from './campOps.constants.js';
 import { extractManualPasteFields, formatManualPasteOutput } from './manualPaste.extract.js';
+import { enrichPasteLocationFromPin } from './manualPaste.enrich.js';
 
 const BLOCK_SEPARATOR = /(?:^|\n)\s*(?:---+|===+|\*\*\*+)\s*(?:\n|$)/;
 
@@ -134,12 +135,29 @@ function extractFieldsFromPasteBlock(block) {
   };
 }
 
+async function enrichExtractedPasteFields(extracted) {
+  const { pasteDisplay, pasteFormatted, ...row } = extracted;
+  const enriched = await enrichPasteLocationFromPin(row, pasteDisplay);
+  const nextDisplay = enriched.display;
+  return {
+    ...enriched.row,
+    pasteDisplay: {
+      ...nextDisplay,
+      locationSource: enriched.locationSource || '',
+    },
+    pasteFormatted: formatManualPasteOutput(nextDisplay),
+  };
+}
+
 async function buildBodyPreview(text, defaults = {}) {
   const blocks = splitPasteBlocks(text);
 
   return Promise.all(
     blocks.map(async (block, index) => {
-      const extracted = applyPasteDefaults(extractFieldsFromPasteBlock(block), defaults);
+      const extracted = applyPasteDefaults(
+        await enrichExtractedPasteFields(extractFieldsFromPasteBlock(block)),
+        defaults,
+      );
       const { pasteDisplay, pasteFormatted, ...rowForValidation } = extracted;
       const { validRows, invalidRows } = validateMappedImportRows([rowForValidation]);
       const validRow = validRows[0];

@@ -29,6 +29,7 @@ import auditRoutes from './modules/audit/audit.routes.js';
 import importRoutes from './modules/imports/import.routes.js';
 import campRoutes from './modules/camps/camp.routes.js';
 import campOpsRoutes from './modules/campOps/campOps.routes.js';
+import campOpsWhatsappRoutes from './modules/campOps/campOps.whatsapp.routes.js';
 import assetRequestRoutes from './modules/assetRequests/assetRequest.routes.js';
 import requestUploadRoutes from './modules/assetRequests/requestUpload.routes.js';
 import logisticsRoutes from './modules/logistics/logistics.routes.js';
@@ -91,6 +92,7 @@ export function createApp() {
 
   // Public, token-gated custodian upload flow. Keep before the /api/v1 catch-all router.
   app.use('/api/v1/request-upload', requestUploadRoutes);
+  app.use('/api/v1/ingest/whatsapp', campOpsWhatsappRoutes);
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/users', userRoutes);
   app.use('/api/v1/hcws', hcwRoutes);

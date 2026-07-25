@@ -47,6 +47,11 @@ import {
   processManualPaste,
 } from './manualPaste.service.js';
 import {
+  parseCampRequestWithValidation,
+  parsedFieldsToCampRow,
+  listClientParserConfigs,
+} from './campRequestParser.service.js';
+import {
   lifecyclePayloadFromBody,
   withCampLifecycle,
   canEditLifecycleStage,
@@ -64,6 +69,19 @@ import {
   CAMP_CLOSURE_REASON_CODES,
   canCloseCampStatus,
 } from './campOps.closure.js';
+import {
+  handleEmailArchive,
+  handleEmailConfigGet,
+  handleEmailConfigPut,
+  handleEmailExtract,
+  handleEmailMessageGet,
+  handleEmailMessagesList,
+  handleEmailPreviewSave,
+  handleEmailProcess,
+  handleEmailRestore,
+  handleEmailStatus,
+  handleEmailSync,
+} from './communications.handlers.js';
 import path from 'path';
 import fs from 'fs';
 import multer from 'multer';
@@ -1525,117 +1543,27 @@ router.post(
 /* Communications                                                             */
 /* -------------------------------------------------------------------------- */
 
-router.get(
-  '/communications/email/status',
-  canRead,
-  asyncHandler(async (_req, res) => {
-    res.json({
-      data: {
-        configured: false,
-        connected: false,
-        lastSyncAt: null,
-        pendingMessages: 0,
-        message: 'Email ingest is not configured on TYLO Camp Ops (stub).',
-      },
-    });
-  })
-);
+router.get('/communications/email/status', canRead, asyncHandler(handleEmailStatus));
 
-router.get(
-  '/communications/email/config',
-  canRead,
-  asyncHandler(async (_req, res) => {
-    res.json({
-      data: {
-        enabled: false,
-        host: '',
-        port: 993,
-        user: '',
-        mailbox: 'INBOX',
-        configured: false,
-      },
-    });
-  })
-);
+router.get('/communications/email/config', canRead, asyncHandler(handleEmailConfigGet));
 
-router.put(
-  '/communications/email/config',
-  canApprove,
-  asyncHandler(async (req, res) => {
-    res.json({
-      data: {
-        ...(req.body || {}),
-        configured: false,
-        message: 'Email config saved locally in request only (stub).',
-      },
-    });
-  })
-);
+router.put('/communications/email/config', canApprove, asyncHandler(handleEmailConfigPut));
 
-router.post(
-  '/communications/email/sync',
-  canRequest,
-  asyncHandler(async (_req, res) => {
-    res.json({ data: { synced: 0, failed: 0, message: 'Email sync not configured (stub).' } });
-  })
-);
+router.post('/communications/email/sync', canRequest, asyncHandler(handleEmailSync));
 
-router.get(
-  '/communications/email/messages',
-  canRead,
-  asyncHandler(async (req, res) => {
-    const { page, limit } = parsePagination(req.query);
-    res.json(paginated([], 0, page, limit));
-  })
-);
+router.get('/communications/email/messages', canRead, asyncHandler(handleEmailMessagesList));
 
-router.get(
-  '/communications/email/messages/:id',
-  canRead,
-  asyncHandler(async (_req, res) => {
-    throw new AppError('Email message not found', 404, 'NOT_FOUND');
-  })
-);
+router.get('/communications/email/messages/:id', canRead, asyncHandler(handleEmailMessageGet));
 
-router.post(
-  '/communications/email/messages/:id/extract',
-  canRequest,
-  asyncHandler(async (_req, res) => {
-    throw new AppError('Email extract not available (stub)', 501, 'NOT_IMPLEMENTED');
-  })
-);
+router.post('/communications/email/messages/:id/extract', canRequest, asyncHandler(handleEmailExtract));
 
-router.put(
-  '/communications/email/messages/:id/preview',
-  canRequest,
-  asyncHandler(async (req, res) => {
-    res.json({ data: req.body?.previewData || null });
-  })
-);
+router.put('/communications/email/messages/:id/preview', canRequest, asyncHandler(handleEmailPreviewSave));
 
-router.post(
-  '/communications/email/messages/:id/process',
-  canRequest,
-  asyncHandler(async (_req, res) => {
-    throw new AppError('Email process not available (stub)', 501, 'NOT_IMPLEMENTED');
-  })
-);
+router.post('/communications/email/messages/:id/process', canRequest, asyncHandler(handleEmailProcess));
 
-router.post(
-  '/communications/email/messages/:id/archive',
-  canRequest,
-  asyncHandler(async (_req, res) => {
-    res.json({ data: { ok: true } });
-  })
-);
+router.post('/communications/email/messages/:id/archive', canRequest, asyncHandler(handleEmailArchive));
 
-router.post(
-  '/communications/email/messages/:id/restore',
-  canRequest,
-  asyncHandler(async (_req, res) => {
-    res.json({ data: { ok: true } });
-  })
-);
+router.post('/communications/email/messages/:id/restore', canRequest, asyncHandler(handleEmailRestore));
 
 router.post(
   '/communications/paste/extract',
@@ -1651,6 +1579,84 @@ router.post(
     const data = await extractManualPastePreview({ text, defaults });
     res.json({ data });
   })
+);
+
+router.get(
+  '/communications/parser/configs',
+  canRead,
+  asyncHandler(async (_req, res) => {
+    const configs = listClientParserConfigs().map((cfg) => ({
+      clientId: cfg.clientId,
+      clientName: cfg.clientName,
+      parserMode: cfg.parserMode,
+    }));
+    res.json({ data: configs });
+  }),
+);
+
+router.post(
+  '/communications/parser/parse',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const data = await parseCampRequestWithValidation(
+      {
+        text: trimStr(req.body?.text),
+        clientId: trimStr(req.body?.clientId),
+        clientName: trimStr(req.body?.clientName),
+        storeAudit: req.body?.storeAudit !== false,
+      },
+      actor(req),
+    );
+    res.json({ data });
+  }),
+);
+
+router.post(
+  '/communications/parser/process',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const parsedFields = req.body?.parsedFields || req.body?.parsed_fields;
+    if (!parsedFields) {
+      throw new AppError('parsedFields is required', 400, 'VALIDATION_ERROR');
+    }
+    const defaults = {
+      clientName: trimStr(req.body?.clientName),
+      campaignType: trimStr(req.body?.campaignType),
+      campaignName: trimStr(req.body?.campaignName),
+    };
+    const row = parsedFieldsToCampRow(parsedFields, defaults);
+    const { validRows, invalidRows } = validateMappedImportRows([row]);
+    if (!validRows.length) {
+      throw new AppError(
+        (invalidRows[0]?.errors || ['Invalid camp data']).join('. '),
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
+    const client = await resolveClientFromBody(
+      { clientName: validRows[0].clientName || 'Unassigned' },
+      { allowCreate: true },
+    );
+    const payload = campPayloadFromBody(
+      { ...validRows[0], source: 'parser', clientName: client?.name || validRows[0].clientName },
+      null,
+      client,
+    );
+    const tracking = captureSubmissionTracking();
+    const camp = await CampOpsCamp.create({
+      ...payload,
+      campId: await generateCampId(payload.campDate),
+      status: 'pending_review',
+      source: 'parser',
+      createdById: actor(req).id,
+      createdByEmail: actor(req).email,
+      ...tracking,
+    });
+    res.status(201).json({
+      data: withCampSchedule(camp),
+      message: `Created camp ${camp.campId} from parser output`,
+    });
+  }),
 );
 
 router.post(

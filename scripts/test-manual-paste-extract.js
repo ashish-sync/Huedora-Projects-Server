@@ -44,6 +44,7 @@ test('extracts labeled fields and contact priority (SE first)', () => {
   assert.equal(display.city, 'Pune');
   assert.equal(display.hq, 'Pune');
   assert.equal(display.pincode, '411001');
+  assert.equal(display.zone, 'West Zone');
   assert.equal(display.expectedPatients, '45');
   assert.equal(row.expectedPatients, 45);
   assert.equal(display.fieldPersonName, 'Amit Sharma');
@@ -83,10 +84,25 @@ test('returns Not Provided for missing fields', () => {
   assert.equal(display.doctorCode, NOT_PROVIDED);
 });
 
-test('formatManualPasteOutput matches required labels', () => {
+test('derives zone from state and prefers labeled PIN', () => {
+  const text = `
+Date: 01-01-2026
+Doctor: Anita Patel
+Camp Venue: Main Hall, Jaipur, Rajasthan
+PIN Code: 302001
+Expected Patients: 10
+`.trim();
+  const { display } = extractManualPasteFields(text);
+  assert.equal(display.pincode, '302001');
+  assert.equal(display.state, 'Rajasthan');
+  assert.equal(display.zone, 'North Zone');
+});
+
+test('formatManualPasteOutput includes zone label', () => {
   const { display } = extractManualPasteFields(SAMPLE);
   const output = formatManualPasteOutput(display);
   assert.match(output, /^Camp Date:\n/);
+  assert.match(output, /Zone:\n/);
   assert.match(output, /Contact Person Number:\n9876543210$/);
 });
 

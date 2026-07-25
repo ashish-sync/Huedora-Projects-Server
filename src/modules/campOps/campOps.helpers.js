@@ -404,6 +404,7 @@ export function validateMappedImportRows(rows) {
       campAddress: trimStr(row.campAddress),
       city: trimStr(row.city),
       state: trimStr(row.state),
+      zone: trimStr(row.zone),
       hq: trimStr(row.hq),
       pincode: trimStr(row.pincode),
       campDate,

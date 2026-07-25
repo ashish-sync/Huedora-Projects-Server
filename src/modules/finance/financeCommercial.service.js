@@ -6,6 +6,7 @@ import {
 } from './finance.constants.js';
 import {
   documentNumberPeriod,
+  nextCommercialDocumentNumber,
 } from './documentNumbering.js';
 import { FinanceOrgProfile } from './finance.model.js';
 
@@ -253,6 +254,10 @@ export function mergeOrgProfile(body = {}) {
 export { nextCommercialDocumentNumber as nextProformaNumber } from './documentNumbering.js';
 export { nextCommercialDocumentNumber as nextPurchaseOrderNumber } from './documentNumbering.js';
 
+export async function nextClientInvoiceNumber(documentDate) {
+  return nextCommercialDocumentNumber('client_invoice', documentDate);
+}
+
 export function normalizePoLineItem(raw = {}, index = 0) {
   const isFoc = Boolean(raw.isFoc);
   const qty = toAmount(raw.qty) || 0;
@@ -413,6 +418,13 @@ export function normalizeProformaPayload(body = {}, orgProfile = DEFAULT_ORG_PRO
     ...totals,
   };
 }
+
+export function normalizeClientInvoicePayload(body = {}, orgProfile = DEFAULT_ORG_PROFILE) {
+  const payload = normalizeProformaPayload(body, orgProfile);
+  return { ...payload, documentType: 'client_invoice' };
+}
+
+export const validateClientInvoicePayload = validateProformaPayload;
 
 export function validateProformaPayload(payload, { requireLines = true } = {}) {
   if (!payload.recipientName) {

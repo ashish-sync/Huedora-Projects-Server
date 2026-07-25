@@ -6,7 +6,7 @@ import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState, GeoZone } from './geo.model.js';
-import { resolveZoneForStateRecord } from './geo.zones.js';
+import { resolveZoneForStateRecord, resolveZoneNameForState } from './geo.zones.js';
 
 const router = Router();
 router.use(authenticate);
@@ -305,14 +305,29 @@ router.post(
   })
 );
 
-/** GET /geo/pin-codes/lookup/:pin — local only */
+function enrichPinRow(row, zones = []) {
+  const o = publicRow(row);
+  if (!o) return null;
+  const zm = resolveZoneForStateRecord(o.stateName, zones);
+  return {
+    ...o,
+    zone: zm?.zone || resolveZoneNameForState(o.stateName),
+    zoneId: zm?.zoneId || '',
+  };
+}
+
+/** GET /geo/pin-codes/lookup/:pin — local master; includes city, state, zone */
 router.get(
   '/pin-codes/lookup/:pin',
   asyncHandler(async (req, res) => {
     const pin = String(req.params.pin || '').replace(/\D+/g, '');
     if (pin.length !== 6) throw new AppError('PIN code must be 6 digits', 400, 'VALIDATION_ERROR');
-    const rows = await GeoPinCode.find({ pinCode: pin, isDeleted: false, isActive: true }).limit(20);
-    res.json({ data: rows.map(publicRow) });
+    const [rows, zones] = await Promise.all([
+      GeoPinCode.find({ pinCode: pin, isDeleted: false, isActive: true }).limit(20),
+      GeoZone.find({ isDeleted: false, isActive: true }),
+    ]);
+    const data = rows.map((row) => enrichPinRow(row, zones)).filter(Boolean);
+    res.json({ data, resolved: data[0] || null });
   })
 );
 

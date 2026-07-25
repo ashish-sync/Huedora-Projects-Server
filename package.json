@@ -6,10 +6,13 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
+    "prestart": "npm run build:parsers",
     "seed": "node src/seed.js",
     "reset:data": "node scripts/reset-all-data.js",
     "geo:build": "node scripts/buildIndiaGeoSeed.js",
     "test:manual-paste": "node scripts/test-manual-paste-extract.js",
+    "test:camp-parser": "npm run build:parsers && node scripts/test-camp-request-parser.js",
+    "build:parsers": "tsc -p src/modules/campOps/parsers/tsconfig.json",
     "test:camp-one": "node scripts/camp-one-e2e-test.js",
     "seed:camp-one": "node -e \"import('./src/config/db.js').then(async ({connectDb,disconnectDb})=>{await connectDb(); const {ensureSeed}=await import('./src/seed.js'); await ensureSeed(); await disconnectDb();})\""
   },
@@ -21,8 +24,10 @@
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.0.0",
+    "imapflow": "^1.5.0",
     "jsonwebtoken": "^9.0.2",
     "jszip": "^3.10.1",
+    "mailparser": "^3.9.14",
     "mongoose": "^8.9.3",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
@@ -34,6 +39,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "mongodb-memory-server": "^10.1.2"
+    "mongodb-memory-server": "^10.1.2",
+    "typescript": "^5.9.3"
   }
 }

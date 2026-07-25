@@ -1,4 +1,5 @@
 import { trimStr, parseLocalDateInput } from './campOps.helpers.js';
+import { resolveZoneNameForState } from '../geo/geo.zones.js';
 
 export const NOT_PROVIDED = 'Not Provided';
 
@@ -108,6 +109,22 @@ function normalizeTimeToken(token) {
   return `${String(hours).padStart(2, '0')}:${minutes}`;
 }
 
+function extractCampTimes(text) {
+  const labeledStart = pickLabeledValue(text, ['Camp Start Time', 'Start Time', 'Start']);
+  const labeledEnd = pickLabeledValue(text, ['Camp End Time', 'End Time', 'End']);
+  const mentioned = extractMentionedTimes(text);
+  const startTime = normalizeTimeToken(labeledStart) || mentioned[0] || '';
+  const endTime = normalizeTimeToken(labeledEnd) || mentioned[1] || '';
+  return { startTime, endTime };
+}
+
+function extractPinCode(text, location = {}) {
+  const labeled = pickLabeledValue(text, ['PIN Code', 'Pin Code', 'Pincode', 'PIN', 'Postal Code']);
+  const fromLabel = String(labeled || '').replace(/\D/g, '').slice(0, 6);
+  if (fromLabel.length === 6) return fromLabel;
+  return location.pincode || '';
+}
+
 function extractMentionedTimes(text) {
   const source = stripIgnoredLines(text);
   const matches = [...source.matchAll(/\b(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)\b/gi)];
@@ -187,9 +204,7 @@ export function extractManualPasteFields(text) {
   const doctorName = pickLabeledValue(raw, ['Doctor Name', 'Dr Name', 'Doctor']);
   const doctorCode = pickLabeledValue(raw, ['Doctor Code', 'SC Code', 'SE Code']);
   const campDate = extractCampDate(raw);
-  const times = extractMentionedTimes(raw);
-  const startTime = times[0] || '';
-  const endTime = times[1] || '';
+  const { startTime, endTime } = extractCampTimes(raw);
   const campAddress = pickLabeledValue(raw, [
     'Camp Address',
     'Camp Venue',
@@ -197,6 +212,8 @@ export function extractManualPasteFields(text) {
     'Complete Address',
   ]);
   const location = extractLocationFromAddress(campAddress);
+  const pincode = extractPinCode(raw, location);
+  const zone = location.state ? resolveZoneNameForState(location.state) : '';
   const expectedPatientsRaw = pickLabeledValue(raw, ['Expected Patients']);
   const expectedPatientsMatch = expectedPatientsRaw.match(/\d+/);
   const contact = extractContactPerson(raw);
@@ -211,7 +228,8 @@ export function extractManualPasteFields(text) {
     state: withDefault(location.state),
     city: withDefault(location.city),
     hq: withDefault(location.city),
-    pincode: withDefault(location.pincode),
+    pincode: withDefault(pincode),
+    zone: withDefault(zone),
     expectedPatients: withDefault(expectedPatientsMatch ? expectedPatientsMatch[0] : ''),
     fieldPersonName: withDefault(contact.name),
     fieldPersonPhone: withDefault(contact.phone),
@@ -229,7 +247,8 @@ export function extractManualPasteFields(text) {
       state: toCampValue(location.state),
       city: toCampValue(location.city),
       hq: toCampValue(location.city),
-      pincode: toCampValue(location.pincode),
+      pincode: toCampValue(pincode),
+      zone: toCampValue(zone),
       expectedPatients: expectedPatientsMatch ? Number(expectedPatientsMatch[0]) : 0,
       fieldPersonName: toCampValue(contact.name),
       fieldPersonPhone: toCampValue(contact.phone),
@@ -255,6 +274,8 @@ export function formatManualPasteOutput(display = {}) {
     display.campAddress || NOT_PROVIDED,
     'State:',
     display.state || NOT_PROVIDED,
+    'Zone:',
+    display.zone || NOT_PROVIDED,
     'City:',
     display.city || NOT_PROVIDED,
     'HQ:',
