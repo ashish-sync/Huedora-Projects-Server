@@ -143,15 +143,65 @@ export function buildCampFilter(query = {}) {
   const filter = { isDeleted: false };
 
   const status = trimStr(query.status);
+  const requestReviewStatus = trimStr(query.requestReviewStatus);
   const client = trimStr(query.client || query.clientId);
   const state = trimStr(query.state);
   const campaignType = trimStr(query.campaignType);
+  const lifecycleStage = trimStr(query.lifecycleStage || query.stage);
+  const assignmentFilter = trimStr(query.assignmentFilter);
   const search = trimStr(query.search || query.q);
 
-  if (status) filter.status = status;
+  if (requestReviewStatus) {
+    if (requestReviewStatus === 'request_approved') filter.status = 'approved';
+    else if (requestReviewStatus === 'request_rejected') filter.status = 'rejected';
+    else filter.status = 'pending_review';
+  } else if (status && !assignmentFilter) filter.status = status;
   if (client) filter.clientId = client;
   if (state) filter.state = state;
   if (campaignType) filter.campaignType = campaignType;
+  if (assignmentFilter === 'assigned') {
+    filter.$and = [
+      ...(filter.$and || []),
+      {
+        $or: [
+          { assignmentStatus: 'Assigned' },
+          { assignmentDecision: 'assign', lifecycleStage: 'execution' },
+        ],
+      },
+    ];
+  } else if (assignmentFilter === 'unassigned') {
+    filter.status = 'approved';
+    filter.$and = [
+      ...(filter.$and || []),
+      { lifecycleStage: 'assignment' },
+      {
+        $or: [
+          { assignmentStatus: { $exists: false } },
+          { assignmentStatus: null },
+          { assignmentStatus: '' },
+          { assignmentStatus: 'Pending' },
+          { assignmentStatus: 'Reassigned' },
+          { assignmentStatus: 'Unassigned' },
+        ],
+      },
+    ];
+  } else if (lifecycleStage && !assignmentFilter) {
+    if (lifecycleStage === 'request') {
+      filter.$and = [
+        ...(filter.$and || []),
+        {
+          $or: [
+            { lifecycleStage: 'request' },
+            { lifecycleStage: { $exists: false } },
+            { lifecycleStage: null },
+            { lifecycleStage: '' },
+          ],
+        },
+      ];
+    } else {
+      filter.lifecycleStage = lifecycleStage;
+    }
+  }
 
   const dateFrom = parseLocalDateInput(query.dateFrom);
   const dateTo = parseLocalDateInput(query.dateTo);
@@ -354,6 +404,7 @@ export function validateMappedImportRows(rows) {
       campAddress: trimStr(row.campAddress),
       city: trimStr(row.city),
       state: trimStr(row.state),
+      hq: trimStr(row.hq),
       pincode: trimStr(row.pincode),
       campDate,
       startTime: schedule.startTime,

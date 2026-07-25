@@ -4,13 +4,13 @@ import {
   trimStr,
   escapeRegex,
   parseLocalDateInput,
-  extractFieldsFromText,
   validateMappedImportRows,
   generateCampId,
   captureSubmissionTracking,
   withCampSchedule,
 } from './campOps.helpers.js';
 import { normalizeCampName } from './campOps.constants.js';
+import { extractManualPasteFields, formatManualPasteOutput } from './manualPaste.extract.js';
 
 const BLOCK_SEPARATOR = /(?:^|\n)\s*(?:---+|===+|\*\*\*+)\s*(?:\n|$)/;
 
@@ -125,13 +125,23 @@ function applyPasteDefaults(row = {}, defaults = {}) {
   };
 }
 
+function extractFieldsFromPasteBlock(block) {
+  const { row, display } = extractManualPasteFields(block);
+  return {
+    ...row,
+    pasteDisplay: display,
+    pasteFormatted: formatManualPasteOutput(display),
+  };
+}
+
 async function buildBodyPreview(text, defaults = {}) {
   const blocks = splitPasteBlocks(text);
 
   return Promise.all(
     blocks.map(async (block, index) => {
-      const extracted = applyPasteDefaults(extractFieldsFromText(block), defaults);
-      const { validRows, invalidRows } = validateMappedImportRows([extracted]);
+      const extracted = applyPasteDefaults(extractFieldsFromPasteBlock(block), defaults);
+      const { pasteDisplay, pasteFormatted, ...rowForValidation } = extracted;
+      const { validRows, invalidRows } = validateMappedImportRows([rowForValidation]);
       const validRow = validRows[0];
       const invalidRow = invalidRows[0];
 
@@ -144,6 +154,8 @@ async function buildBodyPreview(text, defaults = {}) {
         row: (validRow || invalidRow)
           ? { ...(validRow || invalidRow), remarks: '' }
           : null,
+        pasteDisplay: extracted.pasteDisplay || null,
+        pasteFormatted: extracted.pasteFormatted || '',
         block,
         duplicateOf: null,
       };

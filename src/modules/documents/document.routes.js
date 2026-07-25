@@ -3,7 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { Document } from './document.model.js';
@@ -122,7 +122,7 @@ router.get(
 
 router.delete(
   '/:id',
-  requirePermission(PERMISSIONS.DOCUMENTS_WRITE),
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const doc = await Document.findOne({ _id: req.params.id, isDeleted: false });
     if (!doc) throw new AppError('Document not found', 404);

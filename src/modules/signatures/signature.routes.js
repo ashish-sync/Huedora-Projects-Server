@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requirePermission, hasPermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, hasPermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { SignatureMaster, normalizeSignaturePayload } from './signature.model.js';
@@ -276,13 +276,10 @@ router.patch(
 
 router.delete(
   '/:id',
-  requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await SignatureMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Signature not found', 404);
-    if (!hasPermission(req, PERMISSIONS.ALL) && String(row.createdBy) !== String(req.user._id)) {
-      throw new AppError('You can only delete your own signature', 403, 'FORBIDDEN');
-    }
     row.isDeleted = true;
     row.isActive = false;
     row.updatedBy = req.user._id;

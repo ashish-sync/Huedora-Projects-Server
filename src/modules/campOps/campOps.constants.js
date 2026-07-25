@@ -9,11 +9,11 @@ export const CAMP_OPS_STATUSES = [
 ];
 
 export const CAMP_OPS_STATUS_TRANSITIONS = {
-  pending_review: ['approved', 'rejected'],
-  approved: ['executed', 'cancelled'],
+  pending_review: ['approved', 'rejected', 'cancelled'],
+  approved: ['executed', 'cancelled', 'rejected'],
   rejected: ['pending_review'],
   cancelled: [],
-  executed: [],
+  executed: ['cancelled', 'rejected'],
 };
 
 export const CAMP_OPS_SOURCES = ['whatsapp', 'email', 'excel', 'dashboard', 'api', 'paste'];

@@ -8,6 +8,7 @@ import { DocumentTemplate } from './modules/templates/template.model.js';
 import { Contact } from './modules/contacts/contact.model.js';
 import { ensureLogisticsSeed } from './modules/logistics/logistics.seed.js';
 import { ensureGeoSeed } from './modules/geo/geo.seed.js';
+import { ensureCampOpsSeed, CAMP_ONE_DEMO } from './modules/campOps/campOps.seed.js';
 
 const LEASE_TEMPLATE = `ASSET LEASE AGREEMENT
 
@@ -241,6 +242,14 @@ export async function ensureSeed() {
 
   await ensureLogisticsSeed();
   await ensureGeoSeed();
+
+  if (env.seedCampOneDemo) {
+    const campSeed = await ensureCampOpsSeed();
+    if (campSeed.createdCamps > 0) {
+      console.log(`[seed] Camp One demo: ${campSeed.createdCamps} camp(s), client "${campSeed.client.name}"`);
+    }
+    console.log(`[seed] Camp One operator: ${CAMP_ONE_DEMO.adminEmail}`);
+  }
 
   return {};
 }

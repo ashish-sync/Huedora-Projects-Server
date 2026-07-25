@@ -51,3 +51,6 @@ export function requirePermission(...needed) {
 export function hasPermission(req, permission) {
   return req.permissions?.has(PERMISSIONS.ALL) || req.permissions?.has(permission);
 }
+
+/** Only users with the Admin role (permission `*`) may delete records. */
+export const requireAdmin = requirePermission(PERMISSIONS.ALL);

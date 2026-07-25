@@ -58,4 +58,7 @@ export const env = {
   smtpEnabled: String(process.env.SMTP_ENABLED || 'false').toLowerCase() === 'true',
   seedAgreementSamples:
     !isProd && String(process.env.SEED_AGREEMENT_SAMPLES || 'false').toLowerCase() === 'true',
+  /** Dev-only: seed Camp One demo client, camps, and operator account */
+  seedCampOneDemo:
+    !isProd && String(process.env.SEED_CAMP_ONE_DEMO || 'true').toLowerCase() === 'true',
 };

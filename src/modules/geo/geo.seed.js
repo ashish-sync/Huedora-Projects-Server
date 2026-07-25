@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState } from './geo.model.js';
+import { ensureGeoZoneSeed } from './geo.zones.seed.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SEED_PATH = path.resolve(__dirname, 'seed/india-geo.json');
@@ -12,7 +13,10 @@ const SEED_PATH = path.resolve(__dirname, 'seed/india-geo.json');
  */
 export async function ensureGeoSeed() {
   const existingStates = await GeoState.countDocuments({ isDeleted: false });
-  if (existingStates > 0) return { seeded: false, states: existingStates };
+  if (existingStates > 0) {
+    await ensureGeoZoneSeed();
+    return { seeded: false, states: existingStates };
+  }
 
   if (!fs.existsSync(SEED_PATH)) {
     console.warn('[geo] Seed file missing:', SEED_PATH);
@@ -47,5 +51,12 @@ export async function ensureGeoSeed() {
   console.log(
     `[geo] Seeded India masters: ${counts.states} states, ${counts.districts} districts, ${counts.cities} cities (PIN codes empty)`
   );
+  await ensureGeoZoneSeed();
   return { seeded: true, counts };
+}
+
+/** Ensure zone master exists even when geo states were seeded earlier. */
+export async function ensureGeoMasters() {
+  await ensureGeoSeed();
+  await ensureGeoZoneSeed();
 }

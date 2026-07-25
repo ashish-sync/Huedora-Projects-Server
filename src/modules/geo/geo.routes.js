@@ -1,11 +1,12 @@
 import { Router } from 'express';
-import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, AppError, parsePagination, paginated } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
-import { GeoCity, GeoDistrict, GeoPinCode, GeoState } from './geo.model.js';
+import { GeoCity, GeoDistrict, GeoPinCode, GeoState, GeoZone } from './geo.model.js';
+import { resolveZoneForStateRecord } from './geo.zones.js';
 
 const router = Router();
 router.use(authenticate);
@@ -38,6 +39,34 @@ router.get(
         ],
       },
     });
+  })
+);
+
+/** GET /geo/zones */
+router.get(
+  '/zones',
+  asyncHandler(async (_req, res) => {
+    const rows = await GeoZone.find({ isDeleted: false, isActive: true }).sort('sortOrder');
+    res.json({ data: rows.map(publicRow) });
+  })
+);
+
+/** GET /geo/zones/resolve?stateId=&stateName= */
+router.get(
+  '/zones/resolve',
+  asyncHandler(async (req, res) => {
+    const stateId = String(req.query.stateId || '').trim();
+    const stateName = String(req.query.stateName || '').trim();
+    let resolvedName = stateName;
+    if (stateId) {
+      const st = await GeoState.findOne({ _id: stateId, isDeleted: false, isActive: true });
+      if (!st) throw new AppError('State not found', 404, 'NOT_FOUND');
+      resolvedName = st.name;
+    }
+    if (!resolvedName) throw new AppError('stateId or stateName is required', 400, 'VALIDATION_ERROR');
+    const zones = await GeoZone.find({ isDeleted: false, isActive: true });
+    const match = resolveZoneForStateRecord(resolvedName, zones);
+    res.json({ data: match || { zone: '', zoneId: '' } });
   })
 );
 
@@ -405,7 +434,7 @@ router.patch(
 
 router.delete(
   '/pin-codes/:id',
-  requirePermission(PERMISSIONS.AGREEMENTS_WRITE, PERMISSIONS.USERS_WRITE, PERMISSIONS.ALL),
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await GeoPinCode.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('PIN code mapping not found', 404);

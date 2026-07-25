@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import XLSX from 'xlsx';
-import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { DeviceMaster } from './device.model.js';
@@ -742,7 +742,7 @@ router.patch(
 
 router.delete(
   '/:id',
-  canWriteDevicesOrAssets,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const device = await DeviceMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!device) throw new AppError('Asset not found', 404);

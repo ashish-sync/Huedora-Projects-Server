@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
@@ -46,6 +46,55 @@ import {
   extractManualPastePreview,
   processManualPaste,
 } from './manualPaste.service.js';
+import {
+  lifecyclePayloadFromBody,
+  withCampLifecycle,
+  canEditLifecycleStage,
+  applyAssignmentStageOutcome,
+} from './campOps.lifecycle.js';
+import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.requestValidation.js';
+import {
+  withRequestReview,
+  applyRequestReviewTransition,
+  persistRequestReviewOverdue,
+} from './campOps.requestReview.js';
+import {
+  applyCampClosure,
+  CAMP_CLOSURE_TYPES,
+  CAMP_CLOSURE_REASON_CODES,
+  canCloseCampStatus,
+} from './campOps.closure.js';
+import path from 'path';
+import fs from 'fs';
+import multer from 'multer';
+import { fileURLToPath } from 'url';
+
+const __campOpsDir = path.dirname(fileURLToPath(import.meta.url));
+const campUploadRoot = path.resolve(__campOpsDir, '../../../uploads/camp-ops');
+fs.mkdirSync(campUploadRoot, { recursive: true });
+
+const campDocUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, campUploadRoot),
+    filename: (_req, file, cb) => {
+      const safe = String(file.originalname || 'document').replace(/[^\w.\-]+/g, '_');
+      cb(null, `${Date.now()}-${safe}`);
+    },
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+function enrichCamp(camp) {
+  const obj = withRequestReview(withCampLifecycle(withCampSchedule(camp)));
+  const approvalBlockers = getRequestStageBlockers(obj);
+  obj.approvalBlockers = approvalBlockers;
+  obj.requestStageComplete = approvalBlockers.length === 0;
+  const pendingReview = obj.status === 'pending_review';
+  obj.canApprove = pendingReview && approvalBlockers.length === 0;
+  obj.canRequestInformation = pendingReview;
+  return obj;
+}
+
 
 const router = Router();
 router.use(authenticate);
@@ -162,6 +211,7 @@ function campPayloadFromBody(body, existing = null, client = null) {
       ? trimStr(body.source)
       : existing?.source || 'dashboard',
     remarks: trimStr(body.remarks ?? existing?.remarks),
+    ...lifecyclePayloadFromBody(body, existing),
   };
 }
 
@@ -277,12 +327,23 @@ router.get(
   asyncHandler(async (req, res) => {
     const { page, limit, skip } = parsePagination(req.query);
     const overdueOnly = req.query.overdue === '1' || req.query.overdue === 'true';
+    const requestReviewStatus = trimStr(req.query.requestReviewStatus);
     const filter = buildCampFilter(req.query);
+
+    if (requestReviewStatus) {
+      const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
+      const filtered = rows.filter(
+        (row) => enrichCamp(row).requestReviewStatus === requestReviewStatus,
+      );
+      const total = filtered.length;
+      const data = filtered.slice(skip, skip + limit).map(enrichCamp);
+      return res.json(paginated(data, total, page, limit));
+    }
 
     if (overdueOnly) {
       filter.status = 'approved';
       const approved = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
-      const overdue = approved.filter(isCampOverdue).map(withCampSchedule);
+      const overdue = approved.filter(isCampOverdue).map(enrichCamp);
       const total = overdue.length;
       const data = overdue.slice(skip, skip + limit);
       return res.json(paginated(data, total, page, limit));
@@ -292,7 +353,7 @@ router.get(
       CampOpsCamp.find(filter).sort('-campDate -createdAt').skip(skip).limit(limit),
       CampOpsCamp.countDocuments(filter),
     ]);
-    res.json(paginated(rows.map(withCampSchedule), total, page, limit));
+    res.json(paginated(rows.map(enrichCamp), total, page, limit));
   })
 );
 
@@ -307,10 +368,10 @@ router.get(
     if (overdueOnly) {
       filter.status = 'approved';
       const approved = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
-      camps = approved.filter(isCampOverdue).map(withCampSchedule);
+      camps = approved.filter(isCampOverdue).map(enrichCamp);
     } else {
       const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
-      camps = rows.map(withCampSchedule);
+      camps = rows.map(enrichCamp);
     }
 
     const formatCampExportValue = (key, value) => {
@@ -346,6 +407,9 @@ router.post(
     };
     const config = configs[action];
     if (!config) throw new AppError('Invalid bulk action', 400, 'VALIDATION_ERROR');
+    if (action === 'delete' && !req.permissions.has(PERMISSIONS.ALL)) {
+      throw new AppError('Only administrators can delete camps', 403, 'FORBIDDEN');
+    }
     if (
       config.needApprove &&
       !req.permissions.has(PERMISSIONS.ALL) &&
@@ -383,8 +447,16 @@ router.post(
 
         camp.status = config.nextStatus;
         if (config.nextStatus === 'approved') {
+          const blockers = getRequestStageBlockers(camp);
+          if (blockers.length) throw new Error(blockers[0]);
           camp.approvedById = a.id;
           camp.approvedByEmail = a.email;
+          applyRequestReviewTransition(camp, 'approve');
+        }
+        if (config.nextStatus === 'rejected') {
+          const rejectionReason = trimStr(req.body?.rejectionReason || req.body?.remarks);
+          if (!rejectionReason) throw new Error('Rejection reason is required');
+          applyRequestReviewTransition(camp, 'reject', { reason: rejectionReason });
         }
         if (config.nextStatus === 'executed') {
           camp.executedById = a.id;
@@ -416,7 +488,43 @@ router.get(
   asyncHandler(async (req, res) => {
     const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
     if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
-    res.json({ data: withCampSchedule(camp) });
+    await persistRequestReviewOverdue(camp);
+    res.json({ data: enrichCamp(camp) });
+  })
+);
+
+router.post(
+  '/camps/:id/execution-documents',
+  canRequest,
+  campDocUpload.array('documents', 10),
+  asyncHandler(async (req, res) => {
+    const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
+    if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
+    if (!canEditLifecycleStage(camp, 'execution')) {
+      throw new AppError('Cannot upload execution documents for this camp', 400, 'VALIDATION_ERROR');
+    }
+
+    const docType = trimStr(req.body?.docType) || 'other';
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) throw new AppError('Select at least one file', 400, 'VALIDATION_ERROR');
+
+    const before = camp.toObject();
+    const existing = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
+    const added = files.map((file) => ({
+      id: file.filename,
+      fileName: file.originalname,
+      storedName: file.filename,
+      docType,
+      mimeType: file.mimetype,
+      fileSize: file.size,
+      url: `/uploads/camp-ops/${file.filename}`,
+      uploadedAt: new Date().toISOString(),
+    }));
+
+    camp.executionDocuments = [...existing, ...added];
+    await camp.save();
+    await audit(req, 'camp_ops.execution_docs', 'camp_ops_camp', camp._id, before, camp.toObject());
+    res.json({ data: enrichCamp(camp) });
   })
 );
 
@@ -435,19 +543,28 @@ router.post(
     if (!resolved) throw new AppError('Client not found', 404, 'NOT_FOUND');
 
     const payload = campPayloadFromBody(req.body, null, resolved);
+    try {
+      assertRequestStageComplete({ ...payload, clientId: resolved._id, clientName: resolved.name });
+    } catch (err) {
+      throw new AppError(err.message || 'Complete all request stage fields', 400, 'VALIDATION_ERROR');
+    }
+
     const tracking = captureSubmissionTracking();
     const a = actor(req);
     const camp = await CampOpsCamp.create({
       ...payload,
       campId: await generateCampId(payload.campDate),
       status: 'pending_review',
+      lifecycleStage: 'request',
+      requestDate: payload.requestDate || new Date().toISOString().slice(0, 10),
       createdById: a.id,
       createdByEmail: a.email,
+      requestReviewStatus: 'review_pending',
       ...tracking,
     });
 
     await audit(req, 'camp_ops.create', 'camp_ops_camp', camp._id, null, camp.toObject());
-    res.status(201).json({ data: withCampSchedule(camp) });
+    res.status(201).json({ data: enrichCamp(camp) });
   })
 );
 
@@ -457,22 +574,57 @@ router.put(
   asyncHandler(async (req, res) => {
     const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
     if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
-    if (!isCampEditable(camp.status)) {
-      throw new AppError('Executed or cancelled camps cannot be edited', 400, 'VALIDATION_ERROR');
+
+    const stage = trimStr(req.body.editingStage)
+      || trimStr(req.body.lifecycleStage)
+      || camp.lifecycleStage
+      || 'request';
+    const lifecycleOnly = req.body.lifecycleOnly === true;
+
+    if (!canEditLifecycleStage(camp, stage)) {
+      throw new AppError(`Cannot edit ${stage} stage for this camp`, 400, 'VALIDATION_ERROR');
     }
 
     const before = camp.toObject();
     let client = null;
-    if (req.body.clientId !== undefined || req.body.client !== undefined || req.body.clientName) {
+    if (!lifecycleOnly && (req.body.clientId !== undefined || req.body.client !== undefined || req.body.clientName)) {
       client = await resolveClientFromBody(req.body, { allowCreate: false });
       if (!client) throw new AppError('Client not found', 404, 'NOT_FOUND');
     }
 
     const payload = campPayloadFromBody(req.body, camp, client);
     Object.assign(camp, payload);
+
+    if (!lifecycleOnly || stage === 'request') {
+      try {
+        assertRequestStageComplete(camp);
+      } catch (err) {
+        throw new AppError(err.message || 'Complete all request stage fields', 400, 'VALIDATION_ERROR');
+      }
+      if (camp.requestReviewStatus === 'information_requested' && camp.status === 'pending_review') {
+        applyRequestReviewTransition(camp, 'submit');
+        Object.assign(camp, captureSubmissionTracking());
+      }
+    }
+
+    if (stage === 'assignment' && camp.status === 'approved') {
+      try {
+        applyAssignmentStageOutcome(camp, req.body);
+      } catch (err) {
+        throw new AppError(err.message || 'Invalid assignment', 400, 'VALIDATION_ERROR');
+      }
+    }
+
+    if (camp.status === 'approved' && camp.lifecycleStage === 'request') {
+      camp.lifecycleStage = 'assignment';
+    }
+    if (camp.status === 'executed' && ['request', 'assignment'].includes(camp.lifecycleStage)) {
+      camp.lifecycleStage = 'execution';
+    }
+
     await camp.save();
     await audit(req, 'camp_ops.update', 'camp_ops_camp', camp._id, before, camp.toObject());
-    res.json({ data: withCampSchedule(camp) });
+    res.json({ data: enrichCamp(camp) });
   })
 );
 
@@ -492,16 +644,34 @@ async function transitionCamp(req, res, nextStatus, action) {
   camp.status = nextStatus;
 
   if (nextStatus === 'pending_review') {
+    applyRequestReviewTransition(camp, 'submit');
     Object.assign(camp, captureSubmissionTracking());
   }
   if (nextStatus === 'approved') {
+    const blockers = getRequestStageBlockers(camp);
+    if (blockers.length) {
+      throw new AppError(blockers[0], 400, 'VALIDATION_ERROR');
+    }
     camp.approvedById = a.id;
     camp.approvedByEmail = a.email;
+    applyRequestReviewTransition(camp, 'approve');
+    if (!camp.lifecycleStage || camp.lifecycleStage === 'request') {
+      camp.lifecycleStage = 'assignment';
+    }
+  }
+  if (nextStatus === 'rejected') {
+    const rejectionReason = trimStr(req.body?.rejectionReason || req.body?.remarks);
+    if (!rejectionReason) {
+      throw new AppError('Rejection reason is required', 400, 'VALIDATION_ERROR');
+    }
+    applyRequestReviewTransition(camp, 'reject', { reason: rejectionReason });
   }
   if (nextStatus === 'executed') {
     camp.executedById = a.id;
     camp.executedByEmail = a.email;
     camp.executedAt = new Date().toISOString();
+    camp.lifecycleStage = 'execution';
+    camp.executionStatus = camp.executionStatus === 'Pending' ? 'Completed' : camp.executionStatus;
     if (req.body?.actualPatients != null) {
       camp.actualPatients = Math.max(0, Number(req.body.actualPatients) || 0);
     }
@@ -523,7 +693,7 @@ async function transitionCamp(req, res, nextStatus, action) {
 
   await camp.save();
   await audit(req, `camp_ops.${action}`, 'camp_ops_camp', camp._id, before, camp.toObject());
-  res.json({ data: withCampSchedule(camp) });
+  res.json({ data: enrichCamp(camp) });
 }
 
 router.post(
@@ -542,9 +712,55 @@ router.post(
   asyncHandler(async (req, res) => transitionCamp(req, res, 'rejected', 'reject'))
 );
 router.post(
+  '/camps/:id/request-information',
+  canApprove,
+  asyncHandler(async (req, res) => {
+    const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
+    if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
+    if (camp.status !== 'pending_review') {
+      throw new AppError('Only pending review camps can receive an information request', 400, 'VALIDATION_ERROR');
+    }
+    const note = trimStr(req.body?.informationRequestNote || req.body?.note || req.body?.remarks);
+    if (!note) {
+      throw new AppError('Information request note is required', 400, 'VALIDATION_ERROR');
+    }
+    const before = camp.toObject();
+    applyRequestReviewTransition(camp, 'request_information', { actor: actor(req), reason: note });
+    await camp.save();
+    await audit(req, 'camp_ops.request_information', 'camp_ops_camp', camp._id, before, camp.toObject());
+    res.json({ data: enrichCamp(camp) });
+  })
+);
+router.post(
   '/camps/:id/cancel',
   canApprove,
   asyncHandler(async (req, res) => transitionCamp(req, res, 'cancelled', 'cancel'))
+);
+router.post(
+  '/camps/:id/close',
+  canApprove,
+  asyncHandler(async (req, res) => {
+    const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
+    if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
+    if (!canCloseCampStatus(camp.status)) {
+      throw new AppError('Camp is already closed', 400, 'VALIDATION_ERROR');
+    }
+
+    const closureType = trimStr(req.body?.closureType || req.body?.assignmentRefusalReason);
+    const reasonCode = trimStr(req.body?.reasonCode || req.body?.closureReasonCode);
+    if (!CAMP_CLOSURE_TYPES.includes(closureType)) {
+      throw new AppError('Select a closure type', 400, 'VALIDATION_ERROR');
+    }
+    if (!CAMP_CLOSURE_REASON_CODES.includes(reasonCode)) {
+      throw new AppError('Select a reason code', 400, 'VALIDATION_ERROR');
+    }
+
+    const before = camp.toObject();
+    applyCampClosure(camp, { closureType, reasonCode, actor: actor(req) });
+    await camp.save();
+    await audit(req, 'camp_ops.close', 'camp_ops_camp', camp._id, before, camp.toObject());
+    res.json({ data: enrichCamp(camp) });
+  })
 );
 router.post(
   '/camps/:id/execute',
@@ -554,7 +770,7 @@ router.post(
 
 router.delete(
   '/camps/:id',
-  canApprove,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
     if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
@@ -663,7 +879,7 @@ router.put(
 
 router.delete(
   '/clients/:id',
-  canApprove,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const client = await CampOpsClient.findOne({ _id: req.params.id, isDeleted: false });
     if (!client) throw new AppError('Client not found', 404, 'NOT_FOUND');
@@ -1011,7 +1227,7 @@ router.put(
 
 router.delete(
   '/client-masters/:id',
-  canApprove,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
@@ -1053,7 +1269,7 @@ router.post(
 
 router.delete(
   '/client-masters/:id/document',
-  canRequest,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
@@ -1108,7 +1324,7 @@ router.post(
 
 router.delete(
   '/import/templates/:id',
-  canRequest,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await CampOpsImportTemplate.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Template not found', 404, 'NOT_FOUND');
@@ -1282,7 +1498,7 @@ router.post(
         createdByEmail: a.email,
         ...tracking,
       });
-      created.push(withCampSchedule(camp));
+      created.push(enrichCamp(camp));
     }
 
     await audit(req, 'camp_ops.import_confirm', 'camp_ops_import', null, null, {

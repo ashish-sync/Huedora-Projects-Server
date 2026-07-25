@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import multer from 'multer';
 import { fileURLToPath } from 'url';
-import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
@@ -398,7 +398,7 @@ function registerMasterCrud({
 
   router.delete(
     `/${path}/:id`,
-    canMaster,
+    requireAdmin,
     asyncHandler(async (req, res) => {
       const row = await Model.findOne({ _id: req.params.id, isDeleted: false });
       if (!row) throw new AppError('Record not found', 404);
@@ -2244,7 +2244,7 @@ router.patch(
 
 router.delete(
   '/in-out/:id',
-  canWrite,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await LogisticsInOutEntry.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Transaction not found', 404);

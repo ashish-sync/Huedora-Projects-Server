@@ -8,7 +8,10 @@
     "start": "node src/index.js",
     "seed": "node src/seed.js",
     "reset:data": "node scripts/reset-all-data.js",
-    "geo:build": "node scripts/buildIndiaGeoSeed.js"
+    "geo:build": "node scripts/buildIndiaGeoSeed.js",
+    "test:manual-paste": "node scripts/test-manual-paste-extract.js",
+    "test:camp-one": "node scripts/camp-one-e2e-test.js",
+    "seed:camp-one": "node -e \"import('./src/config/db.js').then(async ({connectDb,disconnectDb})=>{await connectDb(); const {ensureSeed}=await import('./src/seed.js'); await ensureSeed(); await disconnectDb();})\""
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

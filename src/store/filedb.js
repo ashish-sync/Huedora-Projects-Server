@@ -54,6 +54,19 @@ function match(doc, filter = {}) {
           : !values.includes(String(current));
       }
       if (val.$ne) return String(get(doc, key)) !== String(val.$ne);
+      if (val.$exists !== undefined) {
+        const parts = key.split('.');
+        let cur = doc;
+        let exists = true;
+        for (const part of parts) {
+          if (cur == null || !Object.prototype.hasOwnProperty.call(cur, part)) {
+            exists = false;
+            break;
+          }
+          cur = cur[part];
+        }
+        return val.$exists ? exists : !exists;
+      }
       if (val.$gte || val.$gt || val.$lte || val.$lt) {
         const cur = get(doc, key);
         const t = cur instanceof Date || !Number.isNaN(Date.parse(cur)) ? new Date(cur).getTime() : Number(cur);

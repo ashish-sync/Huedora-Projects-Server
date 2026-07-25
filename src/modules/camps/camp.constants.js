@@ -54,7 +54,7 @@ export function processesForMethod(method) {
  * Camp Slot from start time (local HH:MM or HH:MM:SS).
  * 6:00 AM – 12:59 PM → Morning
  * 1:00 PM – 4:59 PM → Noon
- * 5:00 PM – 10:00 PM → Evening
+ * 5:00 PM – 9:00 PM → Evening
  */
 export function resolveCampSlot(startTime) {
   if (!startTime) return null;
@@ -65,9 +65,9 @@ export function resolveCampSlot(startTime) {
   const m = Number(match[2]);
   if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
   const mins = h * 60 + m;
-  if (mins >= 6 * 60 && mins <= 12 * 60 + 59) return 'Morning';
-  if (mins >= 13 * 60 && mins <= 16 * 60 + 59) return 'Noon';
-  if (mins >= 17 * 60 && mins <= 22 * 60) return 'Evening';
+  if (mins >= 6 * 60 && mins < 13 * 60) return 'Morning';
+  if (mins >= 13 * 60 && mins < 17 * 60) return 'Noon';
+  if (mins >= 17 * 60 && mins <= 21 * 60) return 'Evening';
   return null;
 }
 
