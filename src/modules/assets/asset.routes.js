@@ -12,6 +12,8 @@ import { Asset } from './asset.model.js';
 import { AssetEvent } from './assetEvent.model.js';
 import { createAsset, transitionAsset } from './asset.service.js';
 import { DeviceMaster } from '../devices/device.model.js';
+import { LogisticsProduct } from '../logistics/logistics.model.js';
+import { productMasterAssetName, productPurchaseCost } from '../logistics/productMasterLabel.js';
 import { Contact } from '../contacts/contact.model.js';
 import {
   Agreement,
@@ -143,7 +145,7 @@ router.get(
     }
     const [rows, total] = await Promise.all([
       Asset.find(filter)
-        .populate('deviceMasterId', 'name assetType cost purchaseMonth description')
+        .populate('deviceMasterId', 'name assetType cost purchaseMonth description productId')
         .populate('hcwId', 'hcwId name contact city')
         .populate('contactId', 'name email city state contact resourceType profession')
         .sort(sort)
@@ -160,7 +162,7 @@ router.get(
   requirePermission(PERMISSIONS.ASSETS_READ),
   asyncHandler(async (req, res) => {
     const rows = await Asset.find({ isDeleted: false })
-      .populate('deviceMasterId', 'name assetType cost purchaseMonth description')
+      .populate('deviceMasterId', 'name assetType cost purchaseMonth description productId')
       .populate('contactId', 'name email city state contact')
       .populate('hcwId', 'name contact city')
       .sort('-createdAt');
@@ -530,6 +532,27 @@ router.patch(
 
     const masterPatch = {};
 
+    if (req.body.productId != null) {
+      const productId = String(req.body.productId || '').trim();
+      if (productId) {
+        const product = await LogisticsProduct.findOne({ _id: productId, isDeleted: false });
+        if (!product) {
+          throw new AppError('Selected product was not found in Product Master', 400, 'VALIDATION_ERROR');
+        }
+        masterPatch.productId = productId;
+        const resolvedName = productMasterAssetName(product);
+        if (resolvedName) {
+          asset.deviceNameSnapshot = resolvedName;
+          masterPatch.name = resolvedName;
+        }
+        const cost = productPurchaseCost(product);
+        asset.deviceValue = cost;
+        masterPatch.cost = cost;
+      } else {
+        masterPatch.productId = null;
+      }
+    }
+
     if (req.body.deviceNameSnapshot != null || req.body.name != null) {
       const name = String(req.body.deviceNameSnapshot ?? req.body.name).trim();
       if (!name) throw new AppError('Asset Name is required', 400, 'VALIDATION_ERROR');
@@ -739,7 +762,7 @@ router.patch(
     }
 
     const populated = await Asset.findOne({ _id: asset._id, isDeleted: false })
-      .populate('deviceMasterId', 'name assetType cost purchaseMonth description')
+      .populate('deviceMasterId', 'name assetType cost purchaseMonth description productId')
       .populate('contactId', 'name email city state contact resourceType profession');
 
     res.json({ data: stripValue(populated || asset, req) });

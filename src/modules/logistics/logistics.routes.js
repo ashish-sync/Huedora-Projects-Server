@@ -22,6 +22,10 @@ import {
   IN_OUT_TRACKING_TYPES,
   IN_OUT_PRODUCT_TYPES,
   IN_OUT_PRODUCT_TYPE_ALIASES,
+  INVENTORY_TYPES_BY_PRODUCT_TYPE,
+  MEDICAL_DEVICE_CATEGORY_ALIASES,
+  MEDICAL_DEVICE_PRODUCT_CATEGORIES,
+  resolveInventoryTypeForProductType,
   PRODUCT_TYPE_CODE_PREFIX,
   PRODUCT_CODE_FORMAT,
   PRODUCT_INVENTORY_TYPES,
@@ -49,6 +53,7 @@ import {
   OUTWARD_OPEN_DISPATCH_STATUS,
   OUTWARD_TERMINAL_DISPATCH_STATUSES,
   OUTWARD_DELIVERY_OUTCOMES,
+  UOM_LEGACY_CODE_ALIASES,
 } from './logistics.constants.js';
 import {
   LogisticsWarehouse,
@@ -70,6 +75,7 @@ import {
 import { buildDashboard } from './logistics.dashboard.js';
 import { listUsageMerged, syncUsageFromCamps } from './logistics.usage.js';
 import { attachMasterExcelRoutes } from '../../utils/masterExcel.js';
+import { productMasterAssetName } from './productMasterLabel.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const inwardUploadRoot = path.resolve(__dirname, '../../../uploads/logistics');
@@ -279,7 +285,9 @@ function registerMasterCrud({
           .map(([k]) => k);
         filter.productType = { $in: [...new Set([want, String(req.query.productType), ...aliases])] };
       }
-      if (req.query.isActive === 'true') filter.isActive = true;
+      if (req.query.productCategory) {
+        filter.productCategory = String(req.query.productCategory).trim();
+      }
       if (req.query.isActive === 'false') filter.isActive = false;
       if (req.query.q) {
         const re = new RegExp(String(req.query.q), 'i');
@@ -475,15 +483,35 @@ function registerMasterCrud({
       entityType,
       writeAudit,
       createFromImport: async (body) => {
+        let working = { ...body };
+        if (typeof excel.importTransform === 'function') {
+          working = await excel.importTransform(working);
+        }
         for (const key of required) {
-          if (!trimStr(body[key])) {
+          if (!trimStr(working[key])) {
             throw new AppError(`${key} is required`, 400, 'VALIDATION_ERROR');
           }
         }
-        const normalized = normalize ? normalize(body) : { ...body };
-        delete normalized.code;
+        const normalized = normalize ? normalize(working) : { ...working };
+        const importCode = trimStr(working.code);
+        if (excel.preserveImportCode && importCode) {
+          normalized.code = importCode.toUpperCase();
+        } else {
+          delete normalized.code;
+        }
         delete normalized.sku;
-        await allocateImportCode(normalized);
+        if (normalized.code) {
+          const clash = await Model.findOne({
+            code: normalized.code,
+            isDeleted: false,
+            ...(listFilter || {}),
+          });
+          if (clash) {
+            throw new AppError(`Code “${normalized.code}” already exists`, 400, 'DUPLICATE');
+          }
+        } else {
+          await allocateImportCode(normalized);
+        }
         await allocateImportSku(normalized);
         await assertPartyIdentity(normalized);
         await assertUniqueFields(normalized);
@@ -718,13 +746,15 @@ registerMasterCrud({
     'brand',
     'manufacturer',
     'productType',
+    'productCategory',
     'model',
     'partNumber',
+    'description',
     'programProject',
   ],
   required: ['name', 'productType', 'brand'],
   resolveCodePrefix: (body) =>
-    PRODUCT_TYPE_CODE_PREFIX[body.productType] || PRODUCT_TYPE_CODE_PREFIX.Other || 'OT',
+    PRODUCT_TYPE_CODE_PREFIX[body.productType] || PRODUCT_TYPE_CODE_PREFIX.Other || 'OTH',
   codeFormat: PRODUCT_CODE_FORMAT,
   skuPrefix: 'SKU',
   uniqueFields: ['name'],
@@ -740,34 +770,78 @@ registerMasterCrud({
     const defaults = PRODUCT_CATEGORY_DEFAULTS[productType] || {
       expiryApplicable: false,
       trackingKind: 'None',
-      inventoryType: 'Multi-use',
+      inventoryType: 'Inventory',
+      calibrationRequired: false,
     };
     let trackingKind = trimStr(b.trackingKind ?? existing?.trackingKind) || defaults.trackingKind;
     if (!PRODUCT_TRACKING_KINDS.includes(trackingKind)) trackingKind = defaults.trackingKind;
 
-    let inventoryType =
-      resolveInventoryType(b.inventoryType ?? existing?.inventoryType) ||
-      defaults.inventoryType ||
-      'Multi-use';
-    if (!PRODUCT_INVENTORY_TYPES.includes(inventoryType)) {
-      inventoryType = defaults.inventoryType || 'Multi-use';
+    let inventoryType = resolveInventoryTypeForProductType(
+      productType,
+      b.inventoryType ?? existing?.inventoryType ?? defaults.inventoryType
+    );
+    const allowedInventory = INVENTORY_TYPES_BY_PRODUCT_TYPE[productType] || ['Inventory'];
+    if (!allowedInventory.includes(inventoryType)) {
+      throw new AppError(
+        `${productType} must use Inventory Type: ${allowedInventory.join(', ')}`,
+        400,
+        'VALIDATION_ERROR'
+      );
     }
 
-    const needsLinkedDevice =
-      inventoryType === 'Replacement Part for Asset' ||
-      inventoryType === 'Accessory of Asset' ||
-      inventoryType === 'Consumed by Device';
+    if (
+      (productType === 'Medical Device' || productType === 'Non-Medical Device') &&
+      inventoryType === 'Inventory'
+    ) {
+      throw new AppError(
+        'Medical Device and Non-Medical Device must be Inventory Type: Asset',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+
+    if (productType === 'Consumable' && inventoryType === 'Asset') {
+      throw new AppError('Consumable must be Inventory Type: Inventory', 400, 'VALIDATION_ERROR');
+    }
+
     const linkedDeviceId =
       b.linkedDeviceId !== undefined
         ? b.linkedDeviceId || null
         : existing?.linkedDeviceId || null;
 
+    const productCategoryRaw = trimStr(b.productCategory ?? existing?.productCategory ?? '');
+    let productCategory = productCategoryRaw;
+    if (productType === 'Medical Device') {
+      productCategory =
+        resolveMedicalDeviceProductCategory(productCategoryRaw) ||
+        productCategoryRaw ||
+        'BMD';
+      if (!MEDICAL_DEVICE_PRODUCT_CATEGORIES.includes(productCategory)) {
+        throw new AppError(
+          `Product Category for Medical Device must be one of: ${MEDICAL_DEVICE_PRODUCT_CATEGORIES.join(', ')}`,
+          400,
+          'VALIDATION_ERROR'
+        );
+      }
+    }
+
+    const associatedProductIds =
+      b.associatedProductIds !== undefined
+        ? asIdList(b.associatedProductIds)
+        : Array.isArray(existing?.associatedProductIds)
+          ? [...existing.associatedProductIds]
+          : [];
+
     const expiryApplicable =
-      b.expiryApplicable != null
-        ? asBool(b.expiryApplicable, defaults.expiryApplicable)
-        : existing?.expiryApplicable != null
-          ? !!existing.expiryApplicable
-          : defaults.expiryApplicable;
+      productType === 'Consumable'
+        ? true
+        : productType === 'Medical Device' || productType === 'Non-Medical Device'
+          ? false
+          : b.expiryApplicable != null
+            ? asBool(b.expiryApplicable, defaults.expiryApplicable)
+            : existing?.expiryApplicable != null
+              ? !!existing.expiryApplicable
+              : defaults.expiryApplicable;
 
     const incomingDocs = b.documents && typeof b.documents === 'object' ? b.documents : {};
     const prevDocs = existing?.documents && typeof existing.documents === 'object' ? existing.documents : {};
@@ -794,8 +868,11 @@ registerMasterCrud({
     const brand = trimStr(b.brand ?? existing?.brand);
     const manufacturer = trimStr(b.manufacturer ?? existing?.manufacturer) || brand;
     const modelOrPart = trimStr(
-      b.model ?? b.partNumber ?? b.name ?? existing?.model ?? existing?.partNumber ?? existing?.name ?? ''
+      b.model ?? b.partNumber ?? existing?.model ?? existing?.partNumber ?? ''
     );
+    const displayName = trimStr(
+      b.name ?? existing?.name ?? ''
+    ) || (modelOrPart && brand ? `${brand} — ${modelOrPart}` : modelOrPart || brand);
     const standardCost = toNum(b.purchaseCost ?? b.standardCost ?? existing?.standardCost, 0);
     const legacyUnit = toNum(b.defaultPerUnitCost ?? existing?.defaultPerUnitCost, standardCost);
     const shelfLifeMonths = toNum(
@@ -818,7 +895,8 @@ registerMasterCrud({
     }
 
     return {
-      name: modelOrPart || trimStr(b.name ?? existing?.name),
+      name: displayName,
+      productCategory,
       categoryId: b.categoryId !== undefined ? b.categoryId || null : existing?.categoryId || null,
       brand,
       manufacturer,
@@ -831,9 +909,9 @@ registerMasterCrud({
       uomId: b.uomId !== undefined ? b.uomId || null : existing?.uomId || null,
       unitsPerPack: Math.max(1, toNum(b.unitsPerPack ?? existing?.unitsPerPack, 1)),
       gstRate: toNum(b.gstRate ?? existing?.gstRate, 0),
-      minStock: toNum(b.minStock ?? existing?.minStock, 0),
+      minStock: toNum(b.reorderLevel ?? b.minStock ?? existing?.reorderLevel ?? existing?.minStock, 0),
       maxStock: toNum(b.maxStock ?? existing?.maxStock, 0),
-      reorderLevel: toNum(b.reorderLevel ?? existing?.reorderLevel, 0),
+      reorderLevel: toNum(b.reorderLevel ?? b.minStock ?? existing?.reorderLevel ?? existing?.minStock, 0),
       shelfLifeMonths,
       shelfLifeDays,
       expiryApplicable: !!expiryApplicable,
@@ -852,18 +930,17 @@ registerMasterCrud({
       standardCost,
       averageCost: toNum(b.averageCost ?? existing?.averageCost, 0),
       lastPurchaseCost: toNum(b.lastPurchaseCost ?? existing?.lastPurchaseCost, standardCost),
-      linkedDeviceId: needsLinkedDevice ? linkedDeviceId : null,
+      linkedDeviceId,
       compatibleDeviceIds,
+      associatedProductIds,
       compatibilityRelationship: trimStr(
         b.compatibilityRelationship ?? existing?.compatibilityRelationship ?? ''
       ),
       qtyPerDevice: toNum(b.qtyPerDevice ?? existing?.qtyPerDevice, 0),
       warrantyPeriodMonths: toNum(b.warrantyPeriodMonths ?? existing?.warrantyPeriodMonths, 0),
       amc: asBool(b.amc ?? existing?.amc, false),
-      calibrationRequired: asBool(b.calibrationRequired ?? existing?.calibrationRequired, false),
-      calibrationFrequency: trimStr(
-        b.calibrationFrequency ?? existing?.calibrationFrequency ?? ''
-      ),
+      calibrationRequired: false,
+      calibrationFrequency: '',
       pmFrequency: trimStr(b.pmFrequency ?? existing?.pmFrequency ?? ''),
       storageTemperature: trimStr(b.storageTemperature ?? existing?.storageTemperature ?? ''),
       storageCondition: trimStr(b.storageCondition ?? existing?.storageCondition ?? ''),
@@ -885,78 +962,221 @@ registerMasterCrud({
   excel: {
     filename: 'Products.xlsx',
     sheetName: 'Products',
+    preserveImportCode: true,
     headers: [
-      'Code',
-      'SKU',
-      'Name',
-      'Product Type',
-      'Brand',
-      'Manufacturer',
-      'Model',
-      'Program / Project',
-      'Inventory Type',
+      'Product Type *',
+      'Product Code',
+      'Product Category',
+      'Brand / Manufacturer *',
+      'Model / Variant *',
+      'Product Name',
+      'Product Description',
+      'UOM',
+      'Units per Pack',
+      'Default Purchase Cost',
+      'Default GST (%)',
+      'Inventory Type *',
       'Expiry Applicable',
-      'GST Rate',
+      'Warranty (Months)',
+      'Reorder Level',
       'Active',
+      'Remarks',
     ],
-    rowFromDoc: (r) => [
-      r.code,
-      r.sku,
-      r.name,
+    prepareExportDocs: async (docs) => {
+      const uoms = await LogisticsUom.find({ isDeleted: false });
+      const byId = Object.fromEntries(uoms.map((u) => [String(u._id), u]));
+      return docs.map((doc) => ({
+        ...doc,
+        _uom: byId[String(doc.uomId)] || null,
+      }));
+    },
+    rowFromDoc: (r) => {
+      const uom = r._uom;
+      const uomLabel = uom
+        ? uom.name && uom.code
+          ? `${uom.name} (${uom.code})`
+          : uom.name || uom.code
+        : '';
+      return [
       r.productType,
-      r.brand,
-      r.manufacturer,
-      r.model || r.partNumber,
-      r.programProject,
+      r.code,
+      r.productCategory || '',
+      r.brand || r.manufacturer,
+      r.model || r.partNumber || '',
+      r.name || '',
+      r.description || '',
+      uomLabel,
+      r.unitsPerPack ?? 1,
+      r.standardCost ?? r.defaultPerUnitCost ?? 0,
+      r.gstRate ?? 0,
       r.inventoryType,
       r.expiryApplicable ? 'Yes' : 'No',
-      r.gstRate,
+      r.warrantyPeriodMonths ?? 0,
+      r.reorderLevel ?? r.minStock ?? 0,
       r.isActive === false ? 'No' : 'Yes',
-    ],
+      r.internalRemarks || '',
+    ];
+    },
     sampleRows: [
       [
-        '',
-        '',
-        'Ultrasound Gel 250ml',
         'Consumable',
+        '',
+        'Medical Consumable',
         'MediGel',
-        'MediGel',
-        'GEL-250',
-        'Camp One',
-        'Consumed by Device',
-        'Yes',
+        '250ml',
+        'MediGel — Ultrasound Gel 250ml',
+        'Ultrasound coupling gel',
+        'Bottle (BTL)',
+        1,
+        120,
         12,
+        'Inventory',
         'Yes',
+        0,
+        50,
+        'Yes',
+        '',
       ],
       [
+        'Medical Device',
         '',
-        '',
-        'BP Cuff Large',
-        'Accessory',
+        'BMD',
         'CarePlus',
-        'CarePlus',
-        'BP-L',
-        '',
-        'Accessory of Asset',
-        'No',
+        'BP Monitor Pro',
+        'CarePlus — BP Monitor Pro',
+        'Digital blood pressure monitor',
+        'Each (EA)',
+        1,
+        2500,
         18,
+        'Asset',
+        'No',
+        12,
+        0,
         'Yes',
+        '',
       ],
     ],
     importColumns: [
-      { labels: ['Name', 'Model', 'Model/Variant/Name'], field: 'name', required: true },
-      { labels: ['Product Type', 'Type'], field: 'productType', required: true },
-      { labels: ['Brand'], field: 'brand', required: true },
-      { labels: ['Manufacturer'], field: 'manufacturer', optional: true },
-      { labels: ['Model', 'Part Number'], field: 'model', optional: true },
-      { labels: ['Program / Project', 'Program'], field: 'programProject', optional: true },
-      { labels: ['Inventory Type'], field: 'inventoryType', optional: true },
-      { labels: ['Expiry Applicable'], field: 'expiryApplicable', type: 'bool', defaultValue: false },
-      { labels: ['GST Rate', 'GST'], field: 'gstRate', type: 'number', defaultValue: 0 },
+      { labels: ['Product Type *', 'Product Type', 'Type'], field: 'productType', required: true },
+      { labels: ['Product Code', 'Code'], field: 'code', optional: true },
+      { labels: ['Product Category', 'Category'], field: 'productCategory', optional: true },
+      {
+        labels: ['Brand / Manufacturer *', 'Brand / Manufacturer', 'Brand'],
+        field: 'brand',
+        required: true,
+      },
+      {
+        labels: ['Model / Variant *', 'Model/Variant/Name *', 'Model', 'Variant'],
+        field: 'model',
+        required: true,
+      },
+      { labels: ['Product Name', 'Name'], field: 'name', optional: true },
+      { labels: ['Product Description', 'Description'], field: 'description', optional: true },
+      {
+        labels: ['UOM', 'Unit of Measure (UOM)', 'Select UOM', 'UOM Name', 'UOM Code'],
+        field: 'uom',
+        optional: true,
+      },
+      { labels: ['Units per Pack'], field: 'unitsPerPack', type: 'number', defaultValue: 1 },
+      {
+        labels: ['Default Purchase Cost', 'Purchase Cost', 'Standard Cost'],
+        field: 'purchaseCost',
+        type: 'number',
+        defaultValue: 0,
+      },
+      {
+        labels: ['Default GST (%)', 'GST / Tax (%)', 'GST / Tax', 'GST Rate', 'GST'],
+        field: 'gstRate',
+        type: 'number',
+        defaultValue: 0,
+      },
+      {
+        labels: ['Inventory Type *', 'Inventory Type'],
+        field: 'inventoryType',
+        required: true,
+      },
+      {
+        labels: ['Expiry Applicable'],
+        field: 'expiryApplicable',
+        type: 'bool',
+        defaultValue: false,
+      },
+      {
+        labels: ['Warranty (Months)', 'Warranty Months'],
+        field: 'warrantyPeriodMonths',
+        type: 'number',
+        defaultValue: 0,
+      },
+      {
+        labels: ['Reorder Level', 'Minimum Stock Level'],
+        field: 'reorderLevel',
+        type: 'number',
+        defaultValue: 0,
+      },
       { labels: ['Active'], field: 'isActive', type: 'bool', defaultValue: true },
+      { labels: ['Remarks', 'Internal Remarks'], field: 'internalRemarks', optional: true },
     ],
+    importTransform: async (body) => {
+      const modelVariantName = trimStr(body.model) || trimStr(body.name);
+      body.model = modelVariantName;
+      body.partNumber = modelVariantName;
+      const brand = trimStr(body.brand);
+      body.manufacturer = brand;
+      body.name =
+        trimStr(body.name) ||
+        (brand && modelVariantName ? `${brand} — ${modelVariantName}` : modelVariantName);
+      const uomText = parseImportedUomText(body.uom, body.uomCode, body.uomName);
+      if (uomText) {
+        body.uomId = await resolveUomIdByText(uomText);
+      }
+      delete body.uom;
+      delete body.uomName;
+      delete body.uomCode;
+      body.productType = resolveProductType(body.productType) || body.productType;
+      if (body.productType === 'Medical Device') {
+        body.productCategory =
+          resolveMedicalDeviceProductCategory(body.productCategory) || 'BMD';
+      }
+      return body;
+    },
   },
 });
+
+router.post(
+  '/products/bulk',
+  canMaster,
+  asyncHandler(async (req, res) => {
+    const action = trimStr(req.body.action).toLowerCase();
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) throw new AppError('ids are required', 400, 'VALIDATION_ERROR');
+    if (!['activate', 'deactivate', 'delete'].includes(action)) {
+      throw new AppError('action must be activate, deactivate, or delete', 400, 'VALIDATION_ERROR');
+    }
+    const rows = await LogisticsProduct.find({ _id: { $in: ids }, isDeleted: false });
+    let updated = 0;
+    for (const row of rows) {
+      if (action === 'activate') row.isActive = true;
+      else if (action === 'deactivate') row.isActive = false;
+      else if (action === 'delete') {
+        row.isDeleted = true;
+        row.isActive = false;
+      }
+      row.updatedBy = req.user._id;
+      await row.save();
+      updated += 1;
+      await writeAudit({
+        actorId: req.user._id,
+        actorEmail: req.user.email,
+        action: `LogisticsProduct.BULK_${action.toUpperCase()}`,
+        entityType: 'LogisticsProduct',
+        entityId: row._id,
+        requestId: req.requestId,
+      });
+    }
+    res.json({ data: { updated, action, ids: rows.map((r) => r._id) } });
+  })
+);
 
 router.post(
   '/products/:id/files',
@@ -1176,6 +1396,17 @@ function resolveEntryType(raw) {
   return IN_OUT_ENTRY_TYPE_ALIASES[v] || v;
 }
 
+function resolveMedicalDeviceProductCategory(raw) {
+  const v = trimStr(raw);
+  if (!v) return '';
+  if (MEDICAL_DEVICE_PRODUCT_CATEGORIES.includes(v)) return v;
+  if (MEDICAL_DEVICE_CATEGORY_ALIASES[v]) return MEDICAL_DEVICE_CATEGORY_ALIASES[v];
+  const hit = Object.entries(MEDICAL_DEVICE_CATEGORY_ALIASES).find(
+    ([k]) => k.toLowerCase() === v.toLowerCase()
+  );
+  return hit?.[1] || '';
+}
+
 function resolveProductType(raw) {
   const v = trimStr(raw);
   if (!v) return '';
@@ -1197,6 +1428,38 @@ function resolveInventoryType(raw) {
     ([k]) => k.toLowerCase() === v.toLowerCase()
   );
   return hit?.[1] || v;
+}
+
+function parseImportedUomText(...candidates) {
+  for (const raw of candidates) {
+    const value = trimStr(raw);
+    if (!value) continue;
+    const paren = value.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+    if (paren) {
+      return trimStr(paren[2]) || trimStr(paren[1]);
+    }
+    return value;
+  }
+  return '';
+}
+
+async function resolveUomIdByText(raw) {
+  let value = trimStr(raw);
+  if (!value) return null;
+  const alias = UOM_LEGACY_CODE_ALIASES[value.toUpperCase()];
+  if (alias) value = alias;
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const uom = await LogisticsUom.findOne({
+    isDeleted: false,
+    $or: [
+      { code: new RegExp(`^${escaped}$`, 'i') },
+      { name: new RegExp(`^${escaped}$`, 'i') },
+    ],
+  });
+  if (!uom) {
+    throw new AppError(`UOM not found: ${value}`, 400, 'VALIDATION_ERROR');
+  }
+  return uom._id;
 }
 
 function resolveDeliveryMode(raw) {
@@ -1531,7 +1794,7 @@ async function enrichBodyFromProduct(body) {
   if (!product) return body;
   return {
     ...body,
-    productName: trimStr(body.productName) || product.name,
+    productName: trimStr(body.productName) || productMasterAssetName(product) || product.name,
     productType: trimStr(body.productType) || product.productType,
     inventoryType: trimStr(body.inventoryType) || product.productType,
     sku: trimStr(body.sku) || product.sku || '',

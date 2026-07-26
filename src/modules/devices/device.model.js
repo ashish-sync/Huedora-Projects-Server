@@ -17,4 +17,6 @@ export const DeviceMaster = defineCollection('device_masters', {
   custodianCity: null,
   custodianState: null,
   quantity: 1,
+  /** Product Master link (LogisticsProduct) */
+  productId: null,
 });

@@ -4,6 +4,7 @@ import {
   CLIENT_PROFESSIONS,
   VENDOR_PROFESSIONS,
   HEALTHCARE_WORKER_PROFESSIONS,
+  HCW_RESOURCE_TYPES,
   SUPPLY_CATEGORIES,
 } from '../contacts/contact.constants.js';
 import { EXPENSE_CATEGORIES, PAYMENT_MODES } from '../finance/finance.constants.js';
@@ -22,6 +23,11 @@ export const PICKLIST_REGISTRY = {
   'contact.resourceType': {
     label: 'Resource Type',
     staticOptions: RESOURCE_TYPES,
+    otherLabel: 'Other',
+  },
+  'contact.hcwResourceType': {
+    label: 'Resource Type (Healthcare Worker)',
+    staticOptions: HCW_RESOURCE_TYPES,
     otherLabel: 'Other',
   },
   'contact.profession': {

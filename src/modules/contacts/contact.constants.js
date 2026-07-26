@@ -8,10 +8,29 @@ export const RESOURCE_TYPES = [
   'Contractual',
   'Freelancer',
   'Consultant',
-  'Service Provider',
-  'Individual',
   'Other',
 ];
+
+/** Engagement type — only when Contact Category is Healthcare Worker */
+export const HCW_RESOURCE_TYPES = ['Full-Time', 'Individual', 'Service Provider'];
+
+export function resourceTypesForCategory(contactCategory) {
+  if (contactCategory === 'Resource') return RESOURCE_TYPES;
+  if (contactCategory === 'Healthcare Worker') return HCW_RESOURCE_TYPES;
+  return [];
+}
+
+export function isHcwStaffResourceType(resourceType) {
+  return resourceType === 'Full-Time' || resourceType === 'Individual';
+}
+
+export function isServiceProviderContact(contact) {
+  if (!contact) return false;
+  return (
+    contact.contactCategory === 'Healthcare Worker' &&
+    String(contact.resourceType || '').trim() === 'Service Provider'
+  );
+}
 
 /** Default Profession / Role when Contact Category is Resource */
 export const PROFESSIONS = [

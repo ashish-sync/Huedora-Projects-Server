@@ -68,10 +68,12 @@ export const LogisticsProduct = defineCollection('logistics_products', {
   description: '',
   image: null, // { url, name }
   isActive: true,
-  /** Medical Device | Non-Medical Device | Peripheral Device | Accessory | Spare Part | Consumable | Document | Other */
+  /** Medical Device | Non-Medical Device | Peripheral | Consumable | Spare Part | Other */
   productType: 'Medical Device',
-  /** Replacement Part for Asset | Accessory of Asset | Consumed by Device | Multi-use */
-  inventoryType: 'Multi-use',
+  /** Dynamic category within product type */
+  productCategory: '',
+  /** Asset | Inventory */
+  inventoryType: 'Asset',
   trackingKind: 'None', // None | Serial | Batch | Batch + Serial
   uomId: null,
   unitsPerPack: 1,
@@ -94,6 +96,7 @@ export const LogisticsProduct = defineCollection('logistics_products', {
   lastPurchaseCost: 0,
   linkedDeviceId: null,
   compatibleDeviceIds: [],
+  associatedProductIds: [],
   compatibilityRelationship: '',
   qtyPerDevice: 0,
   warrantyPeriodMonths: 0,

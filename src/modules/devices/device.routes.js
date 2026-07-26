@@ -6,6 +6,9 @@ import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/
 import { PERMISSIONS } from '../../config/constants.js';
 import { DeviceMaster } from './device.model.js';
 import { Asset } from '../assets/asset.model.js';
+import { Contact } from '../contacts/contact.model.js';
+import { LogisticsProduct } from '../logistics/logistics.model.js';
+import { productMasterAssetName, productPurchaseCost } from '../logistics/productMasterLabel.js';
 import { createAsset } from '../assets/asset.service.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
@@ -184,32 +187,86 @@ function parseMasterFields(input) {
     custodianState,
     description,
     productType,
+    productId: input.productId || null,
+    contactId: input.contactId || null,
+  };
+}
+
+async function applyContactToFields(fields, contactId) {
+  const id = String(contactId || '').trim();
+  if (!id) return fields;
+  const contact = await Contact.findOne({ _id: id, isDeleted: false });
+  if (!contact) {
+    throw new AppError('Custodian contact not found in Contact Directory', 400, 'VALIDATION_ERROR');
+  }
+  return {
+    ...fields,
+    contactId: contact._id,
+    custodianName: contact.name || fields.custodianName,
+    custodianContact:
+      contact.contact || contact.mobile || contact.email || fields.custodianContact,
+    custodianCity: contact.city || fields.custodianCity,
+    custodianState: contact.state || fields.custodianState,
+  };
+}
+
+async function resolveInputFromProduct(input = {}) {
+  const productId = String(input.productId || '').trim();
+  if (!productId) return { ...input };
+  const product = await LogisticsProduct.findOne({ _id: productId, isDeleted: false });
+  if (!product) {
+    throw new AppError('Selected product was not found in Product Master', 400, 'VALIDATION_ERROR');
+  }
+  const registerTypes = ['Medical Device', 'Non-Medical Device'];
+  const productType = String(input.productType || product.productType || '').trim();
+  if (registerTypes.includes(productType) && !registerTypes.includes(product.productType)) {
+    throw new AppError(
+      'Selected product is not a Medical or Non-Medical Device for the asset register',
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+  const name = String(input.name || '').trim() || productMasterAssetName(product);
+  const cost = productPurchaseCost(product);
+  return {
+    ...input,
+    productId,
+    name,
+    cost,
+    productType: registerTypes.includes(productType) ? productType : product.productType,
+    description: String(input.description || '').trim() || product.description || '',
   };
 }
 
 async function createDeviceRecord(input, user, requestId) {
-  const fields = parseMasterFields(input);
+  const resolved = await resolveInputFromProduct(input);
+  if (!String(resolved.productId || '').trim()) {
+    throw new AppError('Product Master selection is required', 400, 'VALIDATION_ERROR');
+  }
+  const fields = parseMasterFields(await resolveInputFromProduct(resolved));
+  const withContact = await applyContactToFields(fields, resolved.contactId);
 
-  const existing = await Asset.findOne({ serialNumber: fields.serialNumber, isDeleted: false });
+  const existing = await Asset.findOne({ serialNumber: withContact.serialNumber, isDeleted: false });
   if (existing) {
-    throw new AppError(`Serial number “${fields.serialNumber}” already exists`, 400, 'SERIAL_EXISTS');
+    throw new AppError(`Serial number “${withContact.serialNumber}” already exists`, 400, 'SERIAL_EXISTS');
   }
 
-  const purchaseDate = purchaseMonthToDate(fields.purchaseMonth);
+  const purchaseDate = purchaseMonthToDate(withContact.purchaseMonth);
 
   const device = await DeviceMaster.create({
-    name: fields.name,
-    assetType: fields.assetType,
-    serialNumber: fields.serialNumber,
-    cost: fields.cost,
-    purchaseMonth: fields.purchaseMonth,
-    agreementStatus: fields.agreementStatus,
-    custody: fields.custody,
-    custodianName: fields.custodianName,
-    custodianContact: fields.custodianContact,
-    custodianCity: fields.custodianCity,
-    custodianState: fields.custodianState,
-    description: fields.description,
+    name: withContact.name,
+    assetType: withContact.assetType,
+    serialNumber: withContact.serialNumber,
+    cost: withContact.cost,
+    purchaseMonth: withContact.purchaseMonth,
+    agreementStatus: withContact.agreementStatus,
+    custody: withContact.custody,
+    custodianName: withContact.custodianName,
+    custodianContact: withContact.custodianContact,
+    custodianCity: withContact.custodianCity,
+    custodianState: withContact.custodianState,
+    description: withContact.description,
+    productId: withContact.productId || null,
     quantity: 1,
     isActive: true,
   });
@@ -217,23 +274,24 @@ async function createDeviceRecord(input, user, requestId) {
   const asset = await createAsset(
     {
       deviceMasterId: device._id,
-      deviceNameSnapshot: fields.name,
-      serialNumber: fields.serialNumber,
+      deviceNameSnapshot: withContact.name,
+      serialNumber: withContact.serialNumber,
       quantity: 1,
       status: 'Purchased',
-      deviceValue: fields.cost,
+      deviceValue: withContact.cost,
       purchaseDate,
-      addedMonth: fields.purchaseMonth,
-      remarks: fields.description || undefined,
-      agreementStatus: fields.agreementStatus,
-      custody: fields.custody,
-      assetType: fields.assetType,
-      productType: fields.productType || 'Medical Device',
-      custodianName: fields.custodianName,
-      custodianContact: fields.custodianContact,
+      addedMonth: withContact.purchaseMonth,
+      remarks: withContact.description || undefined,
+      agreementStatus: withContact.agreementStatus,
+      custody: withContact.custody,
+      assetType: withContact.assetType,
+      productType: withContact.productType || 'Medical Device',
+      contactId: withContact.contactId || null,
+      custodianName: withContact.custodianName,
+      custodianContact: withContact.custodianContact,
       location: {
-        city: fields.custodianCity,
-        state: fields.custodianState,
+        city: withContact.custodianCity,
+        state: withContact.custodianState,
       },
     },
     user
@@ -398,6 +456,8 @@ router.post(
     const purchaseMonth = normalizePurchaseMonth(req.body.purchaseMonth || req.body.purchase);
     const data = await createDeviceRecord(
       {
+        productId: req.body.productId,
+        productType: req.body.productType,
         name: req.body.name || req.body.deviceName,
         assetType: req.body.assetType,
         serialNumber: req.body.serialNumber || req.body.serial,
@@ -406,6 +466,7 @@ router.post(
         description: req.body.description,
         agreementStatus: req.body.agreementStatus ?? req.body.assetStatus,
         custody: req.body.custody || req.body.assetCustody || req.body.deviceCustody,
+        contactId: req.body.contactId,
         custodianName: req.body.custodianName,
         custodianContact: req.body.custodianContact,
         custodianCity: req.body.custodianCity || req.body.city,

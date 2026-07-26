@@ -8,10 +8,12 @@ import { Contact, normalizeContactPayload } from './contact.model.js';
 import {
   CONTACT_CATEGORIES,
   RESOURCE_TYPES,
+  HCW_RESOURCE_TYPES,
   PROFESSIONS,
   CLIENT_PROFESSIONS,
   VENDOR_PROFESSIONS,
   SUPPLY_CATEGORIES,
+  isServiceProviderContact,
 } from './contact.constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
@@ -43,7 +45,45 @@ const CONTACT_HEADERS = [
   'IFSC Code',
   'Bank Name',
   'Account Number',
+  'Service Provider',
 ];
+
+async function validateServiceProviderLink(payload, contactId = null) {
+  if (payload.contactCategory !== 'Healthcare Worker') return;
+  const spId = payload.serviceProviderContactId;
+  if (!spId) return;
+  if (contactId && String(spId) === String(contactId)) {
+    throw new AppError('A contact cannot be their own service provider', 400, 'VALIDATION_ERROR');
+  }
+  const provider = await Contact.findOne({ _id: spId, isDeleted: false });
+  if (!provider) {
+    throw new AppError('Service provider contact not found', 404, 'NOT_FOUND');
+  }
+  if (!isServiceProviderContact(provider)) {
+    throw new AppError(
+      'Linked service provider must be a Healthcare Worker with Resource Type Service Provider',
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+}
+
+async function enrichContactsWithProviders(contacts = []) {
+  const ids = [
+    ...new Set(
+      contacts.map((c) => c.serviceProviderContactId).filter(Boolean).map(String)
+    ),
+  ];
+  if (!ids.length) return contacts;
+  const providers = await Contact.find({ _id: { $in: ids }, isDeleted: false });
+  const byId = Object.fromEntries(providers.map((p) => [String(p._id), p.name || '']));
+  return contacts.map((c) => ({
+    ...c,
+    serviceProviderName: c.serviceProviderContactId
+      ? byId[String(c.serviceProviderContactId)] || ''
+      : '',
+  }));
+}
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -74,6 +114,7 @@ router.get(
       data: {
         contactCategories: CONTACT_CATEGORIES,
         resourceTypes: RESOURCE_TYPES,
+        hcwResourceTypes: HCW_RESOURCE_TYPES,
         professions: PROFESSIONS,
         clientProfessions: CLIENT_PROFESSIONS,
         vendorProfessions: VENDOR_PROFESSIONS,
@@ -109,10 +150,29 @@ router.get(
         { address: new RegExp(q, 'i') },
       ];
     }
-    const [data, total] = await Promise.all([
+    if (req.query.state) {
+      const state = String(req.query.state).trim();
+      if (state) {
+        filter.state = new RegExp(`^${state.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+      }
+    }
+    if (req.query.stateId) {
+      filter.stateId = String(req.query.stateId);
+    }
+    if (req.query.contactCategory) {
+      filter.contactCategory = String(req.query.contactCategory).trim();
+    }
+    if (req.query.resourceType) {
+      filter.resourceType = String(req.query.resourceType).trim();
+    }
+    if (req.query.serviceProviderContactId) {
+      filter.serviceProviderContactId = String(req.query.serviceProviderContactId).trim();
+    }
+    const [rawData, total] = await Promise.all([
       Contact.find(filter).sort(sort || 'name').skip(skip).limit(limit),
       Contact.countDocuments(filter),
     ]);
+    const data = await enrichContactsWithProviders(rawData);
     res.json(paginated(data, total, page, limit));
   })
 );
@@ -121,11 +181,12 @@ router.get(
   '/export',
   asyncHandler(async (_req, res) => {
     const rows = await Contact.find({ isDeleted: false }).sort('name');
+    const enriched = await enrichContactsWithProviders(rows);
     sendExcel(
       res,
       'Contact_Directory.xlsx',
       CONTACT_HEADERS,
-      rows.map((c) => [
+      enriched.map((c) => [
         c.name,
         c.email,
         c.contactCategory,
@@ -142,6 +203,7 @@ router.get(
         c.ifscCode,
         c.bankName,
         c.accountNumber,
+        c.serviceProviderName || '',
       ]),
       { sheetName: 'Contacts' }
     );
@@ -199,11 +261,29 @@ router.get(
 );
 
 router.get(
+  '/:id/staff',
+  asyncHandler(async (req, res) => {
+    const provider = await Contact.findOne({ _id: req.params.id, isDeleted: false });
+    if (!provider) throw new AppError('Contact not found', 404);
+    if (!isServiceProviderContact(provider)) {
+      throw new AppError('Contact is not a Service Provider', 400, 'VALIDATION_ERROR');
+    }
+    const staff = await Contact.find({
+      isDeleted: false,
+      contactCategory: 'Healthcare Worker',
+      serviceProviderContactId: provider._id,
+    }).sort('name');
+    res.json({ data: staff, meta: { count: staff.length, providerId: provider._id } });
+  })
+);
+
+router.get(
   '/:id',
   asyncHandler(async (req, res) => {
     const contact = await Contact.findOne({ _id: req.params.id, isDeleted: false });
     if (!contact) throw new AppError('Contact not found', 404);
-    res.json({ data: contact });
+    const [enriched] = await enrichContactsWithProviders([contact]);
+    res.json({ data: enriched });
   })
 );
 
@@ -212,6 +292,7 @@ router.post(
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
   asyncHandler(async (req, res) => {
     const payload = normalizeContactPayload(req.body, { validate: true });
+    await validateServiceProviderLink(payload);
     const { contact, created, reused } = await resolveOrCreateContact(payload, req.user._id);
 
     if (created) {
@@ -268,9 +349,14 @@ router.patch(
         stateId: req.body.stateId !== undefined ? req.body.stateId : contact.stateId,
         districtId: req.body.districtId !== undefined ? req.body.districtId : contact.districtId,
         cityId: req.body.cityId !== undefined ? req.body.cityId : contact.cityId,
+        serviceProviderContactId:
+          req.body.serviceProviderContactId !== undefined
+            ? req.body.serviceProviderContactId
+            : contact.serviceProviderContactId,
       },
       { validate: true }
     );
+    await validateServiceProviderLink(payload, contact._id);
     await assertContactIdentityAvailable({
       email: payload.email,
       phone: payload.contact,
@@ -334,9 +420,29 @@ router.post(
             ifscCode: cell(row, ['IFSC Code', 'IFSC', 'ifscCode']),
             bankName: cell(row, ['Bank Name', 'bankName']),
             accountNumber: cell(row, ['Account Number', 'accountNumber', 'Account']),
+            serviceProvider: cell(row, ['Service Provider', 'serviceProvider', 'ServiceProvider']),
           },
           { validate: true }
         );
+        const spName = cell(row, ['Service Provider', 'serviceProvider', 'ServiceProvider']);
+        if (spName && payload.contactCategory === 'Healthcare Worker') {
+          const provider = await Contact.findOne({
+            isDeleted: false,
+            contactCategory: 'Healthcare Worker',
+            resourceType: 'Service Provider',
+            name: new RegExp(`^${spName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+          });
+          if (!provider) {
+            errors.push({
+              row: rowNum,
+              field: 'Service Provider',
+              message: `Service provider not found: ${spName}`,
+            });
+            continue;
+          }
+          payload.serviceProviderContactId = provider._id;
+        }
+        await validateServiceProviderLink(payload);
       } catch (err) {
         errors.push({ row: rowNum, field: 'import', message: err.message });
         continue;

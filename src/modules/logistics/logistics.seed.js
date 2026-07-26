@@ -3,8 +3,16 @@ import {
   DEFAULT_MOVEMENT_TYPES,
   DEFAULT_REASON_CODES,
   DEFAULT_STOCK_STATUSES,
+  DEFAULT_UOMS,
   DEFAULT_WAREHOUSE_CODE,
   DEFAULT_WAREHOUSE_NAME,
+  IN_OUT_PRODUCT_TYPE_ALIASES,
+  IN_OUT_PRODUCT_TYPES,
+  MEDICAL_DEVICE_CATEGORY_ALIASES,
+  MEDICAL_DEVICE_PRODUCT_CATEGORIES,
+  PRODUCT_INVENTORY_TYPE_ALIASES,
+  SUPPLEMENTAL_UOMS,
+  UOM_LEGACY_CODE_ALIASES,
 } from './logistics.constants.js';
 import {
   LogisticsCategory,
@@ -17,6 +25,81 @@ import {
   LogisticsUom,
   LogisticsWarehouse,
 } from './logistics.model.js';
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Create or update a UOM row without duplicating by code or name. */
+async function ensureUom({ code, name }) {
+  const normCode = String(code).trim().toUpperCase();
+  const normName = String(name).trim();
+
+  let existing = await LogisticsUom.findOne({ code: normCode, isDeleted: false });
+  if (!existing) {
+    for (const [legacy, canonical] of Object.entries(UOM_LEGACY_CODE_ALIASES)) {
+      if (canonical === normCode) {
+        existing = await LogisticsUom.findOne({ code: legacy, isDeleted: false });
+        if (existing) break;
+      }
+    }
+  }
+  if (!existing) {
+    existing = await LogisticsUom.findOne({
+      isDeleted: false,
+      name: new RegExp(`^${escapeRegex(normName)}$`, 'i'),
+    });
+  }
+
+  if (!existing) {
+    await LogisticsUom.create({ code: normCode, name: normName, isActive: true });
+    return;
+  }
+
+  let changed = false;
+  if (existing.code !== normCode) {
+    existing.code = normCode;
+    changed = true;
+  }
+  if (existing.name !== normName) {
+    existing.name = normName;
+    changed = true;
+  }
+  if (existing.isActive === false) {
+    existing.isActive = true;
+    changed = true;
+  }
+  if (changed) await existing.save();
+}
+
+function normalizeSeededProductType(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return v;
+  if (IN_OUT_PRODUCT_TYPES.includes(v)) return v;
+  if (IN_OUT_PRODUCT_TYPE_ALIASES[v]) return IN_OUT_PRODUCT_TYPE_ALIASES[v];
+  const hit = Object.entries(IN_OUT_PRODUCT_TYPE_ALIASES).find(
+    ([k]) => k.toLowerCase() === v.toLowerCase()
+  );
+  return hit?.[1] || v;
+}
+
+function normalizeSeededInventoryType(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return v;
+  if (v === 'Asset' || v === 'Inventory') return v;
+  return PRODUCT_INVENTORY_TYPE_ALIASES[v] || v;
+}
+
+function normalizeSeededMedicalDeviceCategory(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return '';
+  if (MEDICAL_DEVICE_PRODUCT_CATEGORIES.includes(v)) return v;
+  if (MEDICAL_DEVICE_CATEGORY_ALIASES[v]) return MEDICAL_DEVICE_CATEGORY_ALIASES[v];
+  const hit = Object.entries(MEDICAL_DEVICE_CATEGORY_ALIASES).find(
+    ([k]) => k.toLowerCase() === v.toLowerCase()
+  );
+  return hit?.[1] || 'Others';
+}
 
 /** Seed logistics lookup rows. idempotent, does not touch TYLO One lifecycle data */
 export async function ensureLogisticsSeed() {
@@ -134,27 +217,8 @@ export async function ensureLogisticsSeed() {
     }
   }
 
-  const defaultUoms = [
-    { code: 'PCS', name: 'Piece' },
-    { code: 'BOX', name: 'Box' },
-    { code: 'PACK', name: 'Pack' },
-    { code: 'KIT', name: 'Kit' },
-    { code: 'CTN', name: 'Carton' },
-    { code: 'ROLL', name: 'Roll' },
-    { code: 'BTL', name: 'Bottle' },
-    { code: 'SET', name: 'Set' },
-    { code: 'PAIR', name: 'Pair' },
-    { code: 'DOC', name: 'Document' },
-  ];
-  for (const u of defaultUoms) {
-    const existing = await LogisticsUom.findOne({ code: u.code, isDeleted: false });
-    if (!existing) {
-      await LogisticsUom.create({ ...u, isActive: true });
-    } else if (existing.name !== u.name) {
-      existing.name = u.name;
-      existing.isActive = true;
-      await existing.save();
-    }
+  for (const u of [...DEFAULT_UOMS, ...SUPPLEMENTAL_UOMS]) {
+    await ensureUom(u);
   }
 
   const defaultCategories = [
@@ -173,7 +237,7 @@ export async function ensureLogisticsSeed() {
       code: 'OT0001',
       name: 'Glucose Test Strips',
       productType: 'Other',
-      inventoryType: 'Multi-use',
+      inventoryType: 'Asset',
       sku: 'SKU-SEED01',
       brand: 'Generic',
       manufacturer: 'Generic',
@@ -189,7 +253,7 @@ export async function ensureLogisticsSeed() {
       code: 'MD0001',
       name: 'BP Monitor',
       productType: 'Medical Device',
-      inventoryType: 'Multi-use',
+      inventoryType: 'Asset',
       sku: 'SKU-SEED02',
       brand: 'Generic',
       manufacturer: 'Generic',
@@ -209,6 +273,29 @@ export async function ensureLogisticsSeed() {
     if (!existing) {
       await LogisticsProduct.create({ ...p, isActive: true });
     }
+  }
+
+  const catalogProducts = await LogisticsProduct.find({ isDeleted: false });
+  for (const row of catalogProducts) {
+    const nextType = normalizeSeededProductType(row.productType);
+    const nextInventory = normalizeSeededInventoryType(row.inventoryType);
+    let changed = false;
+    if (nextType && nextType !== row.productType) {
+      row.productType = nextType;
+      changed = true;
+    }
+    if (nextInventory && nextInventory !== row.inventoryType) {
+      row.inventoryType = nextInventory;
+      changed = true;
+    }
+    if (nextType === 'Medical Device' || row.productType === 'Medical Device') {
+      const nextCategory = normalizeSeededMedicalDeviceCategory(row.productCategory);
+      if (nextCategory && nextCategory !== row.productCategory) {
+        row.productCategory = nextCategory;
+        changed = true;
+      }
+    }
+    if (changed) await row.save();
   }
 
   const parties = await LogisticsSupplier.find({ isDeleted: false });

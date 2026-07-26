@@ -8,6 +8,9 @@ import {
   professionsForCategory,
   CONTACT_CATEGORIES,
   RESOURCE_TYPES,
+  HCW_RESOURCE_TYPES,
+  isHcwStaffResourceType,
+  isServiceProviderContact,
   CLIENT_PROFESSIONS,
   VENDOR_PROFESSIONS,
   HEALTHCARE_WORKER_PROFESSIONS,
@@ -41,6 +44,8 @@ export const Contact = defineCollection('contacts', {
   stateId: null,
   districtId: null,
   cityId: null,
+  /** Healthcare Worker staff → parent Service Provider contact */
+  serviceProviderContactId: null,
 });
 
 function inferCategoryFromLegacy(body, resourceTypeRaw) {
@@ -65,6 +70,20 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
   let resourceType = '';
   if (contactCategory === 'Resource') {
     resourceType = allowCustomPicklistValue(resourceTypeRaw, RESOURCE_TYPES, 'Other');
+  } else if (contactCategory === 'Healthcare Worker') {
+    const matched = matchPicklist(resourceTypeRaw, HCW_RESOURCE_TYPES);
+    resourceType = HCW_RESOURCE_TYPES.includes(matched) ? matched : '';
+  }
+
+  let serviceProviderContactId = null;
+  if (contactCategory === 'Healthcare Worker' && isHcwStaffResourceType(resourceType)) {
+    const rawSp =
+      body.serviceProviderContactId ||
+      body.serviceProviderId ||
+      body['Service Provider'] ||
+      body.serviceProvider ||
+      '';
+    serviceProviderContactId = String(rawSp || '').trim() || null;
   }
 
   const professionRaw = body.profession || body.Profession || body['Profession / Role'] || '';
@@ -96,7 +115,9 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
     name: String(body.name || body.Name || '').trim(),
     email: normalizeEmail(body.email || body.Email || ''),
     contactCategory,
-    resourceType: contactCategory === 'Resource' ? resourceType : '',
+    resourceType:
+      contactCategory === 'Resource' || contactCategory === 'Healthcare Worker' ? resourceType : '',
+    serviceProviderContactId,
     profession,
     contact,
     mobile: contact,
@@ -140,6 +161,24 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
     }
     if (payload.contactCategory === 'Resource' && !payload.resourceType) {
       throw new AppError('Resource Type is required for Resource contacts', 400, 'VALIDATION_ERROR');
+    }
+    if (payload.contactCategory === 'Healthcare Worker' && !payload.resourceType) {
+      throw new AppError(
+        'Resource Type is required for Healthcare Worker contacts',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    if (
+      payload.contactCategory === 'Healthcare Worker' &&
+      payload.resourceType === 'Service Provider' &&
+      payload.serviceProviderContactId
+    ) {
+      throw new AppError(
+        'Service Provider contacts cannot be linked to another provider',
+        400,
+        'VALIDATION_ERROR'
+      );
     }
     if (isClient && !payload.organization) {
       throw new AppError('Organization Name is required for Client', 400, 'VALIDATION_ERROR');

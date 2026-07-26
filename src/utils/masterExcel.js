@@ -79,6 +79,7 @@ export function attachMasterExcelRoutes(router, opts) {
     sheetName = 'Master',
     headers,
     rowFromDoc,
+    prepareExportDocs,
     sampleRows = [],
     importColumns,
     sort = 'name',
@@ -88,8 +89,13 @@ export function attachMasterExcelRoutes(router, opts) {
     `/${path}/export`,
     canRead,
     asyncHandler(async (_req, res) => {
-      const rows = await Model.find({ isDeleted: false, ...(listFilter || {}) }).sort(sort);
-      const dataRows = rows.map((doc) => rowFromDoc(doc.toObject ? doc.toObject() : doc));
+      let docs = (
+        await Model.find({ isDeleted: false, ...(listFilter || {}) }).sort(sort)
+      ).map((doc) => (doc.toObject ? doc.toObject() : doc));
+      if (typeof prepareExportDocs === 'function') {
+        docs = await prepareExportDocs(docs);
+      }
+      const dataRows = docs.map((doc) => rowFromDoc(doc));
       sendExcel(res, filename, headers, dataRows, { sheetName });
     })
   );

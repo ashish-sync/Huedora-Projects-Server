@@ -55,6 +55,32 @@ export const DEFAULT_REASON_CODES = [
   { code: 'OTHER', name: 'Other' },
 ];
 
+/** Standard units of measure — seeded by code or name (no duplicates). */
+export const DEFAULT_UOMS = [
+  { code: 'EA', name: 'Each' },
+  { code: 'NOS', name: 'Number' },
+  { code: 'BOX', name: 'Box' },
+  { code: 'PK', name: 'Pack' },
+  { code: 'SET', name: 'Set' },
+  { code: 'PR', name: 'Pair' },
+  { code: 'ROLL', name: 'Roll' },
+];
+
+/** Additional UOMs for existing products and imports. */
+export const SUPPLEMENTAL_UOMS = [
+  { code: 'PCS', name: 'Piece' },
+  { code: 'KIT', name: 'Kit' },
+  { code: 'CTN', name: 'Carton' },
+  { code: 'BTL', name: 'Bottle' },
+  { code: 'DOC', name: 'Document' },
+];
+
+/** Legacy UOM codes normalized to current codes. */
+export const UOM_LEGACY_CODE_ALIASES = {
+  PACK: 'PK',
+  PAIR: 'PR',
+};
+
 export const MASTER_ENTITIES = [
   'warehouses',
   'locations',
@@ -107,69 +133,111 @@ export const IN_OUT_PROCESSES = [
 export const IN_OUT_PRODUCT_TYPES = [
   'Medical Device',
   'Non-Medical Device',
-  'Peripheral Device',
-  'Accessory',
-  'Spare Part',
+  'Peripheral',
   'Consumable',
-  'Document',
+  'Spare Part',
   'Other',
 ];
 
-/** Type-based product code prefixes (MD0001, NM0001, PD0001, …) */
+/** Medical Device product categories (same as camp / hiring methods). */
+export const MEDICAL_DEVICE_PRODUCT_CATEGORIES = [
+  'BMD',
+  'Diagnostics',
+  'Uroflow',
+  'Dietician',
+  'Neuro & Physio',
+  'Others',
+];
+
+export const MEDICAL_DEVICE_CATEGORY_ALIASES = {
+  BMD: 'BMD',
+  Diagnostics: 'Diagnostics',
+  Diagnostic: 'Diagnostics',
+  Daignostics: 'Diagnostics',
+  Uroflow: 'Uroflow',
+  Dietician: 'Dietician',
+  Dietitian: 'Dietician',
+  'Neuro & Physio': 'Neuro & Physio',
+  'Physio & Neuro': 'Neuro & Physio',
+  'Physio & Nuero': 'Neuro & Physio',
+  Others: 'Others',
+  Other: 'Others',
+  Therapeutic: 'Others',
+  Monitoring: 'Others',
+  Imaging: 'Others',
+  Laboratory: 'Others',
+  Surgical: 'Others',
+  'Life Support': 'Others',
+};
+
+/** Type-based product code prefixes (MD0001, NMD0001, PER0001, …) */
 export const PRODUCT_TYPE_CODE_PREFIX = {
   'Medical Device': 'MD',
-  'Non-Medical Device': 'NM',
-  'Peripheral Device': 'PD',
-  Accessory: 'AC',
+  'Non-Medical Device': 'NMD',
+  Peripheral: 'PER',
+  Consumable: 'CON',
   'Spare Part': 'SP',
-  Consumable: 'CN',
-  Document: 'DC',
-  Other: 'OT',
+  Other: 'OTH',
 };
 
 export const PRODUCT_CODE_FORMAT = { digits: 4, separator: '' };
 
-export const PRODUCT_INVENTORY_TYPES = [
-  'Replacement Part for Asset',
-  'Accessory of Asset',
-  'Consumed by Device',
-  'Multi-use',
-];
+export const PRODUCT_INVENTORY_TYPES = ['Asset', 'Inventory'];
 
-/** Legacy inventory labels → current Product Master set */
-export const PRODUCT_INVENTORY_TYPE_ALIASES = {
-  'Replacement Part for Asset': 'Replacement Part for Asset',
-  'Accessory of Asset': 'Accessory of Asset',
-  'Consumed by Device': 'Consumed by Device',
-  'Multi-use': 'Multi-use',
-  'Associated to Asset': 'Replacement Part for Asset',
-  'Used by Device': 'Consumed by Device',
-  Asset: 'Replacement Part for Asset',
-  'Inventory Item': 'Multi-use',
-  'Inventory item': 'Multi-use',
+/** Allowed inventory class per product type. */
+export const INVENTORY_TYPES_BY_PRODUCT_TYPE = {
+  'Medical Device': ['Asset'],
+  'Non-Medical Device': ['Asset'],
+  Peripheral: ['Inventory'],
+  Consumable: ['Inventory'],
+  'Spare Part': ['Inventory'],
+  Other: ['Inventory'],
 };
 
-export const PRODUCT_COMPATIBILITY_TYPES = ['Accessory', 'Spare Part', 'Other'];
+export function resolveInventoryTypeForProductType(productType, raw) {
+  const type = String(productType || '').trim();
+  const allowed = INVENTORY_TYPES_BY_PRODUCT_TYPE[type] || ['Inventory'];
+  let v = String(raw || '').trim();
+  if (PRODUCT_INVENTORY_TYPE_ALIASES[v]) v = PRODUCT_INVENTORY_TYPE_ALIASES[v];
+  if (allowed.includes(v)) return v;
+  return allowed[0];
+}
+
+/** Legacy inventory labels → Asset | Inventory */
+export const PRODUCT_INVENTORY_TYPE_ALIASES = {
+  Asset: 'Asset',
+  Inventory: 'Inventory',
+  'Multi-use': 'Asset',
+  'Replacement Part for Asset': 'Inventory',
+  'Accessory of Asset': 'Inventory',
+  'Consumed by Device': 'Inventory',
+  'Associated to Asset': 'Inventory',
+  'Used by Device': 'Inventory',
+  'Inventory Item': 'Inventory',
+  'Inventory item': 'Inventory',
+};
+
+export const PRODUCT_COMPATIBILITY_TYPES = ['Spare Part', 'Other'];
 
 export const GST_RATE_PRESETS = [0, 5, 12, 18, 28];
 
 export const IN_OUT_PRODUCT_TYPE_ALIASES = {
   'Medical Device': 'Medical Device',
   'Non-Medical Device': 'Non-Medical Device',
-  'Peripheral Device': 'Peripheral Device',
-  Accessory: 'Accessory',
-  'Spare Part': 'Spare Part',
+  Peripheral: 'Peripheral',
   Consumable: 'Consumable',
   Consumables: 'Consumable',
-  Document: 'Document',
+  'Spare Part': 'Spare Part',
   Other: 'Other',
   // Legacy catalog values
   Device: 'Medical Device',
-  Peripheral: 'Peripheral Device',
+  'Peripheral Device': 'Peripheral',
+  Accessory: 'Spare Part',
+  Document: 'Other',
   Misc: 'Other',
   Miscellaneous: 'Other',
   'Spare Part / Accessory': 'Spare Part',
-  Documents: 'Document',
+  Documents: 'Other',
   'Devices Parts': 'Spare Part',
   'Device Part': 'Spare Part',
   Others: 'Other',
@@ -186,42 +254,38 @@ export const PRODUCT_CATEGORY_DEFAULTS = {
   'Medical Device': {
     expiryApplicable: false,
     trackingKind: 'Serial',
-    inventoryType: 'Multi-use',
+    inventoryType: 'Asset',
+    calibrationRequired: true,
   },
   'Non-Medical Device': {
     expiryApplicable: false,
     trackingKind: 'Serial',
-    inventoryType: 'Multi-use',
+    inventoryType: 'Asset',
+    calibrationRequired: false,
   },
-  'Peripheral Device': {
+  Peripheral: {
     expiryApplicable: false,
     trackingKind: 'Serial',
-    inventoryType: 'Multi-use',
-  },
-  Accessory: {
-    expiryApplicable: false,
-    trackingKind: 'Serial',
-    inventoryType: 'Accessory of Asset',
-  },
-  'Spare Part': {
-    expiryApplicable: false,
-    trackingKind: 'Batch + Serial',
-    inventoryType: 'Replacement Part for Asset',
+    inventoryType: 'Inventory',
+    calibrationRequired: false,
   },
   Consumable: {
     expiryApplicable: true,
     trackingKind: 'Batch',
-    inventoryType: 'Consumed by Device',
+    inventoryType: 'Inventory',
+    calibrationRequired: false,
   },
-  Document: {
+  'Spare Part': {
     expiryApplicable: false,
-    trackingKind: 'None',
-    inventoryType: 'Multi-use',
+    trackingKind: 'Batch + Serial',
+    inventoryType: 'Inventory',
+    calibrationRequired: false,
   },
   Other: {
     expiryApplicable: false,
     trackingKind: 'None',
-    inventoryType: 'Consumed by Device',
+    inventoryType: 'Inventory',
+    calibrationRequired: false,
   },
 };
 
@@ -251,7 +315,7 @@ export const PRODUCT_STATUS_OPTIONS = {
     'Retired',
     'Disposed',
   ],
-  'Peripheral Device': [
+  Peripheral: [
     'Available',
     'Assigned',
     'In Transit',
@@ -260,10 +324,8 @@ export const PRODUCT_STATUS_OPTIONS = {
     'Retired',
     'Disposed',
   ],
-  Accessory: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
   'Spare Part': ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
   Consumable: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed', 'Expired'],
-  Document: ['Draft', 'Active', 'Expired', 'Archived', 'Cancelled'],
   Other: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
 };
 
@@ -355,11 +417,9 @@ export const DOCUMENT_TYPES = [
 export const PRODUCT_REQUIRED_FIELDS = {
   'Medical Device': ['qty'],
   'Non-Medical Device': ['qty'],
-  'Peripheral Device': ['qty'],
-  Accessory: ['qty'],
-  'Spare Part': ['qty'],
+  Peripheral: ['qty'],
   Consumable: ['qty'],
-  Document: ['qty'],
+  'Spare Part': ['qty'],
   Other: ['qty'],
   // Legacy keys still present on older stock / txn rows
   Device: ['qty'],
