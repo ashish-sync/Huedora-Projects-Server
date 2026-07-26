@@ -223,9 +223,13 @@ export function mergeOrgProfile(body = {}) {
     'email',
     'website',
     'bankName',
+    'accountHolder',
     'accountNumber',
     'ifscCode',
     'bankBranch',
+    'upiId',
+    'logoDataUrl',
+    'paymentQrDataUrl',
     'defaultPaymentTermsDays',
     'defaultTerms',
     'proformaNotes',
@@ -256,6 +260,10 @@ export { nextCommercialDocumentNumber as nextPurchaseOrderNumber } from './docum
 
 export async function nextClientInvoiceNumber(documentDate) {
   return nextCommercialDocumentNumber('client_invoice', documentDate);
+}
+
+export async function nextCreditNoteNumber(documentDate) {
+  return nextCommercialDocumentNumber('credit_note', documentDate);
 }
 
 export function normalizePoLineItem(raw = {}, index = 0) {
@@ -424,7 +432,13 @@ export function normalizeClientInvoicePayload(body = {}, orgProfile = DEFAULT_OR
   return { ...payload, documentType: 'client_invoice' };
 }
 
+export function normalizeCreditNotePayload(body = {}, orgProfile = DEFAULT_ORG_PROFILE) {
+  const payload = normalizeProformaPayload(body, orgProfile);
+  return { ...payload, documentType: 'credit_note' };
+}
+
 export const validateClientInvoicePayload = validateProformaPayload;
+export const validateCreditNotePayload = validateProformaPayload;
 
 export function validateProformaPayload(payload, { requireLines = true } = {}) {
   if (!payload.recipientName) {

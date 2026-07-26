@@ -1,0 +1,3 @@
+# Consumed on next API boot — wipes all DB data and uploads, then re-seeds.
+# This file is deleted automatically when the server starts.
+# Remove from git after the live site has restarted once.

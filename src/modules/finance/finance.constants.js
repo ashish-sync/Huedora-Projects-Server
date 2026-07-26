@@ -33,22 +33,26 @@ export const COMMERCIAL_DOC_STATUSES = [
 export const DEFAULT_SAC_CODE = '999316';
 
 export const DEFAULT_ORG_PROFILE = {
-  legalName: 'Kartavya Healtheon Private Limited',
-  brandLine: 'Kartavya Healtheon Pvt. Ltd.',
+  legalName: 'Tyo Care Private Limited',
+  brandLine: 'Bringing Healthcare Closer',
   cin: 'U74999MH2008PTC184213',
   pan: 'AADCK4268L',
   gstin: '27AADCK4268L1Z4',
   state: 'Maharashtra',
   stateCode: '27',
   registeredOffice:
-    'Office No. 216, 2nd Floor, Corporate Avenue, Sonawala Road, Goregaon - East, Mumbai-400063',
-  phone: '02261131400',
+    '216, 2nd Floor, Corporate Avenue, Sonawala Road, Goregaon East, Mumbai, Maharashtra 400063',
+  phone: '022 6113 1400',
   email: 'care@kartavyahealtheon.com',
-  website: 'www.kartvyahealtheon.com',
+  website: 'kartavyahealtheon.com',
   bankName: 'HDFC Bank Ltd',
+  accountHolder: 'Tylo Care Pvt. Ltd.',
   accountNumber: '50200120975721',
   ifscCode: 'HDFC0000212',
-  bankBranch: 'Goregaon East, Mumbai',
+  bankBranch: 'Goregaon E',
+  upiId: '',
+  logoDataUrl: '',
+  paymentQrDataUrl: '',
   defaultPaymentTermsDays: 45,
   defaultTerms: [
     'Please pay on or before the due date. Interest @ 2% will be charged in case of any delay in the payments.',

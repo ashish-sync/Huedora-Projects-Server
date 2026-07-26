@@ -6,7 +6,7 @@ import { nextSequence } from '../../utils/counters.js';
  * e.g. TCPI-26-07-001
  */
 export const DOCUMENT_NUMBER_PREFIXES = {
-  client_invoice: 'TCI',
+  client_invoice: 'TCIN',
   purchase_order: 'TCPO',
   proforma: 'TCPI',
   credit_note: 'TCCN',
@@ -21,13 +21,13 @@ export const DOCUMENT_NUMBER_LABELS = {
 
 /** Human-readable standards for UI / API meta */
 export const DOCUMENT_NUMBER_STANDARDS = [
-  { documentType: 'client_invoice', prefix: 'TCI', label: 'Invoice', example: 'TCI-26-07-001' },
+  { documentType: 'client_invoice', prefix: 'TCIN', label: 'Invoice', example: 'TCIN-26-07-001' },
   { documentType: 'purchase_order', prefix: 'TCPO', label: 'Purchase Order', example: 'TCPO-26-07-001' },
   { documentType: 'proforma', prefix: 'TCPI', label: 'Proforma Invoice', example: 'TCPI-26-07-001' },
   { documentType: 'credit_note', prefix: 'TCCN', label: 'Credit Note', example: 'TCCN-26-07-001' },
 ];
 
-const NUMBER_PATTERN = /^(TCI|TCPO|TCPI|TCCN)-(\d{2})-(\d{2})-(\d{3,})$/;
+const NUMBER_PATTERN = /^(TCIN|TCPO|TCPI|TCCN)-(\d{2})-(\d{2})-(\d{3,})$/;
 
 export function documentNumberPeriod(dateIso) {
   const d = dateIso ? new Date(dateIso) : new Date();

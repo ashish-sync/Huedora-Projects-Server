@@ -22,13 +22,16 @@ import {
   nextProformaNumber,
   nextPurchaseOrderNumber,
   normalizeClientInvoicePayload,
+  normalizeCreditNotePayload,
   normalizeProformaPayload,
   normalizePurchaseOrderPayload,
   nextClientInvoiceNumber,
+  nextCreditNoteNumber,
   toAmount,
   todayIso,
   trimStr,
   validateClientInvoicePayload,
+  validateCreditNotePayload,
   validateProformaPayload,
   validatePurchaseOrderPayload,
   usesIgst,
@@ -68,6 +71,52 @@ router.use(authenticate);
 
 const canRead = requirePermission(PERMISSIONS.FINANCE_READ, PERMISSIONS.FINANCE_WRITE);
 const canWrite = requirePermission(PERMISSIONS.FINANCE_WRITE);
+
+const COMMERCIAL_DOC_TYPES = ['client_invoice', 'purchase_order', 'proforma', 'credit_note'];
+
+function commercialListFilter(req) {
+  const filter = { isDeleted: false };
+  const type = trimStr(req.query.documentType);
+  if (type && COMMERCIAL_DOC_TYPES.includes(type)) {
+    filter.documentType = type;
+  } else {
+    filter.documentType = { $in: COMMERCIAL_DOC_TYPES };
+  }
+  if (req.query.status) filter.status = String(req.query.status);
+  if (req.query.q) {
+    const re = new RegExp(String(req.query.q), 'i');
+    filter.$or = [
+      { docKey: re },
+      { documentNumber: re },
+      { recipientName: re },
+      { projectName: re },
+    ];
+  }
+  return filter;
+}
+
+function sendPreviewPdf(res, pdfBuffer, filename = 'preview.pdf') {
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+  res.send(pdfBuffer);
+}
+
+router.get(
+  '/commercial-documents',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const { page, limit, skip, sort } = parsePagination(req.query);
+    const filter = commercialListFilter(req);
+    const [data, total] = await Promise.all([
+      FinanceCommercialDocument.find(filter)
+        .sort(sort || '-documentDate')
+        .skip(skip)
+        .limit(limit),
+      FinanceCommercialDocument.countDocuments(filter),
+    ]);
+    res.json(paginated(data, total, page, limit));
+  })
+);
 
 router.get(
   '/org-profile',
@@ -239,6 +288,24 @@ router.post(
     });
 
     res.json({ data: row });
+  })
+);
+
+router.post(
+  '/proformas/preview',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const orgProfile = await getOrCreateOrgProfile();
+    const payload = normalizeProformaPayload(req.body, orgProfile);
+    if (!payload.recipientName) payload.recipientName = 'Preview Client';
+    const docObj = {
+      ...payload,
+      documentType: 'proforma',
+      documentNumber: trimStr(req.body.documentNumber) || 'PREVIEW',
+      status: 'Draft',
+      taxMode: usesIgst(payload.recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst',
+    };
+    sendPreviewPdf(res, await buildProformaPdfBuffer(docObj, orgProfile.toObject()), 'proforma-preview.pdf');
   })
 );
 
@@ -499,6 +566,23 @@ router.post(
     });
 
     res.json({ data: row });
+  })
+);
+
+router.post(
+  '/purchase-orders/preview',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const orgProfile = await getOrCreateOrgProfile();
+    const payload = normalizePurchaseOrderPayload(req.body, orgProfile);
+    if (!payload.recipientName) payload.recipientName = 'Preview Vendor';
+    const docObj = {
+      ...payload,
+      documentType: 'purchase_order',
+      documentNumber: trimStr(req.body.documentNumber) || 'PREVIEW',
+      status: 'Draft',
+    };
+    sendPreviewPdf(res, await buildPurchaseOrderPdfBuffer(docObj, orgProfile.toObject()), 'po-preview.pdf');
   })
 );
 
@@ -815,6 +899,175 @@ router.get(
       `${asDownload ? 'attachment' : 'inline'}; filename="${safeName}.pdf"`
     );
     res.send(pdfBuffer);
+  })
+);
+
+router.get(
+  '/credit-notes',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const { page, limit, skip, sort } = parsePagination(req.query);
+    const filter = { isDeleted: false, documentType: 'credit_note' };
+    if (req.query.status) filter.status = String(req.query.status);
+    if (req.query.q) {
+      const re = new RegExp(String(req.query.q), 'i');
+      filter.$or = [
+        { docKey: re },
+        { documentNumber: re },
+        { recipientName: re },
+        { projectName: re },
+      ];
+    }
+    const [data, total] = await Promise.all([
+      FinanceCommercialDocument.find(filter)
+        .sort(sort || '-documentDate')
+        .skip(skip)
+        .limit(limit),
+      FinanceCommercialDocument.countDocuments(filter),
+    ]);
+    res.json(paginated(data, total, page, limit));
+  })
+);
+
+router.get(
+  '/credit-notes/:id',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const row = await FinanceCommercialDocument.findOne({
+      _id: req.params.id,
+      isDeleted: false,
+      documentType: 'credit_note',
+    });
+    if (!row) throw new AppError('Credit note not found', 404);
+    res.json({ data: row });
+  })
+);
+
+router.post(
+  '/credit-notes/preview',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const orgProfile = await getOrCreateOrgProfile();
+    const payload = normalizeCreditNotePayload(req.body, orgProfile);
+    if (!payload.recipientName) payload.recipientName = 'Preview Client';
+    const docObj = {
+      ...payload,
+      documentType: 'credit_note',
+      documentNumber: trimStr(req.body.documentNumber) || 'PREVIEW',
+      status: 'Draft',
+      taxMode: usesIgst(payload.recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst',
+    };
+    sendPreviewPdf(res, await buildCreditNotePdfBuffer(docObj, orgProfile.toObject()), 'credit-note-preview.pdf');
+  })
+);
+
+router.post(
+  '/credit-notes',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const orgProfile = await getOrCreateOrgProfile();
+    const payload = normalizeCreditNotePayload(req.body, orgProfile);
+    validateCreditNotePayload(payload);
+
+    let documentNumber = trimStr(req.body.documentNumber);
+    if (documentNumber) {
+      documentNumber = validateManualDocumentNumber(documentNumber, 'credit_note');
+    }
+
+    const row = await FinanceCommercialDocument.create({
+      docKey: await nextSequence('financeCommercialDoc', 'CN'),
+      documentType: 'credit_note',
+      documentNumber,
+      status: 'Draft',
+      source: 'generated',
+      createdById: req.user._id,
+      createdByEmail: req.user.email,
+      ...payload,
+    });
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'FINANCE.CREDIT_NOTE.CREATE',
+      entityType: 'FinanceCommercialDocument',
+      entityId: row._id,
+      after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+
+    res.status(201).json({ data: row });
+  })
+);
+
+router.patch(
+  '/credit-notes/:id',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const row = await FinanceCommercialDocument.findOne({
+      _id: req.params.id,
+      isDeleted: false,
+      documentType: 'credit_note',
+    });
+    if (!row) throw new AppError('Credit note not found', 404);
+    assertEditableStatus(row.status);
+
+    const orgProfile = await getOrCreateOrgProfile();
+    const merged = {
+      ...row.toObject(),
+      ...req.body,
+      documentDate: req.body.documentDate != null ? req.body.documentDate : row.documentDate,
+      lineItems: req.body.lineItems != null ? req.body.lineItems : row.lineItems,
+    };
+    const payload = normalizeCreditNotePayload(merged, orgProfile);
+    validateCreditNotePayload(payload);
+
+    Object.assign(row, payload);
+    if (req.body.documentNumber != null) {
+      const manual = trimStr(req.body.documentNumber);
+      row.documentNumber = manual ? validateManualDocumentNumber(manual, 'credit_note') : '';
+    }
+    await row.save();
+    res.json({ data: row });
+  })
+);
+
+router.post(
+  '/credit-notes/:id/issue',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const row = await FinanceCommercialDocument.findOne({
+      _id: req.params.id,
+      isDeleted: false,
+      documentType: 'credit_note',
+    });
+    if (!row) throw new AppError('Credit note not found', 404);
+    assertIssuable(row.status);
+
+    const orgProfile = await getOrCreateOrgProfile();
+    const payload = normalizeCreditNotePayload(row.toObject(), orgProfile);
+    validateCreditNotePayload(payload);
+    Object.assign(row, payload);
+
+    if (!trimStr(row.documentNumber)) {
+      row.documentNumber = await nextCreditNoteNumber(row.documentDate);
+    }
+    row.documentPeriod = documentNumberPeriod(row.documentDate).periodKey;
+    row.status = 'Issued';
+    row.issuedAt = new Date().toISOString();
+    row.source = row.source || 'generated';
+    await row.save();
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'FINANCE.CREDIT_NOTE.ISSUE',
+      entityType: 'FinanceCommercialDocument',
+      entityId: row._id,
+      after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+
+    res.json({ data: row });
   })
 );
 

@@ -592,11 +592,12 @@ function drawFinancialSummary(pdf, margin, y, contentWidth, docRow, showPayment)
     pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(BRAND.royal).text('Payment Details', margin, leftEnd);
     leftEnd = pdf.y + 4;
     const payLines = [
+      org.accountHolder ? `Account Holder: ${org.accountHolder}` : '',
       org.bankName ? `Bank: ${org.bankName}` : '',
       org.accountNumber ? `A/c No.: ${org.accountNumber}` : '',
       org.ifscCode ? `IFSC: ${org.ifscCode}` : '',
       org.bankBranch ? `Branch: ${org.bankBranch}` : '',
-      `Beneficiary: ${org.legalName || org.brandLine || '—'}`,
+      !org.accountHolder && org.legalName ? `Beneficiary: ${org.legalName}` : '',
     ].filter(Boolean);
     pdf.font('Helvetica').fontSize(FONT.body).fillColor(BRAND.muted);
     for (const line of payLines) {
