@@ -6,6 +6,7 @@ import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState, GeoZone } from './geo.model.js';
+import { forceReseedGeoMasters } from './geo.seed.js';
 import { resolveZoneForStateRecord, resolveZoneNameForState } from './geo.zones.js';
 
 const router = Router();
@@ -16,6 +17,25 @@ function publicRow(row) {
   const o = row.toObject ? row.toObject() : { ...row };
   return o;
 }
+
+/** POST /geo/reseed — reload states, districts, cities, zones from bundled seed */
+router.post(
+  '/reseed',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const result = await forceReseedGeoMasters();
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'GEO.RESEED',
+      entityType: 'GeoMaster',
+      entityId: 'india-geo',
+      after: result,
+      requestId: req.requestId,
+    });
+    res.json({ data: result });
+  })
+);
 
 /** GET /geo/meta — counts + source attribution */
 router.get(

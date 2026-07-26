@@ -10,6 +10,7 @@
     "seed": "node src/seed.js",
     "reset:data": "node scripts/reset-all-data.js",
     "geo:build": "node scripts/buildIndiaGeoSeed.js",
+    "geo:reseed": "node scripts/reseed-geo.js",
     "test:manual-paste": "node scripts/test-manual-paste-extract.js",
     "test:camp-parser": "npm run build:parsers && node scripts/test-camp-request-parser.js",
     "build:parsers": "tsc -p src/modules/campOps/parsers/tsconfig.json",

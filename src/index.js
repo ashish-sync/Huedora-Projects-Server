@@ -2,6 +2,7 @@ import { createApp } from './app.js';
 import { connectDb } from './config/db.js';
 import { env } from './config/env.js';
 import { ensureSeed } from './seed.js';
+import { forceReseedGeoMasters } from './modules/geo/geo.seed.js';
 import { resetApplicationData } from './utils/resetApplicationData.js';
 import fs from 'fs';
 import path from 'path';
@@ -25,10 +26,18 @@ async function maybeFreshStart() {
   }
 }
 
+async function maybeReseedGeoOnBoot() {
+  if (String(process.env.RESEED_GEO_ON_BOOT || '').toLowerCase() !== 'true') return;
+  const result = await forceReseedGeoMasters();
+  console.warn('[geo] RESEED_GEO_ON_BOOT=true — masters reloaded:', result.counts);
+  console.warn('[geo] Set RESEED_GEO_ON_BOOT=false after this deploy');
+}
+
 async function main() {
   await connectDb();
   await maybeFreshStart();
   await ensureSeed();
+  await maybeReseedGeoOnBoot();
   const app = createApp();
   app.listen(env.port, () => {
     console.log(`[api] TYLO One listening on http://localhost:${env.port}`);

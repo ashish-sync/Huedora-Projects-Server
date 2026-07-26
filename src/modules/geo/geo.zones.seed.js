@@ -6,9 +6,9 @@ import { canonicalStateName } from './geo.zones.js';
  * Seed camp zone master rows and link each state to its zone.
  * Runs after geo states are loaded; idempotent on zone count.
  */
-export async function ensureGeoZoneSeed() {
+export async function ensureGeoZoneSeed({ force = false } = {}) {
   const existing = await GeoZone.countDocuments({ isDeleted: false });
-  if (existing > 0) return { seeded: false, zones: existing };
+  if (!force && existing > 0) return { seeded: false, zones: existing };
 
   const states = await GeoState.find({ isDeleted: false, isActive: true });
   const stateByName = new Map(
