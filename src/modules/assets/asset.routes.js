@@ -34,6 +34,7 @@ import {
   normalizeAssetType,
   normalizeCustodianState,
 } from '../devices/device.constants.js';
+import { buildAssetPlaceholderSnapshot } from './assetPlaceholderSnapshot.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const agreementUploadRoot = path.resolve(__dirname, '../../../uploads/agreements');
@@ -134,6 +135,11 @@ router.get(
         $or: [{ name: regex }, { city: regex }, { email: regex }, { contact: regex }],
       });
       const contactIds = contactMatches.map((c) => c._id);
+      const productMatches = await LogisticsProduct.find({
+        isDeleted: false,
+        $or: [{ model: regex }, { brand: regex }, { manufacturer: regex }, { name: regex }],
+      });
+      const productIds = productMatches.map((p) => p._id);
       filter.$or = [
         { serialNumber: regex },
         { assetTag: regex },
@@ -141,6 +147,7 @@ router.get(
         { hcwBusinessId: regex },
         { 'location.city': regex },
         ...(contactIds.length ? [{ contactId: { $in: contactIds } }] : []),
+        ...(productIds.length ? [{ productId: { $in: productIds } }] : []),
       ];
     }
     const [rows, total] = await Promise.all([
@@ -479,6 +486,19 @@ router.post(
     });
 
     res.status(201).json({ data: { agreement, document: doc } });
+  })
+);
+
+router.get(
+  '/:id/placeholder-snapshot',
+  requirePermission(PERMISSIONS.ASSETS_READ),
+  asyncHandler(async (req, res) => {
+    const asset = await Asset.findOne({ _id: req.params.id, isDeleted: false })
+      .populate('deviceMasterId', 'name productId')
+      .populate('contactId', 'name email city state contact');
+    if (!asset) throw new AppError('Asset not found', 404);
+    const snapshot = await buildAssetPlaceholderSnapshot(asset);
+    res.json({ data: snapshot });
   })
 );
 

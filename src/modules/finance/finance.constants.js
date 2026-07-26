@@ -15,6 +15,18 @@ export const INVOICE_STATUSES = ['Open', 'Partially paid', 'Paid', 'Cancelled'];
 
 export const PAYMENT_MODES = ['Bank transfer', 'UPI', 'Cheque', 'Cash', 'Card', 'Other'];
 
+export const CAMP_PAYOUT_SUBMIT_STATUSES = [
+  { value: 'payment_confirmed', label: 'Payment Confirmed' },
+  { value: 'payment_not_checked', label: 'Payment Not Checked' },
+  { value: 'payment_hold', label: 'Payment Hold' },
+];
+
+export const CAMP_FINANCE_PAYMENT_STATUSES = [
+  { value: 'not_paid', label: 'Not Paid' },
+  { value: 'under_review', label: 'Under Review' },
+  { value: 'paid', label: 'Paid' },
+];
+
 export const COMMERCIAL_DOC_TYPES = [
   'proforma',
   'client_invoice',

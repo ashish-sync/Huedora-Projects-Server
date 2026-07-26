@@ -1,5 +1,5 @@
 /**
- * Twice-monthly verification condition rules for Agreement Signed assets.
+ * Twice-monthly verification condition rules for Verification One eligible Medical Devices.
  */
 
 export function daysInMonth(year, monthIndex0) {

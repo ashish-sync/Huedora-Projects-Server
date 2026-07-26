@@ -56,7 +56,18 @@ import {
   withCampLifecycle,
   canEditLifecycleStage,
   applyAssignmentStageOutcome,
+  assertExecutionStageSave,
+  EXECUTION_DOC_TYPES,
+  resolveInTimeSelfieUrl,
+  normalizePaymentSubmitStatus,
+  PAYMENT_SUBMIT_STATUSES,
 } from './campOps.lifecycle.js';
+import {
+  assertCampSubmittedToFinance,
+  buildCampFinanceExportRow,
+  campFinanceExportFilename,
+  campFinanceExportHeaders,
+} from './campFinanceExport.js';
 import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.requestValidation.js';
 import {
   withRequestReview,
@@ -68,6 +79,7 @@ import {
   CAMP_CLOSURE_TYPES,
   CAMP_CLOSURE_REASON_CODES,
   canCloseCampStatus,
+  canCloseCampRecord,
 } from './campOps.closure.js';
 import {
   handleEmailArchive,
@@ -104,6 +116,7 @@ const campDocUpload = multer({
 
 function enrichCamp(camp) {
   const obj = withRequestReview(withCampLifecycle(withCampSchedule(camp)));
+  obj.inTimeSelfieUrl = resolveInTimeSelfieUrl(obj);
   const approvalBlockers = getRequestStageBlockers(obj);
   obj.approvalBlockers = approvalBlockers;
   obj.requestStageComplete = approvalBlockers.length === 0;
@@ -421,13 +434,9 @@ router.post(
       approve: { nextStatus: 'approved', from: ['pending_review'], needApprove: true },
       reject: { nextStatus: 'rejected', from: ['pending_review'], needApprove: true },
       execute: { nextStatus: 'executed', from: ['approved'], needApprove: true },
-      delete: { needApprove: true },
     };
     const config = configs[action];
     if (!config) throw new AppError('Invalid bulk action', 400, 'VALIDATION_ERROR');
-    if (action === 'delete' && !req.permissions.has(PERMISSIONS.ALL)) {
-      throw new AppError('Only administrators can delete camps', 403, 'FORBIDDEN');
-    }
     if (
       config.needApprove &&
       !req.permissions.has(PERMISSIONS.ALL) &&
@@ -443,18 +452,6 @@ router.post(
       try {
         const camp = await CampOpsCamp.findOne({ _id: String(id), isDeleted: false });
         if (!camp) throw new Error('Camp not found');
-
-        if (action === 'delete') {
-          if (camp.status === 'executed' && !req.permissions.has(PERMISSIONS.ALL)) {
-            throw new Error('Executed camps cannot be deleted');
-          }
-          camp.isDeleted = true;
-          camp.deletedAt = new Date().toISOString();
-          camp.deletedBy = a.id;
-          await camp.save();
-          results.success.push({ id: camp._id, campId: camp.campId });
-          continue;
-        }
 
         if (config.from && !config.from.includes(camp.status)) {
           throw new Error(`Camp ${camp.campId} is ${camp.status} and cannot be ${action}d`);
@@ -523,11 +520,21 @@ router.post(
     }
 
     const docType = trimStr(req.body?.docType) || 'other';
+    if (!EXECUTION_DOC_TYPES.includes(docType)) {
+      throw new AppError('Invalid execution document type', 400, 'VALIDATION_ERROR');
+    }
     const files = Array.isArray(req.files) ? req.files : [];
     if (!files.length) throw new AppError('Select at least one file', 400, 'VALIDATION_ERROR');
+    if (docType === 'gps_selfie') {
+      const invalid = files.find((file) => !String(file.mimetype || '').startsWith('image/'));
+      if (invalid) {
+        throw new AppError('GPS Selfie must be an image file', 400, 'VALIDATION_ERROR');
+      }
+    }
 
     const before = camp.toObject();
     const existing = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
+    const uploadedAt = new Date().toISOString();
     const added = files.map((file) => ({
       id: file.filename,
       fileName: file.originalname,
@@ -536,10 +543,19 @@ router.post(
       mimeType: file.mimetype,
       fileSize: file.size,
       url: `/uploads/camp-ops/${file.filename}`,
-      uploadedAt: new Date().toISOString(),
+      uploadedAt,
     }));
 
     camp.executionDocuments = [...existing, ...added];
+
+    if (docType === 'gps_selfie') {
+      const selfie = added[added.length - 1];
+      if (selfie?.url) {
+        camp.inTimeSelfieUrl = selfie.url;
+        camp.lifecycleStage = camp.lifecycleStage || 'execution';
+      }
+    }
+
     await camp.save();
     await audit(req, 'camp_ops.execution_docs', 'camp_ops_camp', camp._id, before, camp.toObject());
     res.json({ data: enrichCamp(camp) });
@@ -633,6 +649,14 @@ router.put(
       }
     }
 
+    if (stage === 'execution') {
+      try {
+        assertExecutionStageSave(camp);
+      } catch (err) {
+        throw new AppError(err.message || 'Invalid execution stage', 400, 'VALIDATION_ERROR');
+      }
+    }
+
     if (camp.status === 'approved' && camp.lifecycleStage === 'request') {
       camp.lifecycleStage = 'assignment';
     }
@@ -643,6 +667,69 @@ router.put(
     await camp.save();
     await audit(req, 'camp_ops.update', 'camp_ops_camp', camp._id, before, camp.toObject());
     res.json({ data: enrichCamp(camp) });
+  })
+);
+
+router.post(
+  '/camps/:id/submit-to-finance',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
+    if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
+    if (!canEditLifecycleStage(camp, 'financial')) {
+      throw new AppError('Financial stage is not editable for this camp', 400, 'VALIDATION_ERROR');
+    }
+    if (camp.submittedToFinanceAt) {
+      throw new AppError('This camp payout was already submitted to Finance One', 400, 'ALREADY_SUBMITTED');
+    }
+
+    const before = camp.toObject();
+    const payload = lifecyclePayloadFromBody(req.body, camp);
+    Object.assign(camp, payload);
+
+    const paymentSubmitStatus = normalizePaymentSubmitStatus(
+      req.body.paymentSubmitStatus || camp.paymentSubmitStatus
+    );
+    if (!paymentSubmitStatus) {
+      throw new AppError(
+        'Select Payment Confirmed, Payment Not Checked, or Payment Hold before submitting',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    if (!PAYMENT_SUBMIT_STATUSES.includes(paymentSubmitStatus)) {
+      throw new AppError('Invalid payment submit status', 400, 'VALIDATION_ERROR');
+    }
+
+    const a = actor(req);
+    const now = new Date().toISOString();
+    camp.paymentSubmitStatus = paymentSubmitStatus;
+    camp.financePaymentStatus = 'under_review';
+    camp.submittedToFinanceAt = now;
+    camp.submittedToFinanceById = a.id;
+    camp.submittedToFinanceByEmail = a.email;
+    camp.lifecycleStage = camp.lifecycleStage || 'financial';
+
+    await camp.save();
+    await audit(req, 'camp_ops.submit_to_finance', 'camp_ops_camp', camp._id, before, camp.toObject());
+    res.json({ data: enrichCamp(camp) });
+  })
+);
+
+router.get(
+  '/camps/:id/finance-export',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
+    if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
+    assertCampSubmittedToFinance(camp);
+    sendExcel(
+      res,
+      campFinanceExportFilename(camp),
+      campFinanceExportHeaders(),
+      [buildCampFinanceExportRow(camp)],
+      { sheetName: 'Camp Payout' },
+    );
   })
 );
 
@@ -760,8 +847,14 @@ router.post(
   asyncHandler(async (req, res) => {
     const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
     if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
-    if (!canCloseCampStatus(camp.status)) {
-      throw new AppError('Camp is already closed', 400, 'VALIDATION_ERROR');
+    if (!canCloseCampRecord(camp)) {
+      throw new AppError(
+        camp.lifecycleStage === 'financial'
+          ? 'Camps in Finance & Settlement cannot be cancelled or refused'
+          : 'Camp is already closed',
+        400,
+        'VALIDATION_ERROR',
+      );
     }
 
     const closureType = trimStr(req.body?.closureType || req.body?.assignmentRefusalReason);
@@ -790,18 +883,7 @@ router.delete(
   '/camps/:id',
   requireAdmin,
   asyncHandler(async (req, res) => {
-    const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
-    if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
-    if (camp.status === 'executed' && !req.permissions.has(PERMISSIONS.ALL)) {
-      throw new AppError('Executed camps cannot be deleted', 400, 'VALIDATION_ERROR');
-    }
-    const before = camp.toObject();
-    camp.isDeleted = true;
-    camp.deletedAt = new Date().toISOString();
-    camp.deletedBy = actor(req).id;
-    await camp.save();
-    await audit(req, 'camp_ops.soft_delete', 'camp_ops_camp', camp._id, before, camp.toObject());
-    res.json({ message: 'Camp archived successfully', data: { ok: true } });
+    throw new AppError('Camps cannot be deleted. Cancel or refuse the camp instead.', 403, 'FORBIDDEN');
   })
 );
 

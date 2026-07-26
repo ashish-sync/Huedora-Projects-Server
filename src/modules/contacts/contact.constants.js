@@ -1,5 +1,7 @@
 /** Canonical picklists for Contact Directory */
 
+import { randomUUID } from 'crypto';
+
 export const CONTACT_CATEGORIES = ['Resource', 'Client', 'Vendor', 'Healthcare Worker'];
 
 /** Employment / engagement type — only when Contact Category is Resource */
@@ -30,6 +32,28 @@ export function isServiceProviderContact(contact) {
     contact.contactCategory === 'Healthcare Worker' &&
     String(contact.resourceType || '').trim() === 'Service Provider'
   );
+}
+
+/** Lightweight staff roster stored on Service Provider contacts */
+export function normalizeProviderEmployees(raw, contactCategory, resourceType) {
+  if (contactCategory !== 'Healthcare Worker' || resourceType !== 'Service Provider') {
+    return [];
+  }
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => {
+      const name = String(entry?.name || '').trim();
+      const mobile = String(entry?.mobile || entry?.contact || '').trim();
+      const profession = String(entry?.profession || '').trim();
+      if (!name && !mobile && !profession) return null;
+      return {
+        id: String(entry?.id || '').trim() || randomUUID(),
+        name,
+        mobile,
+        profession,
+      };
+    })
+    .filter(Boolean);
 }
 
 /** Default Profession / Role when Contact Category is Resource */

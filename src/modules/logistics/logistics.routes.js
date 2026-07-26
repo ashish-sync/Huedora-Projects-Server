@@ -1201,6 +1201,7 @@ router.post(
       }
       docs.images = [...docs.images, ...(extras.length ? extras : [single])];
       row.documents = docs;
+      if (!row.image && docs.images.length) row.image = docs.images[0];
     } else if (['datasheet', 'userManual', 'warranty', 'compliance', 'sop'].includes(slot)) {
       if (!single) throw new AppError('file is required', 400, 'VALIDATION_ERROR');
       docs[slot] = single;
@@ -1218,6 +1219,37 @@ router.post(
       entityType: 'LogisticsProduct',
       entityId: row._id,
       after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+    res.json({ data: row });
+  })
+);
+
+router.delete(
+  '/products/:id/files',
+  canMaster,
+  asyncHandler(async (req, res) => {
+    const row = await LogisticsProduct.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Product not found', 404);
+    const filename = trimStr(req.body?.filename || req.query?.filename);
+    if (!filename) throw new AppError('filename is required', 400, 'VALIDATION_ERROR');
+
+    const docs = row.documents && typeof row.documents === 'object' ? { ...row.documents } : {};
+    if (!Array.isArray(docs.images)) docs.images = [];
+
+    if (row.image?.filename === filename) row.image = null;
+    docs.images = docs.images.filter((img) => img?.filename !== filename);
+    row.documents = docs;
+    if (!row.image && docs.images.length) row.image = docs.images[0];
+
+    row.updatedBy = req.user._id;
+    await row.save();
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'LogisticsProduct.FILE_DELETE',
+      entityType: 'LogisticsProduct',
+      entityId: row._id,
       requestId: req.requestId,
     });
     res.json({ data: row });

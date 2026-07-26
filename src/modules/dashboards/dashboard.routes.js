@@ -14,7 +14,7 @@ import { User } from '../users/user.model.js';
 import { sendExcel, sendMultiSheetExcel } from '../../utils/excelExport.js';
 import {
   ASSET_STATUS_OPTIONS,
-  AGREEMENT_SIGNED_EQUIVALENTS,
+  isVerificationOneEligibleAsset,
 } from '../devices/device.constants.js';
 import {
   computeDeviceCondition,
@@ -248,11 +248,7 @@ router.get(
       ...Object.values(statusBuckets).filter((b) => !ASSET_STATUS_OPTIONS.includes(b.status)),
     ];
 
-    const signed = assets.filter(
-      (a) =>
-        AGREEMENT_SIGNED_EQUIVALENTS.includes(a.agreementStatus) ||
-        String(a.agreementStatus || '').trim().toLowerCase() === 'active'
-    );
+    const signed = assets.filter(isVerificationOneEligibleAsset);
 
     const campaign = await ensureCampaign(periodKey, req.user._id);
     const verificationMap = {

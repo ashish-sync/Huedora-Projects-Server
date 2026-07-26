@@ -122,7 +122,8 @@ function applyPasteDefaults(row = {}, defaults = {}) {
     ...row,
     clientName: trimStr(row.clientName) || context.clientName,
     campaignType: trimStr(row.campaignType) || context.campaignType,
-    campaignName: normalizeCampName(row.campaignName) || context.campaignName,
+    // Manual paste uses the method selected above — not parsed from pasted text.
+    campaignName: context.campaignName,
   };
 }
 
@@ -333,3 +334,5 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
     results,
   };
 }
+
+export { applyPasteDefaults };

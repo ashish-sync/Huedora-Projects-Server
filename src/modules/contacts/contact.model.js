@@ -11,6 +11,8 @@ import {
   HCW_RESOURCE_TYPES,
   isHcwStaffResourceType,
   isServiceProviderContact,
+  matchPicklist,
+  normalizeProviderEmployees,
   CLIENT_PROFESSIONS,
   VENDOR_PROFESSIONS,
   HEALTHCARE_WORKER_PROFESSIONS,
@@ -46,6 +48,8 @@ export const Contact = defineCollection('contacts', {
   cityId: null,
   /** Healthcare Worker staff → parent Service Provider contact */
   serviceProviderContactId: null,
+  /** Employees under a Service Provider (name, mobile, profession) */
+  providerEmployees: [],
 });
 
 function inferCategoryFromLegacy(body, resourceTypeRaw) {
@@ -148,6 +152,11 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
     stateId: body.stateId || null,
     districtId: body.districtId || null,
     cityId: body.cityId || null,
+    providerEmployees: normalizeProviderEmployees(
+      body.providerEmployees,
+      contactCategory,
+      contactCategory === 'Healthcare Worker' ? resourceType : ''
+    ),
   };
 
   if (validate) {
@@ -179,6 +188,26 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
         400,
         'VALIDATION_ERROR'
       );
+    }
+    if (
+      payload.contactCategory === 'Healthcare Worker' &&
+      payload.resourceType === 'Service Provider'
+    ) {
+      if (!String(payload.state || '').trim()) {
+        throw new AppError('State is required for Service Provider', 400, 'VALIDATION_ERROR');
+      }
+      if (!String(payload.contact || '').trim()) {
+        throw new AppError('Mobile number is required for Service Provider', 400, 'VALIDATION_ERROR');
+      }
+      for (let i = 0; i < payload.providerEmployees.length; i += 1) {
+        const emp = payload.providerEmployees[i];
+        if (!emp.name) {
+          throw new AppError(`Employee ${i + 1}: name is required`, 400, 'VALIDATION_ERROR');
+        }
+        if (!emp.mobile) {
+          throw new AppError(`Employee ${i + 1}: mobile number is required`, 400, 'VALIDATION_ERROR');
+        }
+      }
     }
     if (isClient && !payload.organization) {
       throw new AppError('Organization Name is required for Client', 400, 'VALIDATION_ERROR');

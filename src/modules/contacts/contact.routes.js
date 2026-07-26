@@ -273,7 +273,15 @@ router.get(
       contactCategory: 'Healthcare Worker',
       serviceProviderContactId: provider._id,
     }).sort('name');
-    res.json({ data: staff, meta: { count: staff.length, providerId: provider._id } });
+    res.json({
+      data: staff,
+      meta: {
+        count: staff.length,
+        employeeCount: (provider.providerEmployees || []).length,
+        providerId: provider._id,
+        providerEmployees: provider.providerEmployees || [],
+      },
+    });
   })
 );
 
@@ -353,6 +361,10 @@ router.patch(
           req.body.serviceProviderContactId !== undefined
             ? req.body.serviceProviderContactId
             : contact.serviceProviderContactId,
+        providerEmployees:
+          req.body.providerEmployees !== undefined
+            ? req.body.providerEmployees
+            : contact.providerEmployees,
       },
       { validate: true }
     );

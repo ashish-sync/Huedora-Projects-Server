@@ -23,7 +23,11 @@ import {
   createSelfVerifyInvite,
   logCallAttempt,
 } from './verification.service.js';
-import { AGREEMENT_SIGNED_EQUIVALENTS } from '../devices/device.constants.js';
+import {
+  isVerificationOneEligibleAsset,
+  medicalDeviceProductTypeQuery,
+  verificationOneAgreementStatus,
+} from '../devices/device.constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadRoot = path.resolve(__dirname, '../../../uploads/verifications');
@@ -139,17 +143,27 @@ router.get(
     const periodAnchor = new Date(py, pm - 1, Math.min(to?.getDate() || 15, 28));
 
     const campaign = await ensureCampaign(periodKey, req.user._id);
-    const assets = await Asset.find({
+    const candidates = await Asset.find({
       isDeleted: false,
-      agreementStatus: { $in: AGREEMENT_SIGNED_EQUIVALENTS },
+      ...medicalDeviceProductTypeQuery(),
     }).sort({ updatedAt: -1 });
 
-    // Backfill legacy "Active" → picklist value on read
-    for (const asset of assets) {
+    const assets = [];
+    for (const asset of candidates) {
+      if (!isVerificationOneEligibleAsset(asset)) continue;
+
+      // Backfill legacy "Active" → picklist value on read
       if (asset.agreementStatus === 'Active') {
         asset.agreementStatus = 'Agreement Signed';
         await asset.save();
+      } else {
+        const normalized = verificationOneAgreementStatus(asset.agreementStatus);
+        if (normalized && normalized !== asset.agreementStatus) {
+          asset.agreementStatus = normalized;
+          await asset.save();
+        }
       }
+      assets.push(asset);
     }
 
     const rows = [];

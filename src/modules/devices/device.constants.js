@@ -82,6 +82,50 @@ const AGREEMENT_STATUS_ALIASES = {
 /** Statuses treated as signed for verification board inclusion */
 export const AGREEMENT_SIGNED_EQUIVALENTS = ['Agreement Signed', 'Active'];
 
+/**
+ * Medical Device asset statuses included on Verification One (monthly rounds).
+ * With TCPL, Not Applicable, Agreement Signed, and Not Initiated.
+ */
+export const VERIFICATION_ONE_ELIGIBLE_STATUSES = [
+  'With TCPL',
+  'Not Applicable',
+  'Agreement Signed',
+  'Not Initiated',
+];
+
+export function isMedicalDeviceProductType(raw) {
+  const t = String(raw || '').trim();
+  return !t || t === 'Medical Device';
+}
+
+export function verificationOneAgreementStatus(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return 'Not Initiated';
+  if (v.toLowerCase() === 'active') return 'Agreement Signed';
+  const n = normalizeAgreementStatus(v);
+  return n || v;
+}
+
+export function isVerificationOneEligibleAsset(asset) {
+  if (!asset || asset.isDeleted) return false;
+  if (!isMedicalDeviceProductType(asset.productType)) return false;
+  return VERIFICATION_ONE_ELIGIBLE_STATUSES.includes(
+    verificationOneAgreementStatus(asset.agreementStatus)
+  );
+}
+
+/** Mongo filter: legacy rows without productType count as Medical Device */
+export function medicalDeviceProductTypeQuery() {
+  return {
+    $or: [
+      { productType: 'Medical Device' },
+      { productType: { $exists: false } },
+      { productType: null },
+      { productType: '' },
+    ],
+  };
+}
+
 export function normalizeAgreementStatus(raw) {
   const v = String(raw || '').trim();
   if (!v) return null;

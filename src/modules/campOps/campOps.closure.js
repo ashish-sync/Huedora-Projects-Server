@@ -25,6 +25,12 @@ export function canCloseCampStatus(status) {
   return !['cancelled', 'rejected'].includes(String(status || '').trim());
 }
 
+export function canCloseCampRecord(camp = {}) {
+  if (!canCloseCampStatus(camp?.status)) return false;
+  if (String(camp?.lifecycleStage || '').trim() === 'financial') return false;
+  return true;
+}
+
 export function applyCampClosure(camp, { closureType, reasonCode, actor } = {}) {
   const normalizedType = normalizeClosureType(closureType);
   const code = String(reasonCode || '').trim();

@@ -4,6 +4,7 @@ import {
   formatManualPasteOutput,
   NOT_PROVIDED,
 } from '../src/modules/campOps/manualPaste.extract.js';
+import { applyPasteDefaults } from '../src/modules/campOps/manualPaste.service.js';
 
 const SAMPLE = `
 Date: 15/08/2026
@@ -104,6 +105,14 @@ test('formatManualPasteOutput includes zone label', () => {
   assert.match(output, /^Camp Date:\n/);
   assert.match(output, /Zone:\n/);
   assert.match(output, /Contact Person Number:\n9876543210$/);
+});
+
+test('manual paste uses selected method instead of defaulting to Others', () => {
+  const row = applyPasteDefaults(
+    { doctorName: 'Dr Test' },
+    { clientName: 'Demo Pharma Ltd', campaignType: 'Demo Screening Program', campaignName: 'BMD' },
+  );
+  assert.equal(row.campaignName, 'BMD');
 });
 
 if (process.exitCode) {

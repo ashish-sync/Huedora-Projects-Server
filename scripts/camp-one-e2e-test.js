@@ -212,8 +212,8 @@ async function main() {
         outTime: '13:10',
         patientsCount: 38,
         chargeableStatus: 'Chargeable',
-        punctuality: 'Good',
-        attire: 'Good',
+        attire: 'No Issues',
+        labCoat: 'No Issues',
       },
     });
   });

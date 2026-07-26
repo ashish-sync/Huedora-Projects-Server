@@ -43,14 +43,86 @@ export const ASSIGNMENT_REFUSAL_REASONS = [
 export const ASSIGNMENT_STATUSES = ['Pending', 'Assigned', 'Reassigned', 'Unassigned'];
 
 export const EXECUTION_STATUSES = ['Pending', 'In Progress', 'Completed', 'Cancelled', 'Rejected'];
+export const EXECUTION_CLOSED_STATUSES = ['Cancelled', 'Rejected'];
+
+export function isExecutionClosedOut(executionStatus) {
+  return EXECUTION_CLOSED_STATUSES.includes(String(executionStatus || '').trim());
+}
+
+export function assertExecutionStageSave(camp = {}) {
+  if (!isExecutionClosedOut(camp.executionStatus)) return;
+  if (!localTrim(camp.cancellationReason)) {
+    throw new Error(
+      'Cancellation / Rejection Reason is required when execution status is Cancelled or Rejected',
+    );
+  }
+}
 
 export const CHARGEABLE_STATUSES = ['Chargeable', 'Non-Chargeable', 'Partial'];
 
 export const QUALITY_RATINGS = ['Good', 'Average', 'Poor'];
 
+export const ATTIRE_CHECK_OPTIONS = ['No Issues', 'Issues'];
+
 export const HCW_CATEGORIES = ['Technician', 'Phlebotomist', 'Dietician', 'Other'];
 
-export const EXECUTION_DOC_TYPES = ['doctor_form', 'patient_form', 'other'];
+export const EXECUTION_DOC_TYPES = ['doctor_form', 'patient_form', 'other', 'gps_selfie'];
+
+export const PAYMENT_SUBMIT_STATUSES = [
+  'payment_confirmed',
+  'payment_not_checked',
+  'payment_hold',
+];
+
+export const FINANCE_PAYMENT_STATUSES = ['not_paid', 'under_review', 'paid'];
+
+export function normalizePaymentSubmitStatus(raw) {
+  const v = String(raw || '').trim().toLowerCase().replace(/\s+/g, '_');
+  const aliases = {
+    payment_confirmed: 'payment_confirmed',
+    confirmed: 'payment_confirmed',
+    payment_not_checked: 'payment_not_checked',
+    not_checked: 'payment_not_checked',
+    payment_hold: 'payment_hold',
+    hold: 'payment_hold',
+  };
+  return aliases[v] || (PAYMENT_SUBMIT_STATUSES.includes(v) ? v : '');
+}
+
+export function normalizeFinancePaymentStatus(raw) {
+  const v = String(raw || '').trim().toLowerCase().replace(/\s+/g, '_');
+  const aliases = {
+    paid: 'paid',
+    not_paid: 'not_paid',
+    unpaid: 'not_paid',
+    under_review: 'under_review',
+    review: 'under_review',
+  };
+  return aliases[v] || (FINANCE_PAYMENT_STATUSES.includes(v) ? v : '');
+}
+
+export function formatInTimeIst(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const hour = parts.find((p) => p.type === 'hour')?.value || '00';
+  const minute = parts.find((p) => p.type === 'minute')?.value || '00';
+  return `${hour}:${minute}`;
+}
+
+export function resolveInTimeSelfieUrl(camp = {}) {
+  if (camp.inTimeSelfieUrl) return camp.inTimeSelfieUrl;
+  const docs = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
+  const selfies = docs.filter((d) => d.docType === 'gps_selfie');
+  if (!selfies.length) return '';
+  const latest = selfies.sort((a, b) =>
+    String(b.uploadedAt || '').localeCompare(String(a.uploadedAt || ''))
+  )[0];
+  return latest?.url || '';
+}
 
 export function resolveCampSlot(startTime) {
   const mins = parseTimeToMinutes(startTime);
@@ -59,6 +131,21 @@ export function resolveCampSlot(startTime) {
   if (mins >= 13 * 60 && mins < 17 * 60) return 'Noon';
   if (mins >= 17 * 60 && mins <= 21 * 60) return 'Evening';
   return '';
+}
+
+/** On time / early through 5 min late → Good; 5–15 min late → Average; 15+ min late → Poor. */
+export function resolvePunctuality(campStartTime, inTime) {
+  const startMins = parseTimeToMinutes(campStartTime);
+  const inMins = parseTimeToMinutes(inTime);
+  if (startMins == null || inMins == null) return '';
+
+  let lateMinutes = inMins - startMins;
+  if (lateMinutes < -12 * 60) lateMinutes += 24 * 60;
+  if (lateMinutes > 12 * 60) lateMinutes -= 24 * 60;
+
+  if (lateMinutes <= 5) return 'Good';
+  if (lateMinutes <= 15) return 'Average';
+  return 'Poor';
 }
 
 function num(value, fallback = 0) {
@@ -101,6 +188,8 @@ export function computeLifecycleDerived(camp = {}) {
 
   const kmRoundTrip = num(camp.kmRoundTrip);
 
+  const punctuality = resolvePunctuality(startTime, inTime);
+
   return {
     campSlot,
     totalHours: totalHours ?? null,
@@ -109,6 +198,7 @@ export function computeLifecycleDerived(camp = {}) {
     totalPayout,
     balance,
     kmRoundTrip,
+    punctuality,
   };
 }
 
@@ -157,13 +247,13 @@ export function lifecyclePayloadFromBody(body, existing = null) {
     ? pickStr('chargeableStatus')
     : existing?.chargeableStatus || '';
 
-  const punctuality = QUALITY_RATINGS.includes(pickStr('punctuality'))
-    ? pickStr('punctuality')
-    : existing?.punctuality || '';
-
-  const attire = QUALITY_RATINGS.includes(pickStr('attire'))
+  const attire = ATTIRE_CHECK_OPTIONS.includes(pickStr('attire'))
     ? pickStr('attire')
     : existing?.attire || '';
+
+  const labCoat = ATTIRE_CHECK_OPTIONS.includes(pickStr('labCoat'))
+    ? pickStr('labCoat')
+    : existing?.labCoat || '';
 
   const hcwCategory = HCW_CATEGORIES.includes(pickStr('hcwCategory'))
     ? pickStr('hcwCategory')
@@ -191,10 +281,14 @@ export function lifecyclePayloadFromBody(body, existing = null) {
     cancellationReason: pickStr('cancellationReason', pickStr('remarks')),
     chargeableStatus,
     inTime: pickStr('inTime'),
+    inTimeSelfieUrl:
+      body.inTimeSelfieUrl !== undefined
+        ? pickStr('inTimeSelfieUrl')
+        : existing?.inTimeSelfieUrl || resolveInTimeSelfieUrl(existing || {}),
     outTime: pickStr('outTime'),
     kmRoundTrip: pickNum('kmRoundTrip'),
-    punctuality,
     attire,
+    labCoat,
     rxCount: Math.max(0, Math.floor(pickNum('rxCount'))),
     campRevenue: pickNum('campRevenue'),
     overtimeRevenue: pickNum('overtimeRevenue'),
@@ -206,6 +300,14 @@ export function lifecyclePayloadFromBody(body, existing = null) {
     paidAmount: pickNum('paidAmount'),
     transactionId: pickStr('transactionId'),
     paymentRemark: pickStr('paymentRemark'),
+    paymentSubmitStatus:
+      body.paymentSubmitStatus !== undefined
+        ? normalizePaymentSubmitStatus(body.paymentSubmitStatus)
+        : existing?.paymentSubmitStatus || '',
+    financePaymentStatus:
+      body.financePaymentStatus !== undefined
+        ? normalizeFinancePaymentStatus(body.financePaymentStatus)
+        : existing?.financePaymentStatus || '',
   };
 
   if (body.patientsCount !== undefined) {

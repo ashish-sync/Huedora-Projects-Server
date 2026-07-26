@@ -28,6 +28,7 @@ import { syncAssetContactFromAgreement } from '../assets/assetContactSync.js';
 import { Notification } from '../notifications/notification.model.js';
 import { ensureRecipientShortCode, generateShortCode } from './recipientAccess.js';
 import { buildAgreementPdfBuffer, pdfOptionsFromAgreement } from './agreementPdf.js';
+import { persistSignedAgreementPdf } from './agreementSignedDocument.js';
 import { sendExcel } from '../../utils/excelExport.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -976,6 +977,13 @@ router.post(
     agreement.activatedAt = new Date().toISOString();
     agreement.updatedBy = req.user._id;
     await agreement.save();
+
+    try {
+      await persistSignedAgreementPdf(agreement, req.user._id);
+    } catch {
+      /* activation succeeds even if PDF persistence fails */
+    }
+
     const links = await AgreementAsset.find({ agreementId: agreement._id, isActive: true });
     for (const link of links) {
       const asset = await Asset.findOne({ _id: link.assetId, isDeleted: false });
@@ -984,6 +992,13 @@ router.post(
       asset.agreementStatus = 'Agreement Signed';
       await syncAssetContactFromAgreement(asset, agreement);
       await asset.save();
+      await AssetEvent.create({
+        assetId: asset._id,
+        at: new Date().toISOString(),
+        type: 'AGREEMENT_ACTIVATED',
+        message: `Signed agreement ${agreement.agreementNumber} attached from Document One`,
+        actorId: req.user._id,
+      });
     }
     await logActivity(agreement._id, req, 'ACTIVATED', 'Agreement activated');
     await writeAudit({
