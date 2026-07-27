@@ -21,6 +21,13 @@ import {
   normalizeCampName,
 } from './campOps.constants.js';
 import {
+  CLIENT_MASTER_HEADERS,
+  CLIENT_MASTER_SAMPLE_ROW,
+  clientMasterToExcelRow,
+  normalizeClientMasterDuration,
+  parseClientMasterImportRow,
+} from './clientMaster.excel.js';
+import {
   CampOpsCamp,
   CampOpsClient,
   CampOpsClientMaster,
@@ -1028,8 +1035,13 @@ function buildMasterPayload(body, client) {
   };
   for (const field of MASTER_STRING_FIELDS) {
     if (body[field] !== undefined) {
-      payload[field] =
-        field === 'campName' ? normalizeCampName(body[field]) : trimStr(body[field]);
+      if (field === 'campName') {
+        payload[field] = normalizeCampName(body[field]);
+      } else if (field === 'campDuration') {
+        payload[field] = normalizeClientMasterDuration(body[field]);
+      } else {
+        payload[field] = trimStr(body[field]);
+      }
     }
   }
   for (const field of MASTER_NUMERIC_FIELDS) {
@@ -1039,6 +1051,19 @@ function buildMasterPayload(body, client) {
     }
   }
   return payload;
+}
+
+function assertClientMasterPayload(payload) {
+  if (!trimStr(payload.programName)) {
+    throw new AppError('Division / Therapy is required', 400, 'VALIDATION_ERROR');
+  }
+  if (!trimStr(payload.campType)) {
+    throw new AppError('Service Model is required', 400, 'VALIDATION_ERROR');
+  }
+  const method = trimStr(payload.campName);
+  if (!method || method.toLowerCase() === 'others') {
+    throw new AppError('Method is required', 400, 'VALIDATION_ERROR');
+  }
 }
 
 router.get(
@@ -1061,28 +1086,6 @@ router.get(
   })
 );
 
-const CLIENT_MASTER_HEADERS = [
-  'Client Name',
-  'Program Name',
-  'Camp Name',
-  'Camp Type',
-  'Coordinator',
-  'Healthcare Worker',
-  'Camp Duration',
-  'SPOC Name',
-  'SPOC Number',
-  'Request Timeline',
-  'PO Amount',
-  'Executed Camp Unit',
-  'Cancelled Camp Unit',
-  'OT Unit',
-  'Min Patients',
-  'Min KMs',
-  'Ext Patient Unit',
-  'KMs Unit',
-  'Active',
-];
-
 router.get(
   '/client-masters/export',
   canRead,
@@ -1092,27 +1095,7 @@ router.get(
       res,
       'Client_Master.xlsx',
       CLIENT_MASTER_HEADERS,
-      rows.map((r) => [
-        r.clientName,
-        r.programName,
-        r.campName,
-        r.campType,
-        r.coordinatorName,
-        r.healthcareWorker,
-        r.campDuration,
-        r.spocName,
-        r.spocNumber,
-        r.requestTimeline,
-        r.poAmount,
-        r.executedCampUnit,
-        r.cancelledCampUnit,
-        r.otUnit,
-        r.minimumPatientCovered,
-        r.minimumKmsCovered,
-        r.extPatientUnit,
-        r.kmsUnit,
-        r.isActive === false ? 'No' : 'Yes',
-      ]),
+      rows.map((r) => clientMasterToExcelRow(r)),
       { sheetName: 'Client Master' }
     );
   })
@@ -1126,29 +1109,7 @@ router.get(
       res,
       'Client_Master_Sample.xlsx',
       CLIENT_MASTER_HEADERS,
-      [
-        [
-          'Acme Health',
-          'Orthopedics',
-          'BMD',
-          'Fixed',
-          'Ravi Kumar',
-          'Dr. Meera',
-          '4',
-          'Priya Shah',
-          '9876543210',
-          '7 days',
-          150000,
-          10,
-          1,
-          2,
-          120,
-          500,
-          15,
-          25,
-          'Yes',
-        ],
-      ],
+      [CLIENT_MASTER_SAMPLE_ROW],
       { sheetName: 'Client Master' }
     );
   })
@@ -1169,34 +1130,11 @@ router.post(
       const row = rows[i];
       const rowNum = i + 2;
       try {
-        const clientName = cellValue(row, ['Client Name', 'Client', 'clientName']);
-        if (!clientName) continue;
-        const client = await resolveClientFromBody({ clientName }, { allowCreate: true });
+        const parsed = parseClientMasterImportRow(row);
+        if (!parsed) continue;
+        const client = await resolveClientFromBody({ clientName: parsed.clientName }, { allowCreate: true });
         if (!client) throw new AppError('Client is required', 400, 'VALIDATION_ERROR');
-        const body = {
-          clientName,
-          programName: cellValue(row, ['Program Name', 'Division / Therapy', 'programName']),
-          campName: cellValue(row, ['Camp Name', 'campName']) || 'BMD',
-          campType: cellValue(row, ['Camp Type', 'Service Model', 'campType']),
-          coordinatorName: cellValue(row, ['Coordinator', 'coordinatorName']),
-          healthcareWorker: cellValue(row, ['Healthcare Worker', 'HCW', 'healthcareWorker']),
-          campDuration: cellValue(row, ['Camp Duration', 'Duration', 'campDuration']),
-          spocName: cellValue(row, ['SPOC Name', 'spocName']),
-          spocNumber: cellValue(row, ['SPOC Number', 'spocNumber']),
-          requestTimeline: cellValue(row, ['Request Timeline', 'requestTimeline']),
-          poAmount: cellValue(row, ['PO Amount', 'poAmount']),
-          executedCampUnit: cellValue(row, ['Executed Camp Unit', 'executedCampUnit']),
-          cancelledCampUnit: cellValue(row, ['Cancelled Camp Unit', 'cancelledCampUnit']),
-          otUnit: cellValue(row, ['OT Unit', 'otUnit']),
-          minimumPatientCovered: cellValue(row, ['Min Patients', 'minimumPatientCovered']),
-          minimumKmsCovered: cellValue(row, ['Min KMs', 'minimumKmsCovered']),
-          extPatientUnit: cellValue(row, ['Ext Patient Unit', 'extPatientUnit']),
-          kmsUnit: cellValue(row, ['KMs Unit', 'kmsUnit']),
-          isActive: !['no', 'false', '0', 'inactive'].includes(
-            cellValue(row, ['Active', 'isActive']).toLowerCase()
-          ),
-        };
-        const payload = buildMasterPayload(body, client);
+        const payload = buildMasterPayload(parsed, client);
         await CampOpsClientMaster.create({
           ...payload,
           createdById: a.id,
@@ -1288,6 +1226,7 @@ router.post(
     const client = await resolveClientFromBody(req.body, { allowCreate: true });
     if (!client) throw new AppError('Client is required', 400, 'VALIDATION_ERROR');
     const payload = buildMasterPayload(req.body, client);
+    assertClientMasterPayload(payload);
     if (!payload.campName) payload.campName = 'BMD';
     const a = actor(req);
     const row = await CampOpsClientMaster.create({
@@ -1318,6 +1257,7 @@ router.put(
       }
     }
     Object.assign(row, buildMasterPayload({ ...row.toObject(), ...req.body }, client));
+    assertClientMasterPayload(row);
     row.updatedById = actor(req).id;
     await row.save();
     await audit(req, 'camp_ops.client_master_update', 'camp_ops_client_master', row._id, before, row.toObject());
