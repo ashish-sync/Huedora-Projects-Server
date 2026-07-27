@@ -75,6 +75,24 @@ import {
 import { buildDashboard } from './logistics.dashboard.js';
 import { listUsageMerged, syncUsageFromCamps } from './logistics.usage.js';
 import { attachMasterExcelRoutes } from '../../utils/masterExcel.js';
+import {
+  PARTY_HEADERS,
+  PARTY_IMPORT_COLUMNS,
+  PARTY_SAMPLE_HEADERS,
+  PARTY_SAMPLE_ROWS,
+} from './parties.excel.js';
+import {
+  PRODUCT_EXPORT_HEADERS,
+  PRODUCT_IMPORT_COLUMNS,
+  PRODUCT_SAMPLE_HEADERS,
+  PRODUCT_SAMPLE_ROWS,
+} from './products.excel.js';
+import {
+  EXPENSE_CATEGORY_HEADERS,
+  EXPENSE_CATEGORY_IMPORT_COLUMNS,
+  EXPENSE_CATEGORY_SAMPLE_HEADERS,
+  EXPENSE_CATEGORY_SAMPLE_ROWS,
+} from './expenseCategories.excel.js';
 import { productMasterAssetName } from './productMasterLabel.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -592,18 +610,8 @@ registerMasterCrud({
   excel: {
     filename: 'Suppliers_Vendors.xlsx',
     sheetName: 'Parties',
-    headers: [
-      'Type',
-      'Name',
-      'Contact Name',
-      'Email',
-      'Phone',
-      'City',
-      'State',
-      'GSTIN',
-      'PAN Card',
-      'Active',
-    ],
+    headers: PARTY_HEADERS,
+    sampleHeaders: PARTY_SAMPLE_HEADERS,
     rowFromDoc: (r) => [
       r.partyType || 'Supplier',
       r.name,
@@ -616,44 +624,8 @@ registerMasterCrud({
       r.panCard,
       r.isActive === false ? 'No' : 'Yes',
     ],
-    sampleRows: [
-      [
-        'Supplier',
-        'Acme Medical Supplies',
-        'Raj Patel',
-        'raj@acme.example',
-        '9876543210',
-        'Mumbai',
-        'Maharashtra',
-        '27AAAAA0000A1Z5',
-        'ABCDE1234F',
-        'Yes',
-      ],
-      [
-        'Vendor',
-        'City Diagnostics',
-        'Priya Shah',
-        'vendor@citydiag.example',
-        '9123456780',
-        'Pune',
-        'Maharashtra',
-        '',
-        '',
-        'Yes',
-      ],
-    ],
-    importColumns: [
-      { labels: ['Type', 'Party Type'], field: 'partyType' },
-      { labels: ['Name'], field: 'name', required: true },
-      { labels: ['Contact Name', 'Contact'], field: 'contactName', optional: true },
-      { labels: ['Email'], field: 'email', optional: true },
-      { labels: ['Phone', 'Contact Number'], field: 'phone', optional: true },
-      { labels: ['City'], field: 'city', optional: true },
-      { labels: ['State'], field: 'state', optional: true },
-      { labels: ['GSTIN'], field: 'gstin', optional: true },
-      { labels: ['PAN Card', 'PAN'], field: 'panCard', optional: true },
-      { labels: ['Active'], field: 'isActive', type: 'bool', defaultValue: true },
-    ],
+    sampleRows: PARTY_SAMPLE_ROWS,
+    importColumns: PARTY_IMPORT_COLUMNS,
   },
 });
 
@@ -963,25 +935,8 @@ registerMasterCrud({
     filename: 'Products.xlsx',
     sheetName: 'Products',
     preserveImportCode: true,
-    headers: [
-      'Product Type *',
-      'Product Code',
-      'Product Category',
-      'Brand / Manufacturer *',
-      'Model / Variant *',
-      'Product Name',
-      'Product Description',
-      'UOM',
-      'Units per Pack',
-      'Default Purchase Cost',
-      'Default GST (%)',
-      'Inventory Type *',
-      'Expiry Applicable',
-      'Warranty (Months)',
-      'Reorder Level',
-      'Active',
-      'Remarks',
-    ],
+    headers: PRODUCT_EXPORT_HEADERS,
+    sampleHeaders: PRODUCT_SAMPLE_HEADERS,
     prepareExportDocs: async (docs) => {
       const uoms = await LogisticsUom.find({ isDeleted: false });
       const byId = Object.fromEntries(uoms.map((u) => [String(u._id), u]));
@@ -1017,106 +972,8 @@ registerMasterCrud({
       r.internalRemarks || '',
     ];
     },
-    sampleRows: [
-      [
-        'Consumable',
-        '',
-        'Medical Consumable',
-        'MediGel',
-        '250ml',
-        'MediGel — Ultrasound Gel 250ml',
-        'Ultrasound coupling gel',
-        'Bottle (BTL)',
-        1,
-        120,
-        12,
-        'Inventory',
-        'Yes',
-        0,
-        50,
-        'Yes',
-        '',
-      ],
-      [
-        'Medical Device',
-        '',
-        'BMD',
-        'CarePlus',
-        'BP Monitor Pro',
-        'CarePlus — BP Monitor Pro',
-        'Digital blood pressure monitor',
-        'Each (EA)',
-        1,
-        2500,
-        18,
-        'Asset',
-        'No',
-        12,
-        0,
-        'Yes',
-        '',
-      ],
-    ],
-    importColumns: [
-      { labels: ['Product Type *', 'Product Type', 'Type'], field: 'productType', required: true },
-      { labels: ['Product Code', 'Code'], field: 'code', optional: true },
-      { labels: ['Product Category', 'Category'], field: 'productCategory', optional: true },
-      {
-        labels: ['Brand / Manufacturer *', 'Brand / Manufacturer', 'Brand'],
-        field: 'brand',
-        required: true,
-      },
-      {
-        labels: ['Model / Variant *', 'Model/Variant/Name *', 'Model', 'Variant'],
-        field: 'model',
-        required: true,
-      },
-      { labels: ['Product Name', 'Name'], field: 'name', optional: true },
-      { labels: ['Product Description', 'Description'], field: 'description', optional: true },
-      {
-        labels: ['UOM', 'Unit of Measure (UOM)', 'Select UOM', 'UOM Name', 'UOM Code'],
-        field: 'uom',
-        optional: true,
-      },
-      { labels: ['Units per Pack'], field: 'unitsPerPack', type: 'number', defaultValue: 1 },
-      {
-        labels: ['Default Purchase Cost', 'Purchase Cost', 'Standard Cost'],
-        field: 'purchaseCost',
-        type: 'number',
-        defaultValue: 0,
-      },
-      {
-        labels: ['Default GST (%)', 'GST / Tax (%)', 'GST / Tax', 'GST Rate', 'GST'],
-        field: 'gstRate',
-        type: 'number',
-        defaultValue: 0,
-      },
-      {
-        labels: ['Inventory Type *', 'Inventory Type'],
-        field: 'inventoryType',
-        required: true,
-      },
-      {
-        labels: ['Expiry Applicable'],
-        field: 'expiryApplicable',
-        type: 'bool',
-        defaultValue: false,
-      },
-      {
-        labels: ['Warranty (Months)', 'Warranty Months'],
-        field: 'warrantyPeriodMonths',
-        type: 'number',
-        defaultValue: 0,
-      },
-      {
-        labels: ['Reorder Level', 'Minimum Stock Level'],
-        field: 'reorderLevel',
-        type: 'number',
-        defaultValue: 0,
-      },
-      { labels: ['Active'], field: 'isActive', type: 'bool', defaultValue: true },
-      { labels: ['Remarks', 'Internal Remarks'], field: 'internalRemarks', optional: true },
-    ],
+    sampleRows: PRODUCT_SAMPLE_ROWS,
+    importColumns: PRODUCT_IMPORT_COLUMNS,
     importTransform: async (body) => {
       const modelVariantName = trimStr(body.model) || trimStr(body.name);
       body.model = modelVariantName;
@@ -1323,17 +1180,11 @@ registerMasterCrud({
   excel: {
     filename: 'Expense_Categories.xlsx',
     sheetName: 'Expense Categories',
-    headers: ['Name', 'Covers', 'Active'],
+    headers: EXPENSE_CATEGORY_HEADERS,
+    sampleHeaders: EXPENSE_CATEGORY_SAMPLE_HEADERS,
     rowFromDoc: (r) => [r.name, r.covers, r.isActive === false ? 'No' : 'Yes'],
-    sampleRows: [
-      ['Travel', 'Employee travel and conveyance', 'Yes'],
-      ['Meals', 'Team meals during camps', 'Yes'],
-    ],
-    importColumns: [
-      { labels: ['Name'], field: 'name', required: true },
-      { labels: ['Covers', 'Description'], field: 'covers', optional: true },
-      { labels: ['Active'], field: 'isActive', type: 'bool', defaultValue: true },
-    ],
+    sampleRows: EXPENSE_CATEGORY_SAMPLE_ROWS,
+    importColumns: EXPENSE_CATEGORY_IMPORT_COLUMNS,
   },
 });
 

@@ -78,12 +78,14 @@ export function attachMasterExcelRoutes(router, opts) {
     filename,
     sheetName = 'Master',
     headers,
+    sampleHeaders,
     rowFromDoc,
     prepareExportDocs,
     sampleRows = [],
     importColumns,
     sort = 'name',
   } = excel;
+  const sampleColumnHeaders = sampleHeaders?.length ? sampleHeaders : headers;
 
   router.get(
     `/${path}/export`,
@@ -105,7 +107,7 @@ export function attachMasterExcelRoutes(router, opts) {
     canRead,
     asyncHandler(async (_req, res) => {
       const sampleName = String(filename || 'master.xlsx').replace(/\.xlsx$/i, '_Sample.xlsx');
-      sendExcel(res, sampleName, headers, sampleRows, { sheetName });
+      sendExcel(res, sampleName, sampleColumnHeaders, sampleRows, { sheetName });
     })
   );
 

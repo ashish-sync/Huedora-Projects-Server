@@ -28,25 +28,7 @@ import { normalizePhone } from '../../utils/identityNormalize.js';
 const router = Router();
 router.use(authenticate);
 
-const CONTACT_HEADERS = [
-  'Name',
-  'Email',
-  'Contact Category',
-  'Resource Type',
-  'Profession / Role',
-  'Organization Name',
-  'Supply Category',
-  'Contact',
-  'City',
-  'State',
-  'Address',
-  'PIN Code',
-  'PAN Number',
-  'IFSC Code',
-  'Bank Name',
-  'Account Number',
-  'Service Provider',
-];
+import { CONTACT_HEADERS, CONTACT_SAMPLE_ROWS } from './contact.excel.js';
 
 async function validateServiceProviderLink(payload, contactId = null) {
   if (payload.contactCategory !== 'Healthcare Worker') return;
@@ -217,44 +199,7 @@ router.get(
       res,
       'Contact_Directory_Sample.xlsx',
       CONTACT_HEADERS,
-      [
-        [
-          'Dr. Ananya Rao',
-          'ananya@example.com',
-          'Resource',
-          'Doctor',
-          'Radiologist',
-          '',
-          '',
-          '9876543210',
-          'Hyderabad',
-          'Telangana',
-          '12 Health Park Road',
-          '500081',
-          'ABCDE1234F',
-          'HDFC0001234',
-          'HDFC Bank',
-          '123456789012',
-        ],
-        [
-          'City Hospital',
-          'ops@cityhospital.example',
-          'Client',
-          '',
-          'Hospital',
-          'City Hospital Group',
-          '',
-          '9123456780',
-          'Mumbai',
-          'Maharashtra',
-          '',
-          '',
-          '',
-          '',
-          '',
-          '',
-        ],
-      ],
+      CONTACT_SAMPLE_ROWS,
       { sheetName: 'Contacts' }
     );
   })
@@ -432,11 +377,21 @@ router.post(
             ifscCode: cell(row, ['IFSC Code', 'IFSC', 'ifscCode']),
             bankName: cell(row, ['Bank Name', 'bankName']),
             accountNumber: cell(row, ['Account Number', 'accountNumber', 'Account']),
-            serviceProvider: cell(row, ['Service Provider', 'serviceProvider', 'ServiceProvider']),
+            serviceProvider: cell(row, [
+              'Service Provider (agency)',
+              'Service Provider',
+              'serviceProvider',
+              'ServiceProvider',
+            ]),
           },
           { validate: true }
         );
-        const spName = cell(row, ['Service Provider', 'serviceProvider', 'ServiceProvider']);
+        const spName = cell(row, [
+          'Service Provider (agency)',
+          'Service Provider',
+          'serviceProvider',
+          'ServiceProvider',
+        ]);
         if (spName && payload.contactCategory === 'Healthcare Worker') {
           const provider = await Contact.findOne({
             isDeleted: false,

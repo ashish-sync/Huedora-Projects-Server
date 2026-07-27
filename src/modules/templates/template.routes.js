@@ -69,11 +69,9 @@ router.get(
       res,
       'Document_Master.xlsx',
       [
-        'Name',
-        'Document Type',
-        'Category',
-        'Agreement Type',
-        'Signing Mode',
+        'Name of the template',
+        'Document type',
+        'Signing',
         'Active',
         'Description',
         'File Name',
@@ -97,15 +95,7 @@ router.get(
   })
 );
 
-const TEMPLATE_HEADERS = [
-  'Name',
-  'Document Type',
-  'Category',
-  'Agreement Type',
-  'Signing Mode',
-  'Active',
-  'Description',
-];
+import { TEMPLATE_HEADERS, TEMPLATE_SAMPLE_ROWS } from './template.excel.js';
 
 router.get(
   '/sample',
@@ -114,17 +104,7 @@ router.get(
       res,
       'Document_Master_Sample.xlsx',
       TEMPLATE_HEADERS,
-      [
-        [
-          'Lease Agreement Sample',
-          'LEASE',
-          'AGREEMENT',
-          'LEASE',
-          'SIGNING',
-          'Yes',
-          'Sample text template — edit body after import',
-        ],
-      ],
+      TEMPLATE_SAMPLE_ROWS,
       { sheetName: 'Document Master' }
     );
   })
@@ -144,19 +124,19 @@ router.post(
       const row = rows[i];
       const rowNum = i + 2;
       try {
-        const name = cellValue(row, ['Name', 'name']);
+        const name = cellValue(row, ['Name of the template', 'Name', 'name']);
         if (!name) continue;
-        const documentType = cellValue(row, ['Document Type', 'documentType']) || 'LEASE';
-        const signingRaw = cellValue(row, ['Signing Mode', 'signingType']).toUpperCase();
+        const documentType = cellValue(row, ['Document type', 'Document Type', 'documentType']) || 'LEASE';
+        const signingRaw = cellValue(row, ['Signing', 'Signing Mode', 'signingType']).toUpperCase();
         const signingType = signingRaw.includes('NON') ? 'NON_SIGNING' : 'SIGNING';
         const bodyHtml = `Document: ${name}\n\nEdit this template body and add placeholders as needed.`;
         await DocumentTemplate.create({
           name,
-          category: cellValue(row, ['Category', 'category']) || 'AGREEMENT',
-          agreementType: cellValue(row, ['Agreement Type', 'agreementType']) || documentType,
+          category: 'AGREEMENT',
+          agreementType: documentType,
           documentType,
           signingType,
-          description: cellValue(row, ['Description', 'description']) || '',
+          description: '',
           bodyHtml,
           sourceType: 'TEXT',
           placeholders: extractPlaceholdersFromText(bodyHtml),

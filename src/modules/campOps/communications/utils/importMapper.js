@@ -1,29 +1,15 @@
 import { normalizeCampName } from '../config/campNames.js';
 import { parseLocalDateInput, computeDurationHours, resolveCampSchedule, resolveClinicHospitalName } from './campHelpers.js';
 
-export const CAMP_IMPORT_FIELDS = [
-  { key: 'clientName', label: 'Client Name', required: true },
-  { key: 'campaignType', label: 'Division / Business', required: false },
-  { key: 'campaignName', label: 'Camp Name', required: false },
-  { key: 'doctorName', label: 'Doctor Name', required: false },
-  { key: 'doctorCode', label: 'Doctor Code', required: false },
-  { key: 'campAddress', label: 'Camp Address', required: false },
-  { key: 'city', label: 'City', required: false },
-  { key: 'state', label: 'State', required: false },
-  { key: 'pincode', label: 'Pincode', required: false },
-  { key: 'campDate', label: 'Camp Date', required: true },
-  { key: 'startTime', label: 'Start Time', required: false },
-  { key: 'endTime', label: 'End Time', required: false },
-  { key: 'expectedPatients', label: 'Expected Patients', required: false },
-  { key: 'fieldPersonName', label: 'Field Person Name', required: false },
-  { key: 'fieldPersonPhone', label: 'Field Person Contact', required: false },
-  { key: 'remarks', label: 'Remarks', required: false },
-];
+import { CAMP_IMPORT_FIELDS } from '../../campOps.constants.js';
+
+export { CAMP_IMPORT_FIELDS };
 
 const HEADER_ALIASES = {
   clientName: ['client name', 'client', 'company', 'pharma', 'pharma client'],
-  campaignName: ['camp name', 'campaign name', 'campaign'],
+  campaignName: ['method', 'camp name', 'campaign name', 'campaign'],
   campaignType: [
+    'division / therapy',
     'division / business',
     'division / bu',
     'division',

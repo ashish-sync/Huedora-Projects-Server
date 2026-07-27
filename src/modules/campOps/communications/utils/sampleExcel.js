@@ -55,8 +55,8 @@ function buildSampleRow(index) {
 
   return {
     'Client Name': SAMPLE_CLIENTS[index % SAMPLE_CLIENTS.length],
-    'Division / Business': SAMPLE_DIVISIONS[index % SAMPLE_DIVISIONS.length],
-    'Camp Name': CAMP_NAME_OPTIONS[index % CAMP_NAME_OPTIONS.length],
+    'Division / Therapy': SAMPLE_DIVISIONS[index % SAMPLE_DIVISIONS.length],
+    'Method': CAMP_NAME_OPTIONS[index % CAMP_NAME_OPTIONS.length],
     'Doctor Name': `Dr. Sample ${index + 1}`,
     'Doctor Code': `DOC${101 + index}`,
     'Camp Address': `${10 + index} Main Road, ${location.city}`,

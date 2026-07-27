@@ -58,39 +58,22 @@ router.get(
     sendExcel(
       res,
       'Signature_Master.xlsx',
-      [
-        'Name',
-        'Role',
-        'Email',
-        'Department',
-        'Signature Type',
-        'Active',
-        'Notes',
-      ],
+      SIGNATURE_EXPORT_HEADERS,
       rows.map((s) => [
         s.name,
         s.roleLabel,
         s.email,
         s.department,
-        s.signatureType,
-        s.isActive === false ? 'No' : 'Yes',
+        s.signatureType === 'TYPED' ? s.signatureData : '',
         s.notes,
+        s.isActive === false ? 'No' : 'Yes',
       ]),
       { sheetName: 'Signatures' }
     );
   })
 );
 
-const SIGNATURE_HEADERS = [
-  'Name',
-  'Role',
-  'Email',
-  'Department',
-  'Signature Type',
-  'Typed Signature',
-  'Active',
-  'Notes',
-];
+import { SIGNATURE_EXPORT_HEADERS, SIGNATURE_HEADERS, SIGNATURE_SAMPLE_ROWS } from './signature.excel.js';
 
 router.get(
   '/sample',
@@ -99,18 +82,7 @@ router.get(
       res,
       'Signature_Master_Sample.xlsx',
       SIGNATURE_HEADERS,
-      [
-        [
-          'Priya Sharma',
-          'HR',
-          'priya@example.com',
-          'Human Resources',
-          'TYPED',
-          'Priya Sharma',
-          'Yes',
-          'Sample typed signature',
-        ],
-      ],
+      SIGNATURE_SAMPLE_ROWS,
       { sheetName: 'Signatures' }
     );
   })
@@ -130,15 +102,16 @@ router.post(
       const row = rows[i];
       const rowNum = i + 2;
       try {
-        const name = cellValue(row, ['Name', 'name']);
+        const name = cellValue(row, ['Person name', 'Name', 'name']);
         if (!name) continue;
-        const roleLabel = cellValue(row, ['Role', 'roleLabel']);
-        if (!roleLabel) throw new AppError('Role is required', 400, 'VALIDATION_ERROR');
-        const signatureType = cellValue(row, ['Signature Type', 'signatureType']).toUpperCase() || 'TYPED';
+        const roleLabel = cellValue(row, ['Role / designation', 'Role', 'roleLabel']);
+        if (!roleLabel) throw new AppError('Role / designation is required', 400, 'VALIDATION_ERROR');
+        const signatureType =
+          cellValue(row, ['Signature Type', 'signatureType']).toUpperCase() || 'TYPED';
         if (signatureType !== 'TYPED') {
-          throw new AppError('Excel import supports TYPED signatures only', 400, 'VALIDATION_ERROR');
+          throw new AppError('Excel import supports typed signatures only', 400, 'VALIDATION_ERROR');
         }
-        const typed = cellValue(row, ['Typed Signature', 'signatureData']) || name;
+        const typed = cellValue(row, ['Typed signature', 'Typed Signature', 'signatureData']) || name;
         const payload = normalizeSignaturePayload({
           name,
           roleLabel,

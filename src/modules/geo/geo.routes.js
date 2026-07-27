@@ -5,7 +5,6 @@ import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
-import { GeoCity, GeoDistrict, GeoPinCode, GeoState, GeoZone } from './geo.model.js';
 import { forceReseedGeoMasters } from './geo.seed.js';
 import { resolveZoneForStateRecord, resolveZoneNameForState } from './geo.zones.js';
 
@@ -177,7 +176,7 @@ router.get(
   })
 );
 
-const PIN_HEADERS = ['PIN Code', 'State', 'District', 'City', 'Locality', 'Notes', 'Active'];
+import { PIN_CODE_HEADERS, PIN_CODE_SAMPLE_ROWS } from './pinCodes.excel.js';
 
 router.get(
   '/pin-codes/export',
@@ -186,15 +185,14 @@ router.get(
     sendExcel(
       res,
       'Geography_PIN_Codes.xlsx',
-      PIN_HEADERS,
+      PIN_CODE_HEADERS,
       rows.map((r) => [
         r.pinCode,
         r.stateName,
-        r.districtName,
         r.cityName,
         r.locality,
         r.notes,
-        r.isActive === false ? 'No' : 'Yes',
+        r.isActive === false ? 'Inactive' : 'Active',
       ]),
       { sheetName: 'PIN Codes' }
     );
@@ -207,11 +205,8 @@ router.get(
     sendExcel(
       res,
       'Geography_PIN_Codes_Sample.xlsx',
-      PIN_HEADERS,
-      [
-        ['400001', 'Maharashtra', 'Mumbai City', 'Mumbai', 'Fort', 'Sample mapping', 'Yes'],
-        ['500081', 'Telangana', 'Hyderabad', 'Hyderabad', 'Madhapur', '', 'Yes'],
-      ],
+      PIN_CODE_HEADERS,
+      PIN_CODE_SAMPLE_ROWS,
       { sheetName: 'PIN Codes' }
     );
   })
@@ -275,7 +270,7 @@ router.post(
         const districtName = cellValue(row, ['District', 'districtName']);
         const locality = cellValue(row, ['Locality', 'locality']);
         const notes = cellValue(row, ['Notes', 'notes']);
-        const activeRaw = cellValue(row, ['Active', 'isActive']);
+        const activeRaw = cellValue(row, ['Status', 'Active', 'isActive']);
         const isActive = !['no', 'false', '0', 'inactive'].includes(activeRaw.toLowerCase());
 
         const { city, district, state } = await resolveGeoNames({ stateName, districtName, cityName });
