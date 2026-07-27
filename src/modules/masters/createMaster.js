@@ -32,7 +32,7 @@ import {
 } from '../logistics/logistics.model.js';
 import { Contact, normalizeContactPayload } from '../contacts/contact.model.js';
 import { assertContactIdentityAvailable } from '../contacts/contactIdentity.js';
-import { GeoCity, GeoDistrict, GeoPinCode, GeoState } from '../geo/geo.model.js';
+import { resolvePinTargets, upsertNormalizedPin, enrichPinRecord } from '../geo/pinCode.service.js';
 import { DocumentTemplate } from '../templates/template.model.js';
 import { analyzeDocx, writeBuffer } from '../templates/docxPlaceholders.js';
 import {
@@ -288,47 +288,27 @@ async function createContact(payload, actor, requestId) {
 
 async function createPinCode(payload, actor, requestId) {
   const pinCode = String(payload.pinCode || '').replace(/\D+/g, '');
-  if (!/^\d{6}$/.test(pinCode)) {
-    throw new AppError('PIN code must be a 6-digit number', 400, 'VALIDATION_ERROR');
-  }
-  const cityId = payload.cityId;
-  const city = cityId ? await GeoCity.findOne({ _id: cityId, isDeleted: false }) : null;
-  if (!city) throw new AppError('City is required for a PIN mapping', 400, 'VALIDATION_ERROR');
-  let district = null;
-  if (payload.districtId) {
-    district = await GeoDistrict.findOne({ _id: payload.districtId, isDeleted: false });
-  }
-  const sId = payload.stateId || city.stateId;
-  const state = sId ? await GeoState.findOne({ _id: sId, isDeleted: false }) : null;
-  if (!state) throw new AppError('State is required for a PIN mapping', 400, 'VALIDATION_ERROR');
-
-  const dup = await GeoPinCode.findOne({ pinCode, cityId: city._id, isDeleted: false });
-  if (dup) throw new AppError('This PIN is already mapped to that city', 409, 'DUPLICATE_PIN');
-
-  const row = await GeoPinCode.create({
+  const { city, district, state } = await resolvePinTargets(payload);
+  const { row, created } = await upsertNormalizedPin({
     pinCode,
-    cityId: city._id,
-    cityName: city.name,
-    districtId: district?._id || city.districtId || null,
-    districtName: district?.name || '',
-    stateId: state._id,
-    stateName: state.name,
+    city,
+    district,
+    state,
     locality: trimStr(payload.locality),
     notes: trimStr(payload.notes),
     isActive: true,
-    createdBy: actor._id,
     updatedBy: actor._id,
   });
   await writeAudit({
     actorId: actor._id,
     actorEmail: actor.email,
-    action: 'GEO_PIN.CREATE',
+    action: created ? 'GEO_PIN.CREATE' : 'GEO_PIN.UPDATE',
     entityType: 'GeoPinCode',
     entityId: row._id,
-    after: row.toObject ? row.toObject() : row,
+    after: await enrichPinRecord(row),
     requestId,
   });
-  return row;
+  return enrichPinRecord(row);
 }
 
 async function createTemplate(payload, fileBuffer, originalName, actor, requestId) {

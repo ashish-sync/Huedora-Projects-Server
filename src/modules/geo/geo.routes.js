@@ -8,6 +8,17 @@ import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.
 import { forceReseedGeoMasters } from './geo.seed.js';
 import { resolveZoneForStateRecord, resolveZoneNameForState } from './geo.zones.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState, GeoZone } from './geo.model.js';
+import { PIN_CODE_HEADERS, PIN_CODE_SAMPLE_ROWS } from './pinCodes.excel.js';
+import {
+  attachPinCounts,
+  enrichPinRecord,
+  enrichPinRecords,
+  getPinPreview,
+  pinToExcelRow,
+  resolveGeoNames,
+  resolvePinTargets,
+  upsertNormalizedPin,
+} from './pinCode.service.js';
 
 const router = Router();
 router.use(authenticate);
@@ -97,7 +108,11 @@ router.get(
     const filter = { isDeleted: false, isActive: true };
     if (req.query.q) filter.name = new RegExp(String(req.query.q), 'i');
     const rows = await GeoState.find(filter).sort('name').limit(100);
-    res.json({ data: rows.map(publicRow) });
+    let data = rows.map(publicRow);
+    if (req.query.includePinStats === 'true') {
+      data = await attachPinCounts(data, 'stateId');
+    }
+    res.json({ data });
   })
 );
 
@@ -110,7 +125,11 @@ router.get(
     const filter = { isDeleted: false, isActive: true, stateId };
     if (req.query.q) filter.name = new RegExp(String(req.query.q), 'i');
     const rows = await GeoDistrict.find(filter).sort('name').limit(500);
-    res.json({ data: rows.map(publicRow) });
+    let data = rows.map(publicRow);
+    if (req.query.includePinStats === 'true') {
+      data = await attachPinCounts(data, 'districtId');
+    }
+    res.json({ data });
   })
 );
 
@@ -147,11 +166,29 @@ router.get(
       rows = rows.filter((c) => re.test(c.name));
     }
 
-    res.json({ data: rows.map(publicRow) });
+    let data = rows.map(publicRow);
+    if (req.query.includePinStats === 'true') {
+      data = await attachPinCounts(data, 'cityId');
+    }
+    res.json({ data });
   })
 );
 
-/** GET /geo/pin-codes?cityId=&stateId=&q=&pinCode= */
+/** GET /geo/pin-codes?cityId=&stateId=&districtId=&q=&pinCode= */
+router.get(
+  '/pin-codes/preview',
+  asyncHandler(async (req, res) => {
+    const data = await getPinPreview({
+      stateId: req.query.stateId,
+      districtId: req.query.districtId,
+      cityId: req.query.cityId,
+      limit: Math.min(Number(req.query.limit) || 3, 10),
+      active: req.query.active !== 'false',
+    });
+    res.json({ data });
+  })
+);
+
 router.get(
   '/pin-codes',
   asyncHandler(async (req, res) => {
@@ -163,31 +200,47 @@ router.get(
     if (req.query.stateId) filter.stateId = String(req.query.stateId);
     if (req.query.pinCode) filter.pinCode = String(req.query.pinCode).trim();
     if (req.query.q) {
-      const re = new RegExp(String(req.query.q), 'i');
-      filter.$or = [{ pinCode: re }, { cityName: re }, { districtName: re }, { stateName: re }];
+      const term = String(req.query.q).trim();
+      const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const [matchingStates, matchingDistricts, matchingCities] = await Promise.all([
+        GeoState.find({ isDeleted: false, name: re }),
+        GeoDistrict.find({ isDeleted: false, name: re }),
+        GeoCity.find({ isDeleted: false, name: re }),
+      ]);
+      const or = [{ pinCode: re }];
+      if (matchingStates.length) {
+        or.push({ stateId: { $in: matchingStates.map((s) => s._id) } });
+      }
+      if (matchingDistricts.length) {
+        or.push({ districtId: { $in: matchingDistricts.map((d) => d._id) } });
+      }
+      if (matchingCities.length) {
+        or.push({ cityId: { $in: matchingCities.map((c) => c._id) } });
+      }
+      filter.$or = or;
     }
-    const [data, total] = await Promise.all([
+    const [raw, total] = await Promise.all([
       GeoPinCode.find(filter)
         .sort(sort || 'pinCode')
         .skip(skip)
         .limit(limit),
       GeoPinCode.countDocuments(filter),
     ]);
-    res.json(paginated(data.map(publicRow), total, page, limit));
+    const data = await enrichPinRecords(raw);
+    res.json(paginated(data, total, page, limit));
   })
 );
-
-import { PIN_CODE_HEADERS, PIN_CODE_SAMPLE_ROWS } from './pinCodes.excel.js';
 
 router.get(
   '/pin-codes/export',
   asyncHandler(async (_req, res) => {
     const rows = await GeoPinCode.find({ isDeleted: false }).sort('pinCode');
+    const enriched = await enrichPinRecords(rows);
     sendExcel(
       res,
-      'Geography_PIN_Codes.xlsx',
+      'Pin_Code_Master.xlsx',
       PIN_CODE_HEADERS,
-      rows.map((r) => [r.pinCode, r.stateName, r.districtName || '', r.cityName]),
+      enriched.map(pinToExcelRow),
       { sheetName: 'PIN Codes' }
     );
   })
@@ -198,47 +251,13 @@ router.get(
   asyncHandler(async (_req, res) => {
     sendExcel(
       res,
-      'Geography_PIN_Codes_Sample.xlsx',
+      'Pin_Code_Master_Sample.xlsx',
       PIN_CODE_HEADERS,
       PIN_CODE_SAMPLE_ROWS,
       { sheetName: 'PIN Codes' }
     );
   })
 );
-
-async function resolveGeoNames({ stateName, districtName, cityName }) {
-  const state = await GeoState.findOne({
-    isDeleted: false,
-    name: new RegExp(`^${String(stateName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
-  });
-  if (!state) throw new AppError(`State not found: ${stateName}`, 400, 'VALIDATION_ERROR');
-
-  let district = null;
-  if (!districtName) {
-    throw new AppError('District is required', 400, 'VALIDATION_ERROR');
-  }
-  district = await GeoDistrict.findOne({
-    isDeleted: false,
-    stateId: state._id,
-    name: new RegExp(`^${String(districtName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
-  });
-  if (!district) {
-    throw new AppError(`District not found: ${districtName}`, 400, 'VALIDATION_ERROR');
-  }
-
-  const cityFilter = { isDeleted: false, stateId: state._id };
-  const city = await GeoCity.findOne({
-    ...cityFilter,
-    name: new RegExp(`^${String(cityName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
-  });
-  if (!city) throw new AppError(`City not found: ${cityName}`, 400, 'VALIDATION_ERROR');
-
-  return resolvePinTargets({
-    cityId: city._id,
-    districtId: district?._id || city.districtId,
-    stateId: state._id,
-  });
-}
 
 router.post(
   '/pin-codes/import',
@@ -266,37 +285,24 @@ router.post(
         if (!stateName || !districtName || !cityName) {
           throw new AppError('State, District, and City are required', 400, 'VALIDATION_ERROR');
         }
+        const locality = cellValue(row, ['Locality', 'locality']);
+        const notes = cellValue(row, ['Notes', 'notes']);
+        const activeRaw = cellValue(row, ['Active', 'Status', 'isActive']);
+        const isActive = !['no', 'false', '0', 'inactive'].includes(String(activeRaw).toLowerCase());
 
         const { city, district, state } = await resolveGeoNames({ stateName, districtName, cityName });
-        const existing = await GeoPinCode.findOne({
+        const result = await upsertNormalizedPin({
           pinCode,
-          cityId: city._id,
-          isDeleted: false,
+          city,
+          district,
+          state,
+          locality: locality === '-' ? '' : locality,
+          notes,
+          isActive,
+          updatedBy: req.user._id,
         });
-        if (existing) {
-          existing.districtId = district?._id || city.districtId || null;
-          existing.districtName = district?.name || '';
-          existing.stateId = state._id;
-          existing.stateName = state.name;
-          existing.cityName = city.name;
-          existing.updatedBy = req.user._id;
-          await existing.save();
-          updated += 1;
-        } else {
-          await GeoPinCode.create({
-            pinCode,
-            cityId: city._id,
-            cityName: city.name,
-            districtId: district?._id || city.districtId || null,
-            districtName: district?.name || '',
-            stateId: state._id,
-            stateName: state.name,
-            isActive: true,
-            createdBy: req.user._id,
-            updatedBy: req.user._id,
-          });
-          created += 1;
-        }
+        if (result.created) created += 1;
+        else if (result.updated) updated += 1;
       } catch (err) {
         errors.push({ row: rowNum, field: 'import', message: err.message });
       }
@@ -315,14 +321,15 @@ router.post(
 );
 
 function enrichPinRow(row, zones = []) {
-  const o = publicRow(row);
-  if (!o) return null;
-  const zm = resolveZoneForStateRecord(o.stateName, zones);
-  return {
-    ...o,
-    zone: zm?.zone || resolveZoneNameForState(o.stateName),
-    zoneId: zm?.zoneId || '',
-  };
+  return enrichPinRecord(row).then((o) => {
+    if (!o) return null;
+    const zm = resolveZoneForStateRecord(o.stateName, zones);
+    return {
+      ...o,
+      zone: zm?.zone || resolveZoneNameForState(o.stateName),
+      zoneId: zm?.zoneId || '',
+    };
+  });
 }
 
 /** GET /geo/pin-codes/lookup/:pin — local master; includes city, state, zone */
@@ -335,75 +342,39 @@ router.get(
       GeoPinCode.find({ pinCode: pin, isDeleted: false, isActive: true }).limit(20),
       GeoZone.find({ isDeleted: false, isActive: true }),
     ]);
-    const data = rows.map((row) => enrichPinRow(row, zones)).filter(Boolean);
+    const data = (await Promise.all(rows.map((row) => enrichPinRow(row, zones)))).filter(Boolean);
     res.json({ data, resolved: data[0] || null });
   })
 );
-
-async function resolvePinTargets({ cityId, districtId, stateId }) {
-  const city = cityId ? await GeoCity.findOne({ _id: cityId, isDeleted: false }) : null;
-  if (cityId && !city) throw new AppError('City not found', 404);
-
-  let district = null;
-  const dId = districtId || city?.districtId;
-  if (dId) {
-    district = await GeoDistrict.findOne({ _id: dId, isDeleted: false });
-  }
-
-  let state = null;
-  const sId = stateId || city?.stateId || district?.stateId;
-  if (sId) {
-    state = await GeoState.findOne({ _id: sId, isDeleted: false });
-  }
-  if (!state) throw new AppError('State is required for a PIN mapping', 400, 'VALIDATION_ERROR');
-  if (!city) throw new AppError('City is required for a PIN mapping', 400, 'VALIDATION_ERROR');
-
-  return { city, district, state };
-}
 
 router.post(
   '/pin-codes',
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE, PERMISSIONS.USERS_WRITE, PERMISSIONS.ALL),
   asyncHandler(async (req, res) => {
     const pinCode = String(req.body.pinCode || '').replace(/\D+/g, '');
-    if (!/^\d{6}$/.test(pinCode)) {
-      throw new AppError('PIN code must be a 6-digit number', 400, 'VALIDATION_ERROR');
-    }
     const { city, district, state } = await resolvePinTargets(req.body);
-
-    const dup = await GeoPinCode.findOne({
+    const { row, created } = await upsertNormalizedPin({
       pinCode,
-      cityId: city._id,
-      isDeleted: false,
-    });
-    if (dup) throw new AppError('This PIN is already mapped to that city', 409, 'DUPLICATE_PIN');
-
-    const row = await GeoPinCode.create({
-      pinCode,
-      cityId: city._id,
-      cityName: city.name,
-      districtId: district?._id || city.districtId || null,
-      districtName: district?.name || '',
-      stateId: state._id,
-      stateName: state.name,
-      locality: String(req.body.locality || '').trim(),
-      notes: String(req.body.notes || '').trim(),
+      city,
+      district,
+      state,
+      locality: req.body.locality,
+      notes: req.body.notes,
       isActive: req.body.isActive !== false,
-      createdBy: req.user._id,
       updatedBy: req.user._id,
     });
 
     await writeAudit({
       actorId: req.user._id,
       actorEmail: req.user.email,
-      action: 'GEO_PIN.CREATE',
+      action: created ? 'GEO_PIN.CREATE' : 'GEO_PIN.UPDATE',
       entityType: 'GeoPinCode',
       entityId: row._id,
-      after: publicRow(row),
+      after: await enrichPinRecord(row),
       requestId: req.requestId,
     });
 
-    res.status(201).json({ data: publicRow(row) });
+    res.status(created ? 201 : 200).json({ data: await enrichPinRecord(row) });
   })
 );
 
@@ -414,45 +385,51 @@ router.patch(
     const row = await GeoPinCode.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('PIN code mapping not found', 404);
 
-    if (req.body.pinCode !== undefined) {
-      const pinCode = String(req.body.pinCode || '').replace(/\D+/g, '');
-      if (!/^\d{6}$/.test(pinCode)) {
-        throw new AppError('PIN code must be a 6-digit number', 400, 'VALIDATION_ERROR');
-      }
-      row.pinCode = pinCode;
-    }
+    const pinCode =
+      req.body.pinCode !== undefined
+        ? String(req.body.pinCode || '').replace(/\D+/g, '')
+        : row.pinCode;
 
+    let city;
+    let district;
+    let state;
     if (req.body.cityId || req.body.districtId || req.body.stateId) {
-      const { city, district, state } = await resolvePinTargets({
+      ({ city, district, state } = await resolvePinTargets({
         cityId: req.body.cityId || row.cityId,
         districtId: req.body.districtId || row.districtId,
         stateId: req.body.stateId || row.stateId,
-      });
-      row.cityId = city._id;
-      row.cityName = city.name;
-      row.districtId = district?._id || city.districtId || null;
-      row.districtName = district?.name || '';
-      row.stateId = state._id;
-      row.stateName = state.name;
+      }));
+    } else {
+      ({ city, district, state } = await resolvePinTargets({
+        cityId: row.cityId,
+        districtId: row.districtId,
+        stateId: row.stateId,
+      }));
     }
 
-    if (req.body.locality !== undefined) row.locality = String(req.body.locality || '').trim();
-    if (req.body.notes !== undefined) row.notes = String(req.body.notes || '').trim();
-    if (req.body.isActive !== undefined) row.isActive = Boolean(req.body.isActive);
-    row.updatedBy = req.user._id;
-    await row.save();
+    const { row: saved } = await upsertNormalizedPin({
+      pinCode,
+      city,
+      district,
+      state,
+      locality: req.body.locality !== undefined ? req.body.locality : row.locality,
+      notes: req.body.notes !== undefined ? req.body.notes : row.notes,
+      isActive: req.body.isActive !== undefined ? req.body.isActive : row.isActive,
+      updatedBy: req.user._id,
+      existingId: row._id,
+    });
 
     await writeAudit({
       actorId: req.user._id,
       actorEmail: req.user.email,
       action: 'GEO_PIN.UPDATE',
       entityType: 'GeoPinCode',
-      entityId: row._id,
-      after: publicRow(row),
+      entityId: saved._id,
+      after: await enrichPinRecord(saved),
       requestId: req.requestId,
     });
 
-    res.json({ data: publicRow(row) });
+    res.json({ data: await enrichPinRecord(saved) });
   })
 );
 

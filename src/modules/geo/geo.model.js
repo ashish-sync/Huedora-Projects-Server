@@ -40,10 +40,6 @@ export const GeoCity = defineCollection('geo_cities', {
   source: '',
 });
 
-/**
- * PIN codes mapped to cities by administrators.
- * Starts empty — not imported from CSC postcodes.
- */
 /** Camp / operations zones mapped to Indian states (seeded master). */
 export const GeoZone = defineCollection('geo_zones', {
   ...softDelete,
@@ -54,6 +50,10 @@ export const GeoZone = defineCollection('geo_zones', {
   isActive: true,
 });
 
+/**
+ * PIN codes mapped to state / district / city masters (one row per PIN).
+ * Names are resolved from geo masters at read time; only foreign keys are stored.
+ */
 export const GeoPinCode = defineCollection('geo_pin_codes', {
   ...softDelete,
   pinCode: '',
