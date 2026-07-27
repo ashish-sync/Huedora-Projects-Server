@@ -19,6 +19,7 @@ import {
   resolvePinTargets,
   upsertNormalizedPin,
 } from './pinCode.service.js';
+import { autocompletePlaces, getPlaceDetails } from './places.service.js';
 
 const router = Router();
 router.use(authenticate);
@@ -326,6 +327,25 @@ router.get(
     ]);
     const data = (await Promise.all(rows.map((row) => enrichPinRow(row, zones)))).filter(Boolean);
     res.json({ data, resolved: data[0] || null });
+  })
+);
+
+/** GET /geo/places/autocomplete?input=... — Google Places (New) via server key */
+router.get(
+  '/places/autocomplete',
+  asyncHandler(async (req, res) => {
+    const input = String(req.query.input || '').trim();
+    const data = await autocompletePlaces(input);
+    res.json({ data });
+  })
+);
+
+/** GET /geo/places/details?placeId=... */
+router.get(
+  '/places/details',
+  asyncHandler(async (req, res) => {
+    const data = await getPlaceDetails(req.query.placeId);
+    res.json({ data });
   })
 );
 
