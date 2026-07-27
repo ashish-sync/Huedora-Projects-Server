@@ -1,5 +1,13 @@
 import { trimStr, parseLocalDateInput } from './campOps.helpers.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
+import {
+  compactFieldName,
+  getDesignationContactPairs,
+  getTextPasteLabels,
+  isNullValue,
+  normalizePastePhone,
+  preprocessFieldName,
+} from './import/pasteFieldRegistry.js';
 
 export const NOT_PROVIDED = 'Not Provided';
 
@@ -42,25 +50,6 @@ const INDIAN_STATES = [
   'West Bengal',
 ];
 
-const IGNORE_LINE_PATTERNS = [
-  /\btechnician\b/i,
-  /^\s*client\b/i,
-  /^\s*camp\s*type\b/i,
-  /^\s*reminder\b/i,
-  /^\s*request\s*source\b/i,
-  /^\s*specialit/i,
-  /^\s*patch\b/i,
-  /^\s*station\b/i,
-];
-
-const CONTACT_PRIORITY = [
-  { name: ['SE Name'], phone: ['SE Mobile'] },
-  { name: ['ABM Name'], phone: ['ABM Mobile'] },
-  { name: ['BO Name'], phone: ['BO Contact No', 'BO Contact', 'BO Mobile'] },
-  { name: ['RSM Name'], phone: ['RSM Mobile'] },
-  { name: ['Field Team Name'], phone: ['Field Team Mobile', 'Field Team Contact'] },
-];
-
 function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -72,33 +61,52 @@ function withDefault(value) {
 
 function toCampValue(value) {
   const v = trimStr(value);
-  if (!v || v.toLowerCase() === NOT_PROVIDED.toLowerCase()) return '';
+  if (!v || isNullValue(v) || v.toLowerCase() === NOT_PROVIDED.toLowerCase()) return '';
   return v;
-}
-
-function stripIgnoredLines(text) {
-  return String(text || '')
-    .split('\n')
-    .filter((line) => !IGNORE_LINE_PATTERNS.some((pattern) => pattern.test(line)))
-    .join('\n');
 }
 
 function pickLabeledValue(text, labels = []) {
   const raw = String(text || '');
-  for (const label of labels) {
+  const ordered = [...labels]
+    .filter(Boolean)
+    .sort((a, b) => String(b).length - String(a).length);
+
+  for (const label of ordered) {
     const re = new RegExp(
-      `(?:^|\\n)\\s*${escapeRegex(label)}\\s*[:\\-=–]+\\s*(.+?)(?:\\n|$)`,
+      `(?:^|\\n)\\s*${escapeRegex(label)}\\s*[:\\-=–*]+\\s*(.+?)(?:\\n|$)`,
       'i',
     );
     const match = raw.match(re);
-    if (match?.[1]) return trimStr(match[1]);
+    if (match?.[1]) {
+      const value = trimStr(match[1]);
+      if (!isNullValue(value)) return value;
+    }
   }
+
+  const lines = raw.split('\n');
+  for (const line of lines) {
+    const parts = line.split(/[:=\-–*]/);
+    if (parts.length < 2) continue;
+    const left = preprocessFieldName(parts[0]);
+    const right = trimStr(parts.slice(1).join(':'));
+    if (!right || isNullValue(right)) continue;
+    for (const label of ordered) {
+      if (compactFieldName(left) === compactFieldName(label)) {
+        return right;
+      }
+    }
+  }
+
   return '';
 }
 
-function normalizeTimeToken(token) {
+function pickFieldValue(text, internalKey) {
+  return pickLabeledValue(text, getTextPasteLabels(internalKey));
+}
+
+function normalizeSingleTime(token) {
   const raw = trimStr(token);
-  if (!raw) return '';
+  if (!raw || isNullValue(raw)) return '';
   const match = raw.match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
   if (!match) return raw;
   let hours = Number(match[1]);
@@ -109,30 +117,44 @@ function normalizeTimeToken(token) {
   return `${String(hours).padStart(2, '0')}:${minutes}`;
 }
 
+function parseTimeRange(value) {
+  const raw = trimStr(value);
+  const range = raw.match(/^(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)\s*[-–to]+\s*(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)$/i);
+  if (!range) return null;
+  return {
+    startTime: normalizeSingleTime(range[1]),
+    endTime: normalizeSingleTime(range[2]),
+  };
+}
+
 function extractCampTimes(text) {
-  const labeledStart = pickLabeledValue(text, ['Camp Start Time', 'Start Time', 'Start']);
-  const labeledEnd = pickLabeledValue(text, ['Camp End Time', 'End Time', 'End']);
+  const labeledStart = pickFieldValue(text, 'startTime');
+  const labeledEnd = pickFieldValue(text, 'endTime');
+  const timeLabelValue = pickLabeledValue(text, ['Time', 'Camp Time']);
+
+  const startRange = parseTimeRange(labeledStart) || parseTimeRange(timeLabelValue);
+  const endRange = parseTimeRange(labeledEnd);
+
   const mentioned = extractMentionedTimes(text);
-  const startTime = normalizeTimeToken(labeledStart) || mentioned[0] || '';
-  const endTime = normalizeTimeToken(labeledEnd) || mentioned[1] || '';
+  const startTime = startRange?.startTime || normalizeSingleTime(labeledStart) || mentioned[0] || '';
+  const endTime = endRange?.endTime || startRange?.endTime || normalizeSingleTime(labeledEnd) || mentioned[1] || '';
   return { startTime, endTime };
 }
 
 function extractPinCode(text, location = {}) {
-  const labeled = pickLabeledValue(text, ['PIN Code', 'Pin Code', 'Pincode', 'PIN', 'Postal Code']);
+  const labeled = pickFieldValue(text, 'pincode');
   const fromLabel = String(labeled || '').replace(/\D/g, '').slice(0, 6);
   if (fromLabel.length === 6) return fromLabel;
   return location.pincode || '';
 }
 
 function extractMentionedTimes(text) {
-  const source = stripIgnoredLines(text);
-  const matches = [...source.matchAll(/\b(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)\b/gi)];
-  return matches.map((match) => normalizeTimeToken(match[1])).filter(Boolean);
+  const matches = [...String(text || '').matchAll(/\b(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)\b/gi)];
+  return matches.map((match) => normalizeSingleTime(match[1])).filter(Boolean);
 }
 
 function extractCampDate(text) {
-  const raw = pickLabeledValue(text, ['Date']);
+  const raw = pickFieldValue(text, 'campDate');
   if (!raw) return '';
   const dateMatch = raw.match(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{4}-\d{2}-\d{2}/);
   const dateToken = dateMatch ? dateMatch[0] : raw.split(/\s+/)[0];
@@ -189,34 +211,43 @@ function extractLocationFromAddress(address) {
 }
 
 function extractContactPerson(text) {
-  for (const pair of CONTACT_PRIORITY) {
+  for (const pair of getDesignationContactPairs()) {
     const name = pickLabeledValue(text, pair.name);
     const phone = pickLabeledValue(text, pair.phone);
     if (name || phone) {
-      return { name, phone };
+      return {
+        name,
+        phone: normalizePastePhone(phone),
+        role: pair.role,
+      };
     }
   }
-  return { name: '', phone: '' };
+  return { name: '', phone: '', role: '' };
 }
 
 export function extractManualPasteFields(text) {
   const raw = String(text || '');
-  const doctorName = pickLabeledValue(raw, ['Doctor Name', 'Dr Name', 'Doctor']);
-  const doctorCode = pickLabeledValue(raw, ['Doctor Code', 'SC Code', 'SE Code']);
+  const doctorName = pickFieldValue(raw, 'doctorName');
+  const doctorCode = pickFieldValue(raw, 'doctorCode');
+  const speciality = pickFieldValue(raw, 'speciality');
+  const hospitalName = pickFieldValue(raw, 'hospitalName');
   const campDate = extractCampDate(raw);
   const { startTime, endTime } = extractCampTimes(raw);
-  const campAddress = pickLabeledValue(raw, [
-    'Camp Address',
-    'Camp Venue',
-    'Address',
-    'Complete Address',
-  ]);
+  const campAddress = pickFieldValue(raw, 'campAddress') || pickFieldValue(raw, 'hospitalName');
+  const city = pickFieldValue(raw, 'city');
+  const state = pickFieldValue(raw, 'state');
   const location = extractLocationFromAddress(campAddress);
-  const pincode = extractPinCode(raw, location);
-  const zone = location.state ? resolveZoneNameForState(location.state) : '';
-  const expectedPatientsRaw = pickLabeledValue(raw, ['Expected Patients']);
+  const pincode = extractPinCode(raw, { ...location, pincode: pickFieldValue(raw, 'pincode') });
+  const hq = pickFieldValue(raw, 'hq');
+  const zone = (state || location.state) ? resolveZoneNameForState(state || location.state) : '';
+  const expectedPatientsRaw = pickFieldValue(raw, 'expectedPatients');
   const expectedPatientsMatch = expectedPatientsRaw.match(/\d+/);
   const contact = extractContactPerson(raw);
+  const remarks = pickFieldValue(raw, 'remarks');
+
+  const resolvedCity = city || location.city;
+  const resolvedState = state || location.state;
+  const resolvedHq = hq || resolvedCity;
 
   const display = {
     campDate: withDefault(campDate),
@@ -224,15 +255,18 @@ export function extractManualPasteFields(text) {
     endTime: withDefault(endTime),
     doctorName: withDefault(doctorName),
     doctorCode: withDefault(doctorCode),
+    speciality: withDefault(speciality),
+    hospitalName: withDefault(hospitalName),
     campAddress: withDefault(campAddress),
-    state: withDefault(location.state),
-    city: withDefault(location.city),
-    hq: withDefault(location.city),
+    state: withDefault(resolvedState),
+    city: withDefault(resolvedCity),
+    hq: withDefault(resolvedHq),
     pincode: withDefault(pincode),
     zone: withDefault(zone),
     expectedPatients: withDefault(expectedPatientsMatch ? expectedPatientsMatch[0] : ''),
     fieldPersonName: withDefault(contact.name),
     fieldPersonPhone: withDefault(contact.phone),
+    remarks: withDefault(remarks),
   };
 
   return {
@@ -240,19 +274,21 @@ export function extractManualPasteFields(text) {
     row: {
       doctorName: toCampValue(doctorName),
       doctorCode: toCampValue(doctorCode),
+      speciality: toCampValue(speciality),
+      hospitalName: toCampValue(hospitalName),
       campDate: toCampValue(campDate),
       startTime: toCampValue(startTime) || '09:00',
       endTime: toCampValue(endTime),
       campAddress: toCampValue(campAddress),
-      state: toCampValue(location.state),
-      city: toCampValue(location.city),
-      hq: toCampValue(location.city),
+      state: toCampValue(resolvedState),
+      city: toCampValue(resolvedCity),
+      hq: toCampValue(resolvedHq),
       pincode: toCampValue(pincode),
       zone: toCampValue(zone),
       expectedPatients: expectedPatientsMatch ? Number(expectedPatientsMatch[0]) : 0,
       fieldPersonName: toCampValue(contact.name),
       fieldPersonPhone: toCampValue(contact.phone),
-      remarks: '',
+      remarks: toCampValue(remarks),
       rawExcerpt: raw.slice(0, 500),
     },
   };
@@ -270,6 +306,10 @@ export function formatManualPasteOutput(display = {}) {
     display.doctorName || NOT_PROVIDED,
     'Doctor Code:',
     display.doctorCode || NOT_PROVIDED,
+    'Speciality:',
+    display.speciality || NOT_PROVIDED,
+    'Clinic / Hospital:',
+    display.hospitalName || NOT_PROVIDED,
     'Camp Address:',
     display.campAddress || NOT_PROVIDED,
     'State:',
@@ -288,5 +328,7 @@ export function formatManualPasteOutput(display = {}) {
     display.fieldPersonName || NOT_PROVIDED,
     'Contact Person Number:',
     display.fieldPersonPhone || NOT_PROVIDED,
+    'Remarks:',
+    display.remarks || NOT_PROVIDED,
   ].join('\n');
 }

@@ -1,81 +1,57 @@
-import aliasConfig from './campImportFieldAliases.json' with { type: 'json' };
+import {
+  CAMP_PASTE_TABULAR_FIELD_KEYS,
+  compactFieldName,
+  getImportFieldDefinitions,
+  getManualPasteConfig,
+  preprocessFieldName,
+} from './pasteFieldRegistry.js';
 
 const MIN_CONFIDENCE = 55;
-const SHORT_ALIAS_MAX_LEN = 3;
+const SHORT_COMPACT_MAX_LEN = 3;
 
 const CONFIDENCE = {
-  EXACT: 100,
-  COMPACT_EXACT: 95,
-  ALIAS_EXACT: 92,
-  ALIAS_CONTAINS: 78,
-  TOKEN_FULL: 70,
-  TOKEN_PARTIAL: 60,
+  COMPACT_EXACT: 100,
+  NORMALIZED_EXACT: 95,
+  COMPACT_CONTAINS: 82,
+  TOKEN_FULL: 72,
+  TOKEN_PARTIAL: 62,
 };
 
-export const CAMP_PASTE_TABULAR_FIELD_KEYS = aliasConfig.pasteTabularFields || [];
-
-/**
- * Normalize a spreadsheet header for comparison: lowercase, strip punctuation, collapse spaces.
- */
-export function normalizeImportHeader(value) {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[._\-/\\]+/g, ' ')
-    .replace(/[,#!?()[\]{}:;'"`]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-export function compactImportHeader(value) {
-  return normalizeImportHeader(value).replace(/\s+/g, '');
-}
-
 function tokenizeHeader(value) {
-  return normalizeImportHeader(value).split(' ').filter(Boolean);
+  return preprocessFieldName(value).split(' ').filter(Boolean);
 }
 
-function buildFieldCandidates(fieldKey, fieldDef) {
-  const values = [fieldDef.label, fieldKey, ...(fieldDef.aliases || [])];
-  return [...new Set(values.map(normalizeImportHeader).filter(Boolean))];
+function buildCompactCandidates(fieldDef) {
+  const values = [fieldDef.label, fieldDef.key, ...(fieldDef.aliases || [])];
+  return [...new Set(values.map(compactFieldName).filter(Boolean))];
 }
 
-function scoreHeaderToField(header, fieldKey, fieldDef) {
-  const normalized = normalizeImportHeader(header);
-  const compact = compactImportHeader(header);
-  if (!normalized) return 0;
+function buildNormalizedCandidates(fieldDef) {
+  const values = [fieldDef.label, fieldDef.key, ...(fieldDef.aliases || [])];
+  return [...new Set(values.map(preprocessFieldName).filter(Boolean))];
+}
 
-  const candidates = buildFieldCandidates(fieldKey, fieldDef);
-  const compactCandidates = candidates.map(compactImportHeader);
+function scoreHeaderToField(header, fieldDef) {
+  const compact = compactFieldName(header);
+  const normalized = preprocessFieldName(header);
+  if (!compact) return 0;
 
-  if (candidates.includes(normalized)) return CONFIDENCE.EXACT;
+  const compactCandidates = buildCompactCandidates(fieldDef);
+  const normalizedCandidates = buildNormalizedCandidates(fieldDef);
+
   if (compactCandidates.includes(compact)) return CONFIDENCE.COMPACT_EXACT;
+  if (normalizedCandidates.includes(normalized)) return CONFIDENCE.NORMALIZED_EXACT;
 
   let best = 0;
-  for (const alias of candidates) {
-    if (!alias) continue;
-    if (normalized === alias) {
-      best = Math.max(best, CONFIDENCE.ALIAS_EXACT);
-      continue;
-    }
-
-    const aliasCompact = compactImportHeader(alias);
-    if (compact === aliasCompact) {
-      best = Math.max(best, CONFIDENCE.COMPACT_EXACT);
-      continue;
-    }
-
-    const shorter = alias.length <= normalized.length ? alias : normalized;
-    const longer = alias.length <= normalized.length ? normalized : alias;
-    if (shorter.length <= SHORT_ALIAS_MAX_LEN) continue;
-
-    if (longer.includes(shorter) || shorter.includes(longer)) {
-      best = Math.max(best, CONFIDENCE.ALIAS_CONTAINS);
+  for (const candidate of compactCandidates) {
+    if (!candidate || candidate.length <= SHORT_COMPACT_MAX_LEN) continue;
+    if (compact.includes(candidate) || candidate.includes(compact)) {
+      best = Math.max(best, CONFIDENCE.COMPACT_CONTAINS);
     }
   }
 
   const headerTokens = tokenizeHeader(header);
-  for (const alias of candidates) {
+  for (const alias of normalizedCandidates) {
     const aliasTokens = tokenizeHeader(alias);
     if (!aliasTokens.length) continue;
     const overlap = aliasTokens.filter((token) => headerTokens.includes(token)).length;
@@ -91,27 +67,14 @@ function scoreHeaderToField(header, fieldKey, fieldDef) {
 }
 
 function confidenceLabel(score) {
-  if (score >= CONFIDENCE.ALIAS_EXACT) return 'high';
-  if (score >= CONFIDENCE.ALIAS_CONTAINS) return 'medium';
+  if (score >= CONFIDENCE.NORMALIZED_EXACT) return 'high';
+  if (score >= CONFIDENCE.COMPACT_CONTAINS) return 'medium';
   if (score >= MIN_CONFIDENCE) return 'low';
   return 'none';
 }
 
-export function getImportFieldDefinitions(fieldKeys = null) {
-  const keys = fieldKeys?.length
-    ? fieldKeys
-    : Object.keys(aliasConfig.fields || {});
-
-  return keys
-    .filter((key) => aliasConfig.fields[key])
-    .map((key) => ({
-      key,
-      ...aliasConfig.fields[key],
-    }));
-}
-
 /**
- * Match spreadsheet headers to canonical import fields.
+ * Match spreadsheet headers to canonical import fields using compact preprocessing.
  * Unmatched headers are returned as status "unmapped".
  */
 export function matchImportColumns(headers = [], fieldKeys = null) {
@@ -123,7 +86,7 @@ export function matchImportColumns(headers = [], fieldKeys = null) {
   const pairs = [];
   cleanHeaders.forEach((header) => {
     fields.forEach((field) => {
-      const score = scoreHeaderToField(header, field.key, field);
+      const score = scoreHeaderToField(header, field);
       if (score >= MIN_CONFIDENCE) {
         pairs.push({
           header,
@@ -131,6 +94,7 @@ export function matchImportColumns(headers = [], fieldKeys = null) {
           fieldLabel: field.label,
           score,
           confidence: confidenceLabel(score),
+          compactHeader: compactFieldName(header),
         });
       }
     });
@@ -158,6 +122,7 @@ export function matchImportColumns(headers = [], fieldKeys = null) {
 
     return {
       header,
+      compactHeader: compactFieldName(header),
       fieldKey,
       fieldLabel: field?.label || null,
       status: fieldKey ? 'mapped' : 'unmapped',
@@ -194,5 +159,7 @@ export function matchImportColumns(headers = [], fieldKeys = null) {
 }
 
 export function getAliasConfig() {
-  return aliasConfig;
+  return getManualPasteConfig();
 }
+
+export { CAMP_PASTE_TABULAR_FIELD_KEYS, getImportFieldDefinitions };

@@ -3,7 +3,6 @@ import { parseExcelBuffer } from './communications/utils/excelParser.js';
 import { mapRows } from './communications/utils/importMapper.js';
 import {
   CAMP_PASTE_TABULAR_FIELD_KEYS,
-  getAliasConfig,
   getImportFieldDefinitions,
   matchImportColumns,
 } from './import/importColumnMatcher.js';
@@ -160,7 +159,7 @@ export async function parsePasteImportFile(buffer, { fieldKeys = null } = {}) {
   }
 
   const parsed = parseExcelBuffer(buffer);
-  const keys = fieldKeys ?? Object.keys(getAliasConfig().fields || {});
+  const keys = fieldKeys ?? getImportFieldDefinitions().map((field) => field.key);
   const columnMatch = matchImportColumns(parsed.headers, keys);
   const fields = getImportFieldDefinitions(keys);
 
