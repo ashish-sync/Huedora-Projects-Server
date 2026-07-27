@@ -54,6 +54,12 @@ import {
   processManualPaste,
 } from './manualPaste.service.js';
 import {
+  extractPasteImportPreview,
+  extractPasteImportPreviewFromRows,
+  parsePasteImportFile,
+} from './pasteImport.service.js';
+import { matchImportColumns, CAMP_PASTE_TABULAR_FIELD_KEYS } from './import/importColumnMatcher.js';
+import {
   parseCampRequestWithValidation,
   parsedFieldsToCampRow,
   listClientParserConfigs,
@@ -1434,31 +1440,56 @@ router.get(
 router.post(
   '/import/parse',
   canRequest,
+  excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    // Stub: accept pre-parsed rows/headers from client (no Excel binary parsing required).
+    if (req.file?.buffer) {
+      const parsed = await parsePasteImportFile(req.file.buffer);
+      res.json({
+        fileName: req.file.originalname || 'upload',
+        sheetName: parsed.sheetName,
+        headers: parsed.headers,
+        sampleRows: parsed.sampleRows,
+        totalRows: parsed.totalRows,
+        suggestions: parsed.suggestions,
+        rows: parsed.rows,
+        mapping: parsed.mapping,
+        columnResults: parsed.columnResults,
+        unmappedHeaders: parsed.unmappedHeaders,
+        unmappedFields: parsed.unmappedFields,
+        fields: parsed.fields,
+        standardMapping: parsed.standardMapping,
+        missingStandardHeaders: parsed.missingRequiredFields,
+        isSuperAdmin: false,
+      });
+      return;
+    }
+
     const headers = Array.isArray(req.body?.headers) ? req.body.headers : [];
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
-    const suggestions = {};
-    for (const field of CAMP_IMPORT_FIELDS) {
-      const aliases = [field.label, field.key].map((v) => String(v).toLowerCase());
-      const match = headers.find((h) => {
-        const n = String(h || '').toLowerCase();
-        return aliases.some((a) => n === a || n.includes(a));
-      });
-      if (match) suggestions[field.key] = match;
-    }
+    const columnMatch = headers.length ? matchImportColumns(headers) : {
+      mapping: {},
+      suggestions: {},
+      columnResults: [],
+      unmappedHeaders: [],
+      unmappedFields: [],
+      missingRequiredFields: [],
+    };
+
     res.json({
       fileName: req.body?.fileName || 'upload',
       sheetName: req.body?.sheetName || 'Sheet1',
       headers,
       sampleRows: rows.slice(0, 5),
       totalRows: rows.length,
-      suggestions,
+      suggestions: columnMatch.suggestions,
       rows,
+      mapping: columnMatch.mapping,
+      columnResults: columnMatch.columnResults || [],
+      unmappedHeaders: columnMatch.unmappedHeaders || [],
+      unmappedFields: columnMatch.unmappedFields || [],
       standardMapping: STANDARD_IMPORT_MAPPING,
-      missingStandardHeaders: [],
+      missingStandardHeaders: columnMatch.missingRequiredFields || [],
       isSuperAdmin: false,
-      stub: true,
     });
   })
 );
@@ -1608,6 +1639,79 @@ router.post(
       campaignName: trimStr(req.body?.campaignName),
     };
     const data = await extractManualPastePreview({ text, defaults });
+    res.json({ data });
+  })
+);
+
+router.post(
+  '/communications/paste/parse-file',
+  canRequest,
+  excelUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    if (!req.file?.buffer) {
+      throw new AppError('Excel or CSV file is required', 400, 'VALIDATION_ERROR');
+    }
+    const parsed = await parsePasteImportFile(req.file.buffer, {
+      fieldKeys: CAMP_PASTE_TABULAR_FIELD_KEYS,
+    });
+    res.json({
+      data: {
+        ...parsed,
+        fileName: req.file.originalname || 'upload',
+      },
+    });
+  })
+);
+
+router.post(
+  '/communications/paste/extract-file',
+  canRequest,
+  excelUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    if (!req.file?.buffer) {
+      throw new AppError('Excel or CSV file is required', 400, 'VALIDATION_ERROR');
+    }
+    const defaults = {
+      clientName: trimStr(req.body?.clientName),
+      campaignType: trimStr(req.body?.campaignType),
+      campaignName: trimStr(req.body?.campaignName),
+    };
+    let mapping = {};
+    if (req.body?.mapping) {
+      try {
+        mapping = typeof req.body.mapping === 'string'
+          ? JSON.parse(req.body.mapping)
+          : req.body.mapping;
+      } catch {
+        throw new AppError('Invalid mapping JSON', 400, 'VALIDATION_ERROR');
+      }
+    }
+    const data = await extractPasteImportPreview({
+      buffer: req.file.buffer,
+      fileName: req.file.originalname || 'upload',
+      defaults,
+      mapping,
+    });
+    res.json({ data });
+  })
+);
+
+router.post(
+  '/communications/paste/extract-rows',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const data = await extractPasteImportPreviewFromRows({
+      rows: req.body?.rows,
+      headers: req.body?.headers,
+      fileName: trimStr(req.body?.fileName) || 'upload',
+      sheetName: trimStr(req.body?.sheetName) || 'Sheet1',
+      mapping: req.body?.mapping || {},
+      defaults: {
+        clientName: trimStr(req.body?.clientName),
+        campaignType: trimStr(req.body?.campaignType),
+        campaignName: trimStr(req.body?.campaignName),
+      },
+    });
     res.json({ data });
   })
 );

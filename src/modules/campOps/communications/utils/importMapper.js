@@ -1,69 +1,25 @@
 import { normalizeCampName } from '../config/campNames.js';
 import { parseLocalDateInput, computeDurationHours, resolveCampSchedule, resolveClinicHospitalName } from './campHelpers.js';
-
 import { CAMP_IMPORT_FIELDS } from '../../campOps.constants.js';
+import { matchImportColumns, getImportFieldDefinitions } from '../../import/importColumnMatcher.js';
 
 export { CAMP_IMPORT_FIELDS };
-
-const HEADER_ALIASES = {
-  clientName: ['client name', 'client', 'company', 'pharma', 'pharma client'],
-  campaignName: ['method', 'camp name', 'campaign name', 'campaign'],
-  campaignType: [
-    'division / therapy',
-    'division / business',
-    'division / bu',
-    'division',
-    'business unit',
-    'campaign type',
-    'program name',
-    'program',
-    'programme',
-  ],
-  doctorName: ['doctor name', 'dr name', 'doctor', 'physician', 'hcp name'],
-  doctorCode: ['doctor code', 'dr code', 'hcp code'],
-  campAddress: ['camp address', 'address', 'venue address', 'location'],
-  city: ['city', 'town'],
-  state: ['state', 'province', 'region'],
-  pincode: ['pincode', 'pin code', 'zip', 'postal code'],
-  campDate: ['camp date', 'date', 'event date', 'schedule date'],
-  startTime: ['start time', 'from time', 'time from'],
-  endTime: ['end time', 'to time', 'time to'],
-  expectedPatients: ['expected patients', 'expected patient', 'patient count', 'footfall'],
-  fieldPersonName: ['field person name', 'field person', 'field rep', 'mr name', 'representative'],
-  fieldPersonPhone: ['field person contact', 'field phone', 'field person phone', 'mobile no', 'mr mobile'],
-  remarks: ['remarks', 'notes', 'comments'],
-};
-
-function normalizeHeader(value) {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ');
-}
+export { matchImportColumns, getImportFieldDefinitions };
 
 export function suggestMappings(headers) {
-  const suggestions = {};
-
-  CAMP_IMPORT_FIELDS.forEach((field) => {
-    const aliases = [field.label, field.key, ...(HEADER_ALIASES[field.key] || [])].map(normalizeHeader);
-    const match = headers.find((header) => {
-      const normalized = normalizeHeader(header);
-      return aliases.some((alias) => normalized === alias || normalized.includes(alias) || alias.includes(normalized));
-    });
-    if (match) suggestions[field.key] = match;
-  });
-
-  return suggestions;
+  return matchImportColumns(headers).mapping;
 }
 
 export function mapRows(rows, mapping, defaultClientName = '') {
   return rows.map((row, index) => {
     const mapped = { rowNumber: index + 2 };
 
-    CAMP_IMPORT_FIELDS.forEach((field) => {
-      const sourceHeader = mapping[field.key];
-      mapped[field.key] = sourceHeader
+    const fieldKeys = Object.keys(mapping || {});
+    const keys = fieldKeys.length ? fieldKeys : CAMP_IMPORT_FIELDS.map((field) => field.key);
+
+    keys.forEach((fieldKey) => {
+      const sourceHeader = mapping?.[fieldKey];
+      mapped[fieldKey] = sourceHeader
         ? String(row[sourceHeader] ?? '').trim()
         : '';
     });
