@@ -90,6 +90,15 @@ export function createApp() {
     });
   });
 
+  /** Public runtime config for the SPA (no secrets beyond referrer-restricted Maps keys). */
+  app.get('/api/v1/config/public', (_req, res) => {
+    res.json({
+      data: {
+        googleMapsApiKey: env.googleMapsApiKey || null,
+      },
+    });
+  });
+
   // Public, token-gated custodian upload flow. Keep before the /api/v1 catch-all router.
   app.use('/api/v1/request-upload', requestUploadRoutes);
   app.use('/api/v1/ingest/whatsapp', campOpsWhatsappRoutes);
