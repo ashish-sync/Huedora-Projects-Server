@@ -22,7 +22,29 @@ export const CAMP_OPS_CANCEL_SOURCES = ['brand', 'khw'];
 
 export const CAMP_OPS_DURATION_OPTIONS = [3, 4, 5, 6, 8];
 
-export const CAMP_NAME_OPTIONS = ['BMD', 'Dieitician', 'Others', 'Physio & Nuero', 'Uroflow'];
+export const CAMP_METHOD_OTHER_LABEL = 'Others';
+
+export const CAMP_NAME_OPTIONS = [
+  'BMD',
+  'Neuro & Physio',
+  'Uroflowmetery',
+  'Diagnostics',
+  'Dietician',
+  CAMP_METHOD_OTHER_LABEL,
+];
+
+const LEGACY_CAMP_NAME_ALIASES = {
+  dieitician: 'Dietician',
+  dietitian: 'Dietician',
+  'physio & nuero': 'Neuro & Physio',
+  'physio & neuro': 'Neuro & Physio',
+  diagnostic: 'Diagnostics',
+  diagnostics: 'Diagnostics',
+  daignostics: 'Diagnostics',
+  uroflow: 'Uroflowmetery',
+  uroflowmetry: 'Uroflowmetery',
+  uroflowmetery: 'Uroflowmetery',
+};
 
 export const EDITABLE_CAMP_STATUSES = ['pending_review', 'approved', 'rejected'];
 
@@ -103,20 +125,30 @@ export const CAMP_OPS_ROLE_CATALOG = [
 ];
 
 export function isValidCampName(value) {
-  return CAMP_NAME_OPTIONS.includes(String(value || '').trim());
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return false;
+  if (trimmed.toLowerCase() === 'others' || trimmed === CAMP_METHOD_OTHER_LABEL) return false;
+  if (CAMP_NAME_OPTIONS.includes(trimmed)) return true;
+  return trimmed.length >= 2;
 }
 
 export function normalizeCampName(value) {
   const trimmed = String(value || '').trim();
-  if (isValidCampName(trimmed)) return trimmed;
+  if (!trimmed) return '';
+  if (CAMP_NAME_OPTIONS.includes(trimmed)) return trimmed;
+
   const lower = trimmed.toLowerCase();
+  if (LEGACY_CAMP_NAME_ALIASES[lower]) return LEGACY_CAMP_NAME_ALIASES[lower];
+
   if (lower.includes('bmd') || lower.includes('classic')) return 'BMD';
-  if (lower.includes('diet') || lower.includes('dieit')) return 'Dieitician';
+  if (lower.includes('diet') || lower.includes('dieit')) return 'Dietician';
   if (lower.includes('physio') || lower.includes('nuero') || lower.includes('neuro')) {
-    return 'Physio & Nuero';
+    return 'Neuro & Physio';
   }
-  if (lower.includes('uro')) return 'Uroflow';
-  return trimmed || 'Others';
+  if (lower.includes('diagnostic') || lower.includes('daignostic')) return 'Diagnostics';
+  if (lower.includes('uro')) return 'Uroflowmetery';
+
+  return trimmed;
 }
 
 export function canTransition(currentStatus, nextStatus) {

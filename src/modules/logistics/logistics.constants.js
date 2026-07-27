@@ -142,10 +142,10 @@ export const IN_OUT_PRODUCT_TYPES = [
 /** Medical Device product categories (same as camp / hiring methods). */
 export const MEDICAL_DEVICE_PRODUCT_CATEGORIES = [
   'BMD',
-  'Diagnostics',
-  'Uroflow',
-  'Dietician',
   'Neuro & Physio',
+  'Uroflowmetery',
+  'Diagnostics',
+  'Dietician',
   'Others',
 ];
 
@@ -154,7 +154,9 @@ export const MEDICAL_DEVICE_CATEGORY_ALIASES = {
   Diagnostics: 'Diagnostics',
   Diagnostic: 'Diagnostics',
   Daignostics: 'Diagnostics',
-  Uroflow: 'Uroflow',
+  Uroflowmetery: 'Uroflowmetery',
+  Uroflowmetry: 'Uroflowmetery',
+  Uroflow: 'Uroflowmetery',
   Dietician: 'Dietician',
   Dietitian: 'Dietician',
   'Neuro & Physio': 'Neuro & Physio',

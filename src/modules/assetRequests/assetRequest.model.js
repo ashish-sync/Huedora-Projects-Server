@@ -75,7 +75,7 @@ export const HIRING_CAMP_TYPES = [
   'Light Device (1-5 KG)',
   'Heavy Device (5-12 KG)',
 ];
-export const HIRING_METHODS = ['BMD', 'Diagnostics', 'Uroflow', 'Dietitian', 'Others'];
+export const HIRING_METHODS = ['BMD', 'Neuro & Physio', 'Uroflowmetery', 'Diagnostics', 'Dietician', 'Others'];
 
 export const REQUEST_STATUSES = ['REQUESTED', 'APPROVED', 'REJECTED', 'CANCELLED', 'COMPLETED'];
 

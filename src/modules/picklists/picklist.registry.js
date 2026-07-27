@@ -10,10 +10,11 @@ import {
 import { EXPENSE_CATEGORIES, PAYMENT_MODES } from '../finance/finance.constants.js';
 import { DELIVERY_MODES } from '../logistics/logistics.constants.js';
 import { SIGNATURE_ROLES } from '../signatures/signature.constants.js';
+import { CAMP_NAME_OPTIONS } from '../campOps/campOps.constants.js';
 
 /** Hiring / transport picklists mirrored from Request One */
 export const HCW_TYPES = ['Phlebotomist', 'Technician', 'Dietitian', 'Physio', 'Others'];
-export const HIRING_METHODS = ['BMD', 'Diagnostics', 'Uroflow', 'Dietitian', 'Others'];
+export const HIRING_METHODS = [...CAMP_NAME_OPTIONS];
 
 /**
  * Registry of dropdowns that support Other → custom value → approval.
@@ -78,6 +79,11 @@ export const PICKLIST_REGISTRY = {
   'hiring.method': {
     label: 'Hiring Method',
     staticOptions: HIRING_METHODS,
+    otherLabel: 'Others',
+  },
+  'camp.method': {
+    label: 'Camp Method',
+    staticOptions: CAMP_NAME_OPTIONS,
     otherLabel: 'Others',
   },
   'signature.role': {

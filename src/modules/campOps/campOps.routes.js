@@ -1462,7 +1462,7 @@ router.get(
       [
         'Acme Pharma',
         'Oncology',
-        'Physio & Nuero',
+        'Neuro & Physio',
         'Dr Sharma',
         'D002',
         '45 Park Avenue',

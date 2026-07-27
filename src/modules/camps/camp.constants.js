@@ -1,18 +1,25 @@
 /** Camp Management — process mapping, slots, schedule helpers */
 
-export const CAMP_METHODS = ['Diagnostic', 'Physio & Neuro', 'BMD', 'Uroflow', 'Dietitian'];
+export const CAMP_METHODS = [
+  'BMD',
+  'Neuro & Physio',
+  'Uroflowmetery',
+  'Diagnostics',
+  'Dietician',
+  'Others',
+];
 
 /**
  * Method → Process → Camp Type
  */
 export const CAMP_PROCESS_MAP = [
-  { method: 'Diagnostic', process: 'NT PRO - BNP', campType: 'Non Device' },
-  { method: 'Diagnostic', process: 'Lipidocare', campType: 'Device' },
-  { method: 'Diagnostic', process: 'Vitamin D3', campType: 'Device' },
-  { method: 'Physio & Neuro', process: 'Neuro', campType: 'Device' },
+  { method: 'Diagnostics', process: 'NT PRO - BNP', campType: 'Non Device' },
+  { method: 'Diagnostics', process: 'Lipidocare', campType: 'Device' },
+  { method: 'Diagnostics', process: 'Vitamin D3', campType: 'Device' },
+  { method: 'Neuro & Physio', process: 'Neuro', campType: 'Device' },
   { method: 'BMD', process: 'BMD', campType: 'Device' },
-  { method: 'Uroflow', process: 'Uroflow', campType: 'Device' },
-  { method: 'Dietitian', process: 'Dietitian', campType: 'Non Device' },
+  { method: 'Uroflowmetery', process: 'Uroflow', campType: 'Device' },
+  { method: 'Dietician', process: 'Dietician', campType: 'Non Device' },
 ];
 
 export const CAMP_TYPES = ['Device', 'Non Device'];
