@@ -277,7 +277,7 @@ router.post(
         rowNum: i + 2,
         pinCode,
         stateName: cellValue(row, ['State', 'stateName']),
-        districtName: cellValue(row, ['District', 'districtName']),
+        districtName: cellValue(row, ['District', 'District Name', 'districtName']),
         cityName: cellValue(row, ['City', 'cityName']),
         locality: cellValue(row, ['Locality', 'locality']),
         notes: cellValue(row, ['Notes', 'notes']),
