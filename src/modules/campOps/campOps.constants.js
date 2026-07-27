@@ -48,24 +48,9 @@ const LEGACY_CAMP_NAME_ALIASES = {
 
 export const EDITABLE_CAMP_STATUSES = ['pending_review', 'approved', 'rejected'];
 
-export const CAMP_IMPORT_FIELDS = [
-  { key: 'clientName', label: 'Client Name', required: true },
-  { key: 'campaignType', label: 'Division / Therapy', required: false },
-  { key: 'campaignName', label: 'Method', required: false },
-  { key: 'doctorName', label: 'Doctor Name', required: false },
-  { key: 'doctorCode', label: 'Doctor Code', required: false },
-  { key: 'campAddress', label: 'Camp Address', required: false },
-  { key: 'city', label: 'City', required: false },
-  { key: 'state', label: 'State', required: false },
-  { key: 'pincode', label: 'Pincode', required: false },
-  { key: 'campDate', label: 'Camp Date', required: true },
-  { key: 'startTime', label: 'Start Time', required: false },
-  { key: 'endTime', label: 'End Time', required: false },
-  { key: 'expectedPatients', label: 'Expected Patients', required: false },
-  { key: 'fieldPersonName', label: 'Field Person Name', required: false },
-  { key: 'fieldPersonPhone', label: 'Field Person Contact', required: false },
-  { key: 'remarks', label: 'Remarks', required: false },
-];
+import { getCampImportFields } from './import/campRequestFieldSchema.js';
+
+export const CAMP_IMPORT_FIELDS = getCampImportFields();
 
 export const STANDARD_IMPORT_MAPPING = Object.fromEntries(
   CAMP_IMPORT_FIELDS.map((f) => [f.key, f.label])

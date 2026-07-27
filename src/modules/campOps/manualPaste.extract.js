@@ -8,6 +8,10 @@ import {
   normalizePastePhone,
   preprocessFieldName,
 } from './import/pasteFieldRegistry.js';
+import {
+  getFieldLabelsMap,
+  getPasteOutputFieldKeys,
+} from './import/campRequestFieldSchema.js';
 
 export const NOT_PROVIDED = 'Not Provided';
 
@@ -247,6 +251,7 @@ export function extractManualPasteFields(text) {
 
   const resolvedCity = city || location.city;
   const resolvedState = state || location.state;
+  const resolvedDistrict = pickFieldValue(raw, 'district') || location.district || '';
   const resolvedHq = hq || resolvedCity;
 
   const display = {
@@ -259,6 +264,7 @@ export function extractManualPasteFields(text) {
     hospitalName: withDefault(hospitalName),
     campAddress: withDefault(campAddress),
     state: withDefault(resolvedState),
+    district: withDefault(resolvedDistrict),
     city: withDefault(resolvedCity),
     hq: withDefault(resolvedHq),
     pincode: withDefault(pincode),
@@ -281,6 +287,7 @@ export function extractManualPasteFields(text) {
       endTime: toCampValue(endTime),
       campAddress: toCampValue(campAddress),
       state: toCampValue(resolvedState),
+      district: toCampValue(resolvedDistrict),
       city: toCampValue(resolvedCity),
       hq: toCampValue(resolvedHq),
       pincode: toCampValue(pincode),
@@ -295,40 +302,11 @@ export function extractManualPasteFields(text) {
 }
 
 export function formatManualPasteOutput(display = {}) {
-  return [
-    'Camp Date:',
-    display.campDate || NOT_PROVIDED,
-    'Camp Start Time:',
-    display.startTime || NOT_PROVIDED,
-    'Camp End Time:',
-    display.endTime || NOT_PROVIDED,
-    'Doctor Name:',
-    display.doctorName || NOT_PROVIDED,
-    'Doctor Code:',
-    display.doctorCode || NOT_PROVIDED,
-    'Speciality:',
-    display.speciality || NOT_PROVIDED,
-    'Clinic / Hospital:',
-    display.hospitalName || NOT_PROVIDED,
-    'Camp Address:',
-    display.campAddress || NOT_PROVIDED,
-    'State:',
-    display.state || NOT_PROVIDED,
-    'Zone:',
-    display.zone || NOT_PROVIDED,
-    'City:',
-    display.city || NOT_PROVIDED,
-    'HQ:',
-    display.hq || NOT_PROVIDED,
-    'PIN Code:',
-    display.pincode || NOT_PROVIDED,
-    'Expected Patients:',
-    display.expectedPatients || NOT_PROVIDED,
-    'Contact Person Name:',
-    display.fieldPersonName || NOT_PROVIDED,
-    'Contact Person Number:',
-    display.fieldPersonPhone || NOT_PROVIDED,
-    'Remarks:',
-    display.remarks || NOT_PROVIDED,
-  ].join('\n');
+  const labels = getFieldLabelsMap();
+  const keys = getPasteOutputFieldKeys();
+
+  return keys.flatMap((key) => [
+    `${labels[key] || key}:`,
+    display[key] || NOT_PROVIDED,
+  ]).join('\n');
 }

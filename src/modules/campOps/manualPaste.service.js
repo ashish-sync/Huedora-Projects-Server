@@ -160,7 +160,7 @@ async function buildBodyPreview(text, defaults = {}) {
         defaults,
       );
       const { pasteDisplay, pasteFormatted, ...rowForValidation } = extracted;
-      const { validRows, invalidRows } = validateMappedImportRows([rowForValidation]);
+      const { validRows, invalidRows } = validateMappedImportRows([rowForValidation], { source: 'paste' });
       const validRow = validRows[0];
       const invalidRow = invalidRows[0];
 
@@ -171,7 +171,7 @@ async function buildBodyPreview(text, defaults = {}) {
         partialFields: [],
         errors: invalidRow?.errors || [],
         row: (validRow || invalidRow)
-          ? { ...(validRow || invalidRow), remarks: '' }
+          ? { ...(validRow || invalidRow) }
           : null,
         pasteDisplay: extracted.pasteDisplay || null,
         pasteFormatted: extracted.pasteFormatted || '',

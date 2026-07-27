@@ -1,4 +1,5 @@
 import manualPasteConfig from './manualPasteFieldConfig.json' with { type: 'json' };
+import { getPasteTabularFieldKeys } from './campRequestFieldSchema.js';
 
 const NULL_VALUES = new Set(['', '-', 'na', 'n/a', 'nil', 'none', 'null']);
 
@@ -107,7 +108,7 @@ export function getImportFieldDefinitions(fieldKeys = null) {
   return cachedDefinitions.filter((field) => allowed.has(field.key));
 }
 
-export const CAMP_PASTE_TABULAR_FIELD_KEYS = manualPasteConfig.pasteTabularFields || [];
+export const CAMP_PASTE_TABULAR_FIELD_KEYS = getPasteTabularFieldKeys();
 
 export function getTextPasteLabels(internalKey) {
   const field = getImportFieldDefinitions().find((item) => item.key === internalKey);

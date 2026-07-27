@@ -1,5 +1,6 @@
 import { CampOpsCamp } from './campOps.model.js';
 import { normalizeCampName } from './campOps.constants.js';
+import { getRequestStageBlockers } from './campOps.requestValidation.js';
 
 export function trimStr(v) {
   return v == null ? '' : String(v).trim();
@@ -371,14 +372,12 @@ export function mapImportRows(rows, mapping, defaultClientName = '') {
   });
 }
 
-export function validateMappedImportRows(rows) {
+export function validateMappedImportRows(rows, { source = 'excel' } = {}) {
   const validRows = [];
   const invalidRows = [];
 
   for (const row of rows) {
     const errors = [];
-    if (!trimStr(row.clientName)) errors.push('Client name is required');
-    if (!trimStr(row.campDate)) errors.push('Camp date is required');
     const campDate = parseLocalDateInput(row.campDate);
     if (trimStr(row.campDate) && !campDate) errors.push('Camp date is invalid');
 
@@ -396,14 +395,18 @@ export function validateMappedImportRows(rows) {
 
     const normalized = {
       ...row,
+      source: trimStr(row.source) || source,
       clientName: trimStr(row.clientName),
       campaignName: normalizeCampName(row.campaignName),
       campaignType: trimStr(row.campaignType) || 'Screening',
       doctorName: trimStr(row.doctorName),
       doctorCode: trimStr(row.doctorCode),
+      speciality: trimStr(row.speciality),
+      hospitalName: trimStr(row.hospitalName),
       campAddress: trimStr(row.campAddress),
       city: trimStr(row.city),
       state: trimStr(row.state),
+      district: trimStr(row.district),
       zone: trimStr(row.zone),
       hq: trimStr(row.hq),
       pincode: trimStr(row.pincode),
@@ -417,7 +420,10 @@ export function validateMappedImportRows(rows) {
       remarks: trimStr(row.remarks),
     };
 
-    if (errors.length) invalidRows.push({ ...normalized, errors });
+    const blockers = getRequestStageBlockers(normalized);
+    if (blockers.length) errors.push(...blockers);
+
+    if (errors.length) invalidRows.push({ ...normalized, errors: [...new Set(errors)] });
     else validRows.push(normalized);
   }
 

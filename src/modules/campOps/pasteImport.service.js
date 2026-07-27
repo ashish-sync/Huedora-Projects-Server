@@ -86,7 +86,7 @@ async function buildBodyPreviewFromMappedRows(mappedRows, defaults = {}) {
       const withDefaults = applyPasteDefaults(row, defaults);
       const enriched = await enrichPasteLocationFromPin(withDefaults);
       const rowForValidation = { ...enriched.row };
-      const { validRows, invalidRows } = validateMappedImportRows([rowForValidation]);
+      const { validRows, invalidRows } = validateMappedImportRows([rowForValidation], { source: 'excel' });
       const validRow = validRows[0];
       const invalidRow = invalidRows[0];
 
