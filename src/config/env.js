@@ -5,13 +5,6 @@ dotenv.config();
 const nodeEnv = process.env.NODE_ENV || 'development';
 const isProd = nodeEnv === 'production';
 
-function requiredInProd(name, value) {
-  if (isProd && !String(value || '').trim()) {
-    throw new Error(`[config] ${name} is required when NODE_ENV=production`);
-  }
-  return value;
-}
-
 function strongSecret(name, value) {
   const v = String(value || '').trim();
   if (!isProd) {
@@ -29,11 +22,21 @@ function strongSecret(name, value) {
   return v;
 }
 
+function resolveClientOrigin() {
+  const fromEnv = String(process.env.CLIENT_ORIGIN || '').trim();
+  if (fromEnv) return fromEnv;
+  if (isProd) {
+    // Known Render frontend — avoids boot crash when CLIENT_ORIGIN is unset on the API service.
+    return 'https://huedora-projects.onrender.com';
+  }
+  return 'http://localhost:5173';
+}
+
 export const env = {
   port: Number(process.env.PORT || 5000),
   nodeEnv,
   isProd,
-  clientOrigin: requiredInProd('CLIENT_ORIGIN', process.env.CLIENT_ORIGIN) || 'http://localhost:5173',
+  clientOrigin: resolveClientOrigin(),
   useMemoryDb: String(process.env.USE_MEMORY_DB || 'false').toLowerCase() === 'true',
   /** Prefer file DB locally unless USE_MONGOOSE=true */
   useMongoose: String(process.env.USE_MONGOOSE || 'false').toLowerCase() === 'true',

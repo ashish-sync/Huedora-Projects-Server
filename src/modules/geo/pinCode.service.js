@@ -1,5 +1,87 @@
+import { randomUUID } from 'crypto';
 import { AppError } from '../../utils/helpers.js';
+import { resolveZoneNameForState } from './geo.zones.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState } from './geo.model.js';
+
+function normGeoName(name) {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function buildGeoIndexes(states, districts, cities) {
+  const stateByName = new Map();
+  for (const state of states) {
+    if (state.isDeleted) continue;
+    stateByName.set(normGeoName(state.name), state);
+  }
+
+  const districtByKey = new Map();
+  for (const district of districts) {
+    if (district.isDeleted) continue;
+    districtByKey.set(`${district.stateId}|${normGeoName(district.name)}`, district);
+  }
+
+  const citiesByDistrict = new Map();
+  const citiesByState = new Map();
+  const cityByStateAndName = new Map();
+  for (const city of cities) {
+    if (city.isDeleted) continue;
+    const districtKey = String(city.districtId || '');
+    if (districtKey) {
+      const list = citiesByDistrict.get(districtKey) || [];
+      list.push(city);
+      citiesByDistrict.set(districtKey, list);
+    }
+    const stateKey = String(city.stateId || '');
+    const stateList = citiesByState.get(stateKey) || [];
+    stateList.push(city);
+    citiesByState.set(stateKey, stateList);
+    cityByStateAndName.set(`${stateKey}|${normGeoName(city.name)}`, city);
+  }
+
+  return { stateByName, districtByKey, citiesByDistrict, citiesByState, cityByStateAndName };
+}
+
+function resolveCityForDistrict({ district, state }, indexes) {
+  const districtId = String(district._id);
+  const districtNorm = normGeoName(district.name);
+  const inDistrict = indexes.citiesByDistrict.get(districtId) || [];
+
+  const districtCity = inDistrict.find((city) => normGeoName(city.name) === districtNorm);
+  if (districtCity) return districtCity;
+  if (inDistrict.length) return inDistrict[0];
+
+  const stateKey = String(state._id);
+  const stateCity = indexes.cityByStateAndName.get(`${stateKey}|${districtNorm}`);
+  if (stateCity) return stateCity;
+
+  const inState = indexes.citiesByState.get(stateKey) || [];
+  if (inState.length) return inState[0];
+  return null;
+}
+
+function resolveGeoFromNames({ stateName, districtName, cityName = '' }, indexes) {
+  const state = indexes.stateByName.get(normGeoName(stateName));
+  if (!state) throw new AppError(`State not found: ${stateName}`, 400, 'VALIDATION_ERROR');
+
+  const district = indexes.districtByKey.get(`${state._id}|${normGeoName(districtName)}`);
+  if (!district) throw new AppError(`District not found: ${districtName}`, 400, 'VALIDATION_ERROR');
+
+  let city = null;
+  if (cityName) {
+    city = indexes.cityByStateAndName.get(`${state._id}|${normGeoName(cityName)}`);
+    if (!city) throw new AppError(`City not found: ${cityName}`, 400, 'VALIDATION_ERROR');
+  } else {
+    city = resolveCityForDistrict({ district, state }, indexes);
+    if (!city) {
+      throw new AppError(`No city found for district: ${districtName}`, 400, 'VALIDATION_ERROR');
+    }
+  }
+
+  return { state, district, city };
+}
 
 function rowData(row) {
   return row?.toObject ? row.toObject() : { ...(row || {}) };
@@ -28,7 +110,7 @@ export function normalizedPinPayload({ pinCode, city, district, state, locality 
 }
 
 export async function resolvePinTargets({ cityId, districtId, stateId }) {
-  const city = cityId ? await GeoCity.findOne({ _id: cityId, isDeleted: false }) : null;
+  let city = cityId ? await GeoCity.findOne({ _id: cityId, isDeleted: false }) : null;
   if (cityId && !city) throw new AppError('City not found', 404);
 
   let district = null;
@@ -36,6 +118,7 @@ export async function resolvePinTargets({ cityId, districtId, stateId }) {
   if (dId) {
     district = await GeoDistrict.findOne({ _id: dId, isDeleted: false });
   }
+  if (districtId && !district) throw new AppError('District not found', 404);
 
   let state = null;
   const sId = stateId || city?.stateId || district?.stateId;
@@ -43,42 +126,32 @@ export async function resolvePinTargets({ cityId, districtId, stateId }) {
     state = await GeoState.findOne({ _id: sId, isDeleted: false });
   }
   if (!state) throw new AppError('State is required for a PIN mapping', 400, 'VALIDATION_ERROR');
-  if (!city) throw new AppError('City is required for a PIN mapping', 400, 'VALIDATION_ERROR');
+  if (!district) throw new AppError('District is required for a PIN mapping', 400, 'VALIDATION_ERROR');
+
+  if (!city) {
+    const [states, districts, cities] = await Promise.all([
+      GeoState.find({ isDeleted: false }),
+      GeoDistrict.find({ isDeleted: false }),
+      GeoCity.find({ isDeleted: false }),
+    ]);
+    const indexes = buildGeoIndexes(states, districts, cities);
+    city = resolveCityForDistrict({ district, state }, indexes);
+    if (!city) {
+      throw new AppError(`No city found for district: ${district.name}`, 400, 'VALIDATION_ERROR');
+    }
+  }
 
   return { city, district, state };
 }
 
-export async function resolveGeoNames({ stateName, districtName, cityName }) {
-  const state = await GeoState.findOne({
-    isDeleted: false,
-    name: new RegExp(`^${String(stateName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
-  });
-  if (!state) throw new AppError(`State not found: ${stateName}`, 400, 'VALIDATION_ERROR');
-
-  if (!districtName) {
-    throw new AppError('District is required', 400, 'VALIDATION_ERROR');
-  }
-  const district = await GeoDistrict.findOne({
-    isDeleted: false,
-    stateId: state._id,
-    name: new RegExp(`^${String(districtName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
-  });
-  if (!district) {
-    throw new AppError(`District not found: ${districtName}`, 400, 'VALIDATION_ERROR');
-  }
-
-  const city = await GeoCity.findOne({
-    isDeleted: false,
-    stateId: state._id,
-    name: new RegExp(`^${String(cityName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
-  });
-  if (!city) throw new AppError(`City not found: ${cityName}`, 400, 'VALIDATION_ERROR');
-
-  return resolvePinTargets({
-    cityId: city._id,
-    districtId: district._id,
-    stateId: state._id,
-  });
+export async function resolveGeoNames({ stateName, districtName, cityName = '' }) {
+  const [states, districts, cities] = await Promise.all([
+    GeoState.find({ isDeleted: false }),
+    GeoDistrict.find({ isDeleted: false }),
+    GeoCity.find({ isDeleted: false }),
+  ]);
+  const indexes = buildGeoIndexes(states, districts, cities);
+  return resolveGeoFromNames({ stateName, districtName, cityName }, indexes);
 }
 
 async function loadGeoMaps(rows) {
@@ -104,12 +177,16 @@ export async function enrichPinRecords(rows = []) {
   if (!rows.length) return [];
   const list = rows.map(rowData);
   const maps = await loadGeoMaps(list);
-  return list.map((row) => ({
-    ...row,
-    stateName: maps.states[String(row.stateId)]?.name || row.stateName || '',
-    districtName: maps.districts[String(row.districtId)]?.name || row.districtName || '',
-    cityName: maps.cities[String(row.cityId)]?.name || row.cityName || '',
-  }));
+  return list.map((row) => {
+    const stateName = maps.states[String(row.stateId)]?.name || row.stateName || '';
+    return {
+      ...row,
+      stateName,
+      districtName: maps.districts[String(row.districtId)]?.name || row.districtName || '',
+      cityName: maps.cities[String(row.cityId)]?.name || row.cityName || '',
+      zone: resolveZoneNameForState(stateName) || row.zone || '',
+    };
+  });
 }
 
 export async function enrichPinRecord(row) {
@@ -202,13 +279,109 @@ export async function upsertNormalizedPin({
 }
 
 export function pinToExcelRow(row) {
-  return [
-    row.pinCode,
-    row.stateName || '',
-    row.districtName || '',
-    row.cityName || '',
-    row.locality || '',
-    row.notes || '',
-    row.isActive === false ? 'No' : 'Yes',
-  ];
+  return [row.pinCode, row.stateName || '', row.zone || '', row.districtName || ''];
+}
+
+/**
+ * Bulk-import PIN rows (State + District + PIN Code; City optional).
+ * Loads geo masters once, resolves in memory, and persists with a single write.
+ */
+export async function bulkImportPinRows(inputRows = [], { updatedBy = null } = {}) {
+  const [states, districts, cities, allPinRecords] = await Promise.all([
+    GeoState.find({ isDeleted: false }),
+    GeoDistrict.find({ isDeleted: false }),
+    GeoCity.find({ isDeleted: false }),
+    GeoPinCode._all(),
+  ]);
+
+  const indexes = buildGeoIndexes(states, districts, cities);
+  const activeByPin = new Map();
+  for (const record of allPinRecords) {
+    if (!record.isDeleted && record.pinCode) {
+      activeByPin.set(record.pinCode, { ...record });
+    }
+  }
+
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+  const errors = [];
+  const now = new Date().toISOString();
+
+  for (const input of inputRows) {
+    const {
+      rowNum,
+      pinCode,
+      stateName,
+      districtName,
+      cityName = '',
+      locality = '',
+      notes = '',
+      isActive = true,
+    } = input;
+
+    try {
+      if (!pinCode) {
+        skipped += 1;
+        continue;
+      }
+      if (!/^\d{6}$/.test(pinCode)) {
+        throw new AppError('PIN code must be 6 digits', 400, 'VALIDATION_ERROR');
+      }
+      if (!stateName || !districtName) {
+        throw new AppError('State and District are required', 400, 'VALIDATION_ERROR');
+      }
+
+      const { state, district, city } = resolveGeoFromNames(
+        { stateName, districtName, cityName },
+        indexes
+      );
+      const normalized = normalizedPinPayload({
+        pinCode,
+        city,
+        district,
+        state,
+        locality: locality === '-' ? '' : locality,
+        notes,
+        isActive,
+      });
+
+      const existing = activeByPin.get(normalized.pinCode);
+      if (existing) {
+        Object.assign(existing, normalized, { updatedBy, updatedAt: now });
+        updated += 1;
+      } else {
+        activeByPin.set(normalized.pinCode, {
+          pinCode: '',
+          cityId: null,
+          districtId: null,
+          stateId: null,
+          locality: '',
+          notes: '',
+          isActive: true,
+          isDeleted: false,
+          ...normalized,
+          _id: randomUUID(),
+          createdBy: updatedBy,
+          updatedBy,
+          createdAt: now,
+          updatedAt: now,
+        });
+        created += 1;
+      }
+    } catch (err) {
+      errors.push({ row: rowNum, field: 'import', message: err.message });
+    }
+  }
+
+  const deletedPins = allPinRecords.filter((record) => record.isDeleted);
+  GeoPinCode._write([...deletedPins, ...activeByPin.values()]);
+
+  return {
+    created,
+    updated,
+    skipped,
+    errors,
+    totalRows: inputRows.length,
+  };
 }

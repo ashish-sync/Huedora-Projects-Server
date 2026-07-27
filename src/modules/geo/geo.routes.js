@@ -8,14 +8,14 @@ import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.
 import { forceReseedGeoMasters } from './geo.seed.js';
 import { resolveZoneForStateRecord, resolveZoneNameForState } from './geo.zones.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState, GeoZone } from './geo.model.js';
-import { PIN_CODE_HEADERS, PIN_CODE_SAMPLE_ROWS } from './pinCodes.excel.js';
+import { PIN_CODE_HEADERS, PIN_CODE_IMPORT_HEADERS, PIN_CODE_SAMPLE_ROWS } from './pinCodes.excel.js';
 import {
   attachPinCounts,
+  bulkImportPinRows,
   enrichPinRecord,
   enrichPinRecords,
   getPinPreview,
   pinToExcelRow,
-  resolveGeoNames,
   resolvePinTargets,
   upsertNormalizedPin,
 } from './pinCode.service.js';
@@ -252,7 +252,7 @@ router.get(
     sendExcel(
       res,
       'Pin_Code_Master_Sample.xlsx',
-      PIN_CODE_HEADERS,
+      PIN_CODE_IMPORT_HEADERS,
       PIN_CODE_SAMPLE_ROWS,
       { sheetName: 'PIN Codes' }
     );
@@ -266,53 +266,35 @@ router.post(
   asyncHandler(async (req, res) => {
     if (!req.file) throw new AppError('Excel file required', 400, 'VALIDATION_ERROR');
     const rows = parseSheetRows(req.file.buffer);
-    const errors = [];
-    let created = 0;
-    let updated = 0;
+    const parsedRows = [];
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      const rowNum = i + 2;
-      try {
-        const pinCode = String(cellValue(row, ['PIN Code', 'PIN', 'pinCode'])).replace(/\D+/g, '');
-        if (!pinCode) continue;
-        if (!/^\d{6}$/.test(pinCode)) {
-          throw new AppError('PIN code must be 6 digits', 400, 'VALIDATION_ERROR');
-        }
-        const stateName = cellValue(row, ['State', 'stateName']);
-        const districtName = cellValue(row, ['District', 'districtName']);
-        const cityName = cellValue(row, ['City', 'cityName']);
-        if (!stateName || !districtName || !cityName) {
-          throw new AppError('State, District, and City are required', 400, 'VALIDATION_ERROR');
-        }
-        const locality = cellValue(row, ['Locality', 'locality']);
-        const notes = cellValue(row, ['Notes', 'notes']);
-        const activeRaw = cellValue(row, ['Active', 'Status', 'isActive']);
-        const isActive = !['no', 'false', '0', 'inactive'].includes(String(activeRaw).toLowerCase());
-
-        const { city, district, state } = await resolveGeoNames({ stateName, districtName, cityName });
-        const result = await upsertNormalizedPin({
-          pinCode,
-          city,
-          district,
-          state,
-          locality: locality === '-' ? '' : locality,
-          notes,
-          isActive,
-          updatedBy: req.user._id,
-        });
-        if (result.created) created += 1;
-        else if (result.updated) updated += 1;
-      } catch (err) {
-        errors.push({ row: rowNum, field: 'import', message: err.message });
-      }
+      const pinCode = String(cellValue(row, ['PIN Code', 'PIN', 'pinCode'])).replace(/\D+/g, '');
+      if (!pinCode) continue;
+      const activeRaw = cellValue(row, ['Active', 'Status', 'isActive']);
+      parsedRows.push({
+        rowNum: i + 2,
+        pinCode,
+        stateName: cellValue(row, ['State', 'stateName']),
+        districtName: cellValue(row, ['District', 'districtName']),
+        cityName: cellValue(row, ['City', 'cityName']),
+        locality: cellValue(row, ['Locality', 'locality']),
+        notes: cellValue(row, ['Notes', 'notes']),
+        isActive: !['no', 'false', '0', 'inactive'].includes(String(activeRaw).toLowerCase()),
+      });
     }
+
+    const { created, updated, skipped, errors, totalRows } = await bulkImportPinRows(parsedRows, {
+      updatedBy: req.user._id,
+    });
 
     res.json({
       data: {
-        totalRows: rows.length,
+        totalRows,
         created,
         updated,
+        skipped,
         errorRows: errors.length,
         errors: errors.slice(0, 200),
       },
