@@ -1,4 +1,5 @@
 import { GeoPinCode } from '../geo/geo.model.js';
+import { enrichPinRecord } from '../geo/pinCode.service.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
 import { trimStr } from './campOps.helpers.js';
 import { NOT_PROVIDED } from './manualPaste.extract.js';
@@ -42,25 +43,29 @@ export async function enrichPasteLocationFromPin(row = {}, display = {}) {
   }
 
   const match = matches[0];
-  const city = trimStr(match.cityName) || row.city;
-  const state = trimStr(match.stateName) || row.state;
+  const enriched = await enrichPinRecord(match);
+  const city = trimStr(enriched.cityName) || row.city;
+  const state = trimStr(enriched.stateName) || row.state;
+  const district = trimStr(enriched.districtName) || row.district;
   const zone = resolveZoneNameForState(state) || '';
 
   const nextRow = {
     ...row,
     pincode: pin,
-    city,
+    city: district || city,
     state,
-    hq: city || row.hq,
+    district,
+    hq: row.hq || district || city,
     zone,
   };
 
   const nextDisplay = {
     ...display,
     pincode: withDefault(pin),
-    city: withDefault(city),
+    city: withDefault(district || city),
     state: withDefault(state),
-    hq: withDefault(city),
+    district: withDefault(district),
+    hq: withDefault(row.hq || district || city),
     zone: withDefault(zone),
   };
 

@@ -3,6 +3,7 @@
  */
 
 import { GeoPinCode } from '../geo/geo.model.js';
+import { enrichPinRecord } from '../geo/pinCode.service.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
 import { CampOpsParserAudit } from './campOps.model.js';
 import { parseCampRequest, listClientParserConfigs, validateCityPincodeMatch } from './parsers/dist/index.js';
@@ -46,12 +47,13 @@ async function lookupPinMaster(pincode) {
 
   if (!matches.length) return null;
 
-  const match = matches[0];
+  const enriched = await enrichPinRecord(matches[0]);
   return {
     pinCode: pin,
-    cityName: trimStr(match.cityName),
-    stateName: trimStr(match.stateName),
-    zone: resolveZoneNameForState(match.stateName) || '',
+    cityName: trimStr(enriched.cityName),
+    stateName: trimStr(enriched.stateName),
+    districtName: trimStr(enriched.districtName),
+    zone: enriched.zone || resolveZoneNameForState(enriched.stateName) || '',
   };
 }
 

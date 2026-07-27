@@ -19,6 +19,7 @@ export const CampOpsCamp = defineCollection('camp_ops_camps', {
   campAddress: '',
   city: '',
   state: '',
+  district: '',
   pincode: '',
   campDate: '',
   startTime: '09:00',

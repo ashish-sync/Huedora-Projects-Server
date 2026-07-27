@@ -40,7 +40,7 @@ export function getRequestStageBlockers(camp = {}) {
   if (!hasText(camp.doctorCode)) errors.push('Doctor code is required');
   if (!hasText(camp.campAddress)) errors.push('Camp address is required');
   if (!hasText(camp.state)) errors.push('State is required');
-  if (!hasText(camp.city)) errors.push('City is required');
+  if (!hasText(camp.district)) errors.push('District is required');
   if (!/^\d{6}$/.test(trimStr(camp.pincode))) errors.push('Valid 6-digit pin code is required');
   if (!hasText(camp.hq)) errors.push('HQ is required');
   const stateName = trimStr(camp.state);

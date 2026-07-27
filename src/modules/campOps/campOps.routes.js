@@ -232,6 +232,7 @@ function campPayloadFromBody(body, existing = null, client = null) {
     campAddress: trimStr(body.campAddress ?? existing?.campAddress),
     city: trimStr(body.city ?? existing?.city),
     state: trimStr(body.state ?? existing?.state),
+    district: trimStr(body.district ?? existing?.district),
     pincode: trimStr(body.pincode ?? existing?.pincode),
     campDate: campDate || existing?.campDate || '',
     ...schedule,
