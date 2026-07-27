@@ -7,6 +7,7 @@ import { sendExcel } from '../../utils/excelExport.js';
 import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
 import { forceReseedGeoMasters } from './geo.seed.js';
 import { resolveZoneForStateRecord, resolveZoneNameForState } from './geo.zones.js';
+import { GeoCity, GeoDistrict, GeoPinCode, GeoState, GeoZone } from './geo.model.js';
 
 const router = Router();
 router.use(authenticate);
