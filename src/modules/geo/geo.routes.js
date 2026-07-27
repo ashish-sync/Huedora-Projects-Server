@@ -163,7 +163,7 @@ router.get(
     if (req.query.pinCode) filter.pinCode = String(req.query.pinCode).trim();
     if (req.query.q) {
       const re = new RegExp(String(req.query.q), 'i');
-      filter.$or = [{ pinCode: re }, { cityName: re }, { locality: re }, { stateName: re }];
+      filter.$or = [{ pinCode: re }, { cityName: re }, { districtName: re }, { stateName: re }];
     }
     const [data, total] = await Promise.all([
       GeoPinCode.find(filter)
@@ -186,14 +186,7 @@ router.get(
       res,
       'Geography_PIN_Codes.xlsx',
       PIN_CODE_HEADERS,
-      rows.map((r) => [
-        r.pinCode,
-        r.stateName,
-        r.cityName,
-        r.locality,
-        r.notes,
-        r.isActive === false ? 'Inactive' : 'Active',
-      ]),
+      rows.map((r) => [r.pinCode, r.stateName, r.districtName || '', r.cityName]),
       { sheetName: 'PIN Codes' }
     );
   })
@@ -220,12 +213,16 @@ async function resolveGeoNames({ stateName, districtName, cityName }) {
   if (!state) throw new AppError(`State not found: ${stateName}`, 400, 'VALIDATION_ERROR');
 
   let district = null;
-  if (districtName) {
-    district = await GeoDistrict.findOne({
-      isDeleted: false,
-      stateId: state._id,
-      name: new RegExp(`^${String(districtName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
-    });
+  if (!districtName) {
+    throw new AppError('District is required', 400, 'VALIDATION_ERROR');
+  }
+  district = await GeoDistrict.findOne({
+    isDeleted: false,
+    stateId: state._id,
+    name: new RegExp(`^${String(districtName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+  });
+  if (!district) {
+    throw new AppError(`District not found: ${districtName}`, 400, 'VALIDATION_ERROR');
   }
 
   const cityFilter = { isDeleted: false, stateId: state._id };
@@ -263,15 +260,11 @@ router.post(
           throw new AppError('PIN code must be 6 digits', 400, 'VALIDATION_ERROR');
         }
         const stateName = cellValue(row, ['State', 'stateName']);
-        const cityName = cellValue(row, ['City', 'cityName']);
-        if (!stateName || !cityName) {
-          throw new AppError('State and City are required', 400, 'VALIDATION_ERROR');
-        }
         const districtName = cellValue(row, ['District', 'districtName']);
-        const locality = cellValue(row, ['Locality', 'locality']);
-        const notes = cellValue(row, ['Notes', 'notes']);
-        const activeRaw = cellValue(row, ['Status', 'Active', 'isActive']);
-        const isActive = !['no', 'false', '0', 'inactive'].includes(activeRaw.toLowerCase());
+        const cityName = cellValue(row, ['City', 'cityName']);
+        if (!stateName || !districtName || !cityName) {
+          throw new AppError('State, District, and City are required', 400, 'VALIDATION_ERROR');
+        }
 
         const { city, district, state } = await resolveGeoNames({ stateName, districtName, cityName });
         const existing = await GeoPinCode.findOne({
@@ -280,9 +273,11 @@ router.post(
           isDeleted: false,
         });
         if (existing) {
-          existing.locality = locality || existing.locality;
-          existing.notes = notes || existing.notes;
-          existing.isActive = isActive;
+          existing.districtId = district?._id || city.districtId || null;
+          existing.districtName = district?.name || '';
+          existing.stateId = state._id;
+          existing.stateName = state.name;
+          existing.cityName = city.name;
           existing.updatedBy = req.user._id;
           await existing.save();
           updated += 1;
@@ -295,9 +290,7 @@ router.post(
             districtName: district?.name || '',
             stateId: state._id,
             stateName: state.name,
-            locality,
-            notes,
-            isActive,
+            isActive: true,
             createdBy: req.user._id,
             updatedBy: req.user._id,
           });

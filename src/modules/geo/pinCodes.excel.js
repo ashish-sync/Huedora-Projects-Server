@@ -1,17 +1,10 @@
-/** PIN Geography excel columns — aligned with Location Master form labels. */
+/** PIN Geography excel columns — aligned with PIN master form (4 fields only). */
 
-export const PIN_CODE_HEADERS = [
-  'PIN Code',
-  'State',
-  'City',
-  'Locality',
-  'Notes',
-  'Status',
-];
+export const PIN_CODE_HEADERS = ['PIN Code', 'State', 'District', 'City'];
 
 export const PIN_CODE_SAMPLE_ROWS = [
-  ['400001', 'Maharashtra', 'Mumbai', 'Fort', 'Sample mapping', 'Active'],
-  ['500081', 'Telangana', 'Hyderabad', 'Madhapur', '', 'Active'],
+  ['400001', 'Maharashtra', 'Mumbai City', 'Mumbai'],
+  ['500081', 'Telangana', 'Hyderabad', 'Hyderabad'],
 ];
 
 export const PIN_CODE_IMPORT_ALIASES = {
@@ -19,7 +12,4 @@ export const PIN_CODE_IMPORT_ALIASES = {
   stateName: ['State', 'stateName'],
   districtName: ['District', 'districtName'],
   cityName: ['City', 'cityName'],
-  locality: ['Locality', 'locality'],
-  notes: ['Notes', 'notes'],
-  isActive: ['Status', 'Active', 'isActive'],
 };
