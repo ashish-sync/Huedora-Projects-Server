@@ -2,7 +2,6 @@ import {
   CAMP_PASTE_TABULAR_FIELD_KEYS,
   compactFieldName,
   getImportFieldDefinitions,
-  getManualPasteConfig,
   preprocessFieldName,
 } from './pasteFieldRegistry.js';
 
@@ -156,10 +155,6 @@ export function matchImportColumns(headers = [], fieldKeys = null) {
     missingRequiredFields,
     fields,
   };
-}
-
-export function getAliasConfig() {
-  return getManualPasteConfig();
 }
 
 export { CAMP_PASTE_TABULAR_FIELD_KEYS, getImportFieldDefinitions };

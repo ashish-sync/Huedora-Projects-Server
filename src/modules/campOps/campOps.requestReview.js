@@ -110,11 +110,13 @@ export function applyRequestReviewTransition(camp, action, { actor = null, reaso
 }
 
 export async function persistRequestReviewOverdue(camp, now = new Date()) {
-  if (!camp || camp.status !== 'pending_review') return;
-  if (camp.requestReviewStatus === 'information_requested') return;
-  if (!isReviewOverdue(camp.submittedAt, now)) return;
-  if (camp.requestReviewStatus === 'review_overdue' && camp.reviewOverdueAt) return;
+  if (!camp || camp.status !== 'pending_review') return { becameOverdue: false };
+  if (camp.requestReviewStatus === 'information_requested') return { becameOverdue: false };
+  if (!isReviewOverdue(camp.submittedAt, now)) return { becameOverdue: false };
+  const alreadyOverdue = camp.requestReviewStatus === 'review_overdue' && camp.reviewOverdueAt;
+  if (alreadyOverdue) return { becameOverdue: false };
   camp.requestReviewStatus = 'review_overdue';
   if (!camp.reviewOverdueAt) camp.reviewOverdueAt = now.toISOString();
   await camp.save();
+  return { becameOverdue: true };
 }

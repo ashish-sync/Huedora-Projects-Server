@@ -1,6 +1,6 @@
 /** Server-side master entity catalog for MASTER_ADD validation. */
 
-export const MASTER_MODULES = ['inventory', 'movement', 'document'];
+export const MASTER_MODULES = ['inventory', 'movement', 'document', 'camp'];
 
 export const MASTER_ENTITY_IDS = [
   'products',
@@ -9,6 +9,7 @@ export const MASTER_ENTITY_IDS = [
   'contacts',
   'templates',
   'signatures',
+  'pin-codes',
 ];
 
 /** entityId → module */
@@ -19,6 +20,7 @@ export const MASTER_ENTITY_MODULE = {
   contacts: 'document',
   templates: 'document',
   signatures: 'document',
+  'pin-codes': 'camp',
 };
 
 export const MASTER_REQUIRED_FIELDS = {
@@ -28,6 +30,7 @@ export const MASTER_REQUIRED_FIELDS = {
   contacts: ['name'],
   templates: ['name', 'documentType', 'signingType'],
   signatures: ['name', 'roleLabel', 'typedName'],
+  'pin-codes': ['pinCode', 'stateName'],
 };
 
 export function moduleForEntity(entityId) {

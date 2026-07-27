@@ -1,4 +1,21 @@
-export const ASSET_TYPE_OPTIONS = ['Rented', 'Owned', 'Hybrid'];
+import { INDIAN_STATE_NAMES } from '../geo/indianStateNames.js';
+
+export const OWNERSHIP_TYPE_OPTIONS = [
+  'Company Owned',
+  'Rented',
+  'Client Owned',
+  'Hybrid',
+];
+
+const OWNERSHIP_TYPE_ALIASES = {
+  owned: 'Company Owned',
+  'company owned': 'Company Owned',
+  'company-owned': 'Company Owned',
+  rented: 'Rented',
+  'client owned': 'Client Owned',
+  'client-owned': 'Client Owned',
+  hybrid: 'Hybrid',
+};
 
 /** Sheet label: Asset Status. 8 inventory types */
 export const AGREEMENT_STATUS_OPTIONS = [
@@ -25,45 +42,7 @@ export const DEVICE_CUSTODY_OPTIONS = [
 
 export const ASSET_CUSTODY_OPTIONS = DEVICE_CUSTODY_OPTIONS;
 
-/** 28 Indian states + 8 union territories */
-export const INDIAN_STATES_AND_UTS = [
-  'Andaman and Nicobar Islands',
-  'Andhra Pradesh',
-  'Arunachal Pradesh',
-  'Assam',
-  'Bihar',
-  'Chandigarh',
-  'Chhattisgarh',
-  'Dadra and Nagar Haveli and Daman and Diu',
-  'Delhi',
-  'Goa',
-  'Gujarat',
-  'Haryana',
-  'Himachal Pradesh',
-  'Jammu and Kashmir',
-  'Jharkhand',
-  'Karnataka',
-  'Kerala',
-  'Ladakh',
-  'Lakshadweep',
-  'Madhya Pradesh',
-  'Maharashtra',
-  'Manipur',
-  'Meghalaya',
-  'Mizoram',
-  'Nagaland',
-  'Odisha',
-  'Puducherry',
-  'Punjab',
-  'Rajasthan',
-  'Sikkim',
-  'Tamil Nadu',
-  'Telangana',
-  'Tripura',
-  'Uttar Pradesh',
-  'Uttarakhand',
-  'West Bengal',
-];
+export const INDIAN_STATES_AND_UTS = INDIAN_STATE_NAMES;
 
 /** Legacy / workflow aliases → picklist values */
 const AGREEMENT_STATUS_ALIASES = {
@@ -160,8 +139,14 @@ export function normalizeDeviceCustody(raw) {
 export function normalizeAssetType(raw) {
   const v = String(raw || '').trim();
   if (!v) return null;
-  const hit = ASSET_TYPE_OPTIONS.find((o) => o.toLowerCase() === v.toLowerCase());
+  const alias = OWNERSHIP_TYPE_ALIASES[v.toLowerCase()];
+  if (alias) return alias;
+  const hit = OWNERSHIP_TYPE_OPTIONS.find((o) => o.toLowerCase() === v.toLowerCase());
   return hit || null;
+}
+
+export function formatOwnershipType(raw) {
+  return normalizeAssetType(raw) || String(raw || '').trim() || '';
 }
 
 export function normalizeCustodianState(raw) {

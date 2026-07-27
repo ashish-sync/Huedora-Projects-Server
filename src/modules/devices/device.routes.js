@@ -15,13 +15,14 @@ import { sendExcel } from '../../utils/excelExport.js';
 import { notifyImportFailures } from '../imports/importErrorReport.js';
 import { assertValidPhoneOrEmail } from '../../utils/identityNormalize.js';
 import {
-  ASSET_TYPE_OPTIONS,
+  OWNERSHIP_TYPE_OPTIONS,
   AGREEMENT_STATUS_OPTIONS,
   DEVICE_CUSTODY_OPTIONS,
   INDIAN_STATES_AND_UTS,
   normalizeAgreementStatus,
   normalizeDeviceCustody,
   normalizeAssetType,
+  formatOwnershipType,
   normalizeCustodianState,
 } from './device.constants.js';
 
@@ -32,7 +33,7 @@ const canWriteDevicesOrAssets = requirePermission(
 
 const ASSET_MASTER_HEADERS = [
   'Asset Name',
-  'Asset Type',
+  'Ownership Type',
   'Serial Number',
   'Asset Value',
   'Purchase (MM/YYYY)',
@@ -105,7 +106,7 @@ function parseMasterFields(input) {
   const assetType = normalizeAssetType(input.assetType);
   if (!assetType) {
     throw new AppError(
-      `Asset Type is required and must be one of: ${ASSET_TYPE_OPTIONS.join(', ')}`,
+      `Ownership Type is required and must be one of: ${OWNERSHIP_TYPE_OPTIONS.join(', ')}`,
       400,
       'VALIDATION_ERROR'
     );
@@ -357,7 +358,7 @@ router.get(
       ASSET_MASTER_HEADERS,
       rows.map((d) => [
         d.name,
-        d.assetType,
+        d.assetType ? formatOwnershipType(d.assetType) : '',
         d.serialNumber,
         d.cost,
         d.purchaseMonth,
@@ -383,7 +384,7 @@ router.get(
       ASSET_MASTER_HEADERS,
       [
         'Ultrasound Probe X2',
-        'Owned',
+        'Company Owned',
         'SN-1001',
         125000,
         '07/2026',
@@ -425,8 +426,8 @@ router.get(
       { wch: 24 },
     ];
     const help = XLSX.utils.aoa_to_sheet([
-      ['Asset Type options'],
-      ...ASSET_TYPE_OPTIONS.map((o) => [o]),
+      ['Ownership Type options'],
+      ...OWNERSHIP_TYPE_OPTIONS.map((o) => [o]),
       [''],
       ['Asset Status options'],
       ...AGREEMENT_STATUS_OPTIONS.map((o) => [o]),
@@ -502,7 +503,13 @@ router.post(
         const name = String(
           normKey(row, ['Asset Name', 'Device Name', 'deviceName', 'Name'])
         ).trim();
-        const assetType = String(normKey(row, ['Asset Type', 'assetType', 'Type'])).trim();
+        const assetType = String(normKey(row, [
+          'Ownership Type',
+          'Asset Type',
+          'assetType',
+          'ownershipType',
+          'Type',
+        ])).trim();
         const serialNumber = String(
           normKey(row, [
             'Serial Number',
@@ -638,7 +645,7 @@ router.patch(
       const assetType = normalizeAssetType(req.body.assetType);
       if (!assetType) {
         throw new AppError(
-          `Asset Type must be one of: ${ASSET_TYPE_OPTIONS.join(', ')}`,
+          `Ownership Type must be one of: ${OWNERSHIP_TYPE_OPTIONS.join(', ')}`,
           400,
           'VALIDATION_ERROR'
         );

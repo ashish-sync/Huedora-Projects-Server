@@ -94,6 +94,7 @@ import {
   canCloseCampStatus,
   canCloseCampRecord,
 } from './campOps.closure.js';
+import { notifyCampWorkflow } from './campOps.notifications.js';
 import {
   handleEmailArchive,
   handleEmailConfigGet,
@@ -475,6 +476,7 @@ router.post(
         const camp = await CampOpsCamp.findOne({ _id: String(id), isDeleted: false });
         if (!camp) throw new Error('Camp not found');
 
+        const before = camp.toObject();
         if (config.from && !config.from.includes(camp.status)) {
           throw new Error(`Camp ${camp.campId} is ${camp.status} and cannot be ${action}d`);
         }
@@ -501,6 +503,17 @@ router.post(
           camp.executedAt = new Date().toISOString();
         }
         await camp.save();
+        await audit(req, `camp_ops.bulk_${action}`, 'camp_ops_camp', camp._id, before, camp.toObject());
+        if (action === 'approve') {
+          await notifyCampWorkflow({ camp, action: 'approve', actorId: a.id });
+        } else if (action === 'reject') {
+          await notifyCampWorkflow({
+            camp,
+            action: 'reject',
+            actorId: a.id,
+            note: trimStr(req.body?.rejectionReason || req.body?.remarks),
+          });
+        }
         results.success.push({ id: camp._id, campId: camp.campId });
       } catch (err) {
         results.failed.push({ id, reason: err.message });
@@ -525,7 +538,10 @@ router.get(
   asyncHandler(async (req, res) => {
     const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
     if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
-    await persistRequestReviewOverdue(camp);
+    const overdue = await persistRequestReviewOverdue(camp);
+    if (overdue.becameOverdue) {
+      await notifyCampWorkflow({ camp, action: 'review_overdue', actorId: null });
+    }
     res.json({ data: enrichCamp(camp) });
   })
 );
@@ -620,6 +636,7 @@ router.post(
     });
 
     await audit(req, 'camp_ops.create', 'camp_ops_camp', camp._id, null, camp.toObject());
+    await notifyCampWorkflow({ camp, action: 'create', actorId: a.id });
     res.status(201).json({ data: enrichCamp(camp) });
   })
 );
@@ -820,6 +837,18 @@ async function transitionCamp(req, res, nextStatus, action) {
 
   await camp.save();
   await audit(req, `camp_ops.${action}`, 'camp_ops_camp', camp._id, before, camp.toObject());
+  if (nextStatus === 'pending_review') {
+    await notifyCampWorkflow({ camp, action: 'submit_review', actorId: a.id });
+  } else if (nextStatus === 'approved') {
+    await notifyCampWorkflow({ camp, action: 'approve', actorId: a.id });
+  } else if (nextStatus === 'rejected') {
+    await notifyCampWorkflow({
+      camp,
+      action: 'reject',
+      actorId: a.id,
+      note: trimStr(req.body?.rejectionReason || req.body?.remarks),
+    });
+  }
   res.json({ data: enrichCamp(camp) });
 }
 
@@ -855,6 +884,12 @@ router.post(
     applyRequestReviewTransition(camp, 'request_information', { actor: actor(req), reason: note });
     await camp.save();
     await audit(req, 'camp_ops.request_information', 'camp_ops_camp', camp._id, before, camp.toObject());
+    await notifyCampWorkflow({
+      camp,
+      action: 'request_information',
+      actorId: actor(req).id,
+      note,
+    });
     res.json({ data: enrichCamp(camp) });
   })
 );

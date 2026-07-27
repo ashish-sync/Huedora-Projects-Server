@@ -104,7 +104,7 @@ test('formatManualPasteOutput includes zone label', () => {
   const output = formatManualPasteOutput(display);
   assert.match(output, /^Camp Date:\n/);
   assert.match(output, /Zone:\n/);
-  assert.match(output, /Contact Person Number:\n9876543210$/);
+  assert.match(output, /Contact Person Number:\n9876543210\n/);
 });
 
 test('manual paste uses selected method instead of defaulting to Others', () => {

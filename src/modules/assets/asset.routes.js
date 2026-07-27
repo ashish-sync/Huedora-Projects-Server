@@ -26,12 +26,13 @@ import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { assertValidPhoneOrEmail } from '../../utils/identityNormalize.js';
 import {
-  ASSET_TYPE_OPTIONS,
+  OWNERSHIP_TYPE_OPTIONS,
   AGREEMENT_STATUS_OPTIONS,
   DEVICE_CUSTODY_OPTIONS,
   normalizeAgreementStatus,
   normalizeDeviceCustody,
   normalizeAssetType,
+  formatOwnershipType,
   normalizeCustodianState,
 } from '../devices/device.constants.js';
 import { buildAssetPlaceholderSnapshot } from './assetPlaceholderSnapshot.js';
@@ -177,7 +178,7 @@ router.get(
     const showValue = hasPermission(req, PERMISSIONS.ASSETS_VIEW_VALUE);
     const headers = [
       'Asset Name',
-      'Asset Type',
+      'Ownership Type',
       'Serial Number',
       'Asset Tag',
       'Status',
@@ -209,7 +210,7 @@ router.get(
           a.deviceNameSnapshot || a.deviceMasterId?.name || '';
         const cols = [
           deviceName,
-          a.assetType || a.deviceMasterId?.assetType || '',
+          formatOwnershipType(a.assetType || a.deviceMasterId?.assetType || ''),
           a.serialNumber,
           a.assetTag,
           a.status,
@@ -584,7 +585,7 @@ router.patch(
       const assetType = normalizeAssetType(req.body.assetType);
       if (!assetType) {
         throw new AppError(
-          `Asset Type must be one of: ${ASSET_TYPE_OPTIONS.join(', ')}`,
+          `Ownership Type must be one of: ${OWNERSHIP_TYPE_OPTIONS.join(', ')}`,
           400,
           'VALIDATION_ERROR'
         );

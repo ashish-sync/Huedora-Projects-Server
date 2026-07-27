@@ -1,5 +1,6 @@
 import { trimStr, parseLocalDateInput } from './campOps.helpers.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
+import { findStateInText } from '../geo/indianStateNames.js';
 import {
   compactFieldName,
   getDesignationContactPairs,
@@ -10,49 +11,10 @@ import {
 } from './import/pasteFieldRegistry.js';
 import {
   getFieldLabelsMap,
-  getPasteOutputFieldKeys,
+  getPasteTabularFieldKeys,
 } from './import/campRequestFieldSchema.js';
 
 export const NOT_PROVIDED = 'Not Provided';
-
-const INDIAN_STATES = [
-  'Andaman and Nicobar Islands',
-  'Andhra Pradesh',
-  'Arunachal Pradesh',
-  'Assam',
-  'Bihar',
-  'Chandigarh',
-  'Chhattisgarh',
-  'Dadra and Nagar Haveli and Daman and Diu',
-  'Delhi',
-  'Goa',
-  'Gujarat',
-  'Haryana',
-  'Himachal Pradesh',
-  'Jammu and Kashmir',
-  'Jharkhand',
-  'Karnataka',
-  'Kerala',
-  'Ladakh',
-  'Lakshadweep',
-  'Madhya Pradesh',
-  'Maharashtra',
-  'Manipur',
-  'Meghalaya',
-  'Mizoram',
-  'Nagaland',
-  'Odisha',
-  'Puducherry',
-  'Punjab',
-  'Rajasthan',
-  'Sikkim',
-  'Tamil Nadu',
-  'Telangana',
-  'Tripura',
-  'Uttar Pradesh',
-  'Uttarakhand',
-  'West Bengal',
-];
 
 function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -149,7 +111,9 @@ function extractPinCode(text, location = {}) {
   const labeled = pickFieldValue(text, 'pincode');
   const fromLabel = String(labeled || '').replace(/\D/g, '').slice(0, 6);
   if (fromLabel.length === 6) return fromLabel;
-  return location.pincode || '';
+  if (location.pincode) return location.pincode;
+  const address = pickFieldValue(text, 'campAddress') || pickFieldValue(text, 'hospitalName');
+  return extractLocationFromAddress(address).pincode || '';
 }
 
 function extractMentionedTimes(text) {
@@ -163,16 +127,6 @@ function extractCampDate(text) {
   const dateMatch = raw.match(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{4}-\d{2}-\d{2}/);
   const dateToken = dateMatch ? dateMatch[0] : raw.split(/\s+/)[0];
   return parseLocalDateInput(dateToken) || dateToken;
-}
-
-function findStateInText(text) {
-  const haystack = String(text || '');
-  const sorted = [...INDIAN_STATES].sort((a, b) => b.length - a.length);
-  for (const state of sorted) {
-    const re = new RegExp(`\\b${escapeRegex(state)}\\b`, 'i');
-    if (re.test(haystack)) return state;
-  }
-  return '';
 }
 
 function extractLocationFromAddress(address) {
@@ -230,7 +184,7 @@ function extractContactPerson(text) {
 }
 
 export function extractManualPasteFields(text) {
-  const raw = String(text || '');
+  const raw = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const doctorName = pickFieldValue(raw, 'doctorName');
   const doctorCode = pickFieldValue(raw, 'doctorCode');
   const speciality = pickFieldValue(raw, 'speciality');
@@ -241,7 +195,7 @@ export function extractManualPasteFields(text) {
   const city = pickFieldValue(raw, 'city');
   const state = pickFieldValue(raw, 'state');
   const location = extractLocationFromAddress(campAddress);
-  const pincode = extractPinCode(raw, { ...location, pincode: pickFieldValue(raw, 'pincode') });
+  const pincode = extractPinCode(raw, location);
   const hq = pickFieldValue(raw, 'hq');
   const zone = (state || location.state) ? resolveZoneNameForState(state || location.state) : '';
   const expectedPatientsRaw = pickFieldValue(raw, 'expectedPatients');
@@ -303,7 +257,7 @@ export function extractManualPasteFields(text) {
 
 export function formatManualPasteOutput(display = {}) {
   const labels = getFieldLabelsMap();
-  const keys = getPasteOutputFieldKeys();
+  const keys = getPasteTabularFieldKeys();
 
   return keys.flatMap((key) => [
     `${labels[key] || key}:`,

@@ -1,4 +1,5 @@
 import { normalizeCampName } from '../config/campNames.js';
+import { findStateInText } from '../../../geo/indianStateNames.js';
 import { parseLocalDateInput, computeEndTime, parseTimeToMinutes, resolveClinicHospitalName } from './campHelpers.js';
 import {
   cleanFieldValue,
@@ -28,13 +29,6 @@ const MONTHS = {
   aug: 7, august: 7, sep: 8, sept: 8, september: 8, oct: 9, october: 9,
   nov: 10, november: 10, dec: 11, december: 11,
 };
-
-const INDIAN_STATES = [
-  'Andhra Pradesh', 'West Bengal', 'Uttar Pradesh', 'Madhya Pradesh', 'Tamil Nadu',
-  'Maharashtra', 'Karnataka', 'Gujarat', 'Rajasthan', 'Kerala', 'Punjab', 'Haryana',
-  'Bihar', 'Odisha', 'Assam', 'Jharkhand', 'Chhattisgarh', 'Telangana', 'Delhi',
-  'Uttarakhand', 'Himachal Pradesh', 'Goa', 'Punjab',
-];
 
 function normalizeWhitespace(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
@@ -233,13 +227,8 @@ function extractLabeledFieldsFromBlock(text) {
   }
 
   if (!result.state) {
-    const lower = text.toLowerCase();
-    for (const state of INDIAN_STATES) {
-      if (lower.includes(state.toLowerCase())) {
-        result.state = state;
-        break;
-      }
-    }
+    const state = findStateInText(text);
+    if (state) result.state = state;
   }
 
   if (!result.pincode) {

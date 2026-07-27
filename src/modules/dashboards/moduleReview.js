@@ -6,7 +6,7 @@ import { Asset } from '../assets/asset.model.js';
 import { Agreement } from '../agreements/agreement.model.js';
 import { Contact } from '../contacts/contact.model.js';
 import { VerificationRecord } from '../verifications/verification.model.js';
-import { CampRequest } from '../camps/camp.model.js';
+import { CampOpsCamp } from '../campOps/campOps.model.js';
 import { AssetRequest, REQUEST_TYPE_LABELS } from '../assetRequests/assetRequest.model.js';
 import { LogisticsInOutEntry } from '../logistics/logistics.model.js';
 import { FinanceExpense, FinanceInvoice } from '../finance/finance.model.js';
@@ -295,29 +295,31 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
       };
     }
     case 'camps': {
-      const all = activeOnly(await CampRequest.find({ isDeleted: false }).limit(20000));
+      const all = activeOnly(await CampOpsCamp.find({ isDeleted: false }).limit(20000));
       const filtered = all.filter((r) =>
-        inRange(getDateValue(r, ['requestedAt', 'campDate', 'createdAt']), fromDate, toDate)
+        inRange(getDateValue(r, ['submittedAt', 'campDate', 'createdAt']), fromDate, toDate)
       );
       return {
-        dateFieldLabel: 'Requested / camp date',
+        dateFieldLabel: 'Submitted / camp date',
         summary: { total: filtered.length, byStatus: countBy(filtered, 'status') },
         columns: [
+          { key: 'campId', label: 'Camp ID' },
+          { key: 'clientName', label: 'Client' },
+          { key: 'campaignName', label: 'Method' },
           { key: 'campDate', label: 'Camp date' },
-          { key: 'method', label: 'Method' },
-          { key: 'process', label: 'Process' },
           { key: 'city', label: 'City' },
           { key: 'status', label: 'Status' },
-          { key: 'when', label: 'Requested' },
+          { key: 'when', label: 'Submitted' },
         ],
         rows: filtered.slice(0, limit).map((r) => ({
           id: r._id,
+          campId: r.campId || '-',
+          clientName: r.clientName || '-',
+          campaignName: r.campaignName || '-',
           campDate: r.campDate || '-',
-          method: r.method || '-',
-          process: r.process || '-',
           city: r.city || '-',
           status: r.status || '-',
-          when: fmtDate(getDateValue(r, ['requestedAt', 'createdAt'])),
+          when: fmtDate(getDateValue(r, ['submittedAt', 'createdAt'])),
         })),
         total: filtered.length,
       };

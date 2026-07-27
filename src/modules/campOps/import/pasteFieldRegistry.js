@@ -3,10 +3,6 @@ import { getPasteTabularFieldKeys } from './campRequestFieldSchema.js';
 
 const NULL_VALUES = new Set(['', '-', 'na', 'n/a', 'nil', 'none', 'null']);
 
-/**
- * Preprocess a field name for matching: lowercase, trim, strip symbols, collapse spaces.
- * Example: "Doctor Name*" -> "doctor name" ; compact -> "doctorname"
- */
 export function preprocessFieldName(value) {
   let text = String(value ?? '');
   if (manualPasteConfig.trim_whitespace !== false) text = text.trim();
@@ -25,7 +21,7 @@ export function preprocessFieldName(value) {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-/** Compact form used for fuzzy header matching: "Doctor Name" -> "doctorname" */
+/** Compact header token for fuzzy matching. */
 export function compactFieldName(value) {
   return preprocessFieldName(value).replace(/\s+/g, '');
 }
@@ -115,7 +111,6 @@ export function getTextPasteLabels(internalKey) {
   if (!field) return [];
 
   const labels = new Set();
-  (manualPasteConfig.canonical_fields || {});
   Object.entries(manualPasteConfig.canonical_fields || {}).forEach(([canonicalKey, aliases]) => {
     if (manualPasteConfig.canonical_to_internal?.[canonicalKey] !== internalKey) return;
     aliases.forEach((alias) => labels.add(alias));
@@ -163,8 +158,4 @@ export function getDesignationContactPairs() {
   });
 
   return pairs;
-}
-
-export function labelsMatchCompact(label, candidate) {
-  return compactFieldName(label) === compactFieldName(candidate);
 }

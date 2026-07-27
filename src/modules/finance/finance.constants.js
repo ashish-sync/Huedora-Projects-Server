@@ -1,3 +1,4 @@
+/** Finance One expense types (reimbursement line items). Not the Movement One expense-categories master. */
 export const EXPENSE_CATEGORIES = [
   'Travel',
   'Training',
