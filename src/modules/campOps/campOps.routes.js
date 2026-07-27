@@ -234,6 +234,14 @@ function campPayloadFromBody(body, existing = null, client = null) {
     state: trimStr(body.state ?? existing?.state),
     district: trimStr(body.district ?? existing?.district),
     pincode: trimStr(body.pincode ?? existing?.pincode),
+    latitude:
+      body.latitude !== undefined && body.latitude !== ''
+        ? Number(body.latitude)
+        : existing?.latitude ?? null,
+    longitude:
+      body.longitude !== undefined && body.longitude !== ''
+        ? Number(body.longitude)
+        : existing?.longitude ?? null,
     campDate: campDate || existing?.campDate || '',
     ...schedule,
     expectedPatients: Math.max(
