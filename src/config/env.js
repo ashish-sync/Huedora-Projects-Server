@@ -58,6 +58,10 @@ export const env = {
   /** Dev-only: create manager@ / verifier@ demo accounts. ignored in production */
   seedDemoUsers: !isProd && String(process.env.SEED_DEMO_USERS || 'false').toLowerCase() === 'true',
   uploadMaxBytes: Number(process.env.UPLOAD_MAX_BYTES || 10485760),
+  /** Local JSON store directory (dev only). On Render use MongoDB instead. */
+  dataDir: String(process.env.DATA_DIR || '').trim(),
+  /** Uploaded files root. Mount a persistent disk here on Render if not using object storage. */
+  uploadsDir: String(process.env.UPLOADS_DIR || '').trim(),
   smtpEnabled: String(process.env.SMTP_ENABLED || 'false').toLowerCase() === 'true',
   seedAgreementSamples:
     !isProd && String(process.env.SEED_AGREEMENT_SAMPLES || 'false').toLowerCase() === 'true',

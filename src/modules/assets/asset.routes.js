@@ -36,10 +36,9 @@ import {
   normalizeCustodianState,
 } from '../devices/device.constants.js';
 import { buildAssetPlaceholderSnapshot } from './assetPlaceholderSnapshot.js';
+import { uploadDir } from '../../config/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const agreementUploadRoot = path.resolve(__dirname, '../../../uploads/agreements');
-fs.mkdirSync(agreementUploadRoot, { recursive: true });
+const agreementUploadRoot = uploadDir('agreements');
 
 const agreementUpload = multer({
   storage: multer.diskStorage({

@@ -1,0 +1,30 @@
+# Render Blueprint for TYLO One API (huedora-projects-server)
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: huedora-projects-server
+    runtime: node
+    plan: free
+    rootDir: .
+    buildCommand: npm install && npm run build:parsers
+    startCommand: npm start
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CLIENT_ORIGIN
+        value: https://huedora-projects.onrender.com
+      - key: USE_MONGOOSE
+        value: "true"
+      - key: USE_MEMORY_DB
+        value: "false"
+      - key: RESET_ALL_DATA_ON_BOOT
+        value: "false"
+      - key: RESEED_GEO_ON_BOOT
+        value: "false"
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true

@@ -4,9 +4,9 @@ import { fileURLToPath } from 'url';
 import { v4 as uuid } from 'uuid';
 import { AgreementDocument } from './agreement.model.js';
 import { buildAgreementPdfBuffer, pdfOptionsFromAgreement } from './agreementPdf.js';
+import { uploadDir } from '../../config/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const uploadRoot = path.resolve(__dirname, '../../../uploads/agreements');
+const uploadRoot = uploadDir('agreements');
 
 /**
  * Persist the fully signed agreement PDF as the primary contract document.

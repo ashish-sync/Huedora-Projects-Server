@@ -236,7 +236,7 @@ export async function generateCampId(campDate = new Date()) {
   const yy = String(date.getFullYear()).slice(-2);
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const prefix = `${yy}-${mm}-`;
-  const rows = CampOpsCamp._all().filter(
+  const rows = (await CampOpsCamp._all()).filter(
     (r) => !r.isDeleted && String(r.campId || '').startsWith(prefix)
   );
   let maxSeq = 0;

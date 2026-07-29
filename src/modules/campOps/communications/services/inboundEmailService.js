@@ -502,7 +502,7 @@ export async function processInboundEmailRecord(id, user, options = {}) {
   await record.save();
 
   if (record.imapUid) {
-    markEmailMessageHandled({
+    await markEmailMessageHandled({
       messageId: record.messageId,
       receivedAt: record.receivedAt,
       uid: record.imapUid,
@@ -529,7 +529,7 @@ export async function archiveInboundEmailRecord(id, user) {
   await record.save();
 
   if (record.imapUid) {
-    markEmailMessageHandled({
+    await markEmailMessageHandled({
       messageId: record.messageId,
       receivedAt: record.receivedAt,
       uid: record.imapUid,

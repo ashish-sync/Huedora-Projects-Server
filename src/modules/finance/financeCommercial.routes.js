@@ -40,10 +40,9 @@ import { buildProformaPdfBuffer } from './proformaPdf.js';
 import { buildPurchaseOrderPdfBuffer } from './purchaseOrderPdf.js';
 import { buildClientInvoicePdfBuffer } from './clientInvoicePdf.js';
 import { buildCreditNotePdfBuffer } from './creditNotePdf.js';
+import { uploadDir } from '../../config/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const uploadRoot = path.resolve(__dirname, '../../../uploads/finance');
-fs.mkdirSync(uploadRoot, { recursive: true });
+const uploadRoot = uploadDir('finance');
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadRoot),

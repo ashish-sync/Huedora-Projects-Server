@@ -23,10 +23,10 @@ import {
 import { previewStore } from './previewStore.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
+import { uploadDir } from '../../config/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const templateRoot = path.resolve(__dirname, '../../../uploads/templates');
-const previewRoot = path.resolve(__dirname, '../../../uploads/previews');
+const templateRoot = uploadDir('templates');
+const previewRoot = uploadDir('previews');
 ensureDir(templateRoot);
 ensureDir(previewRoot);
 

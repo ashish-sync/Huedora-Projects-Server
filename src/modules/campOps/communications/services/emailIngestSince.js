@@ -3,38 +3,63 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { parseLocalDateInput } from '../utils/campHelpers.js';
 import { getAllowedEmailDomains } from '../utils/emailParser.js';
+import { getAppState, setAppState } from '../../../common/appState.model.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const STATE_FILE = path.join(__dirname, '../../.email-ingest-since.json');
+const LEGACY_STATE_FILE = path.join(__dirname, '../../.email-ingest-since.json');
+const STATE_KEY = 'email_ingest';
 const HANDLED_ID_LIMIT = 2000;
 
+let state = {};
+let hydrated = false;
 let cachedSince = null;
 
-function readFullState() {
+function readLegacyFileState() {
   try {
-    if (!fs.existsSync(STATE_FILE)) return {};
-    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    if (!fs.existsSync(LEGACY_STATE_FILE)) return null;
+    return JSON.parse(fs.readFileSync(LEGACY_STATE_FILE, 'utf8'));
   } catch {
-    return {};
+    return null;
   }
 }
 
-function writeFullState(state) {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+function stripMeta(doc) {
+  const { toObject, save, populate, createdAt, updatedAt, _id, ...rest } = doc || {};
+  return rest;
 }
 
-function readPersistedSince() {
-  const data = readFullState();
-  if (!data.since) return null;
-  const date = new Date(data.since);
-  return Number.isNaN(date.getTime()) ? null : date;
+/** Load email ingest cursor from MongoDB (call once after connectDb). */
+export async function hydrateEmailIngestState() {
+  const stored = await getAppState(STATE_KEY, {});
+  const legacy = readLegacyFileState();
+  const hasStored = Object.keys(stripMeta(stored)).length > 0;
+
+  if (!hasStored && legacy) {
+    state = { ...legacy };
+    await persistState();
+    try {
+      fs.unlinkSync(LEGACY_STATE_FILE);
+      console.log('[email] Migrated legacy .email-ingest-since.json to MongoDB app_state');
+    } catch {
+      // non-fatal
+    }
+  } else {
+    state = hasStored ? stripMeta(stored) : {};
+  }
+
+  hydrated = true;
+  cachedSince = null;
 }
 
-function persistSince(date) {
-  const state = readFullState();
-  state.since = date.toISOString();
-  state.savedAt = new Date().toISOString();
-  writeFullState(state);
+function ensureHydrated() {
+  if (!hydrated) {
+    throw new Error('[email] Email ingest state not hydrated — call hydrateEmailIngestState() after connectDb');
+  }
+}
+
+async function persistState() {
+  ensureHydrated();
+  await setAppState(STATE_KEY, state);
 }
 
 function parseProcessFromEnv(value) {
@@ -50,7 +75,20 @@ function parseProcessFromEnv(value) {
   throw new Error(`Invalid EMAIL_IMAP_PROCESS_FROM value: ${text}`);
 }
 
+function readPersistedSince() {
+  if (!state.since) return null;
+  const date = new Date(state.since);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+async function persistSince(date) {
+  state.since = date.toISOString();
+  state.savedAt = new Date().toISOString();
+  await persistState();
+}
+
 export function getEmailProcessSinceDate() {
+  ensureHydrated();
   if (cachedSince) return cachedSince;
 
   const envValue = process.env.EMAIL_IMAP_PROCESS_FROM || 'now';
@@ -68,13 +106,15 @@ export function getEmailProcessSinceDate() {
   }
 
   cachedSince = new Date();
-  persistSince(cachedSince);
+  persistSince(cachedSince).catch((err) => {
+    console.error('[email] Failed to persist activation timestamp:', err.message);
+  });
   return cachedSince;
 }
 
 export function getEmailFetchSinceDate() {
+  ensureHydrated();
   const activation = getEmailProcessSinceDate();
-  const state = readFullState();
 
   if (state.lastProcessedAt) {
     const cursor = new Date(state.lastProcessedAt);
@@ -87,7 +127,7 @@ export function getEmailFetchSinceDate() {
 }
 
 export function getEmailIngestCursor() {
-  const state = readFullState();
+  ensureHydrated();
   return {
     activationSince: getEmailProcessSinceDate(),
     fetchSince: getEmailFetchSinceDate(),
@@ -99,21 +139,20 @@ export function getEmailIngestCursor() {
 }
 
 export function wasEmailMessageHandled(messageId) {
+  ensureHydrated();
   const id = String(messageId || '').trim();
   if (!id) return false;
-
-  const state = readFullState();
   const handled = Array.isArray(state.handledMessageIds) ? state.handledMessageIds : [];
   return handled.includes(id);
 }
 
-export function markEmailMessageHandled({ messageId, receivedAt, uid }) {
+export async function markEmailMessageHandled({ messageId, receivedAt, uid }) {
+  ensureHydrated();
   const id = String(messageId || '').trim();
   if (!id) return;
 
-  const state = readFullState();
   const at = receivedAt ? new Date(receivedAt) : new Date();
-  const handled = Array.isArray(state.handledMessageIds) ? state.handledMessageIds : [];
+  const handled = Array.isArray(state.handledMessageIds) ? [...state.handledMessageIds] : [];
 
   if (!handled.includes(id)) {
     handled.push(id);
@@ -129,10 +168,11 @@ export function markEmailMessageHandled({ messageId, receivedAt, uid }) {
   }
 
   state.updatedAt = new Date().toISOString();
-  writeFullState(state);
+  await persistState();
 }
 
 export function logEmailProcessSince() {
+  ensureHydrated();
   const cursor = getEmailIngestCursor();
   const source = (() => {
     const envValue = String(process.env.EMAIL_IMAP_PROCESS_FROM || 'now').trim().toLowerCase();

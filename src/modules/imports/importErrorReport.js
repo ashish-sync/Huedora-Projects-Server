@@ -4,10 +4,9 @@ import { fileURLToPath } from 'url';
 import { v4 as uuid } from 'uuid';
 import { workbookBuffer } from '../../utils/excelExport.js';
 import { Notification } from '../notifications/notification.model.js';
+import { uploadDir } from '../../config/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const importErrorReportRoot = path.resolve(__dirname, '../../../uploads/import-errors');
-fs.mkdirSync(importErrorReportRoot, { recursive: true });
+export const importErrorReportRoot = uploadDir('import-errors');
 
 function stamp() {
   const d = new Date();

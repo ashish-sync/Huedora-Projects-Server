@@ -108,14 +108,10 @@ import {
   handleEmailStatus,
   handleEmailSync,
 } from './communications.handlers.js';
-import path from 'path';
-import fs from 'fs';
 import multer from 'multer';
-import { fileURLToPath } from 'url';
+import { uploadDir } from '../../config/paths.js';
 
-const __campOpsDir = path.dirname(fileURLToPath(import.meta.url));
-const campUploadRoot = path.resolve(__campOpsDir, '../../../uploads/camp-ops');
-fs.mkdirSync(campUploadRoot, { recursive: true });
+const campUploadRoot = uploadDir('camp-ops');
 
 const campDocUpload = multer({
   storage: multer.diskStorage({

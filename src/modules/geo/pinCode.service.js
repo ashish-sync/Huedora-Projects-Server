@@ -375,7 +375,7 @@ export async function bulkImportPinRows(inputRows = [], { updatedBy = null } = {
   }
 
   const deletedPins = allPinRecords.filter((record) => record.isDeleted);
-  GeoPinCode._write([...deletedPins, ...activeByPin.values()]);
+  await GeoPinCode._write([...deletedPins, ...activeByPin.values()]);
 
   return {
     created,

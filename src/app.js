@@ -3,9 +3,10 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { env } from './config/env.js';
+import { getDbInfo } from './config/db.js';
+import { uploadsRoot } from './config/paths.js';
+import { getRegisteredCollections } from './store/filedb.js';
 import { correlationId, errorHandler, notFound } from './middleware/error.js';
 
 import authRoutes from './modules/auth/auth.routes.js';
@@ -37,9 +38,6 @@ import financeRoutes from './modules/finance/finance.routes.js';
 import geoRoutes from './modules/geo/geo.routes.js';
 import picklistRoutes from './modules/picklists/picklist.routes.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const uploadsRoot = path.resolve(__dirname, '../uploads');
-
 export function createApp() {
   const app = express();
 
@@ -68,11 +66,16 @@ export function createApp() {
   app.use('/uploads', express.static(uploadsRoot));
 
   app.get('/api/v1/health', (_req, res) => {
+    const db = getDbInfo();
+    const collections = getRegisteredCollections();
     res.json({
       data: {
         status: 'ok',
         live: true,
         service: 'tylo-one-api',
+        persistence: db.mode,
+        mongoConfigured: db.mongoConfigured,
+        collections: collections.length,
         ts: new Date().toISOString(),
       },
     });

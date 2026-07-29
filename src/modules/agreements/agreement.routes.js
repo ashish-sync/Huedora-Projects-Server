@@ -30,11 +30,10 @@ import { ensureRecipientShortCode, generateShortCode } from './recipientAccess.j
 import { buildAgreementPdfBuffer, pdfOptionsFromAgreement } from './agreementPdf.js';
 import { persistSignedAgreementPdf } from './agreementSignedDocument.js';
 import { sendExcel } from '../../utils/excelExport.js';
+import { uploadDir } from '../../config/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const uploadRoot = path.resolve(__dirname, '../../../uploads/agreements');
-const previewRoot = path.resolve(__dirname, '../../../uploads/previews');
-fs.mkdirSync(uploadRoot, { recursive: true });
+const uploadRoot = uploadDir('agreements');
+const previewRoot = uploadDir('previews');
 
 const upload = multer({
   storage: multer.diskStorage({

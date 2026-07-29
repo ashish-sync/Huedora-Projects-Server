@@ -41,9 +41,9 @@ import {
 } from '../signatures/signature.model.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { moduleForEntity, validateMasterAddPayload } from './masterCatalog.js';
+import { uploadDir } from '../../config/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const templateRoot = path.resolve(__dirname, '../../../uploads/templates');
+const templateRoot = uploadDir('templates');
 fs.mkdirSync(templateRoot, { recursive: true });
 
 function trimStr(v) {

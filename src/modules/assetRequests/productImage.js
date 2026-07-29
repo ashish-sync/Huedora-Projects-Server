@@ -5,10 +5,9 @@ import { fileURLToPath } from 'url';
 import { v4 as uuid } from 'uuid';
 import { env } from '../../config/env.js';
 import { AppError } from '../../utils/helpers.js';
+import { uploadDir } from '../../config/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const assetRequestUploadRoot = path.resolve(__dirname, '../../../uploads/asset-requests');
-fs.mkdirSync(assetRequestUploadRoot, { recursive: true });
+export const assetRequestUploadRoot = uploadDir('asset-requests');
 
 const IMAGE_EXTENSIONS = {
   'image/jpeg': '.jpg',

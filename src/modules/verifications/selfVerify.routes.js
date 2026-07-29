@@ -14,10 +14,9 @@ import {
   completeInviteAfterSelfVerify,
 } from './verification.service.js';
 import { env } from '../../config/env.js';
+import { uploadDir } from '../../config/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const uploadRoot = path.resolve(__dirname, '../../../uploads/verifications');
-fs.mkdirSync(uploadRoot, { recursive: true });
+const uploadRoot = uploadDir('verifications');
 
 const upload = multer({
   storage: multer.diskStorage({

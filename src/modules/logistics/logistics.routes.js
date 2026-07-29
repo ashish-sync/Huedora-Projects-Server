@@ -94,10 +94,9 @@ import {
   EXPENSE_CATEGORY_SAMPLE_ROWS,
 } from './expenseCategories.excel.js';
 import { productMasterAssetName } from './productMasterLabel.js';
+import { uploadDir } from '../../config/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const inwardUploadRoot = path.resolve(__dirname, '../../../uploads/logistics');
-fs.mkdirSync(inwardUploadRoot, { recursive: true });
+const inwardUploadRoot = uploadDir('logistics');
 
 const inwardUpload = multer({
   storage: multer.diskStorage({
@@ -112,8 +111,7 @@ const inwardUpload = multer({
   limits: { fileSize: env.uploadMaxBytes },
 });
 
-const productUploadRoot = path.resolve(__dirname, '../../../uploads/logistics/products');
-fs.mkdirSync(productUploadRoot, { recursive: true });
+const productUploadRoot = uploadDir('logistics', 'products');
 
 const productUpload = multer({
   storage: multer.diskStorage({

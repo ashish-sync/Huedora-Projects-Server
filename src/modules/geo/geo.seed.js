@@ -26,11 +26,11 @@ function stampGeoRows(rows, now = new Date().toISOString()) {
 
 async function writeGeoSeedPayload(payload) {
   const now = new Date().toISOString();
-  GeoState._write(stampGeoRows(payload.states, now));
-  GeoDistrict._write(stampGeoRows(payload.districts, now));
-  GeoCity._write(stampGeoRows(payload.cities, now));
+  await GeoState._write(stampGeoRows(payload.states, now));
+  await GeoDistrict._write(stampGeoRows(payload.districts, now));
+  await GeoCity._write(stampGeoRows(payload.cities, now));
   if ((await GeoPinCode.countDocuments({})) === 0) {
-    GeoPinCode._write([]);
+    await GeoPinCode._write([]);
   }
   return payload.meta?.counts || {
     states: payload.states?.length || 0,

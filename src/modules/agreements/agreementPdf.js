@@ -3,9 +3,9 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { AgreementDocument } from './agreement.model.js';
 import { parseDocxBufferBlocks, textToPdfBuffer } from '../templates/docxPlaceholders.js';
+import { uploadDir } from '../../config/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const agreementUploadRoot = path.resolve(__dirname, '../../../uploads/agreements');
+export const agreementUploadRoot = uploadDir('agreements');
 
 function isPdfDocument(doc) {
   const ct = String(doc?.contentType || '').toLowerCase();

@@ -1,11 +1,11 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.resolve(__dirname, '../../data');
-fs.mkdirSync(dataDir, { recursive: true });
+import {
+  loadCollection,
+  saveCollection,
+  resetAllCollections,
+  registerCollection,
+  getRegisteredCollections,
+} from './persistence.js';
 
 function oid() {
   return randomBytes(12).toString('hex');
@@ -13,24 +13,6 @@ function oid() {
 
 function clone(v) {
   return v == null ? v : JSON.parse(JSON.stringify(v));
-}
-
-function getPath(name) {
-  return path.join(dataDir, `${name}.json`);
-}
-
-function load(name) {
-  const p = getPath(name);
-  if (!fs.existsSync(p)) return [];
-  try {
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
-  } catch {
-    return [];
-  }
-}
-
-function save(name, rows) {
-  fs.writeFileSync(getPath(name), JSON.stringify(rows, null, 2));
 }
 
 function match(doc, filter = {}) {
@@ -155,7 +137,7 @@ function project(doc, select, { sanitize = false } = {}) {
           select
             .split(/\s+/)
             .filter(Boolean)
-            .map((field) => [field.replace(/^-/, ''), field.startsWith('-') ? 0 : 1])
+            .map((field) => [field.replace(/^-/, ''), field.startsWith('-') ? 0 : 1]),
         )
       : select;
   const entries = Object.entries(spec || {});
@@ -225,7 +207,7 @@ class Query {
   }
 
   async exec() {
-    let rows = this.model._all().filter((d) => match(d, this.filter)).map(clone);
+    let rows = (await this.model._all()).filter((d) => match(d, this.filter)).map(clone);
     if (this._sort) {
       const fields = String(this._sort).split(/\s+/).filter(Boolean);
       rows.sort((a, b) => {
@@ -251,19 +233,20 @@ class Query {
 }
 
 export function defineCollection(name, defaults = {}) {
+  registerCollection(name);
   const model = {
     modelName: name,
-    _all() {
-      return load(name);
+    async _all() {
+      return loadCollection(name);
     },
-    _write(rows) {
-      save(name, rows);
+    async _write(rows) {
+      await saveCollection(name, rows);
     },
     _wrap(doc) {
       const o = clone(doc);
       o.toObject = () => clone(o);
       o.save = async () => {
-        const rows = model._all();
+        const rows = await model._all();
         const idx = rows.findIndex((r) => String(r._id) === String(o._id));
         const plain = { ...o };
         delete plain.toObject;
@@ -272,7 +255,7 @@ export function defineCollection(name, defaults = {}) {
         plain.updatedAt = new Date().toISOString();
         if (idx >= 0) rows[idx] = plain;
         else rows.push(plain);
-        model._write(rows);
+        await model._write(rows);
         Object.assign(o, plain);
         return o;
       };
@@ -284,7 +267,7 @@ export function defineCollection(name, defaults = {}) {
     },
     async _populateOne(row, field, select) {
       if (field === 'roleIds' && Array.isArray(row.roleIds)) {
-        const all = load('roles');
+        const all = await loadCollection('roles');
         row.roleIds = row.roleIds.map((id) => {
           const found = all.find((x) => String(x._id) === String(id?._id || id));
           return found ? project(found, select, { sanitize: true }) : id;
@@ -293,7 +276,7 @@ export function defineCollection(name, defaults = {}) {
       }
       if (field === 'assets' || field === 'assets.assetId') {
         if (!Array.isArray(row.assets)) return;
-        const assets = load('assets');
+        const assets = await loadCollection('assets');
         row.assets = row.assets.map((a) => ({
           ...a,
           assetId: (() => {
@@ -305,7 +288,7 @@ export function defineCollection(name, defaults = {}) {
       }
       if (field === 'to.hcwId') {
         if (!row.to) return;
-        const all = load('hcws');
+        const all = await loadCollection('hcws');
         const id = row.to.hcwId?._id || row.to.hcwId;
         const found = all.find((x) => String(x._id) === String(id));
         if (found) row.to = { ...row.to, hcwId: project(found, select, { sanitize: true }) };
@@ -334,7 +317,7 @@ export function defineCollection(name, defaults = {}) {
       if (!col) return;
       const val = row[field];
       if (val == null) return;
-      const all = load(col);
+      const all = await loadCollection(col);
       const found = all.find((x) => String(x._id) === String(val?._id || val));
       if (found) row[field] = project(found, select, { sanitize: true });
     },
@@ -355,7 +338,7 @@ export function defineCollection(name, defaults = {}) {
       return model.findOne({ _id: String(id) });
     },
     async findOneAndUpdate(filter, update, opts = {}) {
-      const rows = model._all();
+      const rows = await model._all();
       const idx = rows.findIndex((d) => match(d, filter));
       if (idx < 0) {
         if (opts.upsert) {
@@ -365,14 +348,14 @@ export function defineCollection(name, defaults = {}) {
         return null;
       }
       rows[idx] = applyUpdate(rows[idx], update);
-      model._write(rows);
+      await model._write(rows);
       return model._wrap(rows[idx]);
     },
     async findByIdAndUpdate(id, update, opts = {}) {
       return model.findOneAndUpdate({ _id: String(id) }, update, opts);
     },
     async create(doc) {
-      const rows = model._all();
+      const rows = await model._all();
       const now = new Date().toISOString();
       const base = typeof defaults === 'function' ? defaults() : clone(defaults);
       const row = {
@@ -383,7 +366,7 @@ export function defineCollection(name, defaults = {}) {
         updatedAt: now,
       };
       rows.push(row);
-      model._write(rows);
+      await model._write(rows);
       return model._wrap(row);
     },
     async insertMany(docs) {
@@ -392,18 +375,18 @@ export function defineCollection(name, defaults = {}) {
       return out;
     },
     async countDocuments(filter = {}) {
-      return model._all().filter((d) => match(d, filter)).length;
+      return (await model._all()).filter((d) => match(d, filter)).length;
     },
     async updateOne(filter, update) {
-      const rows = model._all();
+      const rows = await model._all();
       const idx = rows.findIndex((d) => match(d, filter));
       if (idx < 0) return { matchedCount: 0, modifiedCount: 0 };
       rows[idx] = applyUpdate(rows[idx], update);
-      model._write(rows);
+      await model._write(rows);
       return { matchedCount: 1, modifiedCount: 1 };
     },
     async updateMany(filter, update) {
-      const rows = model._all();
+      const rows = await model._all();
       let n = 0;
       for (let i = 0; i < rows.length; i++) {
         if (match(rows[i], filter)) {
@@ -411,14 +394,14 @@ export function defineCollection(name, defaults = {}) {
           n += 1;
         }
       }
-      model._write(rows);
+      await model._write(rows);
       return { matchedCount: n, modifiedCount: n };
     },
     async deleteMany() {
-      model._write([]);
+      await model._write([]);
     },
     async aggregate(pipeline = []) {
-      let rows = model._all().map(clone);
+      let rows = (await model._all()).map(clone);
       for (const stage of pipeline) {
         if (stage.$match) rows = rows.filter((d) => match(d, stage.$match));
         if (stage.$group) {
@@ -441,8 +424,8 @@ export function defineCollection(name, defaults = {}) {
   return model;
 }
 
-export function resetAllData() {
-  for (const f of fs.readdirSync(dataDir)) {
-    if (f.endsWith('.json')) fs.unlinkSync(path.join(dataDir, f));
-  }
+export async function resetAllData() {
+  await resetAllCollections();
 }
+
+export { getRegisteredCollections };

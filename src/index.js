@@ -1,9 +1,11 @@
 import { createApp } from './app.js';
-import { connectDb } from './config/db.js';
+import { connectDb, getDbInfo } from './config/db.js';
 import { env } from './config/env.js';
 import { ensureSeed } from './seed.js';
 import { forceReseedGeoMasters } from './modules/geo/geo.seed.js';
 import { resetApplicationData } from './utils/resetApplicationData.js';
+import { hydrateEmailIngestState } from './modules/campOps/communications/services/emailIngestSince.js';
+import { ensureUploadDirs } from './config/paths.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -35,6 +37,10 @@ async function maybeReseedGeoOnBoot() {
 
 async function main() {
   await connectDb();
+  const db = getDbInfo();
+  console.log(`[api] Persistence: ${db.mode}${db.useMongoose ? ' (MongoDB)' : ' (local JSON — not for production)'}`);
+  ensureUploadDirs();
+  await hydrateEmailIngestState();
   await maybeFreshStart();
   await ensureSeed();
   await maybeReseedGeoOnBoot();

@@ -39,7 +39,7 @@ export async function ensureGeoZoneSeed({ force = false } = {}) {
     };
   });
 
-  GeoZone._write(rows);
+  await GeoZone._write(rows);
   console.log(`[geo] Seeded ${rows.length} camp zones`);
   return { seeded: true, zones: rows.length };
 }

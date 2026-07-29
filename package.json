@@ -13,6 +13,7 @@
     "geo:reseed": "node scripts/reseed-geo.js",
     "test:manual-paste": "node scripts/test-manual-paste-extract.js",
     "test:camp-import": "node scripts/test-camp-import-validation.js",
+    "test:persistence": "node scripts/verify-persistence.js",
     "test:camp-parser": "npm run build:parsers && node scripts/test-camp-request-parser.js",
     "build:parsers": "tsc -p src/modules/campOps/parsers/tsconfig.json",
     "test:camp-one": "node scripts/camp-one-e2e-test.js",

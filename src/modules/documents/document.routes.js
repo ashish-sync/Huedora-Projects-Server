@@ -10,10 +10,9 @@ import { Document } from './document.model.js';
 import { env } from '../../config/env.js';
 import { writeAudit } from '../../utils/audit.js';
 import { v4 as uuid } from 'uuid';
+import { uploadDir } from '../../config/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const uploadRoot = path.resolve(__dirname, '../../../uploads');
-fs.mkdirSync(uploadRoot, { recursive: true });
+const uploadRoot = uploadDir();
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
