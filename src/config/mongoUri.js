@@ -4,9 +4,20 @@
  */
 
 const PLACEHOLDER_HOSTS = new Set(['1234', 'cluster', 'host', 'localhost']);
+const DEFAULT_DATABASE = 'tylo-one';
 
 function stripCredentials(uri) {
   return String(uri || '').replace(/\/\/[^@/]+@/i, '//***@');
+}
+
+/** Split authority at the last @ (password may contain unencoded @ before normalization). */
+function splitAuthority(authority) {
+  const lastAt = authority.lastIndexOf('@');
+  if (lastAt < 0) return { creds: authority, host: '' };
+  return {
+    creds: authority.slice(0, lastAt),
+    host: authority.slice(lastAt + 1),
+  };
 }
 
 export function extractMongoHost(uri) {
@@ -14,7 +25,7 @@ export function extractMongoHost(uri) {
   if (!text) return '';
   const withoutScheme = text.replace(/^mongodb\+srv:\/\//i, '').replace(/^mongodb:\/\//i, '');
   const authority = withoutScheme.split('/')[0] || '';
-  const hostPort = authority.includes('@') ? authority.split('@').pop() : authority;
+  const { host: hostPort } = splitAuthority(authority);
   const host = (hostPort.split(',')[0] || '').split(':')[0] || '';
   return host.trim();
 }
@@ -25,6 +36,56 @@ export function extractMongoDatabase(uri) {
   const slash = path.indexOf('/');
   if (slash < 0) return '';
   return path.slice(slash + 1).split('/')[0] || '';
+}
+
+/**
+ * Fix common Atlas paste mistakes:
+ * - URL-encode passwords that contain @ (e.g. Apple@1234)
+ * - Add default database name when URI ends at host or host/
+ */
+export function normalizeMongoUri(uri) {
+  let value = String(uri || '').trim();
+  if (!value) return value;
+
+  const schemeMatch = value.match(/^(mongodb(\+srv)?:\/\/)/i);
+  if (!schemeMatch) return value;
+
+  const scheme = schemeMatch[1];
+  let rest = value.slice(scheme.length);
+
+  let pathAndQuery = '';
+  const slashIdx = rest.indexOf('/');
+  if (slashIdx >= 0) {
+    pathAndQuery = rest.slice(slashIdx);
+    rest = rest.slice(0, slashIdx);
+  }
+
+  const atCount = (rest.match(/@/g) || []).length;
+  if (atCount > 1) {
+    const { creds, host } = splitAuthority(rest);
+    const colonIdx = creds.indexOf(':');
+    if (colonIdx >= 0) {
+      const user = creds.slice(0, colonIdx);
+      let password = creds.slice(colonIdx + 1);
+      try {
+        password = decodeURIComponent(password);
+      } catch {
+        // keep raw password
+      }
+      rest = `${user}:${encodeURIComponent(password)}@${host}`;
+    }
+  }
+
+  let normalized = `${scheme}${rest}${pathAndQuery}`;
+
+  const pathOnly = pathAndQuery.split('?')[0] || '';
+  const query = pathAndQuery.includes('?') ? pathAndQuery.slice(pathAndQuery.indexOf('?')) : '';
+  if (!pathOnly || pathOnly === '/') {
+    const defaultQuery = query || '?retryWrites=true&w=majority';
+    normalized = `${scheme}${rest}/${DEFAULT_DATABASE}${defaultQuery}`;
+  }
+
+  return normalized;
 }
 
 export function validateMongoUri(uri, { isProd = false } = {}) {
@@ -46,15 +107,6 @@ export function validateMongoUri(uri, { isProd = false } = {}) {
 
   const host = extractMongoHost(value);
   const isSrv = /^mongodb\+srv:\/\//i.test(value);
-  const authority = value.replace(/^mongodb(\+srv)?:\/\//i, '').split('/')[0] || '';
-  const atCount = (authority.match(/@/g) || []).length;
-
-  if (atCount > 1) {
-    throw new Error(
-      '[config] MONGODB_URI contains multiple @ characters — your database password likely includes @ '
-        + 'which must be URL-encoded as %40 (e.g. Apple@1234 → Apple%401234).',
-    );
-  }
 
   if (!host) {
     throw new Error(
@@ -65,8 +117,8 @@ export function validateMongoUri(uri, { isProd = false } = {}) {
 
   if (PLACEHOLDER_HOSTS.has(host.toLowerCase()) || /^\d+$/.test(host) || /^(x+|test|example)$/i.test(host)) {
     throw new Error(
-      `[config] MONGODB_URI hostname "${host}" is invalid — this usually means the password contains @ `
-        + 'without URL encoding. Encode @ as %40 (example: Apple@1234 → Apple%401234 in the connection string).',
+      `[config] MONGODB_URI hostname "${host}" is invalid. `
+        + 'Use the full Atlas host (e.g. huedora.ibo3vfn.mongodb.net).',
     );
   }
 
@@ -80,7 +132,7 @@ export function validateMongoUri(uri, { isProd = false } = {}) {
   if (isSrv && /[<>]/.test(value)) {
     throw new Error(
       '[config] MONGODB_URI still contains < or > placeholders from the Atlas copy dialog. '
-        + 'Replace <username> and <password> with real values (URL-encode special characters in the password).',
+        + 'Replace <username> and <password> with real values.',
     );
   }
 
@@ -96,7 +148,11 @@ export function resolveMongoUri(raw, { isProd = false, useMongoose = false } = {
   }
 
   if (isProd || trimmed) {
-    return validateMongoUri(trimmed, { isProd });
+    const normalized = normalizeMongoUri(trimmed);
+    if (normalized !== trimmed) {
+      console.warn('[db] MONGODB_URI auto-normalized (password encoding and/or default database name)');
+    }
+    return validateMongoUri(normalized, { isProd });
   }
 
   return localDefault;
@@ -117,17 +173,14 @@ export function formatMongoConnectError(err, uri) {
   if (code === 'ENOTFOUND' || message.includes('querySrv ENOTFOUND')) {
     return new Error(
       `[db] Cannot resolve MongoDB host "${host}". `
-        + 'Check MONGODB_URI on Render — it must be the full Atlas connection string '
-        + '(mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/tylo-one?retryWrites=true&w=majority). '
-        + 'URL-encode @ : / ? # [ ] in the password. '
+        + 'Check MONGODB_URI on Render — use your full Atlas connection string. '
         + `Original: ${message}`,
     );
   }
 
   if (message.includes('Authentication failed') || message.includes('bad auth')) {
     return new Error(
-      '[db] MongoDB authentication failed. Verify Atlas database username/password in MONGODB_URI '
-        + '(URL-encode special characters in the password).',
+      '[db] MongoDB authentication failed. Verify Atlas database username and password in MONGODB_URI.',
     );
   }
 
