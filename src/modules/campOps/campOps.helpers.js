@@ -1,6 +1,6 @@
 import { CampOpsCamp } from './campOps.model.js';
 import { normalizeCampName } from './campOps.constants.js';
-import { getRequestStageBlockers } from './campOps.requestValidation.js';
+import { getRequestStageBlockers, getRequestStageCompletion, REQUEST_PARTIAL_THRESHOLD } from './campOps.requestValidation.js';
 
 export function trimStr(v) {
   return v == null ? '' : String(v).trim();
@@ -372,9 +372,10 @@ export function mapImportRows(rows, mapping, defaultClientName = '') {
   });
 }
 
-export function validateMappedImportRows(rows, { source = 'excel' } = {}) {
+export function validateMappedImportRows(rows, { source = 'excel', allowPartial = false } = {}) {
   const validRows = [];
   const invalidRows = [];
+  const partialRows = [];
 
   for (const row of rows) {
     const errors = [];
@@ -421,11 +422,30 @@ export function validateMappedImportRows(rows, { source = 'excel' } = {}) {
     };
 
     const blockers = getRequestStageBlockers(normalized);
-    if (blockers.length) errors.push(...blockers);
+    const completion = getRequestStageCompletion(normalized);
+
+    if (!blockers.length) {
+      validRows.push(normalized);
+      continue;
+    }
+
+    if (allowPartial && completion.partial) {
+      partialRows.push({
+        ...normalized,
+        errors: blockers,
+        partial: true,
+        partialFields: completion.missingKeys,
+        completionPercent: completion.percentLabel,
+        requestIncomplete: true,
+      });
+      continue;
+    }
+
+    if (errors.length) errors.push(...blockers);
+    else errors.push(...blockers);
 
     if (errors.length) invalidRows.push({ ...normalized, errors: [...new Set(errors)] });
-    else validRows.push(normalized);
   }
 
-  return { validRows, invalidRows };
+  return { validRows, partialRows, invalidRows };
 }

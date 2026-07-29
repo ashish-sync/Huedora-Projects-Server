@@ -20,6 +20,7 @@ export const CLIENT_MASTER_HEADERS = [
   'Minimum KMs Covered',
   'Ext Patient Unit',
   'KMs Unit',
+  'Assigned User Emails',
   'Active',
 ];
 
@@ -43,6 +44,7 @@ export const CLIENT_MASTER_SAMPLE_ROW = [
   500,
   15,
   25,
+  'user@client.com, ops@client.com',
   'Yes',
 ];
 
@@ -65,6 +67,7 @@ const IMPORT_ALIASES = {
   minimumKmsCovered: ['Minimum KMs Covered', 'Min KMs', 'minimumKmsCovered'],
   extPatientUnit: ['Ext Patient Unit', 'extPatientUnit'],
   kmsUnit: ['KMs Unit', 'kmsUnit'],
+  assignedUserEmails: ['Assigned User Emails', 'User Emails', 'Login Emails', 'assignedUserEmails'],
   isActive: ['Active', 'isActive'],
 };
 
@@ -135,6 +138,10 @@ export function parseClientMasterImportRow(row) {
     minimumKmsCovered: parseNumber(cellValue(row, IMPORT_ALIASES.minimumKmsCovered)),
     extPatientUnit: parseNumber(cellValue(row, IMPORT_ALIASES.extPatientUnit)),
     kmsUnit: parseNumber(cellValue(row, IMPORT_ALIASES.kmsUnit)),
+    assignedUserEmails: cellValue(row, IMPORT_ALIASES.assignedUserEmails)
+      .split(/[;,\n]/)
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
     isActive: !['no', 'false', '0', 'inactive'].includes(
       cellValue(row, IMPORT_ALIASES.isActive).toLowerCase()
     ),
@@ -161,6 +168,9 @@ export function clientMasterToExcelRow(record) {
     record.minimumKmsCovered,
     record.extPatientUnit,
     record.kmsUnit,
+    Array.isArray(record.assignedUserEmails)
+      ? record.assignedUserEmails.join(', ')
+      : (record.assignedUserEmails || ''),
     record.isActive === false ? 'No' : 'Yes',
   ];
 }

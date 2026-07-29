@@ -160,26 +160,34 @@ async function buildBodyPreview(text, defaults = {}) {
         defaults,
       );
       const { pasteDisplay, pasteFormatted, ...rowForValidation } = extracted;
-      const { validRows, invalidRows } = validateMappedImportRows([rowForValidation], { source: 'paste' });
+      const { validRows, partialRows, invalidRows } = validateMappedImportRows(
+        [rowForValidation],
+        { source: 'paste', allowPartial: true },
+      );
       const validRow = validRows[0];
+      const partialRow = partialRows[0];
       const invalidRow = invalidRows[0];
+      const creatableRow = validRow || partialRow;
 
       const entry = {
         rowNumber: index + 1,
         valid: Boolean(validRow),
-        partial: false,
-        partialFields: [],
-        errors: invalidRow?.errors || [],
-        row: (validRow || invalidRow)
-          ? { ...(validRow || invalidRow) }
-          : null,
+        partial: Boolean(partialRow),
+        partialFields: partialRow?.partialFields || [],
+        completionPercent: partialRow?.completionPercent ?? (validRow ? 100 : 0),
+        errors: invalidRow?.errors || partialRow?.errors || [],
+        row: creatableRow
+          ? { ...creatableRow }
+          : invalidRow
+            ? { ...invalidRow }
+            : null,
         pasteDisplay: extracted.pasteDisplay || null,
         pasteFormatted: extracted.pasteFormatted || '',
         block,
         duplicateOf: null,
       };
 
-      if (!entry.valid || !entry.row) {
+      if (!creatableRow || !entry.row) {
         return entry;
       }
 
@@ -215,14 +223,19 @@ export async function extractManualPastePreview({ text = '', defaults = {} } = {
 
   const bodyPreview = await buildBodyPreview(bodyText, defaults);
 
+  const creatableRows = bodyPreview.filter(
+    (row) => (row.valid || row.partial) && !row.duplicateOf,
+  );
+
   return {
     extractedAt: new Date().toISOString(),
     excelPreview: [],
     bodyPreview,
     summary: {
       excelFiles: 0,
-      validBodyRows: bodyPreview.filter((row) => row.valid).length,
-      invalidBodyRows: bodyPreview.filter((row) => !row.valid).length,
+      validBodyRows: creatableRows.filter((row) => row.valid).length,
+      partialBodyRows: creatableRows.filter((row) => row.partial).length,
+      invalidBodyRows: bodyPreview.filter((row) => !row.valid && !row.partial).length,
       duplicateBodyRows: bodyPreview.filter((row) => row.duplicateOf).length,
     },
   };
@@ -247,7 +260,8 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
   const results = [];
 
   for (const entry of bodyPreview) {
-    if (!entry.valid || !entry.row) {
+    const creatable = (entry.valid || entry.partial) && entry.row;
+    if (!creatable) {
       results.push({
         status: 'invalid',
         rowNumber: entry.rowNumber,
@@ -281,25 +295,25 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
         client,
       );
 
-      if (!payload.campDate) {
-        throw new Error('Camp date is required');
-      }
-
       const camp = await CampOpsCamp.create({
         ...payload,
-        campId: await generateCampId(payload.campDate),
+        campId: payload.campDate ? await generateCampId(payload.campDate) : await generateCampId(),
         status: 'pending_review',
         source: 'paste',
+        requestIncomplete: Boolean(entry.partial),
+        requestDate: new Date().toISOString().slice(0, 10),
         createdById: actor.id,
         createdByEmail: actor.email,
         ...tracking,
       });
 
       results.push({
-        status: 'created',
+        status: entry.partial ? 'created_partial' : 'created',
         rowNumber: entry.rowNumber,
         campId: camp.campId,
         id: camp._id,
+        partial: Boolean(entry.partial),
+        partialFields: entry.partialFields || [],
       });
     } catch (error) {
       results.push({
@@ -310,7 +324,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
     }
   }
 
-  const created = results.filter((item) => item.status === 'created');
+  const created = results.filter((item) => item.status === 'created' || item.status === 'created_partial');
   const duplicates = results.filter((item) => item.status === 'duplicate');
 
   if (!created.length) {
@@ -331,6 +345,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
     camps: created.map((item) => withCampSchedule({ campId: item.campId, _id: item.id })),
     duplicates: duplicates.length,
     duplicateCampIds: duplicates.map((item) => item.campId),
+    partial: created.filter((item) => item.partial).length,
     results,
   };
 }

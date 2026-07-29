@@ -86,26 +86,34 @@ async function buildBodyPreviewFromMappedRows(mappedRows, defaults = {}) {
       const withDefaults = applyPasteDefaults(row, defaults);
       const enriched = await enrichPasteLocationFromPin(withDefaults);
       const rowForValidation = { ...enriched.row };
-      const { validRows, invalidRows } = validateMappedImportRows([rowForValidation], { source: 'excel' });
+      const { validRows, partialRows, invalidRows } = validateMappedImportRows(
+        [rowForValidation],
+        { source: 'excel', allowPartial: true },
+      );
       const validRow = validRows[0];
+      const partialRow = partialRows[0];
       const invalidRow = invalidRows[0];
+      const creatableRow = validRow || partialRow;
 
       const entry = {
         rowNumber: index + 1,
         valid: Boolean(validRow),
-        partial: false,
-        partialFields: [],
-        errors: invalidRow?.errors || [],
-        row: (validRow || invalidRow)
-          ? { ...(validRow || invalidRow), remarks: trimStr((validRow || invalidRow).remarks) }
-          : null,
+        partial: Boolean(partialRow),
+        partialFields: partialRow?.partialFields || [],
+        completionPercent: partialRow?.completionPercent ?? (validRow ? 100 : 0),
+        errors: invalidRow?.errors || partialRow?.errors || [],
+        row: creatableRow
+          ? { ...creatableRow, remarks: trimStr(creatableRow.remarks) }
+          : invalidRow
+            ? { ...invalidRow, remarks: trimStr(invalidRow.remarks) }
+            : null,
         pasteDisplay: enriched.display || null,
         pasteFormatted: '',
         block: '',
         duplicateOf: null,
       };
 
-      if (!entry.valid || !entry.row) return entry;
+      if (!creatableRow || !entry.row) return entry;
 
       const client = await resolveClientForRow(entry.row, { allowCreate: false });
       if (client?._id) entry.row.clientName = client.name;
@@ -219,7 +227,8 @@ export async function extractPasteImportPreview({
     summary: {
       excelFiles: 1,
       validBodyRows: bodyPreview.filter((row) => row.valid).length,
-      invalidBodyRows: bodyPreview.filter((row) => !row.valid).length,
+      partialBodyRows: bodyPreview.filter((row) => row.partial).length,
+      invalidBodyRows: bodyPreview.filter((row) => !row.valid && !row.partial).length,
       duplicateBodyRows: bodyPreview.filter((row) => row.duplicateOf).length,
     },
   };
@@ -270,7 +279,8 @@ export async function extractPasteImportPreviewFromRows({
     summary: {
       excelFiles: 1,
       validBodyRows: bodyPreview.filter((row) => row.valid).length,
-      invalidBodyRows: bodyPreview.filter((row) => !row.valid).length,
+      partialBodyRows: bodyPreview.filter((row) => row.partial).length,
+      invalidBodyRows: bodyPreview.filter((row) => !row.valid && !row.partial).length,
       duplicateBodyRows: bodyPreview.filter((row) => row.duplicateOf).length,
     },
   };

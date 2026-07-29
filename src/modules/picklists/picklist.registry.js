@@ -10,7 +10,7 @@ import {
 import { EXPENSE_CATEGORIES, PAYMENT_MODES } from '../finance/finance.constants.js';
 import { DELIVERY_MODES } from '../logistics/logistics.constants.js';
 import { SIGNATURE_ROLES } from '../signatures/signature.constants.js';
-import { CAMP_NAME_OPTIONS } from '../campOps/campOps.constants.js';
+import { CAMP_NAME_OPTIONS, DOCTOR_SPECIALTY_OPTIONS } from '../campOps/campOps.constants.js';
 
 /** Hiring / transport picklists mirrored from Request One */
 export const HCW_TYPES = ['Phlebotomist', 'Technician', 'Dietitian', 'Physio', 'Others'];
@@ -90,6 +90,11 @@ export const PICKLIST_REGISTRY = {
     label: 'Signature Role',
     staticOptions: SIGNATURE_ROLES,
     otherLabel: 'Other',
+  },
+  'camp.doctorSpecialty': {
+    label: 'Doctor Specialty',
+    staticOptions: DOCTOR_SPECIALTY_OPTIONS,
+    otherLabel: 'Other (Specify Others)',
   },
 };
 

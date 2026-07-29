@@ -3,6 +3,8 @@ import { resolveCampSlot } from './campOps.lifecycle.js';
 import { CAMP_OPS_SOURCES } from './campOps.constants.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
 
+export const REQUEST_PARTIAL_THRESHOLD = 0.6;
+
 function hasText(value) {
   return Boolean(trimStr(value));
 }
@@ -10,6 +12,35 @@ function hasText(value) {
 function phoneDigits(value) {
   return String(value ?? '').replace(/\D/g, '');
 }
+
+/** Required request-stage checks used for completion percentage (paste partial import). */
+const REQUEST_COMPLETION_CHECKS = [
+  { key: 'source', test: (c) => hasText(c.source) && CAMP_OPS_SOURCES.includes(trimStr(c.source)) },
+  { key: 'client', test: (c) => Boolean(c.clientId) || hasText(c.clientName) },
+  { key: 'campaignType', test: (c) => hasText(c.campaignType) },
+  { key: 'campaignName', test: (c) => hasText(c.campaignName) },
+  { key: 'campDate', test: (c) => hasText(c.campDate) },
+  { key: 'startTime', test: (c) => hasText(c.startTime) },
+  { key: 'endTime', test: (c) => hasText(c.endTime) },
+  { key: 'doctorName', test: (c) => hasText(c.doctorName) },
+  { key: 'doctorCode', test: (c) => hasText(c.doctorCode) },
+  { key: 'campAddress', test: (c) => hasText(c.campAddress) },
+  { key: 'state', test: (c) => hasText(c.state) },
+  { key: 'district', test: (c) => hasText(c.district) },
+  { key: 'city', test: (c) => hasText(c.city) },
+  { key: 'pincode', test: (c) => /^\d{6}$/.test(trimStr(c.pincode)) },
+  { key: 'hq', test: (c) => hasText(c.hq) },
+  { key: 'zone', test: (c) => hasText(c.zone) },
+  { key: 'expectedPatients', test: (c) => Number(c.expectedPatients) > 0 },
+  { key: 'fieldPersonName', test: (c) => hasText(c.fieldPersonName) },
+  {
+    key: 'fieldPersonPhone',
+    test: (c) => {
+      const phone = phoneDigits(c.fieldPersonPhone);
+      return phone.length >= 6 && phone.length <= 15;
+    },
+  },
+];
 
 export function getRequestStageBlockers(camp = {}) {
   const errors = [];
@@ -67,6 +98,24 @@ export function getRequestStageBlockers(camp = {}) {
   }
 
   return errors;
+}
+
+export function getRequestStageCompletion(camp = {}) {
+  const total = REQUEST_COMPLETION_CHECKS.length;
+  const filledKeys = REQUEST_COMPLETION_CHECKS.filter(({ test }) => test(camp)).map(({ key }) => key);
+  const percent = total ? filledKeys.length / total : 0;
+  const blockers = getRequestStageBlockers(camp);
+  return {
+    percent,
+    percentLabel: Math.round(percent * 100),
+    filledCount: filledKeys.length,
+    total,
+    filledKeys,
+    missingKeys: REQUEST_COMPLETION_CHECKS.filter(({ key }) => !filledKeys.includes(key)).map(({ key }) => key),
+    blockers,
+    complete: blockers.length === 0,
+    partial: blockers.length > 0 && percent >= REQUEST_PARTIAL_THRESHOLD,
+  };
 }
 
 export function assertRequestStageComplete(camp = {}) {

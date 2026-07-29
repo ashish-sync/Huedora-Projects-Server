@@ -33,6 +33,18 @@ export const CAMP_NAME_OPTIONS = [
   CAMP_METHOD_OTHER_LABEL,
 ];
 
+export const DOCTOR_SPECIALTY_OPTIONS = [
+  'General Practitioner',
+  'Pediatrician',
+  'Gynecologist',
+  'Cardiologist',
+  'Orthopedist',
+  'Dermatologist',
+  'Neurologist',
+  'Urologist',
+  'Other (Specify Others)',
+];
+
 const LEGACY_CAMP_NAME_ALIASES = {
   dieitician: 'Dietician',
   dietitian: 'Dietician',

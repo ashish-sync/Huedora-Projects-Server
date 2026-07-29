@@ -83,6 +83,12 @@ import {
 } from './campFinanceExport.js';
 import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.requestValidation.js';
 import {
+  resolveCampClientScope,
+  applyClientScopeToFilter,
+  assertCampClientAccess,
+  parseAssignedUserEmails,
+} from './campOps.clientAccess.js';
+import {
   withRequestReview,
   applyRequestReviewTransition,
   persistRequestReviewOverdue,
@@ -128,12 +134,21 @@ function enrichCamp(camp) {
   const obj = withRequestReview(withCampLifecycle(withCampSchedule(camp)));
   obj.inTimeSelfieUrl = resolveInTimeSelfieUrl(obj);
   const approvalBlockers = getRequestStageBlockers(obj);
+  if (obj.requestIncomplete) {
+    approvalBlockers.unshift('Request data is incomplete — complete all required fields before approval');
+  }
   obj.approvalBlockers = approvalBlockers;
   obj.requestStageComplete = approvalBlockers.length === 0;
   const pendingReview = obj.status === 'pending_review';
   obj.canApprove = pendingReview && approvalBlockers.length === 0;
   obj.canRequestInformation = pendingReview;
   return obj;
+}
+
+async function scopeCampFilter(req, filter) {
+  const scoped = await resolveCampClientScope(req.user);
+  if (!scoped) return filter;
+  return applyClientScopeToFilter(filter, scoped);
 }
 
 
@@ -212,6 +227,7 @@ function campPayloadFromBody(body, existing = null, client = null) {
   const hospitalName = trimStr(
     body.hospitalName ?? body.clinicName ?? existing?.hospitalName ?? ''
   );
+  const campAddress = trimStr(body.campAddress ?? existing?.campAddress) || hospitalName;
 
   return {
     clientId: client?._id ?? existing?.clientId ?? null,
@@ -230,9 +246,9 @@ function campPayloadFromBody(body, existing = null, client = null) {
     scCode: trimStr(body.scCode ?? existing?.scCode),
     mslNo: trimStr(body.mslNo ?? existing?.mslNo),
     speciality: trimStr(body.speciality ?? existing?.speciality),
-    hospitalName,
+    hospitalName: campAddress ? '' : hospitalName,
     clinicName: '',
-    campAddress: trimStr(body.campAddress ?? existing?.campAddress),
+    campAddress,
     city: trimStr(body.city ?? existing?.city),
     state: trimStr(body.state ?? existing?.state),
     district: trimStr(body.district ?? existing?.district),
@@ -273,7 +289,7 @@ router.get(
   '/dashboard/stats',
   canRead,
   asyncHandler(async (req, res) => {
-    const filter = buildCampFilter(req.query);
+    const filter = await scopeCampFilter(req, buildCampFilter(req.query));
     const camps = await CampOpsCamp.find(filter);
     const byStatus = Object.fromEntries(CAMP_OPS_STATUSES.map((s) => [s, 0]));
     for (const camp of camps) {
@@ -378,7 +394,7 @@ router.get(
     const { page, limit, skip } = parsePagination(req.query);
     const overdueOnly = req.query.overdue === '1' || req.query.overdue === 'true';
     const requestReviewStatus = trimStr(req.query.requestReviewStatus);
-    const filter = buildCampFilter(req.query);
+    const filter = await scopeCampFilter(req, buildCampFilter(req.query));
 
     if (requestReviewStatus) {
       const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
@@ -412,7 +428,7 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const overdueOnly = req.query.overdue === '1' || req.query.overdue === 'true';
-    const filter = buildCampFilter(req.query);
+    const filter = await scopeCampFilter(req, buildCampFilter(req.query));
 
     let camps;
     if (overdueOnly) {
@@ -534,6 +550,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
     if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
+    await assertCampClientAccess(req.user, camp);
     const overdue = await persistRequestReviewOverdue(camp);
     if (overdue.becameOverdue) {
       await notifyCampWorkflow({ camp, action: 'review_overdue', actorId: null });
@@ -667,8 +684,13 @@ router.put(
     if (!lifecycleOnly || stage === 'request') {
       try {
         assertRequestStageComplete(camp);
+        camp.requestIncomplete = false;
       } catch (err) {
-        throw new AppError(err.message || 'Complete all request stage fields', 400, 'VALIDATION_ERROR');
+        if (camp.requestIncomplete) {
+          camp.requestIncomplete = true;
+        } else {
+          throw new AppError(err.message || 'Complete all request stage fields', 400, 'VALIDATION_ERROR');
+        }
       }
       if (camp.requestReviewStatus === 'information_requested' && camp.status === 'pending_review') {
         applyRequestReviewTransition(camp, 'submit');
@@ -1079,6 +1101,9 @@ function buildMasterPayload(body, client) {
     clientName: client.name,
     isActive: body.isActive !== false,
   };
+  if (body.assignedUserEmails !== undefined) {
+    payload.assignedUserEmails = parseAssignedUserEmails(body.assignedUserEmails);
+  }
   for (const field of MASTER_STRING_FIELDS) {
     if (body[field] !== undefined) {
       if (field === 'campName') {
