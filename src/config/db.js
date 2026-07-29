@@ -70,13 +70,21 @@ export async function disconnectDb() {
 }
 
 export function getDbInfo() {
-  const uri = connectedMongoUri || env.mongoUriRaw || env.mongoUri;
-  const target = env.useMongoose && uri ? describeMongoTarget(uri) : null;
+  let mongoHost = null;
+  if (env.useMongoose) {
+    try {
+      const uri = connectedMongoUri
+        || prepareMongoUri(env.mongoUriRaw || env.mongoUri, { isProd: env.isProd });
+      mongoHost = describeMongoTarget(uri).host;
+    } catch {
+      mongoHost = null;
+    }
+  }
   return {
     mode: getPersistenceMode(),
     dataDir,
     useMongoose: env.useMongoose,
     mongoConfigured: Boolean(env.mongoUriRaw || env.mongoUri),
-    mongoHost: target?.host || null,
+    mongoHost,
   };
 }
