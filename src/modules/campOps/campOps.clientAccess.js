@@ -37,6 +37,8 @@ export async function resolveCampClientScope(user = {}) {
   }
 
   if (!anyAssignmentsConfigured) return null;
+  // Users not listed on any client master keep full camp visibility (internal ops).
+  if (scopedClientIds.size === 0) return null;
   return scopedClientIds;
 }
 

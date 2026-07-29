@@ -660,6 +660,7 @@ router.put(
   asyncHandler(async (req, res) => {
     const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
     if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
+    await assertCampClientAccess(req.user, camp);
 
     const stage = trimStr(req.body.editingStage)
       || trimStr(req.body.lifecycleStage)
