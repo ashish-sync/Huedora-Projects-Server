@@ -44,8 +44,14 @@ export function extractMongoDatabase(uri) {
  * - Add default database name when URI ends at host or host/
  */
 export function normalizeMongoUri(uri) {
-  let value = String(uri || '').trim();
+  let value = String(uri || '').trim().replace(/^['"]|['"]$/g, '');
   if (!value) return value;
+
+  if (/<db_password>|<password>/i.test(value)) {
+    throw new Error(
+      '[config] MONGODB_URI still contains <db_password>. Replace it with your real Atlas password.',
+    );
+  }
 
   const schemeMatch = value.match(/^(mongodb(\+srv)?:\/\/)/i);
   if (!schemeMatch) return value;
@@ -139,22 +145,24 @@ export function validateMongoUri(uri, { isProd = false } = {}) {
   return value;
 }
 
+export function prepareMongoUri(raw, { isProd = false } = {}) {
+  const trimmed = String(raw || '').trim().replace(/^['"]|['"]$/g, '');
+  if (!trimmed) {
+    throw new Error('[config] MONGODB_URI is not set.');
+  }
+  const normalized = normalizeMongoUri(trimmed);
+  if (normalized !== trimmed) {
+    console.warn('[db] MONGODB_URI auto-normalized (password encoding and/or default database name)');
+  }
+  return validateMongoUri(normalized, { isProd });
+}
+
+/** @deprecated use prepareMongoUri */
 export function resolveMongoUri(raw, { isProd = false, useMongoose = false } = {}) {
   const trimmed = String(raw || '').trim();
   const localDefault = 'mongodb://127.0.0.1:27017/tylo-one';
-
-  if (!useMongoose) {
-    return trimmed || localDefault;
-  }
-
-  if (isProd || trimmed) {
-    const normalized = normalizeMongoUri(trimmed);
-    if (normalized !== trimmed) {
-      console.warn('[db] MONGODB_URI auto-normalized (password encoding and/or default database name)');
-    }
-    return validateMongoUri(normalized, { isProd });
-  }
-
+  if (!useMongoose) return trimmed || localDefault;
+  if (isProd || trimmed) return prepareMongoUri(trimmed, { isProd });
   return localDefault;
 }
 

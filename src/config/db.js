@@ -5,7 +5,9 @@ import {
   getPersistenceMode,
   hydratePersistence,
 } from '../store/persistence.js';
-import { describeMongoTarget, formatMongoConnectError } from './mongoUri.js';
+import { describeMongoTarget, formatMongoConnectError, prepareMongoUri } from './mongoUri.js';
+
+let connectedMongoUri = null;
 
 /**
  * Persistence backends:
@@ -26,7 +28,7 @@ export async function connectDb() {
 
   if (env.useMongoose) {
     const mongoose = (await import('mongoose')).default;
-    let uri = env.mongoUri;
+    let uri = env.mongoUriRaw || env.mongoUri;
 
     if (env.useMemoryDb) {
       const { MongoMemoryServer } = await import('mongodb-memory-server');
@@ -34,15 +36,17 @@ export async function connectDb() {
       uri = memoryServer.getUri('tylo-one');
       console.log('[db] Using in-memory MongoDB (development only)');
     } else {
+      uri = prepareMongoUri(uri, { isProd: env.isProd });
       const target = describeMongoTarget(uri);
       console.log(
         `[db] Connecting to MongoDB (${target.mode}) host=${target.host} database=${target.database}`,
       );
     }
 
+    connectedMongoUri = uri;
     mongoose.set('strictQuery', true);
     try {
-      await mongoose.connect(uri);
+      await mongoose.connect(uri, { serverSelectionTimeoutMS: 15000 });
     } catch (err) {
       throw formatMongoConnectError(err, uri);
     }
@@ -62,15 +66,17 @@ export async function disconnectDb() {
     const mongoose = (await import('mongoose')).default;
     await mongoose.disconnect();
   }
+  connectedMongoUri = null;
 }
 
 export function getDbInfo() {
-  const target = env.useMongoose ? describeMongoTarget(env.mongoUri) : null;
+  const uri = connectedMongoUri || env.mongoUriRaw || env.mongoUri;
+  const target = env.useMongoose && uri ? describeMongoTarget(uri) : null;
   return {
     mode: getPersistenceMode(),
     dataDir,
     useMongoose: env.useMongoose,
-    mongoConfigured: Boolean(env.mongoUri),
+    mongoConfigured: Boolean(env.mongoUriRaw || env.mongoUri),
     mongoHost: target?.host || null,
   };
 }

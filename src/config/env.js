@@ -1,11 +1,10 @@
 import dotenv from 'dotenv';
-import { resolveMongoUri } from './mongoUri.js';
 
 dotenv.config();
 
 const nodeEnv = process.env.NODE_ENV || 'development';
 const isProd = nodeEnv === 'production';
-const mongoUriRaw = String(process.env.MONGODB_URI || '').trim();
+const mongoUriRaw = String(process.env.MONGODB_URI || '').trim().replace(/^['"]|['"]$/g, '');
 const hasMongoUri = /^mongodb(\+srv)?:\/\//i.test(mongoUriRaw);
 
 const useMongoose =
@@ -47,7 +46,9 @@ export const env = {
   clientOrigin: resolveClientOrigin(),
   useMemoryDb: String(process.env.USE_MEMORY_DB || 'false').toLowerCase() === 'true',
   useMongoose,
-  mongoUri: resolveMongoUri(mongoUriRaw, { isProd, useMongoose }),
+  /** Raw MONGODB_URI from environment (normalized at connect time). */
+  mongoUriRaw,
+  mongoUri: mongoUriRaw || 'mongodb://127.0.0.1:27017/tylo-one',
   jwtAccessSecret: strongSecret('JWT_ACCESS_SECRET', process.env.JWT_ACCESS_SECRET),
   jwtRefreshSecret: strongSecret('JWT_REFRESH_SECRET', process.env.JWT_REFRESH_SECRET),
   jwtAccessExpires: process.env.JWT_ACCESS_EXPIRES || '15m',
