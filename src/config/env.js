@@ -1,9 +1,17 @@
 import dotenv from 'dotenv';
+import { resolveMongoUri } from './mongoUri.js';
 
 dotenv.config();
 
 const nodeEnv = process.env.NODE_ENV || 'development';
 const isProd = nodeEnv === 'production';
+const mongoUriRaw = String(process.env.MONGODB_URI || '').trim();
+const hasMongoUri = /^mongodb(\+srv)?:\/\//i.test(mongoUriRaw);
+
+const useMongoose =
+  isProd
+    ? String(process.env.USE_MONGOOSE || 'false').toLowerCase() === 'true' || hasMongoUri
+    : String(process.env.USE_MONGOOSE || 'false').toLowerCase() === 'true';
 
 function strongSecret(name, value) {
   const v = String(value || '').trim();
@@ -38,9 +46,8 @@ export const env = {
   isProd,
   clientOrigin: resolveClientOrigin(),
   useMemoryDb: String(process.env.USE_MEMORY_DB || 'false').toLowerCase() === 'true',
-  /** Prefer file DB locally unless USE_MONGOOSE=true */
-  useMongoose: String(process.env.USE_MONGOOSE || 'false').toLowerCase() === 'true',
-  mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/tylo-one',
+  useMongoose,
+  mongoUri: resolveMongoUri(mongoUriRaw, { isProd, useMongoose }),
   jwtAccessSecret: strongSecret('JWT_ACCESS_SECRET', process.env.JWT_ACCESS_SECRET),
   jwtRefreshSecret: strongSecret('JWT_REFRESH_SECRET', process.env.JWT_REFRESH_SECRET),
   jwtAccessExpires: process.env.JWT_ACCESS_EXPIRES || '15m',

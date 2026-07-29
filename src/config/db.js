@@ -5,6 +5,7 @@ import {
   getPersistenceMode,
   hydratePersistence,
 } from '../store/persistence.js';
+import { describeMongoTarget, formatMongoConnectError } from './mongoUri.js';
 
 /**
  * Persistence backends:
@@ -14,7 +15,7 @@ import {
 export async function connectDb() {
   if (env.isProd && !env.useMongoose) {
     throw new Error(
-      '[config] Production requires USE_MONGOOSE=true and MONGODB_URI pointing to MongoDB Atlas. '
+      '[config] Production requires MONGODB_URI (mongodb+srv://...) pointing to MongoDB Atlas. '
         + 'JSON file storage is wiped on every Render deploy/restart.',
     );
   }
@@ -32,12 +33,19 @@ export async function connectDb() {
       const memoryServer = await MongoMemoryServer.create();
       uri = memoryServer.getUri('tylo-one');
       console.log('[db] Using in-memory MongoDB (development only)');
-    } else if (env.isProd && !String(uri || '').trim()) {
-      throw new Error('[config] MONGODB_URI must be set in production when USE_MONGOOSE=true');
+    } else {
+      const target = describeMongoTarget(uri);
+      console.log(
+        `[db] Connecting to MongoDB (${target.mode}) host=${target.host} database=${target.database}`,
+      );
     }
 
     mongoose.set('strictQuery', true);
-    await mongoose.connect(uri);
+    try {
+      await mongoose.connect(uri);
+    } catch (err) {
+      throw formatMongoConnectError(err, uri);
+    }
     configurePersistence({ backend: 'mongo', dataDirectory: dataDir, db: mongoose.connection.db });
     await hydratePersistence();
     console.log(`[db] Connected to MongoDB (${getPersistenceMode()} persistence, database: ${mongoose.connection.name})`);
@@ -57,10 +65,12 @@ export async function disconnectDb() {
 }
 
 export function getDbInfo() {
+  const target = env.useMongoose ? describeMongoTarget(env.mongoUri) : null;
   return {
     mode: getPersistenceMode(),
     dataDir,
     useMongoose: env.useMongoose,
     mongoConfigured: Boolean(env.mongoUri),
+    mongoHost: target?.host || null,
   };
 }
