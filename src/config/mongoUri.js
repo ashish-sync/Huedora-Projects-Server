@@ -46,6 +46,15 @@ export function validateMongoUri(uri, { isProd = false } = {}) {
 
   const host = extractMongoHost(value);
   const isSrv = /^mongodb\+srv:\/\//i.test(value);
+  const authority = value.replace(/^mongodb(\+srv)?:\/\//i, '').split('/')[0] || '';
+  const atCount = (authority.match(/@/g) || []).length;
+
+  if (atCount > 1) {
+    throw new Error(
+      '[config] MONGODB_URI contains multiple @ characters — your database password likely includes @ '
+        + 'which must be URL-encoded as %40 (e.g. Apple@1234 → Apple%401234).',
+    );
+  }
 
   if (!host) {
     throw new Error(
@@ -54,10 +63,10 @@ export function validateMongoUri(uri, { isProd = false } = {}) {
     );
   }
 
-  if (PLACEHOLDER_HOSTS.has(host.toLowerCase()) || /^(x+|test|example)$/i.test(host)) {
+  if (PLACEHOLDER_HOSTS.has(host.toLowerCase()) || /^\d+$/.test(host) || /^(x+|test|example)$/i.test(host)) {
     throw new Error(
-      `[config] MONGODB_URI hostname "${host}" looks like a placeholder. `
-        + 'Replace it with your Atlas cluster host (cluster0.xxxxx.mongodb.net).',
+      `[config] MONGODB_URI hostname "${host}" is invalid — this usually means the password contains @ `
+        + 'without URL encoding. Encode @ as %40 (example: Apple@1234 → Apple%401234 in the connection string).',
     );
   }
 
