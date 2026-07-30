@@ -1,4 +1,5 @@
 import { normalizeCampName } from '../config/campNames.js';
+import { formatCampTextPayload } from '../../campOps.helpers.js';
 import { findStateInText } from '../../../geo/indianStateNames.js';
 import { parseLocalDateInput, computeEndTime, parseTimeToMinutes, resolveClinicHospitalName } from './campHelpers.js';
 import {
@@ -341,7 +342,7 @@ export function normalizeCampRow(raw = {}, { from = '', knownClients = [] } = {}
 
   const expectedPatients = Number(String(fields.expectedPatients || '').replace(/[^\d]/g, '')) || 0;
 
-  return {
+  return formatCampTextPayload({
     clientName: fields.clientName || PENDING_IMPORT_CLIENT_NAME,
     campaignName: normalizeCampName(fields.campaignName),
     campaignType: String(fields.campaignType || '').trim() || 'Screening',
@@ -365,7 +366,7 @@ export function normalizeCampRow(raw = {}, { from = '', knownClients = [] } = {}
     fieldPersonName: String(fields.fieldPersonName || '').trim(),
     fieldPersonPhone: String(fields.fieldPersonPhone || fields.fieldPersonContact || '').trim(),
     remarks: String(fields.remarks || '').trim(),
-  };
+  });
 }
 
 export function parseCampMessageBlock(text, options = {}) {

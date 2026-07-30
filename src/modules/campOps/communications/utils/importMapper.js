@@ -2,6 +2,7 @@ import { normalizeCampName } from '../config/campNames.js';
 import { parseLocalDateInput, computeDurationHours, resolveCampSchedule, resolveClinicHospitalName } from './campHelpers.js';
 import { CAMP_IMPORT_FIELDS } from '../../campOps.constants.js';
 import { matchImportColumns, getImportFieldDefinitions } from '../../import/importColumnMatcher.js';
+import { formatCampTextPayload } from '../../campOps.helpers.js';
 
 export { CAMP_IMPORT_FIELDS };
 export { matchImportColumns, getImportFieldDefinitions };
@@ -80,7 +81,7 @@ export function validateMappedRows(rows) {
 
     const schedule = resolveCampSchedule({ startTime, endTime });
 
-    const normalized = {
+    const normalized = formatCampTextPayload({
       ...row,
       clientName: String(row.clientName || '').trim(),
       campaignName: normalizeCampName(row.campaignName),
@@ -101,7 +102,7 @@ export function validateMappedRows(rows) {
       fieldPersonName: String(row.fieldPersonName || '').trim(),
       fieldPersonPhone: String(row.fieldPersonPhone || '').trim(),
       remarks: String(row.remarks || '').trim(),
-    };
+    });
 
     if (errors.length) {
       invalidRows.push({ rowNumber: row.rowNumber, data: normalized, errors });

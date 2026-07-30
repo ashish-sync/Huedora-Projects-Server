@@ -26,6 +26,7 @@ import {
   normalizeCustodianState,
 } from './device.constants.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import { formatTextValue, cleanSpaces } from '../../utils/textFormat.js';
 
 const canWriteDevicesOrAssets = requirePermission(
   PERMISSIONS.DEVICES_WRITE,
@@ -107,7 +108,7 @@ function normKey(row, candidates) {
 }
 
 function parseMasterFields(input) {
-  const name = String(input.name || '').trim();
+  const name = cleanSpaces(String(input.name || ''));
   if (!name) throw new AppError('Asset Name is required', 400, 'VALIDATION_ERROR');
 
   const assetType = normalizeAssetType(input.assetType);
@@ -119,7 +120,7 @@ function parseMasterFields(input) {
     );
   }
 
-  const serialNumber = String(input.serialNumber || '').trim();
+  const serialNumber = formatTextValue(String(input.serialNumber || ''), 'serialNumber');
   if (!serialNumber) throw new AppError('Serial Number is required', 400, 'VALIDATION_ERROR');
 
   const purchaseMonth = input.purchaseMonth;
@@ -154,14 +155,14 @@ function parseMasterFields(input) {
     );
   }
 
-  const custodianName = String(input.custodianName || '').trim();
+  const custodianName = formatTextValue(String(input.custodianName || ''), 'custodianName');
   if (!custodianName) throw new AppError('Custodian Name is required', 400, 'VALIDATION_ERROR');
 
-  const custodianContact = String(input.custodianContact || '').trim();
+  const custodianContact = formatTextValue(String(input.custodianContact || ''), 'custodianContact');
   if (!custodianContact) throw new AppError('Custodian Contact is required', 400, 'VALIDATION_ERROR');
   assertValidPhoneOrEmail(custodianContact, 'Custodian Contact');
 
-  const custodianCity = String(input.custodianCity || input.city || '').trim();
+  const custodianCity = formatTextValue(String(input.custodianCity || input.city || ''), 'city');
   if (!custodianCity) throw new AppError('Custodian City is required', 400, 'VALIDATION_ERROR');
 
   const custodianState = normalizeCustodianState(input.custodianState);
@@ -169,7 +170,7 @@ function parseMasterFields(input) {
     throw new AppError('Custodian State is required (Indian state or union territory)', 400, 'VALIDATION_ERROR');
   }
 
-  const description = String(input.description || '').trim() || null;
+  const description = formatTextValue(String(input.description || ''), 'peripheralRemarks') || null;
 
   const registerTypes = ['Medical Device', 'Non-Medical Device'];
   let productType = String(input.productType || '').trim() || 'Medical Device';

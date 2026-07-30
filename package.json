@@ -17,6 +17,7 @@
     "test:camp-filters": "node --test src/modules/campOps/campOps.filters.test.js",
     "test:camp-alerts": "node --test src/modules/campOps/campOps.alertFilters.test.js",
     "test:camp-coordinators": "node --test src/modules/campOps/campOps.coordinatorNotify.test.js",
+    "test:text-format": "node --test src/utils/textFormat.test.js",
     "test:camp-ops": "node --test src/modules/campOps/*.test.js",
     "geo:build": "node scripts/buildIndiaGeoSeed.js",
     "geo:build-cities": "node scripts/buildTyloCitySeed.js",

@@ -39,8 +39,10 @@ import {
 import { LogisticsProduct, LogisticsUom } from '../logistics/logistics.model.js';
 import { Contact } from '../contacts/contact.model.js';
 import { getHcwFinanceBlockers } from '../contacts/hcwFinanceReadiness.js';
+import { formatTextValue } from '../../utils/textFormat.js';
 import {
   trimStr,
+  formatCampTextPayload,
   escapeRegex,
   resolveCampSchedule,
   parseLocalDateInput,
@@ -278,7 +280,7 @@ async function resolveClientFromBody(body, { allowCreate = false } = {}) {
     const byId = await CampOpsClient.findOne({ _id: String(clientId), isDeleted: false });
     if (byId) return byId;
   }
-  const name = trimStr(body.clientName);
+  const name = formatTextValue(body.clientName, 'clientName');
   if (!name) return null;
   const existing = await CampOpsClient.findOne({ isDeleted: false, name });
   if (existing) return existing;
@@ -306,7 +308,7 @@ function campPayloadFromBody(body, existing = null, client = null) {
   );
   const campAddress = trimStr(body.campAddress ?? existing?.campAddress) || hospitalName;
 
-  return {
+  return formatCampTextPayload({
     clientId: client?._id ?? existing?.clientId ?? null,
     clientName:
       client?.name || trimStr(body.clientName) || existing?.clientName || '',
@@ -357,7 +359,7 @@ function campPayloadFromBody(body, existing = null, client = null) {
       : existing?.source || 'dashboard',
     remarks: trimStr(body.remarks ?? existing?.remarks),
     ...lifecyclePayloadFromBody(body, existing),
-  };
+  });
 }
 
 /* -------------------------------------------------------------------------- */

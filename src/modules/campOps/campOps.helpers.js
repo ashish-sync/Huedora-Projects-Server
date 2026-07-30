@@ -2,9 +2,28 @@ import { CampOpsCamp } from './campOps.model.js';
 import { normalizeCampName } from './campOps.constants.js';
 import { getRequestStageBlockers, getRequestStageCompletion, REQUEST_PARTIAL_THRESHOLD } from './campOps.requestValidation.js';
 import { normalizeContactPersons } from './campContactPersons.js';
+import { cleanSpaces, formatTextValue } from '../../utils/textFormat.js';
 
 export function trimStr(v) {
-  return v == null ? '' : String(v).trim();
+  return v == null ? '' : cleanSpaces(v);
+}
+
+export function formatCampTextPayload(payload = {}) {
+  const out = { ...payload };
+  Object.entries(out).forEach(([key, value]) => {
+    if (typeof value === 'string') {
+      out[key] = formatTextValue(value, key);
+    }
+  });
+  if (Array.isArray(out.contactPersons)) {
+    out.contactPersons = out.contactPersons.map((person) => ({
+      ...person,
+      name: formatTextValue(person?.name, 'doctorName'),
+      level: formatTextValue(person?.level, 'contactPersonLevel'),
+      phone: formatTextValue(person?.phone, 'fieldPersonPhone'),
+    }));
+  }
+  return out;
 }
 
 export function escapeRegex(value) {

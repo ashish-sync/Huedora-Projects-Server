@@ -20,6 +20,7 @@ import {
 } from './contact.constants.js';
 import { normalizeEmail } from '../../utils/identityNormalize.js';
 import { AppError } from '../../utils/helpers.js';
+import { formatTextValue } from '../../utils/textFormat.js';
 
 /** Contact directory fields (Excel + form parity) */
 export const Contact = defineCollection('contacts', {
@@ -100,13 +101,16 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
   const isVendor = contactCategory === 'Vendor';
 
   const organization = isClient
-    ? String(
-        body.organization ||
-          body.Organization ||
-          body['Organization Name'] ||
-          body['Organization'] ||
-          ''
-      ).trim()
+    ? formatTextValue(
+        String(
+          body.organization ||
+            body.Organization ||
+            body['Organization Name'] ||
+            body['Organization'] ||
+            ''
+        ),
+        'organization'
+      )
     : '';
 
   const supplyCategoryRaw =
@@ -118,7 +122,7 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
   const supplyCategory = isVendor ? normalizeSupplyCategory(supplyCategoryRaw) : '';
 
   const payload = {
-    name: String(body.name || body.Name || '').trim(),
+    name: formatTextValue(String(body.name || body.Name || ''), 'name'),
     email: normalizeEmail(body.email || body.Email || ''),
     contactCategory,
     resourceType:
@@ -127,36 +131,36 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
     profession,
     contact,
     mobile: contact,
-    city: String(body.city || body.City || '').trim(),
-    state: String(body.state || body.State || '').trim(),
+    city: formatTextValue(String(body.city || body.City || ''), 'city'),
+    state: formatTextValue(String(body.state || body.State || ''), 'state'),
     pinCode: isClient
       ? ''
       : String(
           body.pinCode || body.pincode || body['Pin Code'] || body.Pincode || body.PIN || ''
         ).trim(),
-    address: isClient ? '' : String(body.address || body.Address || '').trim(),
+    address: isClient ? '' : formatTextValue(String(body.address || body.Address || ''), 'address'),
     organization,
     supplyCategory,
     panNumber: isClient
       ? ''
-      : String(body.panNumber || body.PAN || body['PAN Number'] || body.pan || '').trim().toUpperCase(),
+      : formatTextValue(String(body.panNumber || body.PAN || body['PAN Number'] || body.pan || ''), 'panNumber'),
     ifscCode: isClient
       ? ''
-      : String(body.ifscCode || body.IFSC || body['IFSC Code'] || body.ifsc || '').trim().toUpperCase(),
+      : formatTextValue(String(body.ifscCode || body.IFSC || body['IFSC Code'] || body.ifsc || ''), 'ifscCode'),
     bankName: isClient
       ? ''
-      : String(body.bankName || body['Bank Name'] || body.bank || '').trim(),
+      : formatTextValue(String(body.bankName || body['Bank Name'] || body.bank || ''), 'bankName'),
     accountNumber: isClient
       ? ''
-      : String(body.accountNumber || body['Account Number'] || body.account || '').trim(),
+      : formatTextValue(String(body.accountNumber || body['Account Number'] || body.account || ''), 'accountNumber'),
     passbookCopyUrl: isClient
       ? ''
       : String(body.passbookCopyUrl || body.passbookCopy || '').trim(),
     panCardCopyUrl: isClient
       ? ''
       : String(body.panCardCopyUrl || body.panCardCopy || '').trim(),
-    notes: String(body.notes || '').trim(),
-    district: String(body.district || body.District || '').trim(),
+    notes: formatTextValue(String(body.notes || ''), 'notes'),
+    district: formatTextValue(String(body.district || body.District || ''), 'district'),
     stateId: body.stateId || null,
     districtId: body.districtId || null,
     cityId: body.cityId || null,
