@@ -14,7 +14,7 @@ npm-debug.log*
 !.env.example
 
 # Local file-DB and uploads (reseeded locally)
-data/
+/data/
 uploads/
 tmp/
 tmp-*.json

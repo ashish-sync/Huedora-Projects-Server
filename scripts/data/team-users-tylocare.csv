@@ -1,0 +1,23 @@
+email,fullName,designation,accessProfile,reportingToEmail
+zohra@tylocare.com,Zohra Sawant,Operations Head,full_access,
+ashish@tylocare.com,Ashish Singh,Senior Manager,full_access,zohra@tylocare.com
+komal@tylocare.com,Komal Pujari,Team Leader,full_access,ashish@tylocare.com
+prashant@tylocare.com,Prashant Arvind Talekar,Team Leader,full_access,ashish@tylocare.com
+anita@tylocare.com,Anita Annam,Team Leader,full_access,ashish@tylocare.com
+vinayak@tylocare.com,Vinayak Lokesh Shetty,Team Leader,full_access,ashish@tylocare.com
+avita@tylocare.com,Avita Talekar,Training Manager,full_access,ashish@tylocare.com
+pragya@tylocare.com,Pragya Anand Gupt Maurya,Data Analyst,full_access,ashish@tylocare.com
+sandesh@tylocare.com,Sandesh Sachin Dalvi,Data Analyst,full_access,ashish@tylocare.com
+snehal@tylocare.com,Snehal Mahadev Menge,System Analyst,full_access,prashant@tylocare.com
+divyalaxmi@tylocare.com,Divyalaxmi Arumugam,Healthcare Camp Coordinator,camp_coordinator,prashant@tylocare.com
+alfisha@tylocare.com,Khan Alfisha Mohd Farooq,Healthcare Camp Coordinator,camp_coordinator,komal@tylocare.com
+manomani@tylocare.com,Mano Mani Sounderjan,Healthcare Camp Coordinator,camp_coordinator,anita@tylocare.com
+peter@tylocare.com,Peter Rajkumar Pandit,Healthcare Camp Coordinator,camp_coordinator,komal@tylocare.com
+projit@tylocare.com,Projit Prem Khosla,Healthcare Camp Coordinator,camp_coordinator,prashant@tylocare.com
+ramesh@tylocare.com,Ramesh Devraj Devendra,Healthcare Camp Coordinator,camp_coordinator,anita@tylocare.com
+rishu@tylocare.com,Rishu Laxmishankar Yadav,Healthcare Camp Coordinator,camp_coordinator,anita@tylocare.com
+rohit@tylocare.com,Rohit Anant Gurav,Healthcare Camp Coordinator,camp_coordinator,prashant@tylocare.com
+rupali@tylocare.com,Rupali Divesh Keni,Healthcare Camp Coordinator,camp_coordinator,anita@tylocare.com
+sonali@tylocare.com,Sonali Sen,Healthcare Camp Coordinator,camp_coordinator,komal@tylocare.com
+tanisha@tylocare.com,Tanisha Santosh Athawale,Healthcare Camp Coordinator,camp_coordinator,anita@tylocare.com
+aansh@tylocare.com,Aansh Lovely Sharma,Logistics Associate,logistics_associate,vinayak@tylocare.com
