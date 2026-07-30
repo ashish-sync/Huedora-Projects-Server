@@ -312,6 +312,7 @@ export function defineCollection(name, defaults = {}) {
         userId: 'users',
         reportedByUserId: 'users',
         receivedByUserId: 'users',
+        reportingManagerId: 'users',
       };
       const col = map[field];
       if (!col) return;

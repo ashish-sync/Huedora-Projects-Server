@@ -7,9 +7,16 @@ import { SIGNATURE_ROLES } from './signature.constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 const router = Router();
 router.use(authenticate);
+
+const canReadSignatures = requirePermission(PERMISSIONS.AGREEMENTS_READ, PERMISSIONS.AGREEMENTS_WRITE);
+router.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  return canReadSignatures(req, res, next);
+});
 
 router.get(
   '/meta/roles',
@@ -25,9 +32,9 @@ router.get(
     const filter = { isDeleted: false };
     if (req.query.active !== 'false') filter.isActive = true;
     if (req.query.all === 'true') delete filter.isActive;
-    if (req.query.role) filter.roleLabel = new RegExp(String(req.query.role), 'i');
+    if (req.query.role) filter.roleLabel = new RegExp(escapeRegex(String(req.query.role)), 'i');
     if (req.query.q) {
-      const q = String(req.query.q);
+      const q = escapeRegex(String(req.query.q));
       filter.$or = [
         { name: new RegExp(q, 'i') },
         { email: new RegExp(q, 'i') },

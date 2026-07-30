@@ -79,6 +79,15 @@ function photosFromUpload(req) {
 const router = Router();
 router.use(authenticate);
 
+const canReadVerifications = requirePermission(
+  PERMISSIONS.VERIFICATIONS_READ,
+  PERMISSIONS.VERIFICATIONS_WRITE
+);
+router.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  return canReadVerifications(req, res, next);
+});
+
 async function ensureCampaign(periodKey, userId) {
   let campaign = await VerificationCampaign.findOne({ periodKey, isDeleted: false });
   if (!campaign) {

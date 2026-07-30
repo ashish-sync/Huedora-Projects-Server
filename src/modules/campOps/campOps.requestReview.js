@@ -13,7 +13,7 @@ export const REQUEST_REVIEW_LABELS = {
   review_overdue: 'Review Overdue',
   information_requested: 'Information Requested',
   request_approved: 'Request Approved',
-  request_rejected: 'Request Rejected',
+  request_rejected: 'Request Refused',
 };
 
 const WORK_START_HOUR = 9;

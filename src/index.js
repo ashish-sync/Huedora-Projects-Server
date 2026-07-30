@@ -36,6 +36,14 @@ async function maybeReseedGeoOnBoot() {
 }
 
 async function main() {
+  if (env.isProd) {
+    if (String(process.env.RESET_ALL_DATA_ON_BOOT || '').toLowerCase() === 'true') {
+      throw new Error('[config] RESET_ALL_DATA_ON_BOOT is not allowed in production');
+    }
+    if (env.bootstrapAdminReset) {
+      throw new Error('[config] BOOTSTRAP_ADMIN_RESET is not allowed in production');
+    }
+  }
   await connectDb();
   const db = getDbInfo();
   console.log(`[api] Persistence: ${db.mode}${db.useMongoose ? ' (MongoDB)' : ' (local JSON — not for production)'}`);

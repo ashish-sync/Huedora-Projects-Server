@@ -41,6 +41,8 @@ export const Contact = defineCollection('contacts', {
   ifscCode: '',
   bankName: '',
   accountNumber: '',
+  passbookCopyUrl: '',
+  panCardCopyUrl: '',
   notes: '',
   district: '',
   stateId: null,
@@ -147,6 +149,12 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
     accountNumber: isClient
       ? ''
       : String(body.accountNumber || body['Account Number'] || body.account || '').trim(),
+    passbookCopyUrl: isClient
+      ? ''
+      : String(body.passbookCopyUrl || body.passbookCopy || '').trim(),
+    panCardCopyUrl: isClient
+      ? ''
+      : String(body.panCardCopyUrl || body.panCardCopy || '').trim(),
     notes: String(body.notes || '').trim(),
     district: String(body.district || body.District || '').trim(),
     stateId: body.stateId || null,

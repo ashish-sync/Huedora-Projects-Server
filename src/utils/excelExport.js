@@ -53,6 +53,26 @@ export function sendExcel(res, filename, headers, rows, opts = {}) {
   sendBuffer(res, filename, buf);
 }
 
+export function csvBuffer(headers, rows) {
+  const escapeCell = (value) => {
+    const text = value == null ? '' : String(value);
+    if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+    return text;
+  };
+  const lines = [
+    headers.map(escapeCell).join(','),
+    ...(rows || []).map((row) => headers.map((_, index) => escapeCell(row[index])).join(',')),
+  ];
+  return Buffer.from(lines.join('\r\n'), 'utf8');
+}
+
+export function sendCsv(res, filename, headers, rows) {
+  const safe = String(filename || 'export.csv').replace(/[^\w.\- ]+/g, '_');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${safe}"`);
+  res.send(csvBuffer(headers, rows));
+}
+
 export function sendMultiSheetExcel(res, filename, sheets) {
   const buf = multiSheetBuffer(sheets);
   sendBuffer(res, filename, buf);

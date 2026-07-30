@@ -25,6 +25,7 @@ import {
   formatOwnershipType,
   normalizeCustodianState,
 } from './device.constants.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 const canWriteDevicesOrAssets = requirePermission(
   PERMISSIONS.DEVICES_WRITE,
@@ -48,6 +49,12 @@ const ASSET_MASTER_HEADERS = [
 
 const router = Router();
 router.use(authenticate);
+
+const canReadDevices = requirePermission(PERMISSIONS.ASSETS_READ, PERMISSIONS.DEVICES_WRITE);
+router.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  return canReadDevices(req, res, next);
+});
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -325,7 +332,7 @@ router.get(
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
     if (req.query.q) {
-      const re = new RegExp(String(req.query.q), 'i');
+      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
       filter.$or = [
         { name: re },
         { description: re },

@@ -1,16 +1,14 @@
 import { trimStr, computeDurationHours } from './campOps.helpers.js';
 import { resolveCampSlot } from './campOps.lifecycle.js';
-import { CAMP_OPS_SOURCES } from './campOps.constants.js';
+import { CAMP_OPS_SOURCES, CONTACT_PERSON_LEVELS } from './campOps.constants.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
+import { isValidPhone } from '../../utils/identityNormalize.js';
+import { normalizeContactPersons } from './campContactPersons.js';
 
 export const REQUEST_PARTIAL_THRESHOLD = 0.6;
 
 function hasText(value) {
   return Boolean(trimStr(value));
-}
-
-function phoneDigits(value) {
-  return String(value ?? '').replace(/\D/g, '');
 }
 
 /** Required request-stage checks used for completion percentage (paste partial import). */
@@ -31,14 +29,14 @@ const REQUEST_COMPLETION_CHECKS = [
   { key: 'pincode', test: (c) => /^\d{6}$/.test(trimStr(c.pincode)) },
   { key: 'hq', test: (c) => hasText(c.hq) },
   { key: 'zone', test: (c) => hasText(c.zone) },
-  { key: 'expectedPatients', test: (c) => Number(c.expectedPatients) > 0 },
-  { key: 'fieldPersonName', test: (c) => hasText(c.fieldPersonName) },
+  { key: 'expectedPatients', test: (c) => /^\d+$/.test(String(c.expectedPatients ?? '').trim()) },
   {
-    key: 'fieldPersonPhone',
-    test: (c) => {
-      const phone = phoneDigits(c.fieldPersonPhone);
-      return phone.length >= 6 && phone.length <= 15;
-    },
+    key: 'contactPersons',
+    test: (c) => normalizeContactPersons(c).every(
+      (contact) => hasText(contact.name)
+        && CONTACT_PERSON_LEVELS.includes(trimStr(contact.level))
+        && isValidPhone(contact.phone),
+    ),
   },
 ];
 
@@ -86,16 +84,27 @@ export function getRequestStageBlockers(camp = {}) {
     }
   }
 
-  const expectedPatients = Number(camp.expectedPatients);
-  if (!Number.isFinite(expectedPatients) || expectedPatients <= 0) {
-    errors.push('Expected patients must be greater than zero');
+  const expectedPatientsRaw = String(camp.expectedPatients ?? '').trim();
+  if (!expectedPatientsRaw) {
+    errors.push('Expected patients is required');
+  } else if (!/^\d+$/.test(expectedPatientsRaw)) {
+    errors.push('Expected patients must be a whole number');
   }
 
-  if (!hasText(camp.fieldPersonName)) errors.push('Contact person name is required');
-  const phone = phoneDigits(camp.fieldPersonPhone);
-  if (phone.length < 6 || phone.length > 15) {
-    errors.push('Contact person number must be 6–15 digits');
+  const contacts = normalizeContactPersons(camp);
+  if (!contacts.length) {
+    errors.push('At least one contact person is required');
   }
+  contacts.forEach((contact, index) => {
+    const label = contacts.length > 1 ? `Contact person ${index + 1}` : 'Contact person';
+    if (!CONTACT_PERSON_LEVELS.includes(trimStr(contact.level))) {
+      errors.push(`${label} level is required`);
+    }
+    if (!hasText(contact.name)) errors.push(`${label} name is required`);
+    if (!isValidPhone(contact.phone)) {
+      errors.push(`${label} number must be exactly 10 digits`);
+    }
+  });
 
   return errors;
 }

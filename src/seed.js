@@ -7,7 +7,7 @@ import { User } from './modules/users/user.model.js';
 import { DocumentTemplate } from './modules/templates/template.model.js';
 import { Contact } from './modules/contacts/contact.model.js';
 import { ensureLogisticsSeed } from './modules/logistics/logistics.seed.js';
-import { ensureGeoSeed } from './modules/geo/geo.seed.js';
+import { ensureGeoSeed, ensureDistrictSupplements } from './modules/geo/geo.seed.js';
 import { ensureCampOpsSeed, CAMP_ONE_DEMO } from './modules/campOps/campOps.seed.js';
 
 const LEASE_TEMPLATE = `ASSET LEASE AGREEMENT
@@ -242,6 +242,7 @@ export async function ensureSeed() {
 
   await ensureLogisticsSeed();
   await ensureGeoSeed();
+  await ensureDistrictSupplements();
 
   if (env.seedCampOneDemo) {
     const campSeed = await ensureCampOpsSeed();

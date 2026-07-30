@@ -31,6 +31,9 @@ import { buildAgreementPdfBuffer, pdfOptionsFromAgreement } from './agreementPdf
 import { persistSignedAgreementPdf } from './agreementSignedDocument.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { uploadDir } from '../../config/paths.js';
+import { redactAgreement, redactAgreementList } from '../../utils/redactAgreement.js';
+import { sanitizeHtml } from '../../utils/sanitizeHtml.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 const uploadRoot = uploadDir('agreements');
 const previewRoot = uploadDir('previews');
@@ -48,6 +51,11 @@ const upload = multer({
 
 const router = Router();
 router.use(authenticate);
+
+const canReadAgreements = requirePermission(
+  PERMISSIONS.AGREEMENTS_READ,
+  PERMISSIONS.AGREEMENTS_WRITE,
+);
 
 async function logActivity(agreementId, req, action, message, meta = null) {
   await AgreementActivity.create({
@@ -147,6 +155,7 @@ function ensureTwoPartySigners(agreement, req) {
 
 router.get(
   '/stats',
+  canReadAgreements,
   asyncHandler(async (_req, res) => {
     const all = await Agreement.find({ isDeleted: false }).limit(500);
     const counts = {
@@ -172,6 +181,7 @@ router.get(
 
 router.get(
   '/',
+  canReadAgreements,
   asyncHandler(async (req, res) => {
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
@@ -184,7 +194,7 @@ router.get(
     }
     if (req.query.type) filter.type = req.query.type;
     if (req.query.q) {
-      const q = String(req.query.q);
+      const q = escapeRegex(String(req.query.q));
       filter.$or = [
         { agreementNumber: new RegExp(q, 'i') },
         { partyName: new RegExp(q, 'i') },
@@ -196,12 +206,13 @@ router.get(
       Agreement.find(filter).sort(sort || '-updatedAt').skip(skip).limit(limit),
       Agreement.countDocuments(filter),
     ]);
-    res.json(paginated(data, total, page, limit));
+    res.json(paginated(redactAgreementList(data), total, page, limit));
   })
 );
 
 router.get(
   '/export',
+  canReadAgreements,
   asyncHandler(async (req, res) => {
     const filter = { isDeleted: false };
     if (req.query.status) {
@@ -213,7 +224,7 @@ router.get(
     }
     if (req.query.type) filter.type = req.query.type;
     if (req.query.q) {
-      const q = String(req.query.q);
+      const q = escapeRegex(String(req.query.q));
       filter.$or = [
         { agreementNumber: new RegExp(q, 'i') },
         { partyName: new RegExp(q, 'i') },
@@ -254,6 +265,7 @@ router.get(
 
 router.get(
   '/:id',
+  canReadAgreements,
   asyncHandler(async (req, res) => {
     let agreement = await Agreement.findOne({ _id: req.params.id, isDeleted: false });
     if (!agreement) throw new AppError('Agreement not found', 404);
@@ -267,7 +279,7 @@ router.get(
     ]);
     res.json({
       data: {
-        ...agreement.toObject(),
+        ...redactAgreement(agreement),
         assets: links,
         documents,
         activity,
@@ -376,6 +388,7 @@ router.post(
     if (!bodyHtml && !req.file && !previewEntry) {
       throw new AppError('Upload a document or select a template', 400, 'VALIDATION_ERROR');
     }
+    bodyHtml = sanitizeHtml(bodyHtml);
 
     const deliverEmail = body.deliverEmail === 'false' ? false : Boolean(partyEmail);
     const deliverSms = body.deliverSms === 'true' || body.deliverSms === true;
@@ -572,13 +585,15 @@ router.patch(
       'partyContact',
       'startDate',
       'endDate',
-      'bodyHtml',
       'termsSummary',
       'envelopeMessage',
       'commercialNotes',
     ];
     for (const f of fields) {
       if (req.body[f] !== undefined) agreement[f] = req.body[f];
+    }
+    if (req.body.bodyHtml !== undefined) {
+      agreement.bodyHtml = sanitizeHtml(req.body.bodyHtml);
     }
     agreement.updatedBy = req.user._id;
     await agreement.save();
@@ -695,7 +710,6 @@ router.post(
         : 'Envelope sent for receiver signature';
     await logActivity(agreement._id, req, 'SENT', sentLabel, {
       receiver: partySigner(agreement.signers, 'RECEIVER')?.email,
-      recipientAccessToken: token,
     });
     await writeAudit({
       actorId: req.user._id,
@@ -717,7 +731,7 @@ router.post(
       entityId: agreement._id,
     });
 
-    res.json({ data: { ...agreement.toObject?.() || agreement, recipientAccessToken: token } });
+    res.json({ data: { ...redactAgreement(agreement), recipientAccessToken: token } });
   })
 );
 
@@ -911,6 +925,7 @@ router.post(
  */
 router.get(
   '/:id/pdf',
+  canReadAgreements,
   asyncHandler(async (req, res) => {
     const agreement = await Agreement.findOne({ _id: req.params.id, isDeleted: false });
     if (!agreement) throw new AppError('Agreement not found', 404);
@@ -935,6 +950,7 @@ router.get(
 
 router.get(
   '/:id/documents/:docId/download',
+  canReadAgreements,
   asyncHandler(async (req, res) => {
     const doc = await AgreementDocument.findOne({
       _id: req.params.docId,

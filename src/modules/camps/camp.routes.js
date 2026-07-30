@@ -3,6 +3,7 @@ import { authenticate, requirePermission, requireAdmin } from '../../middleware/
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 import {
   CAMP_METHODS,
   CAMP_PROCESS_MAP,
@@ -244,7 +245,7 @@ router.get(
     if (req.query.method) filter.method = String(req.query.method);
     if (req.query.campSlot) filter.campSlot = String(req.query.campSlot);
     if (req.query.q) {
-      const re = new RegExp(String(req.query.q), 'i');
+      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
       filter.$or = [
         { requestKey: re },
         { doctorName: re },

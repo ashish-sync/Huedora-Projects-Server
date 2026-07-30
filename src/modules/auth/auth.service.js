@@ -36,12 +36,26 @@ export function collectPermissions(user) {
 }
 
 export function publicUser(user) {
+  const manager = user.reportingManagerId;
+  const managerObj =
+    manager && typeof manager === 'object' && manager._id
+      ? {
+          id: manager._id,
+          fullName: manager.fullName || '',
+          email: manager.email || '',
+          designation: manager.designation || '',
+        }
+      : null;
+
   return {
     id: user._id,
     email: user.email,
     username: user.username,
     fullName: user.fullName,
     phone: user.phone,
+    designation: String(user.designation || '').trim(),
+    reportingManagerId: managerObj?.id || manager?._id || manager || null,
+    reportingManager: managerObj,
     isActive: user.isActive !== false,
     roles: (user.roleIds || []).map((r) => ({
       id: r?._id || r,
@@ -68,14 +82,18 @@ async function findUserByLoginEmail(email) {
   let user = await User.findOne({
     email: normalizedEmail,
     isDeleted: false,
-  }).populate('roleIds');
+  })
+    .populate('roleIds')
+    .populate('reportingManagerId', 'fullName email designation');
 
   if (!user && normalizedEmail.endsWith('@tylo.local')) {
     const legacyEmail = `${normalizedEmail.slice(0, -'@tylo.local'.length)}@dhub.local`;
     user = await User.findOne({
       email: legacyEmail,
       isDeleted: false,
-    }).populate('roleIds');
+    })
+      .populate('roleIds')
+      .populate('reportingManagerId', 'fullName email designation');
   }
 
   return { user, normalizedEmail };
@@ -165,14 +183,39 @@ export async function refresh({ refreshToken, ip, userAgent, requestId }) {
   }
 
   const tokenHash = hashToken(refreshToken);
-  const stored = await RefreshToken.findOne({ tokenHash, revokedAt: null });
-  if (!stored || stored.expiresAt < new Date()) {
-    throw new AppError('Refresh token revoked or expired', 401, 'UNAUTHORIZED');
+  const stored = await RefreshToken.findOne({ tokenHash });
+
+  if (!stored) {
+    throw new AppError('Invalid refresh token', 401, 'UNAUTHORIZED');
   }
 
-  const user = await User.findOne({ _id: payload.sub, isDeleted: false, isActive: true }).populate(
-    'roleIds'
-  );
+  if (stored.revokedAt) {
+    await RefreshToken.updateMany(
+      { userId: stored.userId, revokedAt: null },
+      { $set: { revokedAt: new Date() } }
+    );
+    const compromised = await User.findOne({ _id: stored.userId });
+    if (compromised) {
+      compromised.tokenVersion = (compromised.tokenVersion || 0) + 1;
+      await compromised.save();
+    }
+    await writeAudit({
+      actorId: stored.userId,
+      action: 'USER.REFRESH_REUSE_DETECTED',
+      ip,
+      userAgent,
+      requestId,
+    });
+    throw new AppError('Session invalidated', 401, 'UNAUTHORIZED');
+  }
+
+  if (stored.expiresAt < new Date()) {
+    throw new AppError('Refresh token expired', 401, 'UNAUTHORIZED');
+  }
+
+  const user = await User.findOne({ _id: payload.sub, isDeleted: false, isActive: true })
+    .populate('roleIds')
+    .populate('reportingManagerId', 'fullName email designation');
   if (!user || payload.tv !== user.tokenVersion) {
     throw new AppError('Session invalidated', 401, 'UNAUTHORIZED');
   }

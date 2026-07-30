@@ -24,9 +24,25 @@ import {
   resolveOrCreateContact,
 } from './contactIdentity.js';
 import { normalizePhone } from '../../utils/identityNormalize.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
+import { uploadDir } from '../../config/paths.js';
+
+const contactUploadRoot = uploadDir('contacts');
 
 const router = Router();
 router.use(authenticate);
+
+const canReadContacts = requirePermission(
+  PERMISSIONS.AGREEMENTS_READ,
+  PERMISSIONS.AGREEMENTS_WRITE,
+  PERMISSIONS.CAMPS_READ,
+  PERMISSIONS.CAMPS_REQUEST,
+  PERMISSIONS.CAMPS_APPROVE
+);
+router.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  return canReadContacts(req, res, next);
+});
 
 import { CONTACT_HEADERS, CONTACT_SAMPLE_ROWS } from './contact.excel.js';
 
@@ -68,6 +84,27 @@ async function enrichContactsWithProviders(contacts = []) {
 }
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+const kycUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, contactUploadRoot),
+    filename: (_req, file, cb) => {
+      const safe = String(file.originalname || 'document').replace(/[^\w.\-]+/g, '_');
+      cb(null, `${Date.now()}-${safe}`);
+    },
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const mime = String(file.mimetype || '').toLowerCase();
+    const allowed = mime.startsWith('image/') || mime === 'application/pdf';
+    cb(allowed ? null : new Error('Passbook and PAN copies must be an image or PDF'), allowed);
+  },
+});
+
+const KYC_DOC_TYPES = {
+  passbook: 'passbookCopyUrl',
+  pan_card: 'panCardCopyUrl',
+};
 
 function sheetRows(buffer) {
   const wb = XLSX.read(buffer, { type: 'buffer' });
@@ -112,7 +149,7 @@ router.get(
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
     if (req.query.q) {
-      const q = String(req.query.q);
+      const q = escapeRegex(String(req.query.q));
       filter.$or = [
         { name: new RegExp(q, 'i') },
         { email: new RegExp(q, 'i') },
@@ -298,6 +335,10 @@ router.patch(
         bankName: req.body.bankName !== undefined ? req.body.bankName : contact.bankName,
         accountNumber:
           req.body.accountNumber !== undefined ? req.body.accountNumber : contact.accountNumber,
+        passbookCopyUrl:
+          req.body.passbookCopyUrl !== undefined ? req.body.passbookCopyUrl : contact.passbookCopyUrl,
+        panCardCopyUrl:
+          req.body.panCardCopyUrl !== undefined ? req.body.panCardCopyUrl : contact.panCardCopyUrl,
         notes: req.body.notes !== undefined ? req.body.notes : contact.notes,
         stateId: req.body.stateId !== undefined ? req.body.stateId : contact.stateId,
         districtId: req.body.districtId !== undefined ? req.body.districtId : contact.districtId,
@@ -321,6 +362,44 @@ router.patch(
     });
     Object.assign(contact, payload, { updatedBy: req.user._id });
     await contact.save();
+    res.json({ data: contact });
+  })
+);
+
+router.post(
+  '/:id/kyc-document',
+  requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  kycUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    const docType = String(req.body?.docType || '').trim();
+    const field = KYC_DOC_TYPES[docType];
+    if (!field) {
+      throw new AppError('docType must be passbook or pan_card', 400, 'VALIDATION_ERROR');
+    }
+    if (!req.file) throw new AppError('Select a file to upload', 400, 'VALIDATION_ERROR');
+
+    const contact = await Contact.findOne({ _id: req.params.id, isDeleted: false });
+    if (!contact) throw new AppError('Contact not found', 404, 'NOT_FOUND');
+    if (contact.contactCategory === 'Client') {
+      throw new AppError('KYC documents are not applicable for Client contacts', 400, 'VALIDATION_ERROR');
+    }
+
+    const before = contact.toObject();
+    contact[field] = `/uploads/contacts/${req.file.filename}`;
+    contact.updatedBy = req.user._id;
+    await contact.save();
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'CONTACT.KYC_UPLOAD',
+      entityType: 'Contact',
+      entityId: contact._id,
+      before,
+      after: contact.toObject(),
+      requestId: req.requestId,
+    });
+
     res.json({ data: contact });
   })
 );

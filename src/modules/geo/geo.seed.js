@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState, GeoZone } from './geo.model.js';
 import { ensureGeoZoneSeed } from './geo.zones.seed.js';
+import { DISTRICT_SUPPLEMENTS_BY_STATE } from './geo.districtSupplements.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SEED_PATH = path.resolve(__dirname, 'seed/india-geo.json');
@@ -114,8 +115,45 @@ export async function forceReseedGeoMasters() {
   };
 }
 
+/** Add districts missing from the bundled seed (e.g. Delhi revenue districts for PIN import). */
+export async function ensureDistrictSupplements() {
+  let added = 0;
+  for (const [stateKey, supplements] of Object.entries(DISTRICT_SUPPLEMENTS_BY_STATE)) {
+    const state = await GeoState.findOne({
+      isDeleted: false,
+      name: new RegExp(`^${stateKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+    });
+    if (!state) continue;
+
+    for (const entry of supplements) {
+      const existing = await GeoDistrict.findOne({
+        isDeleted: false,
+        stateId: state._id,
+        name: entry.name,
+      });
+      if (existing) continue;
+
+      await GeoDistrict.create({
+        stateId: state._id,
+        stateName: state.name,
+        name: entry.name,
+        isActive: true,
+        isDeleted: false,
+        source: 'geo-district-supplement',
+      });
+      added += 1;
+    }
+  }
+
+  if (added > 0) {
+    console.log(`[geo] Added ${added} supplemental district(s) for PIN import`);
+  }
+  return { added };
+}
+
 /** Ensure zone master exists even when geo states were seeded earlier. */
 export async function ensureGeoMasters() {
   await ensureGeoSeed();
+  await ensureDistrictSupplements();
   await ensureGeoZoneSeed();
 }

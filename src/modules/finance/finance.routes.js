@@ -28,6 +28,7 @@ import {
   campFinanceExportRows,
 } from '../campOps/campFinanceExport.js';
 import { sendExcel } from '../../utils/excelExport.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 const router = Router();
 router.use(authenticate);
@@ -122,7 +123,7 @@ router.get(
     if (req.query.status) filter.status = String(req.query.status);
     if (req.query.category) filter.category = String(req.query.category);
     if (req.query.q) {
-      const re = new RegExp(String(req.query.q), 'i');
+      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
       filter.$or = [{ expenseKey: re }, { title: re }, { payeeName: re }, { remarks: re }];
     }
     const [data, total] = await Promise.all([
@@ -193,6 +194,7 @@ router.patch(
   asyncHandler(async (req, res) => {
     const row = await FinanceExpense.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Expense not found', 404);
+    const before = row.toObject ? row.toObject() : { ...row };
 
     if (req.body.title != null) {
       const title = trimStr(req.body.title);
@@ -239,6 +241,18 @@ router.patch(
     if (req.body.remarks != null) row.remarks = trimStr(req.body.remarks);
 
     await row.save();
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'FINANCE.EXPENSE.UPDATE',
+      entityType: 'FinanceExpense',
+      entityId: row._id,
+      before,
+      after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+
     res.json({ data: row });
   })
 );
@@ -249,9 +263,22 @@ router.delete(
   asyncHandler(async (req, res) => {
     const row = await FinanceExpense.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Expense not found', 404);
+    const before = row.toObject ? row.toObject() : { ...row };
     row.isDeleted = true;
     row.deletedAt = new Date().toISOString();
     await row.save();
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'FINANCE.EXPENSE.DELETE',
+      entityType: 'FinanceExpense',
+      entityId: row._id,
+      before,
+      after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+
     res.json({ data: { ok: true } });
   })
 );
@@ -264,7 +291,7 @@ router.get(
     const filter = { isDeleted: false };
     if (req.query.status) filter.status = String(req.query.status);
     if (req.query.q) {
-      const re = new RegExp(String(req.query.q), 'i');
+      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
       filter.$or = [
         { invoiceKey: re },
         { invoiceNumber: re },
@@ -348,6 +375,7 @@ router.patch(
   asyncHandler(async (req, res) => {
     const row = await FinanceInvoice.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Invoice not found', 404);
+    const before = row.toObject ? row.toObject() : { ...row };
 
     if (req.body.invoiceNumber != null) {
       const invoiceNumber = trimStr(req.body.invoiceNumber);
@@ -395,6 +423,18 @@ router.patch(
     if (req.body.remarks != null) row.remarks = trimStr(req.body.remarks);
 
     await row.save();
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'FINANCE.INVOICE.UPDATE',
+      entityType: 'FinanceInvoice',
+      entityId: row._id,
+      before,
+      after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+
     res.json({ data: row });
   })
 );
@@ -405,9 +445,22 @@ router.delete(
   asyncHandler(async (req, res) => {
     const row = await FinanceInvoice.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Invoice not found', 404);
+    const before = row.toObject ? row.toObject() : { ...row };
     row.isDeleted = true;
     row.deletedAt = new Date().toISOString();
     await row.save();
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'FINANCE.INVOICE.DELETE',
+      entityType: 'FinanceInvoice',
+      entityId: row._id,
+      before,
+      after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+
     res.json({ data: { ok: true } });
   })
 );
@@ -449,7 +502,7 @@ router.get(
       filter.financePaymentStatus = normalizeFinancePaymentStatus(req.query.status);
     }
     if (req.query.q) {
-      const re = new RegExp(String(req.query.q), 'i');
+      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
       filter.$or = [
         { campId: re },
         { clientName: re },
@@ -473,7 +526,7 @@ router.get(
       filter.financePaymentStatus = normalizeFinancePaymentStatus(req.query.status);
     }
     if (req.query.q) {
-      const re = new RegExp(String(req.query.q), 'i');
+      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
       filter.$or = [
         { campId: re },
         { clientName: re },

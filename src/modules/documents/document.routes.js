@@ -49,6 +49,12 @@ const upload = multer({
 const router = Router();
 router.use(authenticate);
 
+const canReadDocuments = requirePermission(PERMISSIONS.AGREEMENTS_READ, PERMISSIONS.DOCUMENTS_WRITE);
+router.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  return canReadDocuments(req, res, next);
+});
+
 router.get(
   '/',
   asyncHandler(async (req, res) => {

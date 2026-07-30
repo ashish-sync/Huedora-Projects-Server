@@ -207,7 +207,7 @@ async function main() {
         editingStage: 'execution',
         lifecycleStage: 'execution',
         lifecycleOnly: true,
-        executionStatus: 'In Progress',
+        executionStatus: 'Ongoing',
         inTime: '09:55',
         outTime: '13:10',
         patientsCount: 38,
@@ -252,14 +252,18 @@ async function main() {
     await api(`/camp-ops/camps/${assignmentCampId}/approve`, { method: 'POST' });
   });
 
-  await runStep('Close camp — Refused (reason code 2)', async () => {
+  await runStep('Close camp — Refused (duplicate request)', async () => {
     await api(`/camp-ops/camps/${assignmentCampId}/close`, {
       method: 'POST',
-      body: { closureType: 'Refused', reasonCode: '2' },
+      body: {
+        closureType: 'Refused',
+        reasonCategory: 'Request Issue',
+        subReason: 'duplicate_request',
+      },
     });
     const res = await api(`/camp-ops/camps/${assignmentCampId}`);
     if (res.data.status !== 'rejected') throw new Error(`Expected rejected, got ${res.data.status}`);
-    if (res.data.closureReasonCode !== '2') throw new Error('Closure reason code not saved');
+    if (res.data.closureReasonCode !== 'duplicate_request') throw new Error('Closure sub-reason not saved');
   });
 
   await runStep('Create camp for TCPL cancellation', async () => {
@@ -271,7 +275,11 @@ async function main() {
     await api(`/camp-ops/camps/${id}/approve`, { method: 'POST' });
     await api(`/camp-ops/camps/${id}/close`, {
       method: 'POST',
-      body: { closureType: 'Cancelled by TCPL', reasonCode: '4' },
+      body: {
+        closureType: 'Cancelled by TCPL',
+        reasonCategory: 'Device & Inventory',
+        subReason: 'device_failure',
+      },
     });
     const closed = await api(`/camp-ops/camps/${id}`);
     if (closed.data.status !== 'cancelled') throw new Error('Expected cancelled');

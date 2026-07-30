@@ -13,6 +13,16 @@ import { sendExcel } from '../../utils/excelExport.js';
 export const repairRoutes = Router();
 repairRoutes.use(authenticate);
 
+const canReadRepairs = requirePermission(
+  PERMISSIONS.REPAIRS_READ,
+  PERMISSIONS.REPAIRS_WRITE,
+  PERMISSIONS.MAINTENANCE_WRITE
+);
+repairRoutes.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  return canReadRepairs(req, res, next);
+});
+
 repairRoutes.get(
   '/export',
   asyncHandler(async (_req, res) => {

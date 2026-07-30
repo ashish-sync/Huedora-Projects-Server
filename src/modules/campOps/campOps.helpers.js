@@ -1,6 +1,7 @@
 import { CampOpsCamp } from './campOps.model.js';
 import { normalizeCampName } from './campOps.constants.js';
 import { getRequestStageBlockers, getRequestStageCompletion, REQUEST_PARTIAL_THRESHOLD } from './campOps.requestValidation.js';
+import { normalizeContactPersons } from './campContactPersons.js';
 
 export function trimStr(v) {
   return v == null ? '' : String(v).trim();
@@ -105,6 +106,19 @@ export function parseLocalDateInput(value) {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
+export function getCampStartDateTime(camp) {
+  const dateStr = parseLocalDateInput(camp.campDate) || String(camp.campDate || '').slice(0, 10);
+  const start = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(start.getTime())) return null;
+  const startMinutes = parseTimeToMinutes(camp.startTime || '09:00');
+  if (startMinutes == null) {
+    start.setHours(9, 0, 0, 0);
+    return start;
+  }
+  start.setHours(Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
+  return start;
+}
+
 export function getCampEndDateTime(camp) {
   const dateStr = parseLocalDateInput(camp.campDate) || String(camp.campDate || '').slice(0, 10);
   const end = new Date(`${dateStr}T00:00:00`);
@@ -150,7 +164,30 @@ export function buildCampFilter(query = {}) {
   const campaignType = trimStr(query.campaignType);
   const lifecycleStage = trimStr(query.lifecycleStage || query.stage);
   const assignmentFilter = trimStr(query.assignmentFilter);
+  const financialFilter = trimStr(query.financialFilter);
   const search = trimStr(query.search || query.q);
+  const offHoursOnly = query.offHours === '1' || query.offHours === 'true';
+  const weekendAttentionOnly = query.weekendAttention === '1' || query.weekendAttention === 'true';
+
+  if (offHoursOnly) {
+    filter.status = 'pending_review';
+    filter.submittedOffHours = true;
+  } else if (weekendAttentionOnly) {
+    filter.status = 'pending_review';
+    filter.submittedWeekendAttention = true;
+  }
+
+  if (financialFilter === 'payment_completed' || financialFilter === 'payment_done') {
+    filter.financePaymentStatus = 'paid';
+  } else if (financialFilter === 'pending_review' || financialFilter === 'payment_not_checked') {
+    filter.paymentSubmitStatus = 'payment_not_checked';
+  } else if (financialFilter === 'payment_verified') {
+    filter.paymentSubmitStatus = 'payment_confirmed';
+  } else if (financialFilter === 'payment_on_hold') {
+    filter.paymentSubmitStatus = 'payment_hold';
+  } else if (financialFilter) {
+    filter.paymentSubmitStatus = financialFilter;
+  }
 
   if (requestReviewStatus) {
     if (requestReviewStatus === 'request_approved') filter.status = 'approved';
@@ -160,6 +197,10 @@ export function buildCampFilter(query = {}) {
   if (client) filter.clientId = client;
   if (state) filter.state = state;
   if (campaignType) filter.campaignType = campaignType;
+
+  const skipLifecycleForRequestReview = requestReviewStatus === 'request_approved'
+    || requestReviewStatus === 'request_rejected';
+
   if (assignmentFilter === 'assigned') {
     filter.$and = [
       ...(filter.$and || []),
@@ -186,7 +227,31 @@ export function buildCampFilter(query = {}) {
         ],
       },
     ];
-  } else if (lifecycleStage && !assignmentFilter) {
+  } else if (assignmentFilter === 'cancelled_by_tcpl') {
+    filter.status = 'cancelled';
+    filter.$and = [
+      ...(filter.$and || []),
+      {
+        $or: [
+          { assignmentRefusalReason: 'Cancelled by TCPL' },
+          { cancelledBy: 'khw' },
+        ],
+      },
+    ];
+    if (lifecycleStage === 'assignment') filter.lifecycleStage = 'assignment';
+  } else if (assignmentFilter === 'cancelled_by_client') {
+    filter.status = 'cancelled';
+    filter.$and = [
+      ...(filter.$and || []),
+      {
+        $or: [
+          { assignmentRefusalReason: 'Cancelled by Client' },
+          { cancelledBy: 'brand' },
+        ],
+      },
+    ];
+    if (lifecycleStage === 'assignment') filter.lifecycleStage = 'assignment';
+  } else if (lifecycleStage && !assignmentFilter && !skipLifecycleForRequestReview) {
     if (lifecycleStage === 'request') {
       filter.$and = [
         ...(filter.$and || []),
@@ -416,6 +481,8 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
       endTime: schedule.endTime,
       durationHours: schedule.durationHours,
       expectedPatients: expectedPatients || 0,
+      contactPersonLevel: trimStr(row.contactPersonLevel),
+      contactPersons: normalizeContactPersons(row),
       fieldPersonName: trimStr(row.fieldPersonName),
       fieldPersonPhone: trimStr(row.fieldPersonPhone),
       remarks: trimStr(row.remarks),

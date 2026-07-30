@@ -37,6 +37,7 @@ import logisticsRoutes from './modules/logistics/logistics.routes.js';
 import financeRoutes from './modules/finance/finance.routes.js';
 import geoRoutes from './modules/geo/geo.routes.js';
 import picklistRoutes from './modules/picklists/picklist.routes.js';
+import fileRoutes from './modules/files/file.routes.js';
 
 export function createApp() {
   const app = express();
@@ -63,9 +64,24 @@ export function createApp() {
   app.use('/uploads/asset-requests', (_req, res) => {
     res.status(404).json({ error: { code: 'NOT_FOUND', message: 'File not found' } });
   });
-  app.use('/uploads', express.static(uploadsRoot));
+  if (env.isProd) {
+    app.use('/uploads', (_req, res) => {
+      res.status(404).json({ error: { code: 'NOT_FOUND', message: 'File not found' } });
+    });
+  } else {
+    app.use('/uploads', express.static(uploadsRoot));
+  }
 
   app.get('/api/v1/health', (_req, res) => {
+    if (env.isProd) {
+      return res.json({
+        data: {
+          status: 'ok',
+          live: true,
+          ts: new Date().toISOString(),
+        },
+      });
+    }
     const db = getDbInfo();
     const collections = getRegisteredCollections();
     res.json({
@@ -130,6 +146,7 @@ export function createApp() {
   app.use('/api/v1/finance', financeRoutes);
   app.use('/api/v1/geo', geoRoutes);
   app.use('/api/v1/picklists', picklistRoutes);
+  app.use('/api/v1/files', fileRoutes);
   // Scoped mounts only. never mount repairs as a /api/v1 catch-all (it hid missing routes).
   app.use('/api/v1/repairs', repairRoutes);
   app.use('/api/v1/maintenance', maintenanceRoutes);

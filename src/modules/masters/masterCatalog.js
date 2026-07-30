@@ -1,5 +1,7 @@
 /** Server-side master entity catalog for MASTER_ADD validation. */
 
+import { isValidEmail, isValidPhone } from '../../utils/identityNormalize.js';
+
 export const MASTER_MODULES = ['inventory', 'movement', 'document', 'camp'];
 
 export const MASTER_ENTITY_IDS = [
@@ -51,7 +53,19 @@ export function validateMasterAddPayload(entityId, payload = {}) {
   if (entityId === 'contacts') {
     const email = String(payload.email || '').trim();
     const phone = String(payload.contact || payload.phone || '').trim();
-    if (!email && !phone) return 'Email or phone is required for a contact';
+    if (!email && !phone) return 'Email or mobile number is required for a contact';
+    if (email && !isValidEmail(email)) {
+      return 'Email must include @ and a valid domain suffix (e.g. .com, .in, .net)';
+    }
+    if (phone && !isValidPhone(phone)) return 'Mobile number must be exactly 10 digits';
+  }
+  if (entityId === 'parties') {
+    const email = String(payload.email || '').trim();
+    const phone = String(payload.phone || '').trim();
+    if (email && !isValidEmail(email)) {
+      return 'Email must include @ and a valid domain suffix (e.g. .com, .in, .net)';
+    }
+    if (phone && !isValidPhone(phone)) return 'Mobile number must be exactly 10 digits';
   }
   return '';
 }

@@ -10,6 +10,13 @@ import { writeAudit } from '../../utils/audit.js';
 import { publicUser } from '../auth/auth.service.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { normalizeEmail, normalizePhone, throwIfIdentityClash, assertValidEmail, assertValidPhone } from '../../utils/identityNormalize.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
+import { USER_DESIGNATIONS } from './user.constants.js';
+import {
+  assertReportingManager,
+  buildHierarchyTree,
+  clearReportingManagerForUser,
+} from './user.hierarchy.js';
 
 const router = Router();
 
@@ -31,6 +38,10 @@ async function assertUserIdentityAvailable({ email, phone, excludeId } = {}) {
   return { emailKey, phoneKey };
 }
 
+function normalizeDesignation(value) {
+  return String(value || '').trim().slice(0, 120);
+}
+
 function asRoleIdList(roleIds) {
   if (!Array.isArray(roleIds)) return [];
   return [...new Set(roleIds.map((id) => String(id?._id || id)).filter(Boolean))];
@@ -39,7 +50,33 @@ function asRoleIdList(roleIds) {
 router.use(authenticate);
 
 router.get(
+  '/designations',
+  requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),
+  asyncHandler(async (_req, res) => {
+    res.json({ data: USER_DESIGNATIONS });
+  })
+);
+
+router.get(
+  '/hierarchy',
+  requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),
+  asyncHandler(async (_req, res) => {
+    const rows = await User.find({ isDeleted: false })
+      .populate('roleIds', 'name')
+      .populate('reportingManagerId', 'fullName email designation');
+    const people = rows.map(publicUser);
+    res.json({
+      data: {
+        tree: buildHierarchyTree(people),
+        people,
+      },
+    });
+  })
+);
+
+router.get(
   '/permissions',
+  requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),
   asyncHandler(async (_req, res) => {
     res.json({
       data: {
@@ -77,16 +114,19 @@ router.get(
   asyncHandler(async (_req, res) => {
     const users = await User.find({ isDeleted: false })
       .populate('roleIds', 'name')
+      .populate('reportingManagerId', 'fullName email')
       .sort('fullName');
     sendExcel(
       res,
       'Users_Master.xlsx',
-      ['Full Name', 'Email', 'Username', 'Phone', 'Active', 'Roles'],
+      ['Full Name', 'Email', 'Username', 'Phone', 'Designation', 'Reporting Manager', 'Active', 'Roles'],
       users.map((u) => [
         u.fullName,
         u.email,
         u.username,
         u.phone,
+        u.designation || '',
+        u.reportingManagerId?.fullName || u.reportingManagerId?.email || '',
         u.isActive === false ? 'No' : 'Yes',
         (u.roleIds || []).map((r) => r.name || r).filter(Boolean).join(', '),
       ]),
@@ -97,6 +137,7 @@ router.get(
 
 router.get(
   '/roles',
+  requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),
   asyncHandler(async (_req, res) => {
     const roles = await Role.find({ isDeleted: false }).sort('name');
     res.json({ data: roles });
@@ -105,6 +146,7 @@ router.get(
 
 router.get(
   '/roles/:id',
+  requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),
   asyncHandler(async (req, res) => {
     const role = await Role.findOne({ _id: req.params.id, isDeleted: false });
     if (!role) throw new AppError('Role not found', 404);
@@ -226,14 +268,20 @@ router.get(
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
     if (req.query.q) {
+      const q = escapeRegex(String(req.query.q));
       filter.$or = [
-        { email: new RegExp(req.query.q, 'i') },
-        { fullName: new RegExp(req.query.q, 'i') },
-        { username: new RegExp(req.query.q, 'i') },
+        { email: new RegExp(q, 'i') },
+        { fullName: new RegExp(q, 'i') },
+        { username: new RegExp(q, 'i') },
       ];
     }
     const [rows, total] = await Promise.all([
-      User.find(filter).populate('roleIds').sort(sort).skip(skip).limit(limit),
+      User.find(filter)
+        .populate('roleIds')
+        .populate('reportingManagerId', 'fullName email designation')
+        .sort(sort)
+        .skip(skip)
+        .limit(limit),
       User.countDocuments(filter),
     ]);
     res.json(paginated(rows.map(publicUser), total, page, limit));
@@ -244,7 +292,8 @@ router.post(
   '/',
   requirePermission(PERMISSIONS.USERS_WRITE),
   asyncHandler(async (req, res) => {
-    const { email, username, fullName, password, phone, roleIds } = req.body;
+    const { email, username, fullName, password, phone, roleIds, designation, reportingManagerId } =
+      req.body;
     if (!email || !username || !fullName || !password || !roleIds?.length) {
       throw new AppError('Missing required fields', 400, 'VALIDATION_ERROR');
     }
@@ -253,17 +302,21 @@ router.post(
     const usernameKey = String(username).trim();
     const usernameClash = await User.findOne({ username: usernameKey, isDeleted: false });
     if (usernameClash) throw new AppError('A user with this username already exists', 409, 'DUPLICATE_USERNAME');
+    const managerId = await assertReportingManager({ reportingManagerId });
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await User.create({
       email: emailKey,
       username: usernameKey,
       fullName,
       phone: phoneKey || String(phone || '').trim(),
+      designation: normalizeDesignation(designation),
+      reportingManagerId: managerId,
       roleIds: asRoleIdList(roleIds),
       passwordHash,
       passwordChangedAt: new Date().toISOString(),
     });
     await user.populate('roleIds');
+    await user.populate('reportingManagerId', 'fullName email designation');
     await writeAudit({
       actorId: req.user._id,
       actorEmail: req.user.email,
@@ -288,6 +341,7 @@ router.patch(
     // (populate() would otherwise persist nested role docs and break later loads).
     const beforeDoc = await User.findOne({ _id: user._id, isDeleted: false });
     await beforeDoc.populate('roleIds');
+    await beforeDoc.populate('reportingManagerId', 'fullName email designation');
     const before = publicUser(beforeDoc);
 
     // Normalize any previously populated / nested role ids back to strings
@@ -321,6 +375,15 @@ router.patch(
       }
       user.roleIds = nextIds;
     }
+    if (req.body.designation !== undefined) {
+      user.designation = normalizeDesignation(req.body.designation);
+    }
+    if (req.body.reportingManagerId !== undefined) {
+      user.reportingManagerId = await assertReportingManager({
+        userId: user._id,
+        reportingManagerId: req.body.reportingManagerId,
+      });
+    }
     if (req.body.password) {
       if (String(req.body.password).length < 12) {
         throw new AppError('Password must be at least 12 characters', 400, 'VALIDATION_ERROR');
@@ -331,6 +394,7 @@ router.patch(
     }
     await user.save();
     await user.populate('roleIds');
+    await user.populate('reportingManagerId', 'fullName email designation');
     await writeAudit({
       actorId: req.user._id,
       actorEmail: req.user.email,
@@ -358,6 +422,7 @@ router.delete(
     user.isActive = false;
     user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
+    await clearReportingManagerForUser(user._id);
     await writeAudit({
       actorId: req.user._id,
       actorEmail: req.user.email,

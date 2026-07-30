@@ -1,6 +1,8 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { asyncHandler, AppError } from '../../utils/helpers.js';
 import { formatDateTime } from '../../utils/dateFormat.js';
+import { env } from '../../config/env.js';
 import { Agreement, AgreementActivity } from './agreement.model.js';
 import { writeAudit } from '../../utils/audit.js';
 import { findAgreementByAccessKey } from './recipientAccess.js';
@@ -8,6 +10,16 @@ import { syncLinkedAssetsFromAgreement } from '../assets/assetContactSync.js';
 import { buildAgreementPdfBuffer, pdfOptionsFromAgreement } from './agreementPdf.js';
 
 const router = Router();
+
+const recipientLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: env.isProd ? 60 : 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${req.ip || 'unknown'}:${String(req.params.token || '').slice(0, 32)}`,
+  message: { error: { message: 'Too many attempts. Try again later.', code: 'RATE_LIMIT' } },
+});
+router.use(recipientLimiter);
 
 function party(signers, side) {
   return (signers || []).find((s) => s.partySide === side || s.role === side) || null;

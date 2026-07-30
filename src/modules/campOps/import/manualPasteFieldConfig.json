@@ -22,6 +22,7 @@
     { "key": "district", "label": "District", "required": true },
     { "key": "city", "label": "City", "required": true },
     { "key": "hq", "label": "HQ", "required": true },
+    { "key": "contactPersonLevel", "label": "Contact Person Level", "required": true },
     { "key": "fieldPersonName", "label": "Contact Person Name", "required": true },
     { "key": "expectedPatients", "label": "Expected Patients", "required": true },
     { "key": "fieldPersonPhone", "label": "Contact Person Number", "required": true },

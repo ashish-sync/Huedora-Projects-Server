@@ -4,6 +4,7 @@ import * as authService from './auth.service.js';
 import { authenticate } from '../../middleware/auth.js';
 import { asyncHandler } from '../../utils/helpers.js';
 import { env } from '../../config/env.js';
+import { User } from '../users/user.model.js';
 
 const router = Router();
 
@@ -24,6 +25,24 @@ const loginLimiter = rateLimit({
     return `${req.ip || 'unknown'}:${email || 'none'}`;
   },
   message: { error: { message: 'Too many login attempts. Try again later.', code: 'RATE_LIMIT' } },
+});
+
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: env.isProd ? 120 : 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.ip || 'unknown',
+  message: { error: { message: 'Too many refresh attempts. Try again later.', code: 'RATE_LIMIT' } },
+});
+
+const passwordChangeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: env.isProd ? 10 : 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${req.ip || 'unknown'}:${req.user?._id || 'anon'}`,
+  message: { error: { message: 'Too many password change attempts. Try again later.', code: 'RATE_LIMIT' } },
 });
 
 function setRefreshCookie(res, token) {
@@ -59,6 +78,7 @@ router.post(
 
 router.post(
   '/refresh',
+  refreshLimiter,
   asyncHandler(async (req, res) => {
     const refreshToken = req.cookies.refreshToken || req.body.refreshToken;
     const result = await authService.refresh({
@@ -92,13 +112,17 @@ router.get(
   '/me',
   authenticate,
   asyncHandler(async (req, res) => {
-    res.json({ data: authService.publicUser(req.user) });
+    const user = await User.findOne({ _id: req.user._id, isDeleted: false })
+      .populate('roleIds')
+      .populate('reportingManagerId', 'fullName email designation');
+    res.json({ data: authService.publicUser(user || req.user) });
   })
 );
 
 router.post(
   '/change-password',
   authenticate,
+  passwordChangeLimiter,
   asyncHandler(async (req, res) => {
     await authService.changePassword({
       user: req.user,

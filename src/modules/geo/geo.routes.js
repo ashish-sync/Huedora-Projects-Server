@@ -20,9 +20,32 @@ import {
   upsertNormalizedPin,
 } from './pinCode.service.js';
 import { autocompletePlaces, getPlaceDetails } from './places.service.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 const router = Router();
 router.use(authenticate);
+
+const canReadGeo = requirePermission(
+  PERMISSIONS.LOGISTICS_READ,
+  PERMISSIONS.LOGISTICS_MASTER,
+  PERMISSIONS.MASTERS_READ,
+  PERMISSIONS.CAMPS_READ,
+  PERMISSIONS.CAMPS_REQUEST,
+  PERMISSIONS.CAMPS_APPROVE
+);
+router.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  if (req.path.startsWith('/places/')) return next();
+  return canReadGeo(req, res, next);
+});
+
+const canUsePlaces = requirePermission(
+  PERMISSIONS.CAMPS_READ,
+  PERMISSIONS.CAMPS_REQUEST,
+  PERMISSIONS.CAMPS_APPROVE,
+  PERMISSIONS.LOGISTICS_WRITE,
+  PERMISSIONS.AGREEMENTS_WRITE
+);
 
 function publicRow(row) {
   if (!row) return null;
@@ -107,7 +130,7 @@ router.get(
   '/states',
   asyncHandler(async (req, res) => {
     const filter = { isDeleted: false, isActive: true };
-    if (req.query.q) filter.name = new RegExp(String(req.query.q), 'i');
+    if (req.query.q) filter.name = new RegExp(escapeRegex(String(req.query.q)), 'i');
     const rows = await GeoState.find(filter).sort('name').limit(100);
     let data = rows.map(publicRow);
     if (req.query.includePinStats === 'true') {
@@ -124,7 +147,7 @@ router.get(
     const stateId = String(req.query.stateId || '').trim();
     if (!stateId) throw new AppError('stateId is required', 400, 'VALIDATION_ERROR');
     const filter = { isDeleted: false, isActive: true, stateId };
-    if (req.query.q) filter.name = new RegExp(String(req.query.q), 'i');
+    if (req.query.q) filter.name = new RegExp(escapeRegex(String(req.query.q)), 'i');
     const rows = await GeoDistrict.find(filter).sort('name').limit(500);
     let data = rows.map(publicRow);
     if (req.query.includePinStats === 'true') {
@@ -333,6 +356,7 @@ router.get(
 /** GET /geo/places/autocomplete?input=... — Google Places (New) via server key */
 router.get(
   '/places/autocomplete',
+  canUsePlaces,
   asyncHandler(async (req, res) => {
     const input = String(req.query.input || '').trim();
     const data = await autocompletePlaces(input);
@@ -343,6 +367,7 @@ router.get(
 /** GET /geo/places/details?placeId=... */
 router.get(
   '/places/details',
+  canUsePlaces,
   asyncHandler(async (req, res) => {
     const data = await getPlaceDetails(req.query.placeId);
     res.json({ data });

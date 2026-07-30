@@ -31,7 +31,7 @@ function componentValue(components, type, field = 'longText') {
   return hit[field] || hit.longText || hit.shortText || hit.long_name || hit.short_name || '';
 }
 
-function mapPlaceToCampFields(place) {
+function mapPlaceToCampFields(place, googlePlaceId = '') {
   const components = place.addressComponents || [];
   const city =
     componentValue(components, 'locality')
@@ -62,6 +62,7 @@ function mapPlaceToCampFields(place) {
     pincode,
     latitude: Number.isFinite(lat) ? String(lat) : '',
     longitude: Number.isFinite(lng) ? String(lng) : '',
+    googlePlaceId: googlePlaceId || '',
   };
 }
 
@@ -124,5 +125,5 @@ export async function getPlaceDetails(placeId) {
     );
   }
 
-  return mapPlaceToCampFields(place);
+  return mapPlaceToCampFields(place, id);
 }

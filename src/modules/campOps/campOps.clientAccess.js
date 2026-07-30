@@ -1,4 +1,6 @@
 import { AppError } from '../../utils/helpers.js';
+import { PERMISSIONS } from '../../config/constants.js';
+import { userHasAnyPermission } from '../../middleware/auth.js';
 import { CampOpsClientMaster } from './campOps.model.js';
 
 function normalizeEmail(value) {
@@ -9,10 +11,10 @@ export function parseAssignedUserEmails(raw) {
   if (Array.isArray(raw)) {
     return [...new Set(raw.map(normalizeEmail).filter(Boolean))];
   }
-  return String(raw || '')
+  return [...new Set(String(raw || '')
     .split(/[;,\n]/)
     .map(normalizeEmail)
-    .filter(Boolean);
+    .filter(Boolean))];
 }
 
 /**
@@ -37,8 +39,11 @@ export async function resolveCampClientScope(user = {}) {
   }
 
   if (!anyAssignmentsConfigured) return null;
-  // Users not listed on any client master keep full camp visibility (internal ops).
-  if (scopedClientIds.size === 0) return null;
+  if (scopedClientIds.size === 0) {
+    // Internal ops (admin or camp approvers) keep full visibility when not explicitly assigned.
+    if (userHasAnyPermission(user, PERMISSIONS.ALL, PERMISSIONS.CAMPS_APPROVE)) return null;
+    return new Set();
+  }
   return scopedClientIds;
 }
 

@@ -1,0 +1,38 @@
+import {
+  EXECUTION_STATUS,
+  normalizeExecutionStatus,
+  resolveEffectiveExecutionStatus,
+} from './campOps.lifecycle.js';
+
+function isCancelledByTcpl(camp = {}) {
+  return camp.status === 'cancelled' && (
+    camp.assignmentRefusalReason === 'Cancelled by TCPL'
+    || camp.cancelledBy === 'khw'
+  );
+}
+
+function isCancelledByClient(camp = {}) {
+  return camp.status === 'cancelled' && (
+    camp.assignmentRefusalReason === 'Cancelled by Client'
+    || camp.cancelledBy === 'brand'
+  );
+}
+
+export function matchesExecutionFilter(camp = {}, filter = '') {
+  const value = String(filter || '').trim();
+  if (!value) return true;
+
+  if (value === 'cancelled_by_tcpl') return isCancelledByTcpl(camp);
+  if (value === 'cancelled_by_client') return isCancelledByClient(camp);
+  if (value === 'completed') {
+    return normalizeExecutionStatus(camp.executionStatus) === EXECUTION_STATUS.CAMP_COMPLETED;
+  }
+
+  if (['cancelled', 'rejected'].includes(camp.status)) return false;
+
+  const effective = camp.effectiveExecutionStatus || resolveEffectiveExecutionStatus(camp);
+  if (value === 'yet_to_start') return effective === EXECUTION_STATUS.CAMP_SCHEDULED;
+  if (value === 'ongoing') return effective === EXECUTION_STATUS.CAMP_ONGOING;
+  if (value === 'executed') return effective === EXECUTION_STATUS.MARKED_EXECUTED;
+  return true;
+}

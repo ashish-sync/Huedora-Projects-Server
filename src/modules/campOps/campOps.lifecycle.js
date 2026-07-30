@@ -1,4 +1,10 @@
-import { trimStr, parseTimeToMinutes, computeDurationHours } from './campOps.helpers.js';
+import { normalizeConsumablesUsed, getConsumablesCompletionBlockers } from './campConsumables.js';
+import {
+  parseTimeToMinutes,
+  computeDurationHours,
+  getCampStartDateTime,
+  getCampEndDateTime,
+} from './campOps.helpers.js';
 
 function localTrim(v) {
   return v == null ? '' : String(v).trim();
@@ -36,24 +42,140 @@ export const ASSIGNMENT_DECISIONS = ['assign', 'refuse'];
 
 export const ASSIGNMENT_REFUSAL_REASONS = [
   'Refused',
-  'Cancelled by TCPL',
-  'Cancelled by Client',
 ];
 
 export const ASSIGNMENT_STATUSES = ['Pending', 'Assigned', 'Reassigned', 'Unassigned'];
 
-export const EXECUTION_STATUSES = ['Pending', 'In Progress', 'Completed', 'Cancelled', 'Rejected'];
-export const EXECUTION_CLOSED_STATUSES = ['Cancelled', 'Rejected'];
+export const EXECUTION_STATUS = {
+  CAMP_SCHEDULED: 'Camp Scheduled',
+  CAMP_ONGOING: 'Camp Ongoing',
+  CAMP_COMPLETED: 'Camp Completed',
+  MARKED_EXECUTED: 'Marked Executed',
+};
+
+export const EXECUTION_STATUSES = [
+  EXECUTION_STATUS.CAMP_SCHEDULED,
+  EXECUTION_STATUS.CAMP_ONGOING,
+  EXECUTION_STATUS.MARKED_EXECUTED,
+  EXECUTION_STATUS.CAMP_COMPLETED,
+];
+
+export const LEGACY_EXECUTION_CLOSED_STATUSES = ['Cancelled', 'Refused'];
+
+const LEGACY_EXECUTION_STATUS_ALIASES = {
+  Pending: EXECUTION_STATUS.CAMP_SCHEDULED,
+  'Yet to Start': EXECUTION_STATUS.CAMP_SCHEDULED,
+  'In Progress': EXECUTION_STATUS.CAMP_ONGOING,
+  Ongoing: EXECUTION_STATUS.CAMP_ONGOING,
+  Executed: EXECUTION_STATUS.MARKED_EXECUTED,
+  Completed: EXECUTION_STATUS.CAMP_COMPLETED,
+};
+
+export function normalizeExecutionStatus(executionStatus) {
+  const value = String(executionStatus || '').trim();
+  if (value === 'Rejected') return 'Refused';
+  if (LEGACY_EXECUTION_STATUS_ALIASES[value]) return LEGACY_EXECUTION_STATUS_ALIASES[value];
+  return value;
+}
 
 export function isExecutionClosedOut(executionStatus) {
-  return EXECUTION_CLOSED_STATUSES.includes(String(executionStatus || '').trim());
+  return LEGACY_EXECUTION_CLOSED_STATUSES.includes(normalizeExecutionStatus(executionStatus));
+}
+
+export function resolveScheduledExecutionStatus(camp = {}, now = new Date()) {
+  const start = getCampStartDateTime(camp);
+  const end = getCampEndDateTime(camp);
+  if (!start || !end) return EXECUTION_STATUS.CAMP_SCHEDULED;
+
+  const ts = now.getTime();
+  if (ts < start.getTime()) return EXECUTION_STATUS.CAMP_SCHEDULED;
+  if (ts <= end.getTime()) return EXECUTION_STATUS.CAMP_ONGOING;
+  return EXECUTION_STATUS.MARKED_EXECUTED;
+}
+
+export function resolveEffectiveExecutionStatus(camp = {}, now = new Date()) {
+  const normalized = normalizeExecutionStatus(camp.executionStatus);
+  if (normalized === EXECUTION_STATUS.CAMP_COMPLETED) return EXECUTION_STATUS.CAMP_COMPLETED;
+  if (isExecutionClosedOut(normalized)) return normalized;
+  return resolveScheduledExecutionStatus(camp, now);
+}
+
+export function syncExecutionStatusForSave(camp = {}, now = new Date()) {
+  const normalized = normalizeExecutionStatus(camp.executionStatus);
+  if (normalized === EXECUTION_STATUS.CAMP_COMPLETED) return EXECUTION_STATUS.CAMP_COMPLETED;
+  if (isExecutionClosedOut(normalized)) return normalized;
+  return resolveScheduledExecutionStatus(camp, now);
+}
+
+/** Execution is complete enough to open Finance & Settlement. */
+export function normalizeExecutionDocType(docType) {
+  const raw = String(docType || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (raw === 'doctor_form' || raw === 'df' || raw.includes('doctor')) return 'doctor_form';
+  if (raw === 'patient_form' || raw === 'pf' || raw.includes('patient')) return 'patient_form';
+  return raw;
+}
+
+function hasExecutionDocType(docs, targetType) {
+  return (docs || []).some((doc) => normalizeExecutionDocType(doc?.docType) === targetType);
+}
+
+export function getExecutionFinanceBlockers(camp = {}, mappedConsumables = []) {
+  const blockers = [];
+  if (isExecutionClosedOut(camp.executionStatus)) {
+    blockers.push('Execution is cancelled or refused');
+    return blockers;
+  }
+  if (normalizeExecutionStatus(camp.executionStatus) !== EXECUTION_STATUS.CAMP_COMPLETED) {
+    blockers.push('Set execution status to Camp Completed');
+  }
+  if (!localTrim(camp.chargeableStatus)) {
+    blockers.push('Select chargeable status');
+  }
+  if (!localTrim(camp.inTime)) {
+    blockers.push('Enter in time on the execution form');
+  }
+  if (!localTrim(camp.outTime)) {
+    blockers.push('Enter out time on the execution form');
+  }
+  const docs = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
+  if (!hasExecutionDocType(docs, 'doctor_form')) {
+    blockers.push('Upload at least one DF (doctor form) document');
+  }
+  if (!hasExecutionDocType(docs, 'patient_form')) {
+    blockers.push('Upload at least one PF (patient form) document');
+  }
+  blockers.push(...getExecutionConsumablesBlockers(camp, mappedConsumables));
+  return blockers;
+}
+
+export function getExecutionConsumablesBlockers(camp = {}, mappedConsumables = []) {
+  if (!Array.isArray(mappedConsumables) || !mappedConsumables.length) return [];
+  const normalized = normalizeExecutionStatus(camp.executionStatus);
+  const effective = normalized === EXECUTION_STATUS.CAMP_COMPLETED
+    ? EXECUTION_STATUS.CAMP_COMPLETED
+    : isExecutionClosedOut(normalized)
+      ? normalized
+      : resolveScheduledExecutionStatus(camp);
+  if (effective === EXECUTION_STATUS.CAMP_SCHEDULED) return [];
+  return getConsumablesCompletionBlockers(mappedConsumables, camp.consumablesUsed);
+}
+
+export function assertExecutionConsumablesComplete(camp = {}, mappedConsumables = []) {
+  const blockers = getExecutionConsumablesBlockers(camp, mappedConsumables);
+  if (blockers.length) {
+    throw new Error(blockers[0]);
+  }
+}
+
+export function isExecutionReadyForFinance(camp = {}, mappedConsumables = []) {
+  return getExecutionFinanceBlockers(camp, mappedConsumables).length === 0;
 }
 
 export function assertExecutionStageSave(camp = {}) {
   if (!isExecutionClosedOut(camp.executionStatus)) return;
   if (!localTrim(camp.cancellationReason)) {
     throw new Error(
-      'Cancellation / Rejection Reason is required when execution status is Cancelled or Rejected',
+      'Cancellation / Refusal Reason is required when execution status is Cancelled or Refused',
     );
   }
 }
@@ -239,9 +361,13 @@ export function lifecyclePayloadFromBody(body, existing = null) {
     ? pick('hcwContactId')
     : existing?.hcwContactId ?? null;
 
-  const executionStatus = EXECUTION_STATUSES.includes(pickStr('executionStatus'))
-    ? pickStr('executionStatus')
-    : existing?.executionStatus || 'Pending';
+  const requestedExecutionStatus = normalizeExecutionStatus(pickStr('executionStatus'));
+  const executionStatus = requestedExecutionStatus === EXECUTION_STATUS.CAMP_COMPLETED
+    || isExecutionClosedOut(requestedExecutionStatus)
+    ? (EXECUTION_STATUSES.includes(requestedExecutionStatus)
+      ? requestedExecutionStatus
+      : existing?.executionStatus || EXECUTION_STATUS.CAMP_SCHEDULED)
+    : syncExecutionStatusForSave({ ...existing, ...body }, new Date());
 
   const chargeableStatus = CHARGEABLE_STATUSES.includes(pickStr('chargeableStatus'))
     ? pickStr('chargeableStatus')
@@ -324,6 +450,14 @@ export function lifecyclePayloadFromBody(body, existing = null) {
     payload.executionDocuments = [];
   }
 
+  if (Array.isArray(body.consumablesUsed)) {
+    payload.consumablesUsed = normalizeConsumablesUsed(body.consumablesUsed);
+  } else if (existing?.consumablesUsed) {
+    payload.consumablesUsed = existing.consumablesUsed;
+  } else {
+    payload.consumablesUsed = [];
+  }
+
   const derived = computeLifecycleDerived({ ...existing, ...body, ...payload });
   return { ...payload, ...derived };
 }
@@ -334,6 +468,7 @@ export function withCampLifecycle(camp) {
   Object.assign(obj, derived);
   obj.patientsCount = obj.actualPatients ?? 0;
   obj.lifecycleStages = CAMP_LIFECYCLE_STAGES;
+  obj.effectiveExecutionStatus = resolveEffectiveExecutionStatus(obj);
   return obj;
 }
 
@@ -357,7 +492,7 @@ export function applyAssignmentStageOutcome(camp, body = {}) {
     camp.assignmentStatus = 'Assigned';
     camp.assignmentRefusalReason = '';
     camp.lifecycleStage = 'execution';
-    camp.executionStatus = camp.executionStatus === 'Pending' ? 'Pending' : camp.executionStatus;
+    camp.executionStatus = syncExecutionStatusForSave(camp);
     return;
   }
 

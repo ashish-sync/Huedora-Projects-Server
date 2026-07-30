@@ -41,8 +41,19 @@ import { buildPurchaseOrderPdfBuffer } from './purchaseOrderPdf.js';
 import { buildClientInvoicePdfBuffer } from './clientInvoicePdf.js';
 import { buildCreditNotePdfBuffer } from './creditNotePdf.js';
 import { uploadDir } from '../../config/paths.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 const uploadRoot = uploadDir('finance');
+
+const ALLOWED_COMMERCIAL_MIMES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+
+const ALLOWED_COMMERCIAL_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx']);
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadRoot),
@@ -56,12 +67,13 @@ const upload = multer({
   storage,
   limits: { fileSize: env.uploadMaxBytes },
   fileFilter: (_req, file, cb) => {
-    const ok =
-      file.mimetype === 'application/pdf' ||
-      file.mimetype.includes('word') ||
-      file.mimetype.includes('sheet') ||
-      /\.(pdf|docx?|xlsx?)$/i.test(file.originalname || '');
-    cb(ok ? null : new Error('Only PDF, Word, or Excel files are allowed'), ok);
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const okMime = ALLOWED_COMMERCIAL_MIMES.has(file.mimetype);
+    const okExt = ALLOWED_COMMERCIAL_EXTENSIONS.has(ext);
+    if (!okMime || !okExt) {
+      return cb(new AppError('Only PDF, Word, or Excel files are allowed', 400, 'INVALID_FILE'));
+    }
+    cb(null, true);
   },
 });
 
@@ -83,7 +95,7 @@ function commercialListFilter(req) {
   }
   if (req.query.status) filter.status = String(req.query.status);
   if (req.query.q) {
-    const re = new RegExp(String(req.query.q), 'i');
+    const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
     filter.$or = [
       { docKey: re },
       { documentNumber: re },
@@ -147,7 +159,7 @@ router.get(
     const filter = { isDeleted: false, documentType: 'proforma' };
     if (req.query.status) filter.status = String(req.query.status);
     if (req.query.q) {
-      const re = new RegExp(String(req.query.q), 'i');
+      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
       filter.$or = [
         { docKey: re },
         { documentNumber: re },
@@ -413,7 +425,7 @@ function poListFilter(req) {
   const filter = { isDeleted: false, documentType: 'purchase_order' };
   if (req.query.status) filter.status = String(req.query.status);
   if (req.query.q) {
-    const re = new RegExp(String(req.query.q), 'i');
+    const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
     filter.$or = [
       { docKey: re },
       { documentNumber: re },
@@ -687,7 +699,7 @@ function clientInvoiceListFilter(req) {
   const filter = { isDeleted: false, documentType: 'client_invoice' };
   if (req.query.status) filter.status = String(req.query.status);
   if (req.query.q) {
-    const re = new RegExp(String(req.query.q), 'i');
+    const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
     filter.$or = [
       { docKey: re },
       { documentNumber: re },
@@ -909,7 +921,7 @@ router.get(
     const filter = { isDeleted: false, documentType: 'credit_note' };
     if (req.query.status) filter.status = String(req.query.status);
     if (req.query.q) {
-      const re = new RegExp(String(req.query.q), 'i');
+      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
       filter.$or = [
         { docKey: re },
         { documentNumber: re },

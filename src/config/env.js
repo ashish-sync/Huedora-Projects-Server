@@ -33,8 +33,7 @@ function resolveClientOrigin() {
   const fromEnv = String(process.env.CLIENT_ORIGIN || '').trim();
   if (fromEnv) return fromEnv;
   if (isProd) {
-    // Known Render frontend — avoids boot crash when CLIENT_ORIGIN is unset on the API service.
-    return 'https://huedora-projects.onrender.com';
+    throw new Error('[config] CLIENT_ORIGIN must be set in production');
   }
   return 'http://localhost:5173';
 }
@@ -52,7 +51,16 @@ export const env = {
   jwtAccessSecret: strongSecret('JWT_ACCESS_SECRET', process.env.JWT_ACCESS_SECRET),
   jwtRefreshSecret: strongSecret('JWT_REFRESH_SECRET', process.env.JWT_REFRESH_SECRET),
   jwtAccessExpires: process.env.JWT_ACCESS_EXPIRES || '15m',
-  jwtRefreshExpiresDays: Number(process.env.JWT_REFRESH_EXPIRES_DAYS || 7),
+  jwtRefreshExpiresDays: (() => {
+    const n = Number(process.env.JWT_REFRESH_EXPIRES_DAYS || 7);
+    if (!Number.isFinite(n) || n < 1 || n > 90) {
+      if (isProd) {
+        throw new Error('[config] JWT_REFRESH_EXPIRES_DAYS must be a number between 1 and 90 in production');
+      }
+      return 7;
+    }
+    return n;
+  })(),
   /** Optional first-run admin. both must be set; never defaults to a public demo password */
   bootstrapAdminEmail: String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase(),
   bootstrapAdminPassword: String(process.env.BOOTSTRAP_ADMIN_PASSWORD || ''),

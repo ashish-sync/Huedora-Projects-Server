@@ -38,6 +38,12 @@ const upload = multer({
 const router = Router();
 router.use(authenticate);
 
+const canReadTemplates = requirePermission(PERMISSIONS.AGREEMENTS_READ, PERMISSIONS.AGREEMENTS_WRITE);
+router.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  return canReadTemplates(req, res, next);
+});
+
 router.get(
   '/',
   asyncHandler(async (req, res) => {

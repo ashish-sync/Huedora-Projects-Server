@@ -2,12 +2,16 @@ import { randomUUID } from 'crypto';
 import { AppError } from '../../utils/helpers.js';
 import { resolveZoneNameForState } from './geo.zones.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState } from './geo.model.js';
+import {
+  buildDistrictAliasMap,
+  buildDistrictCityFallbackMap,
+  DISTRICT_SUPPLEMENTS_BY_STATE,
+  normGeoKey,
+} from './geo.districtSupplements.js';
+import { PIN_DISTRICT_ALIASES } from './pinCodeGeoNormalize.js';
 
 function normGeoName(name) {
-  return String(name || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
+  return normGeoKey(name);
 }
 
 function buildGeoIndexes(states, districts, cities) {
@@ -15,6 +19,13 @@ function buildGeoIndexes(states, districts, cities) {
   for (const state of states) {
     if (state.isDeleted) continue;
     stateByName.set(normGeoName(state.name), state);
+  }
+
+  const districtAliasesByState = new Map();
+  const districtCityFallbacksByState = new Map();
+  for (const [stateKey, supplements] of Object.entries(DISTRICT_SUPPLEMENTS_BY_STATE)) {
+    districtAliasesByState.set(stateKey, buildDistrictAliasMap(supplements));
+    districtCityFallbacksByState.set(stateKey, buildDistrictCityFallbackMap(supplements));
   }
 
   const districtByKey = new Map();
@@ -41,12 +52,21 @@ function buildGeoIndexes(states, districts, cities) {
     cityByStateAndName.set(`${stateKey}|${normGeoName(city.name)}`, city);
   }
 
-  return { stateByName, districtByKey, citiesByDistrict, citiesByState, cityByStateAndName };
+  return {
+    stateByName,
+    districtByKey,
+    citiesByDistrict,
+    citiesByState,
+    cityByStateAndName,
+    districtAliasesByState,
+    districtCityFallbacksByState,
+  };
 }
 
-function resolveCityForDistrict({ district, state }, indexes) {
+function resolveCityForDistrict({ district, state, districtInput = '' }, indexes) {
   const districtId = String(district._id);
   const districtNorm = normGeoName(district.name);
+  const inputNorm = normGeoName(districtInput || district.name);
   const inDistrict = indexes.citiesByDistrict.get(districtId) || [];
 
   const districtCity = inDistrict.find((city) => normGeoName(city.name) === districtNorm);
@@ -54,11 +74,48 @@ function resolveCityForDistrict({ district, state }, indexes) {
   if (inDistrict.length) return inDistrict[0];
 
   const stateKey = String(state._id);
+  const stateNorm = normGeoName(state.name);
+  const cityFallbacks = indexes.districtCityFallbacksByState.get(stateNorm);
+  const fallbackCityName = cityFallbacks?.get(inputNorm) || cityFallbacks?.get(districtNorm);
+  if (fallbackCityName) {
+    const fallbackCity = indexes.cityByStateAndName.get(
+      `${stateKey}|${normGeoName(fallbackCityName)}`
+    );
+    if (fallbackCity) return fallbackCity;
+  }
+
   const stateCity = indexes.cityByStateAndName.get(`${stateKey}|${districtNorm}`);
   if (stateCity) return stateCity;
 
+  if (stateNorm === 'delhi') {
+    const delhiCity = indexes.cityByStateAndName.get(`${stateKey}|${districtNorm} delhi`);
+    if (delhiCity) return delhiCity;
+  }
+
   const inState = indexes.citiesByState.get(stateKey) || [];
   if (inState.length) return inState[0];
+  return null;
+}
+
+function resolveDistrictFromNames(state, districtName, indexes) {
+  const stateNorm = normGeoName(state.name);
+  const rawKey = normGeoName(districtName);
+  const aliasTarget = PIN_DISTRICT_ALIASES[`${stateNorm}|${rawKey}`];
+  const canonicalName = aliasTarget
+    || indexes.districtAliasesByState.get(stateNorm)?.get(rawKey)
+    || districtName;
+
+  let district = indexes.districtByKey.get(`${state._id}|${normGeoName(canonicalName)}`);
+  if (district) return district;
+
+  district = indexes.districtByKey.get(`${state._id}|${rawKey}`);
+  if (district) return district;
+
+  if (stateNorm === 'delhi') {
+    district = indexes.districtByKey.get(`${state._id}|${normGeoName(`${districtName} Delhi`)}`);
+    if (district) return district;
+  }
+
   return null;
 }
 
@@ -66,7 +123,7 @@ function resolveGeoFromNames({ stateName, districtName, cityName = '' }, indexes
   const state = indexes.stateByName.get(normGeoName(stateName));
   if (!state) throw new AppError(`State not found: ${stateName}`, 400, 'VALIDATION_ERROR');
 
-  const district = indexes.districtByKey.get(`${state._id}|${normGeoName(districtName)}`);
+  const district = resolveDistrictFromNames(state, districtName, indexes);
   if (!district) throw new AppError(`District not found: ${districtName}`, 400, 'VALIDATION_ERROR');
 
   let city = null;
@@ -74,7 +131,7 @@ function resolveGeoFromNames({ stateName, districtName, cityName = '' }, indexes
     city = indexes.cityByStateAndName.get(`${state._id}|${normGeoName(cityName)}`);
     if (!city) throw new AppError(`City not found: ${cityName}`, 400, 'VALIDATION_ERROR');
   } else {
-    city = resolveCityForDistrict({ district, state }, indexes);
+    city = resolveCityForDistrict({ district, state, districtInput: districtName }, indexes);
     if (!city) {
       throw new AppError(`No city found for district: ${districtName}`, 400, 'VALIDATION_ERROR');
     }
@@ -279,7 +336,7 @@ export async function upsertNormalizedPin({
 }
 
 export function pinToExcelRow(row) {
-  return [row.pinCode, row.stateName || '', row.zone || '', row.districtName || ''];
+  return [row.pinCode, row.stateName || '', row.zone || '', row.districtName || '', row.cityName || ''];
 }
 
 /**

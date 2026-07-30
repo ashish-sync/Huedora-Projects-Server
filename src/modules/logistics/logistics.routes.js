@@ -8,7 +8,8 @@ import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { env } from '../../config/env.js';
-import { throwIfIdentityClash } from '../../utils/identityNormalize.js';
+import { throwIfIdentityClash, assertValidEmail, assertValidPhone } from '../../utils/identityNormalize.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 import { nextSequence } from '../../utils/counters.js';
 import { AssetRequest } from '../assetRequests/assetRequest.model.js';
 import {
@@ -272,6 +273,8 @@ function registerMasterCrud({
   }
   async function assertPartyIdentity(body, excludeId) {
     if (!checkIdentity) return;
+    if (body.email) assertValidEmail(body.email, 'Email');
+    if (body.phone) assertValidPhone(body.phone, 'Mobile number');
     if (!body.email && !body.phone) return;
     const rows = await Model.find({ isDeleted: false, ...(listFilter || {}) }).limit(20000);
     throwIfIdentityClash(rows, {
@@ -306,7 +309,7 @@ function registerMasterCrud({
       }
       if (req.query.isActive === 'false') filter.isActive = false;
       if (req.query.q) {
-        const re = new RegExp(String(req.query.q), 'i');
+        const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
         filter.$or = searchFields.map((f) => ({ [f]: re }));
       }
       const [data, total] = await Promise.all([
@@ -2192,7 +2195,7 @@ router.get(
       }
     }
     if (req.query.q) {
-      const re = new RegExp(String(req.query.q), 'i');
+      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
       filter.$or = [
         { uniqueKey: re },
         { employeeName: re },
@@ -2247,9 +2250,10 @@ router.post(
     }
 
     let reserved = false;
+    let row = null;
     try {
       reserved = await reserveRequestFulfillment(prepared.context);
-      const row = await LogisticsInOutEntry.create(body);
+      row = await LogisticsInOutEntry.create(body);
       await applyInventoryUpdate(row, req.user);
       const fulfillment = await finalizeRequestFulfillment(prepared.context);
 
@@ -2266,6 +2270,13 @@ router.post(
       res.status(201).json({ data: row, fulfillment });
     } catch (error) {
       if (reserved) await releaseRequestFulfillmentReservation(prepared.context);
+      if (row?._id) {
+        try {
+          await LogisticsInOutEntry.deleteOne({ _id: row._id });
+        } catch {
+          /* best-effort rollback */
+        }
+      }
       throw error;
     }
   })
@@ -2472,14 +2483,14 @@ router.get(
     const filter = { isDeleted: false };
     const andParts = [];
     if (req.query.hcw) {
-      const re = new RegExp(String(req.query.hcw), 'i');
+      const re = new RegExp(escapeRegex(String(req.query.hcw)), 'i');
       andParts.push({ $or: [{ hcwName: re }, { hcwId: re }] });
     }
     if (req.query.location || req.query.city) {
-      filter.machineCity = new RegExp(String(req.query.location || req.query.city), 'i');
+      filter.machineCity = new RegExp(escapeRegex(String(req.query.location || req.query.city)), 'i');
     }
     if (req.query.q) {
-      const re = new RegExp(String(req.query.q), 'i');
+      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
       andParts.push({
         $or: [
           { inventoryType: re },
@@ -2612,7 +2623,7 @@ router.get(
     if (req.query.movementTypeCode) filter.movementTypeCode = String(req.query.movementTypeCode);
     if (req.query.warehouseId) filter.warehouseId = req.query.warehouseId;
     if (req.query.q) {
-      const re = new RegExp(String(req.query.q), 'i');
+      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
       filter.$or = [{ remarks: re }, { movementTypeCode: re }, { actorEmail: re }, { referenceType: re }];
     }
     const [data, total] = await Promise.all([
@@ -2644,7 +2655,7 @@ router.get(
       filter.productType = { $in: [...new Set([want, String(req.query.productType), ...aliases])] };
     }
     if (req.query.q) {
-      const re = new RegExp(String(req.query.q), 'i');
+      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
       filter.$or = [
         { name: re },
         { sku: re },

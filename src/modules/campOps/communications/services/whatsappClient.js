@@ -11,7 +11,7 @@ export function isWhatsAppConfigured() {
 
 export function verifyWebhookSignature(rawBody, signatureHeader) {
   const appSecret = process.env.WHATSAPP_APP_SECRET;
-  if (!appSecret) return true;
+  if (!appSecret) return process.env.NODE_ENV !== 'production';
 
   if (!signatureHeader || !signatureHeader.startsWith('sha256=')) {
     return false;

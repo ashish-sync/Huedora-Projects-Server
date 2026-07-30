@@ -6,9 +6,16 @@ import { Hcw } from './hcw.model.js';
 import { Asset } from '../assets/asset.model.js';
 import { writeAudit } from '../../utils/audit.js';
 import { throwIfIdentityClash } from '../../utils/identityNormalize.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 const router = Router();
 router.use(authenticate);
+
+const canReadHcws = requirePermission(PERMISSIONS.ASSETS_READ, PERMISSIONS.HCWS_WRITE);
+router.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  return canReadHcws(req, res, next);
+});
 
 async function assertHcwIdentityAvailable({ hcwId, contact, excludeId } = {}) {
   const rows = await Hcw.find({ isDeleted: false }).limit(20000);
@@ -41,10 +48,11 @@ router.get(
     if (req.query.status) filter.status = req.query.status;
     if (req.query.city) filter.city = req.query.city;
     if (req.query.q) {
+      const q = escapeRegex(String(req.query.q));
       filter.$or = [
-        { name: new RegExp(req.query.q, 'i') },
-        { hcwId: new RegExp(req.query.q, 'i') },
-        { contact: new RegExp(req.query.q, 'i') },
+        { name: new RegExp(q, 'i') },
+        { hcwId: new RegExp(q, 'i') },
+        { contact: new RegExp(q, 'i') },
       ];
     }
     const [data, total] = await Promise.all([

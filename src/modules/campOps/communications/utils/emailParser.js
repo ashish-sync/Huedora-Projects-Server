@@ -93,7 +93,9 @@ function isAllowedSender(from) {
   const allowedDomains = parseAllowList(process.env.EMAIL_ALLOWED_DOMAINS);
   const sender = String(from || '').trim().toLowerCase();
 
-  if (!allowedEmails.length && !allowedDomains.length) return true;
+  if (!allowedEmails.length && !allowedDomains.length) {
+    return process.env.NODE_ENV !== 'production';
+  }
 
   if (allowedEmails.includes(sender)) return true;
 

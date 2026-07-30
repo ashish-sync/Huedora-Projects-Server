@@ -1,3 +1,4 @@
+import { notifyCampCoordinatorStakeholders } from './campOps.coordinatorNotify.js';
 import { Notification } from '../notifications/notification.model.js';
 import { User } from '../users/user.model.js';
 import { Role } from '../users/role.model.js';
@@ -59,6 +60,22 @@ export async function notifyCampRequester({ camp, type, title, body }) {
   });
 }
 
+async function notifyCoordinatorTeam({
+  camp,
+  type,
+  title,
+  body,
+  excludeUserIds = [],
+}) {
+  await notifyCampCoordinatorStakeholders({
+    camp,
+    type,
+    title,
+    body,
+    excludeUserIds,
+  });
+}
+
 export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
   const label = camp.campId || String(camp._id || '').slice(-6);
   const summary = campSummary(camp);
@@ -73,6 +90,31 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
         title: `Camp ${label} needs review`,
         body: summary,
       });
+      await notifyCoordinatorTeam({
+        camp,
+        type: 'CAMP_REVIEW',
+        title: `Camp ${label} needs review`,
+        body: summary,
+        excludeUserIds: [actorId],
+      });
+      if (camp.submittedOffHours) {
+        await notifyCoordinatorTeam({
+          camp,
+          type: 'CAMP_OFF_HOURS',
+          title: `Off-hours camp submitted: ${label}`,
+          body: summary,
+          excludeUserIds: [actorId],
+        });
+      }
+      if (camp.submittedWeekendAttention) {
+        await notifyCoordinatorTeam({
+          camp,
+          type: 'CAMP_WEEKEND_ATTENTION',
+          title: `Weekend camp needs attention: ${label}`,
+          body: summary,
+          excludeUserIds: [actorId],
+        });
+      }
       break;
     case 'approve':
       await notifyCampRequester({
@@ -86,7 +128,7 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
       await notifyCampRequester({
         camp,
         type: 'CAMP_REJECTED',
-        title: `Camp ${label} rejected`,
+        title: `Camp ${label} refused`,
         body: note || camp.rejectionReason || summary,
       });
       break;
@@ -97,6 +139,13 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
         title: `Information requested for camp ${label}`,
         body: note || camp.informationRequestNote || summary,
       });
+      await notifyCoordinatorTeam({
+        camp,
+        type: 'CAMP_INFO_REQUESTED',
+        title: `Information requested for camp ${label}`,
+        body: note || camp.informationRequestNote || summary,
+        excludeUserIds: [actorId],
+      });
       break;
     case 'review_overdue':
       await notifyCampApprovers({
@@ -104,6 +153,20 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
         actorId: null,
         type: 'CAMP_REVIEW_OVERDUE',
         title: `Camp review overdue: ${label}`,
+        body: summary,
+      });
+      await notifyCoordinatorTeam({
+        camp,
+        type: 'CAMP_REVIEW_OVERDUE',
+        title: `Camp review overdue: ${label}`,
+        body: summary,
+      });
+      break;
+    case 'execution_overdue':
+      await notifyCoordinatorTeam({
+        camp,
+        type: 'CAMP_EXECUTION_OVERDUE',
+        title: `Camp execution overdue: ${label}`,
         body: summary,
       });
       break;

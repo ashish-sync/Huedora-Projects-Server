@@ -1,14 +1,14 @@
 /** PIN Geography excel columns — aligned with Master One form (PIN Code, State, Zone, District). */
 
-export const PIN_CODE_HEADERS = ['PIN Code', 'State', 'Zone', 'District'];
+export const PIN_CODE_HEADERS = ['PIN Code', 'State', 'Zone', 'District', 'City'];
 
 /** Sample and export use the same columns so the downloaded template matches the master form. */
 export const PIN_CODE_IMPORT_HEADERS = PIN_CODE_HEADERS;
 
 export const PIN_CODE_SAMPLE_ROWS = [
-  ['110001', 'Delhi', 'North Zone', 'New Delhi'],
-  ['400001', 'Maharashtra', 'West Zone', 'Mumbai City'],
-  ['500081', 'Telangana', 'South Zone', 'Hyderabad'],
+  ['110001', 'Delhi', 'North Zone', 'New Delhi', 'New Delhi'],
+  ['400001', 'Maharashtra', 'West Zone', 'Mumbai City', 'Mumbai'],
+  ['500081', 'Telangana', 'South Zone', 'Rangareddy', 'Hyderabad'],
 ];
 
 export const PIN_CODE_IMPORT_ALIASES = {
@@ -16,4 +16,5 @@ export const PIN_CODE_IMPORT_ALIASES = {
   stateName: ['State', 'stateName'],
   zoneName: ['Zone', 'zoneName'],
   districtName: ['District', 'District Name', 'districtName'],
+  cityName: ['City', 'cityName'],
 };

@@ -16,6 +16,16 @@ import { sendExcel } from '../../utils/excelExport.js';
 const router = Router();
 router.use(authenticate);
 
+const canReadMovements = requirePermission(
+  PERMISSIONS.MOVEMENTS_READ,
+  PERMISSIONS.MOVEMENTS_REQUEST,
+  PERMISSIONS.MOVEMENTS_APPROVE
+);
+router.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  return canReadMovements(req, res, next);
+});
+
 router.get(
   '/',
   asyncHandler(async (req, res) => {

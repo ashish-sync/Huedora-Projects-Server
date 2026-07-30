@@ -56,7 +56,7 @@ function baseCampFields({ client, campDate, doctorSuffix = 'A' }) {
     remarks: '',
     lifecycleStage: 'request',
     assignmentStatus: 'Pending',
-    executionStatus: 'Pending',
+    executionStatus: 'Camp Scheduled',
   };
 }
 
@@ -235,7 +235,7 @@ export async function ensureCampOpsSeed() {
         hcwCategory: 'Technician',
         hcwName: hcw.name,
         hcwContact: hcw.mobile || hcw.contact,
-        executionStatus: 'Completed',
+        executionStatus: 'Camp Completed',
         patientsCount: 42,
         actualPatients: 42,
         campDate: addDays(today, 5),

@@ -13,10 +13,18 @@ export const CAMP_OPS_STATUS_TRANSITIONS = {
   approved: ['executed', 'cancelled', 'rejected'],
   rejected: ['pending_review'],
   cancelled: [],
-  executed: ['cancelled', 'rejected'],
+  executed: ['cancelled'],
 };
 
 export const CAMP_OPS_SOURCES = ['whatsapp', 'email', 'excel', 'dashboard', 'api', 'paste'];
+
+export const CONTACT_PERSON_LEVELS = [
+  'Territory Manager',
+  'Area Manager',
+  'Regional Manager',
+  'Zonal Manager',
+  'Product Manager',
+];
 
 export const CAMP_OPS_CANCEL_SOURCES = ['brand', 'khw'];
 
