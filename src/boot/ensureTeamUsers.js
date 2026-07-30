@@ -2,6 +2,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { User } from '../modules/users/user.model.js';
 import { runTeamUsersImport } from '../../scripts/teamUsersImport.js';
+import { TEAM_TEMP_PASSWORD_HASH } from './teamUsersDefaults.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CSV = path.resolve(__dirname, '../../scripts/data/team-users-tylocare.csv');
@@ -23,12 +24,14 @@ export async function ensureTeamUsersInDatabase() {
   if (!forceImport && count >= EXPECTED_MIN_TEAM_USERS) return;
 
   const password = String(process.env.BULK_USERS_DEFAULT_PASSWORD || '').trim();
-  if (!password || password.length < 12) {
+  const passwordHash =
+    String(process.env.TEAM_USERS_PASSWORD_HASH || '').trim() || TEAM_TEMP_PASSWORD_HASH;
+
+  if (!password && !passwordHash) {
     if (count < EXPECTED_MIN_TEAM_USERS) {
       console.warn(
         `[team-users] Only ${count} active @tylocare.com user(s) in database (expected ~22). `
-          + 'Set BULK_USERS_DEFAULT_PASSWORD (12+ chars) on Render and either redeploy with '
-          + 'TEAM_USERS_IMPORT_ON_BOOT=true once, or run bulk-import-users.js in the Render shell.',
+          + 'Team import could not run.',
       );
     }
     return;
@@ -38,9 +41,11 @@ export async function ensureTeamUsersInDatabase() {
     ? path.resolve(process.cwd(), process.env.TEAM_USERS_CSV)
     : DEFAULT_CSV;
 
+  const needsFullRoster = count < EXPECTED_MIN_TEAM_USERS;
   const resetPassword =
-    forceImport
-    && String(process.env.TEAM_USERS_RESET_PASSWORD_ON_BOOT || 'true').toLowerCase() === 'true';
+    needsFullRoster
+    || (forceImport
+      && String(process.env.TEAM_USERS_RESET_PASSWORD_ON_BOOT || 'true').toLowerCase() === 'true');
 
   console.warn(
     `[team-users] Importing team users (existing=${count}, force=${forceImport}, resetPassword=${resetPassword})...`,
@@ -53,6 +58,9 @@ export async function ensureTeamUsersInDatabase() {
     skipConnect: true,
     skipDisconnect: true,
     skipSeed: true,
+    writeReport: false,
+    defaultPassword: password,
+    passwordHash: password ? '' : passwordHash,
   });
 
   console.warn(

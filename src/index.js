@@ -51,8 +51,12 @@ async function main() {
   await hydrateEmailIngestState();
   await maybeFreshStart();
   await ensureSeed();
-  const { ensureTeamUsersInDatabase } = await import('./boot/ensureTeamUsers.js');
-  await ensureTeamUsersInDatabase();
+  try {
+    const { ensureTeamUsersInDatabase } = await import('./boot/ensureTeamUsers.js');
+    await ensureTeamUsersInDatabase();
+  } catch (err) {
+    console.error('[team-users] Boot import failed:', err.message);
+  }
   await maybeReseedGeoOnBoot();
   const app = createApp();
   app.listen(env.port, () => {

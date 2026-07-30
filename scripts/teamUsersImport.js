@@ -214,6 +214,7 @@ export async function runTeamUsersImport({
   skipSeed = false,
   writeReport = true,
   defaultPassword: passwordOverride = '',
+  passwordHash: passwordHashOverride = '',
 } = {}) {
   if (!csvPath) {
     throw new Error('csvPath is required');
@@ -225,8 +226,19 @@ export async function runTeamUsersImport({
   }
 
   const defaultPassword = String(passwordOverride || process.env.BULK_USERS_DEFAULT_PASSWORD || '').trim();
-  if (!defaultPassword || defaultPassword.length < 12) {
-    throw new Error('Set BULK_USERS_DEFAULT_PASSWORD (min 12 characters) before running.');
+  const envPasswordHash = String(passwordHashOverride || process.env.TEAM_USERS_PASSWORD_HASH || '').trim();
+
+  let passwordHash = null;
+  if (!dryRun) {
+    if (envPasswordHash) {
+      passwordHash = envPasswordHash;
+    } else if (defaultPassword && defaultPassword.length >= 12) {
+      passwordHash = await bcrypt.hash(defaultPassword, 12);
+    } else {
+      throw new Error(
+        'Set BULK_USERS_DEFAULT_PASSWORD (min 12 characters) or TEAM_USERS_PASSWORD_HASH before running.',
+      );
+    }
   }
 
   const defaultRole = String(process.env.BULK_USERS_DEFAULT_ROLE || 'Viewer').trim();
@@ -248,7 +260,6 @@ export async function runTeamUsersImport({
   roleByName = await loadRoles();
 
   let allUsers = await User.find({ isDeleted: false }).limit(20000);
-  const passwordHash = dryRun ? null : await bcrypt.hash(defaultPassword, 12);
 
   const report = [];
   let created = 0;
