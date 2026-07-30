@@ -18,6 +18,7 @@ data/
 uploads/
 tmp/
 tmp-*.json
+scripts/out/
 
 # OS / IDE
 .DS_Store

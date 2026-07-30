@@ -9,28 +9,42 @@ test('parseAssignedUserEmails normalizes coordinator login emails', async () => 
   );
 });
 
-test('resolveCoordinatorStakeholders returns coordinators and reporting managers', async () => {
+test('resolveCoordinatorStakeholders returns coordinators and reporting managers', async (t) => {
   const { CampOpsClientMaster } = await import('./campOps.model.js');
   const { User } = await import('../users/user.model.js');
   const { resolveCoordinatorStakeholders } = await import('./campOps.coordinatorNotify.js');
 
   const suffix = Date.now();
+  const managerEmail = `manager-${suffix}@test.com`;
+  const coordinatorEmail = `coordinator-${suffix}@test.com`;
   const manager = await User.create({
     fullName: 'Reporting Manager',
-    email: `manager-${suffix}@test.com`,
+    email: managerEmail,
     isActive: true,
   });
   const coordinator = await User.create({
     fullName: 'Coordinator User',
-    email: `coordinator-${suffix}@test.com`,
+    email: coordinatorEmail,
     isActive: true,
     reportingManagerId: manager._id,
   });
   const clientId = `client-${suffix}`;
-  await CampOpsClientMaster.create({
+  const master = await CampOpsClientMaster.create({
     clientId,
     clientName: 'Demo Client',
     assignedUserEmails: [coordinator.email],
+  });
+
+  t.after(async () => {
+    for (const user of [manager, coordinator]) {
+      user.isDeleted = true;
+      user.deletedAt = new Date().toISOString();
+      user.isActive = false;
+      await user.save();
+    }
+    master.isDeleted = true;
+    master.deletedAt = new Date().toISOString();
+    await master.save();
   });
 
   const result = await resolveCoordinatorStakeholders(clientId);

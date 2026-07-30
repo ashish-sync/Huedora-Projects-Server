@@ -68,13 +68,14 @@ export async function hydratePersistence() {
 }
 
 export async function loadCollection(name) {
-  if (cache.has(name)) return clone(cache.get(name));
   if (mode === 'mongo') {
+    if (cache.has(name)) return clone(cache.get(name));
     if (!mongoDb) throw new Error('MongoDB persistence is not configured');
     const rows = await mongoDb.collection(collectionKey(name)).find({}).toArray();
     cache.set(name, rows);
     return clone(rows);
   }
+  // Local JSON store: always read from disk so CLI scripts and the dev server stay in sync.
   const rows = readFileCollection(name);
   cache.set(name, rows);
   return clone(rows);

@@ -77,55 +77,38 @@ export const STANDARD_IMPORT_MAPPING = Object.fromEntries(
 );
 
 /**
- * Role catalog aligned with TYLO One ROLE_PERMISSIONS (not HueDora's separate role enum).
- * HueDora mapping for reference:
- *   super_admin / admin → Admin (*)
- *   operations_executive → CampRequester / AssetManager (camps:read + camps:request)
- *   reviewer → CampApprover / Approver (camps:read + camps:approve)
- *   read_only → Viewer (camps:read; Viewer also has camps:request in TYLO)
+ * Role catalog aligned with TYLO One standard roles.
  */
 export const CAMP_OPS_ROLE_CATALOG = [
   {
     role: 'Admin',
     label: 'Administrator',
     tyloRole: 'Admin',
-    huedoraEquivalent: 'admin / super_admin',
     permissions: ['*'],
-  },
-  {
-    role: 'CampApprover',
-    label: 'Camp Approver',
-    tyloRole: 'CampApprover',
-    huedoraEquivalent: 'reviewer',
-    permissions: ['camps:read', 'camps:request', 'camps:approve', 'dashboards:read'],
   },
   {
     role: 'Approver',
     label: 'Approver',
     tyloRole: 'Approver',
-    huedoraEquivalent: 'reviewer',
-    permissions: ['camps:read', 'camps:approve', 'dashboards:read'],
+    permissions: ['camps:read', 'camps:request', 'camps:approve', 'dashboards:read'],
   },
   {
-    role: 'CampRequester',
-    label: 'Camp Requester',
-    tyloRole: 'CampRequester',
-    huedoraEquivalent: 'operations_executive',
-    permissions: ['camps:read', 'camps:request'],
-  },
-  {
-    role: 'AssetManager',
-    label: 'Asset Manager',
-    tyloRole: 'AssetManager',
-    huedoraEquivalent: 'operations_executive',
+    role: 'Editor',
+    label: 'Editor',
+    tyloRole: 'Editor',
     permissions: ['camps:read', 'camps:request', 'imports:execute', 'dashboards:read'],
+  },
+  {
+    role: 'Requester',
+    label: 'Requester',
+    tyloRole: 'Requester',
+    permissions: ['camps:read', 'camps:request'],
   },
   {
     role: 'Viewer',
     label: 'Viewer',
     tyloRole: 'Viewer',
-    huedoraEquivalent: 'read_only',
-    permissions: ['camps:read', 'camps:request', 'dashboards:read'],
+    permissions: ['camps:read', 'dashboards:read'],
   },
 ];
 

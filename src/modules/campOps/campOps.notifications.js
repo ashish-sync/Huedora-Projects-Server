@@ -20,7 +20,7 @@ async function findCampApprovers(excludeUserId = null) {
         perms.includes(PERMISSIONS.ALL)
         || perms.includes('*')
         || perms.includes(PERMISSIONS.CAMPS_APPROVE)
-        || ['Approver', 'CampApprover', 'Admin'].includes(role.name)
+        || ['Approver', 'Admin'].includes(role.name)
       );
     });
   });

@@ -6,6 +6,10 @@ import { User } from '../users/user.model.js';
 import { RefreshToken } from './refreshToken.model.js';
 import { AppError } from '../../utils/helpers.js';
 import { writeAudit } from '../../utils/audit.js';
+import {
+  alternateLegacyLocalEmail,
+  normalizeLoginEmail,
+} from '../../utils/legacyMigration.js';
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -67,16 +71,6 @@ export function publicUser(user) {
   };
 }
 
-/** Normalize login email; map legacy @dhub.local to @tylo.local after rebrand. */
-function normalizeLoginEmail(email) {
-  let value = String(email || '').toLowerCase().trim();
-  if (value.endsWith('@dhub.local')) {
-    value = `${value.slice(0, -'@dhub.local'.length)}@tylo.local`;
-  }
-  return value;
-}
-
-/** Resolve user by current or legacy local email (tylo ↔ dhub). */
 async function findUserByLoginEmail(email) {
   const normalizedEmail = normalizeLoginEmail(email);
   let user = await User.findOne({
@@ -86,14 +80,16 @@ async function findUserByLoginEmail(email) {
     .populate('roleIds')
     .populate('reportingManagerId', 'fullName email designation');
 
-  if (!user && normalizedEmail.endsWith('@tylo.local')) {
-    const legacyEmail = `${normalizedEmail.slice(0, -'@tylo.local'.length)}@dhub.local`;
-    user = await User.findOne({
-      email: legacyEmail,
-      isDeleted: false,
-    })
-      .populate('roleIds')
-      .populate('reportingManagerId', 'fullName email designation');
+  if (!user) {
+    const legacyEmail = alternateLegacyLocalEmail(normalizedEmail);
+    if (legacyEmail) {
+      user = await User.findOne({
+        email: legacyEmail,
+        isDeleted: false,
+      })
+        .populate('roleIds')
+        .populate('reportingManagerId', 'fullName email designation');
+    }
   }
 
   return { user, normalizedEmail };

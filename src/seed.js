@@ -4,11 +4,13 @@ import { env } from './config/env.js';
 import { ROLE_PERMISSIONS } from './config/constants.js';
 import { Role } from './modules/users/role.model.js';
 import { User } from './modules/users/user.model.js';
+import { consolidateLegacyRoles, dedupeActiveUsersByEmail, roleDescription } from './modules/users/role.consolidation.js';
 import { DocumentTemplate } from './modules/templates/template.model.js';
 import { Contact } from './modules/contacts/contact.model.js';
 import { ensureLogisticsSeed } from './modules/logistics/logistics.seed.js';
 import { ensureGeoSeed, ensureDistrictSupplements } from './modules/geo/geo.seed.js';
 import { ensureCampOpsSeed, CAMP_ONE_DEMO } from './modules/campOps/campOps.seed.js';
+import { alternateLegacyLocalEmail } from './utils/legacyMigration.js';
 
 const LEASE_TEMPLATE = `ASSET LEASE AGREEMENT
 
@@ -74,7 +76,7 @@ export async function ensureSeed() {
       await Role.create({
         name,
         permissions,
-        description: `${name} role`,
+        description: roleDescription(name),
         isSystem: true,
         isDeleted: false,
       });
@@ -100,6 +102,9 @@ export async function ensureSeed() {
     if (dirty) await existing.save();
   }
 
+  await consolidateLegacyRoles();
+  await dedupeActiveUsersByEmail();
+
   // Repair users that previously saved populated role documents into roleIds
   const allUsers = await User.find({});
   for (const u of allUsers) {
@@ -111,15 +116,14 @@ export async function ensureSeed() {
   }
 
   const adminRole = await Role.findOne({ name: 'Admin' });
-  const managerRole = await Role.findOne({ name: 'AssetManager' });
-  const verifierRole = await Role.findOne({ name: 'Verifier' });
+  const editorRole = await Role.findOne({ name: 'Editor' });
   const approverRole = await Role.findOne({ name: 'Approver' });
 
   // First-run admin only when credentials are explicitly provided
   if (canBootstrapAdmin() && adminRole) {
     const bootstrapEmail = env.bootstrapAdminEmail;
     const legacyEmail = bootstrapEmail.endsWith('@tylo.local')
-      ? `${bootstrapEmail.slice(0, -'@tylo.local'.length)}@dhub.local`
+      ? alternateLegacyLocalEmail(bootstrapEmail)
       : null;
     let existing =
       (await User.findOne({ email: bootstrapEmail })) ||
@@ -169,20 +173,20 @@ export async function ensureSeed() {
   }
 
   // Optional local demo accounts. never in production
-  if (env.seedDemoUsers && managerRole && verifierRole && approverRole && canBootstrapAdmin()) {
+  if (env.seedDemoUsers && editorRole && approverRole && canBootstrapAdmin()) {
     const passwordHash = await bcrypt.hash(env.bootstrapAdminPassword, 12);
     const extras = [
       {
         email: 'manager@tylo.local',
         username: 'manager',
         fullName: 'Asset Manager',
-        roleIds: [managerRole._id, approverRole._id],
+        roleIds: [editorRole._id, approverRole._id],
       },
       {
         email: 'verifier@tylo.local',
         username: 'verifier',
         fullName: 'Field Verifier',
-        roleIds: [verifierRole._id],
+        roleIds: [editorRole._id],
       },
     ];
     for (const e of extras) {
