@@ -17,6 +17,11 @@ import {
   buildHierarchyTree,
   clearReportingManagerForUser,
 } from './user.hierarchy.js';
+import {
+  DESIGNATION_ACCESS_TEMPLATES,
+  getDesignationAccessTemplate,
+  resolveDesignationRoleIds,
+} from './designationAccess.js';
 
 const router = Router();
 
@@ -53,7 +58,10 @@ router.get(
   '/designations',
   requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),
   asyncHandler(async (_req, res) => {
-    res.json({ data: USER_DESIGNATIONS });
+    res.json({
+      data: USER_DESIGNATIONS,
+      accessTemplates: DESIGNATION_ACCESS_TEMPLATES,
+    });
   })
 );
 
@@ -304,14 +312,16 @@ router.post(
     if (usernameClash) throw new AppError('A user with this username already exists', 409, 'DUPLICATE_USERNAME');
     const managerId = await assertReportingManager({ reportingManagerId });
     const passwordHash = await bcrypt.hash(password, 12);
+    const designationValue = normalizeDesignation(designation);
+    const templateRoleIds = await resolveDesignationRoleIds(designationValue, Role);
     const user = await User.create({
       email: emailKey,
       username: usernameKey,
       fullName,
       phone: phoneKey || String(phone || '').trim(),
-      designation: normalizeDesignation(designation),
+      designation: designationValue,
       reportingManagerId: managerId,
-      roleIds: asRoleIdList(roleIds),
+      roleIds: templateRoleIds || asRoleIdList(roleIds),
       passwordHash,
       passwordChangedAt: new Date().toISOString(),
     });
@@ -365,7 +375,16 @@ router.patch(
       }
       user.isActive = req.body.isActive;
     }
-    if (req.body.roleIds !== undefined) {
+    if (req.body.designation !== undefined) {
+      user.designation = normalizeDesignation(req.body.designation);
+    }
+    const designationTemplate = getDesignationAccessTemplate(user.designation);
+    if (designationTemplate) {
+      const templateRoleIds = await resolveDesignationRoleIds(user.designation, Role);
+      if (templateRoleIds?.length) {
+        user.roleIds = templateRoleIds;
+      }
+    } else if (req.body.roleIds !== undefined) {
       const nextIds = asRoleIdList(req.body.roleIds);
       if (!nextIds.length) throw new AppError('Select at least one role', 400, 'VALIDATION_ERROR');
       const roleRows = await Role.find({ isDeleted: false });
@@ -374,9 +393,6 @@ router.patch(
         throw new AppError('One or more roles are invalid', 400, 'VALIDATION_ERROR');
       }
       user.roleIds = nextIds;
-    }
-    if (req.body.designation !== undefined) {
-      user.designation = normalizeDesignation(req.body.designation);
     }
     if (req.body.reportingManagerId !== undefined) {
       user.reportingManagerId = await assertReportingManager({

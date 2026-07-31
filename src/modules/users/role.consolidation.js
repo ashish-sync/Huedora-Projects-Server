@@ -11,6 +11,8 @@ const ROLE_DESCRIPTIONS = {
   Requester: 'View modules and submit requests',
   Editor: 'View and edit records across modules',
   Approver: 'View modules and approve requests',
+  'Camp Coordinator':
+    'Healthcare Camp Coordinator — Document One, Camp One, Request One, dashboard, and Verification One',
 };
 
 /**

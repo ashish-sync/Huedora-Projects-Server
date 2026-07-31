@@ -5,6 +5,7 @@ import { ROLE_PERMISSIONS } from './config/constants.js';
 import { Role } from './modules/users/role.model.js';
 import { User } from './modules/users/user.model.js';
 import { consolidateLegacyRoles, dedupeActiveUsersByEmail, roleDescription } from './modules/users/role.consolidation.js';
+import { applyDesignationAccessRoles } from './modules/users/designationAccess.js';
 import { DocumentTemplate } from './modules/templates/template.model.js';
 import { Contact } from './modules/contacts/contact.model.js';
 import { ensureLogisticsSeed } from './modules/logistics/logistics.seed.js';
@@ -99,10 +100,20 @@ export async function ensureSeed() {
         dirty = true;
       }
     }
+    // Camp Coordinator is a fixed designation bundle — keep permissions in sync
+    if (name === 'Camp Coordinator') {
+      const expected = [...ROLE_PERMISSIONS['Camp Coordinator']].sort().join('|');
+      const current = [...(existing.permissions || [])].sort().join('|');
+      if (expected !== current) {
+        existing.permissions = ROLE_PERMISSIONS['Camp Coordinator'];
+        dirty = true;
+      }
+    }
     if (dirty) await existing.save();
   }
 
   await consolidateLegacyRoles();
+  await applyDesignationAccessRoles(User, Role);
   await dedupeActiveUsersByEmail();
 
   // Repair users that previously saved populated role documents into roleIds

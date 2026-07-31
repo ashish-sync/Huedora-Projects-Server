@@ -9,8 +9,9 @@ export const TEAM_ACCESS_PROFILES = {
     description: 'All modules — view, edit, and approve',
   },
   camp_coordinator: {
-    roleNames: ['Editor'],
-    description: 'View all modules; edit Camp One, Document One, and Request One',
+    roleNames: ['Camp Coordinator'],
+    description:
+      'Document One, Camp One, Request One, Operations Dashboard & Notifications, and Verification One',
   },
   logistics_associate: {
     roleNames: ['Editor', 'Approver'],
@@ -19,6 +20,11 @@ export const TEAM_ACCESS_PROFILES = {
 };
 
 export function inferAccessProfile(row) {
+  const designation = String(row.designation || '')
+    .trim()
+    .toLowerCase();
+  if (designation === 'healthcare camp coordinator') return 'camp_coordinator';
+
   const explicit = String(
     row.accessprofile || row.accessProfile || row.profile || ''
   )
