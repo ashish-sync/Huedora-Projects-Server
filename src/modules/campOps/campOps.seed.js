@@ -8,6 +8,7 @@ import {
   CampOpsClientMaster,
 } from './campOps.model.js';
 import { generateCampId, captureSubmissionTracking } from './campOps.helpers.js';
+import { repairExecutedCampLifecycleStages } from './campOps.lifecycle.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
 
 export const CAMP_ONE_DEMO = {
@@ -243,6 +244,11 @@ export async function ensureCampOpsSeed() {
       },
     }),
   ]);
+
+  const repaired = await repairExecutedCampLifecycleStages();
+  if (repaired) {
+    console.log(`[camp-ops] Moved ${repaired} executed camp(s) to Finance & Settlement stage`);
+  }
 
   return {
     admin,

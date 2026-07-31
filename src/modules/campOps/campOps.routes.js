@@ -729,6 +729,8 @@ router.post(
           camp.executedById = a.id;
           camp.executedByEmail = a.email;
           camp.executedAt = new Date().toISOString();
+          camp.executionStatus = EXECUTION_STATUS.CAMP_COMPLETED;
+          camp.lifecycleStage = 'financial';
         }
         await camp.save();
         await audit(req, `camp_ops.bulk_${action}`, 'camp_ops_camp', camp._id, before, camp.toObject());
@@ -962,8 +964,8 @@ router.put(
     if (camp.status === 'approved' && camp.lifecycleStage === 'request') {
       camp.lifecycleStage = 'assignment';
     }
-    if (camp.status === 'executed' && ['request', 'assignment'].includes(camp.lifecycleStage)) {
-      camp.lifecycleStage = 'execution';
+    if (camp.status === 'executed' && ['request', 'assignment', 'execution'].includes(camp.lifecycleStage)) {
+      camp.lifecycleStage = 'financial';
     }
 
     await camp.save();
@@ -1089,7 +1091,7 @@ async function transitionCamp(req, res, nextStatus, action) {
     camp.executedById = a.id;
     camp.executedByEmail = a.email;
     camp.executedAt = new Date().toISOString();
-    camp.lifecycleStage = 'execution';
+    camp.lifecycleStage = 'financial';
     camp.executionStatus = EXECUTION_STATUS.CAMP_COMPLETED;
     if (req.body?.actualPatients != null) {
       camp.actualPatients = Math.max(0, Number(req.body.actualPatients) || 0);

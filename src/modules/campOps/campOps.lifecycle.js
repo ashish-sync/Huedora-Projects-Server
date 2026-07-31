@@ -545,3 +545,20 @@ export function canEditLifecycleStage(camp, stage) {
   }
   return false;
 }
+
+/** Move executed camps stuck in earlier lifecycle stages into Finance & Settlement. */
+export async function repairExecutedCampLifecycleStages(CampModel = null) {
+  const Camp = CampModel || (await import('./campOps.model.js')).CampOpsCamp;
+  const rows = await Camp.find({ isDeleted: false, status: 'executed' });
+  let repaired = 0;
+  for (const camp of rows) {
+    if (!['request', 'assignment', 'execution'].includes(camp.lifecycleStage)) continue;
+    camp.lifecycleStage = 'financial';
+    if (camp.executionStatus !== 'Camp Completed') {
+      camp.executionStatus = 'Camp Completed';
+    }
+    await camp.save();
+    repaired += 1;
+  }
+  return repaired;
+}
