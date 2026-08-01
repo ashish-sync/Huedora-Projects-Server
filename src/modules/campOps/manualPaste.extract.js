@@ -1,5 +1,6 @@
 import { trimStr, parseLocalDateInput } from './campOps.helpers.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
+import { formatDoctorName, formatContactPersonName } from '../../utils/textFormat.js';
 import { findStateInText } from '../geo/indianStateNames.js';
 import {
   compactFieldName,
@@ -18,6 +19,14 @@ export const NOT_PROVIDED = 'Not Provided';
 
 function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function formatExtractedDoctorName(value) {
+  return formatDoctorName(value);
+}
+
+function formatExtractedContactName(value) {
+  return formatContactPersonName(value);
 }
 
 function withDefault(value) {
@@ -212,7 +221,7 @@ export function extractManualPasteFields(text) {
     campDate: withDefault(campDate),
     startTime: withDefault(startTime),
     endTime: withDefault(endTime),
-    doctorName: withDefault(doctorName),
+    doctorName: withDefault(formatExtractedDoctorName(doctorName)),
     doctorCode: withDefault(doctorCode),
     speciality: withDefault(speciality),
     hospitalName: withDefault(hospitalName),
@@ -224,7 +233,7 @@ export function extractManualPasteFields(text) {
     pincode: withDefault(pincode),
     zone: withDefault(zone),
     expectedPatients: withDefault(expectedPatientsMatch ? expectedPatientsMatch[0] : ''),
-    fieldPersonName: withDefault(contact.name),
+    fieldPersonName: withDefault(formatExtractedContactName(contact.name)),
     fieldPersonPhone: withDefault(contact.phone),
     remarks: withDefault(remarks),
   };
@@ -232,7 +241,7 @@ export function extractManualPasteFields(text) {
   return {
     display,
     row: {
-      doctorName: toCampValue(doctorName),
+      doctorName: toCampValue(formatExtractedDoctorName(doctorName)),
       doctorCode: toCampValue(doctorCode),
       speciality: toCampValue(speciality),
       hospitalName: toCampValue(hospitalName),
@@ -247,7 +256,7 @@ export function extractManualPasteFields(text) {
       pincode: toCampValue(pincode),
       zone: toCampValue(zone),
       expectedPatients: expectedPatientsMatch ? Number(expectedPatientsMatch[0]) : 0,
-      fieldPersonName: toCampValue(contact.name),
+      fieldPersonName: toCampValue(formatExtractedContactName(contact.name)),
       fieldPersonPhone: toCampValue(contact.phone),
       remarks: toCampValue(remarks),
       rawExcerpt: raw.slice(0, 500),

@@ -1,6 +1,11 @@
 import { CampOpsCamp } from './campOps.model.js';
 import { normalizeCampName } from './campOps.constants.js';
-import { getRequestStageBlockers, getRequestStageCompletion, REQUEST_PARTIAL_THRESHOLD } from './campOps.requestValidation.js';
+import {
+  getRequestStageBlockers,
+  getRequestStageCompletion,
+  isPastePartialImportEligible,
+  REQUEST_PARTIAL_THRESHOLD,
+} from './campOps.requestValidation.js';
 import { normalizeContactPersons } from './campContactPersons.js';
 import { cleanSpaces, formatTextValue } from '../../utils/textFormat.js';
 
@@ -18,7 +23,7 @@ export function formatCampTextPayload(payload = {}) {
   if (Array.isArray(out.contactPersons)) {
     out.contactPersons = out.contactPersons.map((person) => ({
       ...person,
-      name: formatTextValue(person?.name, 'doctorName'),
+      name: formatTextValue(person?.name, 'fieldPersonName'),
       level: formatTextValue(person?.level, 'contactPersonLevel'),
       phone: formatTextValue(person?.phone, 'fieldPersonPhone'),
     }));
@@ -484,7 +489,7 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
       clientName: trimStr(row.clientName),
       campaignName: normalizeCampName(row.campaignName),
       campaignType: trimStr(row.campaignType) || 'Screening',
-      doctorName: trimStr(row.doctorName),
+      doctorName: formatTextValue(trimStr(row.doctorName), 'doctorName'),
       doctorCode: trimStr(row.doctorCode),
       speciality: trimStr(row.speciality),
       hospitalName: trimStr(row.hospitalName),
@@ -502,7 +507,7 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
       expectedPatients: expectedPatients || 0,
       contactPersonLevel: trimStr(row.contactPersonLevel),
       contactPersons: normalizeContactPersons(row),
-      fieldPersonName: trimStr(row.fieldPersonName),
+      fieldPersonName: formatTextValue(trimStr(row.fieldPersonName), 'fieldPersonName'),
       fieldPersonPhone: trimStr(row.fieldPersonPhone),
       remarks: trimStr(row.remarks),
     };
@@ -515,7 +520,12 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
       continue;
     }
 
-    if (allowPartial && completion.partial) {
+    const partialEligible = allowPartial && (
+      completion.partial
+      || (source === 'paste' && isPastePartialImportEligible(normalized))
+    );
+
+    if (partialEligible) {
       partialRows.push({
         ...normalized,
         errors: blockers,

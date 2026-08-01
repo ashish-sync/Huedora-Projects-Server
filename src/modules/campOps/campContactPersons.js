@@ -1,4 +1,5 @@
 import { CONTACT_PERSON_LEVELS } from './campOps.constants.js';
+import { formatContactPersonName } from '../../utils/textFormat.js';
 
 export const DEFAULT_CONTACT_PERSON_LEVEL = 'Territory Manager';
 
@@ -14,6 +15,10 @@ const LEGACY_CONTACT_PERSON_LEVEL_ALIASES = {
 
 function trimStr(v) {
   return v == null ? '' : String(v).trim();
+}
+
+function formatName(value) {
+  return formatContactPersonName(trimStr(value));
 }
 
 export function normalizeContactPersonLevel(level) {
@@ -38,13 +43,13 @@ export function normalizeContactPersons(source = {}) {
   if (list.length) {
     return list.map((item) => ({
       level: normalizeContactPersonLevel(item?.level ?? item?.contactPersonLevel),
-      name: trimStr(item?.name ?? item?.fieldPersonName),
+      name: formatName(item?.name ?? item?.fieldPersonName),
       phone: trimStr(item?.phone ?? item?.fieldPersonPhone),
     }));
   }
 
   const legacy = emptyContactPerson(trimStr(source.contactPersonLevel) || DEFAULT_CONTACT_PERSON_LEVEL);
-  legacy.name = trimStr(source.fieldPersonName);
+  legacy.name = formatName(source.fieldPersonName);
   legacy.phone = trimStr(source.fieldPersonPhone);
 
   if (legacy.name || legacy.phone) {

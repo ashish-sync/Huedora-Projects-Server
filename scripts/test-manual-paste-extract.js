@@ -38,7 +38,8 @@ function test(name, fn) {
 test('extracts labeled fields and contact priority (SE first)', () => {
   const { display, row } = extractManualPasteFields(SAMPLE);
 
-  assert.equal(display.doctorName, 'Dr. Rajesh Kumar');
+  assert.equal(display.doctorName, 'Rajesh Kumar');
+  assert.equal(row.doctorName, 'Rajesh Kumar');
   assert.equal(row.doctorCode, 'DOC123');
   assert.equal(display.campAddress, '12 MG Road, Pune, Maharashtra 411001');
   assert.equal(display.state, 'Maharashtra');

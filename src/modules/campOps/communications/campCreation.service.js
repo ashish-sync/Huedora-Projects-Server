@@ -6,6 +6,7 @@ import {
   resolveCampSchedule,
   captureSubmissionTracking,
 } from '../campOps.helpers.js';
+import { assertHistoricalCampDatesAllowed } from '../campDatePolicy.js';
 import { CampDuplicateError, findExistingDuplicateCamp } from './utils/campDuplicateHelpers.js';
 
 export { CampDuplicateError, findExistingDuplicateCamp };
@@ -17,11 +18,17 @@ export async function createCampFromRow({
   source = 'api',
   submittedAt,
   extras = {},
+  permissions = null,
 }) {
   const duplicate = await findExistingDuplicateCamp({ client, row });
   if (duplicate) {
     throw new CampDuplicateError(duplicate);
   }
+
+  assertHistoricalCampDatesAllowed(createdBy, permissions, {
+    campDate: row.campDate,
+    requestDate: row.requestDate,
+  });
 
   const campId = await generateCampId(row.campDate);
   const schedule = resolveCampSchedule({

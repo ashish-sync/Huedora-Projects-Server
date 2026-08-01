@@ -21,13 +21,21 @@ export const CAMP_ONE_DEMO = {
   hcwName: 'Ravi Technician',
 };
 
+/** Demo camps use doctorCode DEMO-{key} and are upserted on every seed run. */
+export const DEMO_CAMP_KEYS = [
+  'REQ', 'INFO', 'REJ', 'CANR',
+  'ASGN', 'ASGD',
+  'EXEC', 'ONGO', 'EXMK',
+  'FIN', 'FINSB', 'FINCF', 'FINHD', 'FINPY',
+];
+
 function addDays(isoDate, days) {
   const d = new Date(`${isoDate}T12:00:00`);
   d.setDate(d.getDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
-function baseCampFields({ client, campDate, doctorSuffix = 'A' }) {
+function baseCampFields({ client, campDate, label }) {
   const state = 'Maharashtra';
   const city = 'Pune';
   const zone = resolveZoneNameForState(state) || 'West Zone';
@@ -43,8 +51,8 @@ function baseCampFields({ client, campDate, doctorSuffix = 'A' }) {
     endTime: '12:00',
     durationHours: 3,
     campSlot: 'Morning',
-    doctorName: `Dr. Demo ${doctorSuffix}`,
-    doctorCode: `DOC${doctorSuffix}`,
+    doctorName: label,
+    doctorCode: '',
     campAddress: '12 MG Road, Pune, Maharashtra 411001',
     city,
     state,
@@ -54,10 +62,47 @@ function baseCampFields({ client, campDate, doctorSuffix = 'A' }) {
     expectedPatients: 50,
     fieldPersonName: 'Amit Sharma',
     fieldPersonPhone: '9876543210',
-    remarks: '',
+    remarks: 'Demo camp for stage testing',
     lifecycleStage: 'request',
     assignmentStatus: 'Pending',
     executionStatus: 'Camp Scheduled',
+    isDeleted: false,
+  };
+}
+
+function hcwAssignmentFields(hcw) {
+  return {
+    assignmentDecision: 'assign',
+    assignmentStatus: 'Assigned',
+    hcwContactId: hcw._id,
+    hcwCategory: 'Technician',
+    hcwName: hcw.name,
+    hcwContact: hcw.mobile || hcw.contact,
+  };
+}
+
+function executionCompleteFields() {
+  return {
+    executionStatus: 'Camp Completed',
+    chargeableStatus: 'Chargeable',
+    inTime: '09:05',
+    outTime: '12:10',
+    totalHours: 3.08,
+    patientsCount: 42,
+    actualPatients: 42,
+    consumablesUsed: [{ item: 'Gloves', quantity: 2, unit: 'box' }],
+  };
+}
+
+function financialPayoutFields() {
+  return {
+    campAmount: 15000,
+    travelling: 500,
+    overtimeExpense: 0,
+    otherExpenses: 0,
+    totalPayout: 15500,
+    paidAmount: 0,
+    balance: 15500,
   };
 }
 
@@ -142,25 +187,253 @@ async function ensureHcwContact() {
   return contact;
 }
 
-async function ensureDemoCamp({ key, client, hcw, overrides = {} }) {
-  const existing = await CampOpsCamp.findOne({ isDeleted: false, doctorCode: `DEMO-${key}` });
-  if (existing) return { created: false, camp: existing };
-
+async function ensureDemoCamp({ key, client, overrides = {} }) {
+  const doctorCode = `DEMO-${key}`;
+  const existing = await CampOpsCamp.findOne({ doctorCode });
+  const label = overrides.doctorName || `Dr. Demo ${key}`;
   const campDate = overrides.campDate || addDays(new Date().toISOString().slice(0, 10), 14);
-  const base = baseCampFields({ client, campDate, doctorSuffix: key });
+  const base = baseCampFields({ client, campDate, label });
   const tracking = captureSubmissionTracking();
 
-  const camp = await CampOpsCamp.create({
+  const payload = {
     ...base,
     ...overrides,
-    doctorCode: `DEMO-${key}`,
-    campId: await generateCampId(campDate),
+    doctorCode,
+    doctorName: label,
+    campId: existing?.campId || await generateCampId(campDate),
     createdByEmail: CAMP_ONE_DEMO.adminEmail,
-    requestReviewStatus: overrides.requestReviewStatus || 'review_pending',
-    ...tracking,
-  });
+    requestReviewStatus: overrides.requestReviewStatus ?? 'review_pending',
+    isDeleted: false,
+    ...(existing ? {} : tracking),
+  };
 
-  return { created: true, camp };
+  if (existing) {
+    Object.assign(existing, payload);
+    await existing.save();
+    return { created: false, updated: true, camp: existing };
+  }
+
+  const camp = await CampOpsCamp.create(payload);
+  return { created: true, updated: false, camp };
+}
+
+function buildDemoCampDefinitions({ client, hcw, today }) {
+  const hcwFields = hcwAssignmentFields(hcw);
+  const execComplete = executionCompleteFields();
+  const payout = financialPayoutFields();
+
+  return [
+    {
+      key: 'REQ',
+      label: 'Dr. Demo REQ (Review Pending)',
+      overrides: {
+        status: 'pending_review',
+        lifecycleStage: 'request',
+        requestReviewStatus: 'review_pending',
+        campDate: addDays(today, 10),
+      },
+    },
+    {
+      key: 'INFO',
+      label: 'Dr. Demo INFO (Info Requested)',
+      overrides: {
+        status: 'pending_review',
+        lifecycleStage: 'request',
+        requestReviewStatus: 'information_requested',
+        informationRequestNote: 'Please confirm doctor contact number.',
+        campDate: addDays(today, 12),
+      },
+    },
+    {
+      key: 'REJ',
+      label: 'Dr. Demo REJ (Rejected)',
+      overrides: {
+        status: 'rejected',
+        lifecycleStage: 'request',
+        requestReviewStatus: 'rejected',
+        rejectionReason: 'Demo rejection for testing',
+        campDate: addDays(today, 8),
+      },
+    },
+    {
+      key: 'CANR',
+      label: 'Dr. Demo CANR (Cancelled)',
+      overrides: {
+        status: 'cancelled',
+        lifecycleStage: 'request',
+        requestReviewStatus: 'cancelled',
+        cancelledBy: 'brand',
+        remarks: 'Cancelled by client for demo',
+        campDate: addDays(today, 7),
+      },
+    },
+    {
+      key: 'ASGN',
+      label: 'Dr. Demo ASGN (Unassigned)',
+      overrides: {
+        status: 'approved',
+        lifecycleStage: 'assignment',
+        requestReviewStatus: 'approved',
+        assignmentDecision: '',
+        assignmentStatus: 'Pending',
+        campDate: addDays(today, 15),
+      },
+    },
+    {
+      key: 'ASGD',
+      label: 'Dr. Demo ASGD (Assigned)',
+      overrides: {
+        status: 'approved',
+        lifecycleStage: 'assignment',
+        requestReviewStatus: 'approved',
+        campDate: addDays(today, 16),
+        ...hcwFields,
+      },
+    },
+    {
+      key: 'EXEC',
+      label: 'Dr. Demo EXEC (Scheduled)',
+      overrides: {
+        status: 'approved',
+        lifecycleStage: 'execution',
+        requestReviewStatus: 'approved',
+        executionStatus: 'Camp Scheduled',
+        campDate: addDays(today, 18),
+        ...hcwFields,
+      },
+    },
+    {
+      key: 'ONGO',
+      label: 'Dr. Demo ONGO (Ongoing)',
+      overrides: {
+        status: 'approved',
+        lifecycleStage: 'execution',
+        requestReviewStatus: 'approved',
+        executionStatus: 'Camp Ongoing',
+        campDate: today,
+        startTime: '08:00',
+        endTime: '20:00',
+        inTime: '08:05',
+        ...hcwFields,
+      },
+    },
+    {
+      key: 'EXMK',
+      label: 'Dr. Demo EXMK (Marked Executed)',
+      overrides: {
+        status: 'approved',
+        lifecycleStage: 'execution',
+        requestReviewStatus: 'approved',
+        executionStatus: 'Marked Executed',
+        campDate: addDays(today, -1),
+        startTime: '09:00',
+        endTime: '11:00',
+        inTime: '09:02',
+        outTime: '11:05',
+        ...hcwFields,
+      },
+    },
+    {
+      key: 'FIN',
+      label: 'Dr. Demo FIN (Pending Submission)',
+      overrides: {
+        status: 'executed',
+        lifecycleStage: 'financial',
+        requestReviewStatus: 'approved',
+        campDate: addDays(today, 5),
+        executedAt: new Date().toISOString(),
+        paymentSubmitStatus: '',
+        financePaymentStatus: 'not_paid',
+        submittedToFinanceAt: null,
+        ...hcwFields,
+        ...execComplete,
+        ...payout,
+      },
+    },
+    {
+      key: 'FINSB',
+      label: 'Dr. Demo FINSB (Submitted)',
+      overrides: {
+        status: 'executed',
+        lifecycleStage: 'financial',
+        requestReviewStatus: 'approved',
+        campDate: addDays(today, 4),
+        executedAt: addDays(today, 3) + 'T10:00:00.000Z',
+        paymentSubmitStatus: 'payment_not_checked',
+        financePaymentStatus: 'under_review',
+        submittedToFinanceAt: new Date().toISOString(),
+        submittedToFinanceByEmail: CAMP_ONE_DEMO.adminEmail,
+        ...hcwFields,
+        ...execComplete,
+        ...payout,
+      },
+    },
+    {
+      key: 'FINCF',
+      label: 'Dr. Demo FINCF (Payment Verified)',
+      overrides: {
+        status: 'executed',
+        lifecycleStage: 'financial',
+        requestReviewStatus: 'approved',
+        campDate: addDays(today, 3),
+        executedAt: addDays(today, 2) + 'T10:00:00.000Z',
+        paymentSubmitStatus: 'payment_confirmed',
+        financePaymentStatus: 'under_review',
+        submittedToFinanceAt: addDays(today, 1) + 'T12:00:00.000Z',
+        submittedToFinanceByEmail: CAMP_ONE_DEMO.adminEmail,
+        ...hcwFields,
+        ...execComplete,
+        ...payout,
+      },
+    },
+    {
+      key: 'FINHD',
+      label: 'Dr. Demo FINHD (Payment On Hold)',
+      overrides: {
+        status: 'executed',
+        lifecycleStage: 'financial',
+        requestReviewStatus: 'approved',
+        campDate: addDays(today, 2),
+        executedAt: addDays(today, 1) + 'T10:00:00.000Z',
+        paymentSubmitStatus: 'payment_hold',
+        paymentRemark: 'Demo hold — awaiting invoice',
+        financePaymentStatus: 'under_review',
+        submittedToFinanceAt: addDays(today, 1) + 'T14:00:00.000Z',
+        submittedToFinanceByEmail: CAMP_ONE_DEMO.adminEmail,
+        ...hcwFields,
+        ...execComplete,
+        ...payout,
+      },
+    },
+    {
+      key: 'FINPY',
+      label: 'Dr. Demo FINPY (Paid)',
+      overrides: {
+        status: 'executed',
+        lifecycleStage: 'financial',
+        requestReviewStatus: 'approved',
+        campDate: addDays(today, 1),
+        executedAt: today + 'T09:00:00.000Z',
+        paymentSubmitStatus: 'payment_confirmed',
+        financePaymentStatus: 'paid',
+        transactionId: 'DEMO-UTR-0001',
+        submittedToFinanceAt: addDays(today, -1) + 'T11:00:00.000Z',
+        submittedToFinanceByEmail: CAMP_ONE_DEMO.adminEmail,
+        ...hcwFields,
+        ...execComplete,
+        ...payout,
+        paidAmount: 15500,
+        balance: 0,
+      },
+    },
+  ].map((entry) => ({
+    key: entry.key,
+    client,
+    overrides: {
+      ...entry.overrides,
+      doctorName: entry.label,
+    },
+  }));
 }
 
 export async function ensureCampOpsSeed() {
@@ -170,91 +443,23 @@ export async function ensureCampOpsSeed() {
   const hcw = await ensureHcwContact();
 
   const today = new Date().toISOString().slice(0, 10);
-
-  const camps = await Promise.all([
-    ensureDemoCamp({
-      key: 'REQ',
-      client,
-      hcw,
-      overrides: {
-        status: 'pending_review',
-        lifecycleStage: 'request',
-        requestReviewStatus: 'review_pending',
-        campDate: addDays(today, 10),
-      },
-    }),
-    ensureDemoCamp({
-      key: 'INFO',
-      client,
-      hcw,
-      overrides: {
-        status: 'pending_review',
-        lifecycleStage: 'request',
-        requestReviewStatus: 'information_requested',
-        informationRequestNote: 'Please confirm doctor contact number.',
-        campDate: addDays(today, 12),
-      },
-    }),
-    ensureDemoCamp({
-      key: 'ASGN',
-      client,
-      hcw,
-      overrides: {
-        status: 'approved',
-        lifecycleStage: 'assignment',
-        assignmentDecision: '',
-        assignmentStatus: 'Pending',
-        campDate: addDays(today, 15),
-      },
-    }),
-    ensureDemoCamp({
-      key: 'EXEC',
-      client,
-      hcw,
-      overrides: {
-        status: 'approved',
-        lifecycleStage: 'execution',
-        assignmentDecision: 'assign',
-        assignmentStatus: 'Assigned',
-        hcwContactId: hcw._id,
-        hcwCategory: 'Technician',
-        hcwName: hcw.name,
-        hcwContact: hcw.mobile || hcw.contact,
-        campDate: addDays(today, 18),
-      },
-    }),
-    ensureDemoCamp({
-      key: 'FIN',
-      client,
-      hcw,
-      overrides: {
-        status: 'executed',
-        lifecycleStage: 'financial',
-        assignmentDecision: 'assign',
-        assignmentStatus: 'Assigned',
-        hcwContactId: hcw._id,
-        hcwCategory: 'Technician',
-        hcwName: hcw.name,
-        hcwContact: hcw.mobile || hcw.contact,
-        executionStatus: 'Camp Completed',
-        patientsCount: 42,
-        actualPatients: 42,
-        campDate: addDays(today, 5),
-        executedAt: new Date().toISOString(),
-      },
-    }),
-  ]);
+  const definitions = buildDemoCampDefinitions({ client, hcw, today });
+  const camps = await Promise.all(definitions.map((def) => ensureDemoCamp(def)));
 
   const repaired = await repairExecutedCampLifecycleStages();
   if (repaired) {
     console.log(`[camp-ops] Moved ${repaired} executed camp(s) to Finance & Settlement stage`);
   }
 
+  const createdCamps = camps.filter((item) => item.created).length;
+  const updatedCamps = camps.filter((item) => item.updated).length;
+
   return {
     admin,
     client,
     hcw,
     camps: camps.map((item) => item.camp),
-    createdCamps: camps.filter((item) => item.created).length,
+    createdCamps,
+    updatedCamps,
   };
 }

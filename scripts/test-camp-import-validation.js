@@ -82,6 +82,35 @@ const cases = [
     expectInvalid: 1,
   },
   {
+    name: 'paste partial with doctor and date only',
+    rows: [{
+      source: 'paste',
+      clientName: 'Acme Pharma',
+      campaignType: 'Cardio',
+      campaignName: 'BMD',
+      doctorName: 'Dr Sharma',
+      doctorCode: 'D001',
+      campDate: '2026-07-22',
+    }],
+    options: { source: 'paste', allowPartial: true },
+    expectValid: 0,
+    expectPartial: 1,
+    expectInvalid: 0,
+  },
+  {
+    name: 'paste without anchor fields stays invalid',
+    rows: [{
+      source: 'paste',
+      clientName: 'Acme Pharma',
+      campaignType: 'Cardio',
+      campaignName: 'BMD',
+    }],
+    options: { source: 'paste', allowPartial: true },
+    expectValid: 0,
+    expectPartial: 0,
+    expectInvalid: 1,
+  },
+  {
     name: 'variant doctor headers map to name and code',
     run: () => {
       const result = matchImportColumns(['Doctor Name', 'Doctor_Code', 'Camp Date']);
@@ -100,8 +129,14 @@ for (const testCase of cases) {
     if (testCase.run) {
       testCase.run();
     } else {
-      const { validRows, invalidRows } = validateMappedImportRows(testCase.rows, { source: 'excel' });
+      const { validRows, partialRows, invalidRows } = validateMappedImportRows(
+        testCase.rows,
+        testCase.options || { source: 'excel' },
+      );
       assert(validRows.length === testCase.expectValid, `expected ${testCase.expectValid} valid, got ${validRows.length}`);
+      if (testCase.expectPartial != null) {
+        assert(partialRows.length === testCase.expectPartial, `expected ${testCase.expectPartial} partial, got ${partialRows.length}`);
+      }
       assert(invalidRows.length === testCase.expectInvalid, `expected ${testCase.expectInvalid} invalid, got ${invalidRows.length}`);
       if (testCase.expectErrorIncludes) {
         const errors = invalidRows[0]?.errors || [];

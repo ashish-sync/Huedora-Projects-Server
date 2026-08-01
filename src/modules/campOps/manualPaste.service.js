@@ -12,6 +12,7 @@ import {
 import { normalizeCampName } from './campOps.constants.js';
 import { extractManualPasteFields, formatManualPasteOutput } from './manualPaste.extract.js';
 import { enrichPasteLocationFromPin } from './manualPaste.enrich.js';
+import { assertHistoricalCampDatesAllowed } from './campDatePolicy.js';
 
 const BLOCK_SEPARATOR = /(?:^|\n)\s*(?:---+|===+|\*\*\*+)\s*(?:\n|$)/;
 
@@ -293,15 +294,32 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
         },
         null,
         client,
+        { allowPartial: Boolean(entry.partial) },
       );
+
+      assertHistoricalCampDatesAllowed(
+        helpers.user,
+        helpers.permissions,
+        {
+          campDate: payload.campDate,
+          requestDate: payload.requestDate || new Date().toISOString().slice(0, 10),
+        },
+      );
+
+      const requestDate = payload.requestDate || new Date().toISOString().slice(0, 10);
+      if (!payload.campDate) {
+        payload.campDate = requestDate;
+      }
 
       const camp = await CampOpsCamp.create({
         ...payload,
         campId: payload.campDate ? await generateCampId(payload.campDate) : await generateCampId(),
         status: 'pending_review',
+        lifecycleStage: 'request',
+        requestReviewStatus: 'review_pending',
         source: 'paste',
         requestIncomplete: Boolean(entry.partial),
-        requestDate: new Date().toISOString().slice(0, 10),
+        requestDate,
         createdById: actor.id,
         createdByEmail: actor.email,
         ...tracking,

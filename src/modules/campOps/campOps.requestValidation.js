@@ -4,11 +4,50 @@ import { CAMP_OPS_SOURCES, CONTACT_PERSON_LEVELS } from './campOps.constants.js'
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
 import { isValidPhone } from '../../utils/identityNormalize.js';
 import { normalizeContactPersons } from './campContactPersons.js';
+import { getDoctorNameFormatError } from '../../utils/textFormat.js';
 
 export const REQUEST_PARTIAL_THRESHOLD = 0.6;
 
+/** Manual paste: at least one substantive field from pasted text (not context defaults). */
+const PASTE_PARTIAL_ANCHOR_KEYS = [
+  'doctorName',
+  'doctorCode',
+  'campDate',
+  'campAddress',
+  'pincode',
+  'city',
+  'state',
+  'district',
+  'hq',
+  'expectedPatients',
+  'contactPersons',
+];
+
 function hasText(value) {
   return Boolean(trimStr(value));
+}
+
+function hasPasteAnchorField(camp = {}) {
+  return PASTE_PARTIAL_ANCHOR_KEYS.some((key) => {
+    if (key === 'pincode') return /^\d{6}$/.test(trimStr(camp.pincode));
+    if (key === 'expectedPatients') {
+      const raw = String(camp.expectedPatients ?? '').trim();
+      return raw !== '' && /^\d+$/.test(raw) && Number(raw) > 0;
+    }
+    if (key === 'contactPersons') {
+      return normalizeContactPersons(camp).some(
+        (contact) => hasText(contact.name) || isValidPhone(contact.phone),
+      );
+    }
+    return hasText(camp[key]);
+  });
+}
+
+/** Paste imports may create incomplete camps when a few fields were captured from text. */
+export function isPastePartialImportEligible(camp = {}) {
+  const completion = getRequestStageCompletion(camp);
+  if (completion.complete) return false;
+  return hasPasteAnchorField(camp);
 }
 
 /** Required request-stage checks used for completion percentage (paste partial import). */
@@ -66,6 +105,12 @@ export function getRequestStageBlockers(camp = {}) {
   }
 
   if (!hasText(camp.doctorName)) errors.push('Doctor name is required');
+  else {
+    const doctorNameError = getDoctorNameFormatError(camp.doctorName);
+    if (doctorNameError && doctorNameError !== 'Doctor name is required') {
+      errors.push(doctorNameError);
+    }
+  }
   if (!hasText(camp.doctorCode)) errors.push('Doctor code is required');
   if (!hasText(camp.campAddress)) errors.push('Camp address is required');
   if (!hasText(camp.state)) errors.push('State is required');

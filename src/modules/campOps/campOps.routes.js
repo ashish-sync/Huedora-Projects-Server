@@ -110,6 +110,7 @@ import {
   parseExportFormat,
 } from './campOps.export.js';
 import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.requestValidation.js';
+import { assertHistoricalCampDatesAllowed } from './campDatePolicy.js';
 import {
   resolveCampClientScope,
   applyClientScopeToFilter,
@@ -290,7 +291,8 @@ async function resolveClientFromBody(body, { allowCreate = false } = {}) {
   return CampOpsClient.create({ name, code, isActive: true });
 }
 
-function campPayloadFromBody(body, existing = null, client = null) {
+function campPayloadFromBody(body, existing = null, client = null, options = {}) {
+  const allowPartial = options.allowPartial === true;
   const schedule = resolveCampSchedule({
     startTime: body.startTime ?? existing?.startTime ?? '09:00',
     endTime: body.endTime ?? existing?.endTime ?? '',
@@ -299,7 +301,7 @@ function campPayloadFromBody(body, existing = null, client = null) {
 
   const campDateRaw = body.campDate ?? existing?.campDate;
   const campDate = parseLocalDateInput(campDateRaw) || trimStr(campDateRaw);
-  if (!campDate && !existing) {
+  if (!campDate && !existing && !allowPartial) {
     throw new AppError('Camp date is required', 400, 'VALIDATION_ERROR');
   }
 
@@ -857,6 +859,11 @@ router.post(
       throw new AppError(err.message || 'Complete all request stage fields', 400, 'VALIDATION_ERROR');
     }
 
+    assertHistoricalCampDatesAllowed(req.user, req.permissions, {
+      campDate: payload.campDate,
+      requestDate: payload.requestDate,
+    });
+
     const tracking = captureSubmissionTracking();
     const a = actor(req);
     const camp = await CampOpsCamp.create({
@@ -915,6 +922,19 @@ router.put(
     if (stage !== 'financial') {
       financialOnlyKeys.forEach((key) => { delete payload[key]; });
     }
+
+    if (stage === 'request' || !lifecycleOnly) {
+      assertHistoricalCampDatesAllowed(
+        req.user,
+        req.permissions,
+        {
+          campDate: payload.campDate ?? camp.campDate,
+          requestDate: payload.requestDate ?? camp.requestDate,
+        },
+        { existing: camp },
+      );
+    }
+
     Object.assign(camp, payload);
 
     if (!lifecycleOnly || stage === 'request') {
@@ -1915,6 +1935,10 @@ router.post(
         endTime: row.endTime,
         durationHours: row.durationHours,
       });
+      assertHistoricalCampDatesAllowed(req.user, req.permissions, {
+        campDate: row.campDate,
+        requestDate: row.requestDate,
+      });
       const tracking = captureSubmissionTracking();
       const camp = await CampOpsCamp.create({
         campId: await generateCampId(row.campDate),
@@ -2139,6 +2163,10 @@ router.post(
       null,
       client,
     );
+    assertHistoricalCampDatesAllowed(req.user, req.permissions, {
+      campDate: payload.campDate,
+      requestDate: payload.requestDate,
+    });
     const tracking = captureSubmissionTracking();
     const camp = await CampOpsCamp.create({
       ...payload,
@@ -2172,7 +2200,7 @@ router.post(
         defaults,
       },
       actor(req),
-      { resolveClientFromBody, campPayloadFromBody },
+      { resolveClientFromBody, campPayloadFromBody, user: req.user, permissions: req.permissions },
     );
     res.json({
       data,
