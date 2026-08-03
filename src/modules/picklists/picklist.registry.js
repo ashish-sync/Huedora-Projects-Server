@@ -57,7 +57,7 @@ export const PICKLIST_REGISTRY = {
     otherLabel: 'Other',
   },
   'finance.category': {
-    label: 'Expense Category',
+    label: 'Expense',
     staticOptions: EXPENSE_CATEGORIES,
     otherLabel: 'Other',
   },

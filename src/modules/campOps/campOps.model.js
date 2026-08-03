@@ -125,6 +125,15 @@ export const CampOpsClient = defineCollection('camp_ops_clients', {
   ...softDelete,
   name: '',
   code: '',
+  /** Billing / invoice recipient details (shared across Client Master programs) */
+  address: '',
+  gstin: '',
+  pan: '',
+  stateName: '',
+  stateCode: '',
+  contactPerson: '',
+  email: '',
+  phone: '',
   isActive: true,
 });
 

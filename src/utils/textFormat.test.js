@@ -19,6 +19,9 @@ test('formatTextValue respects field kinds', () => {
   assert.equal(formatTextValue('  9876543210  ', 'contact'), '9876543210');
   assert.equal(formatTextValue('  mumbai  ', 'city'), 'Mumbai');
   assert.equal(formatTextValue('  not initiated  ', 'agreementStatus'), 'not initiated');
+  assert.equal(formatTextValue('  request  ', 'lifecycleStage'), 'request');
+  assert.equal(formatTextValue('  pending_review  ', 'status'), 'pending_review');
+  assert.equal(formatTextValue('  payment_confirmed  ', 'paymentSubmitStatus'), 'payment_confirmed');
   assert.equal(formatTextValue('  dr.  ravi   kumar  ', 'doctorName'), 'Ravi Kumar');
   assert.equal(formatTextValue('  amit   sharma  ', 'fieldPersonName'), 'Amit Sharma');
 });

@@ -136,9 +136,23 @@ export function assertMasterWritePermission(userPermissions, entityId) {
     }
     return;
   }
+  if (module === 'camp') {
+    if (
+      !perms.has(PERMISSIONS.CAMPS_REQUEST) &&
+      !perms.has(PERMISSIONS.CAMPS_APPROVE) &&
+      !perms.has(PERMISSIONS.LOGISTICS_MASTER)
+    ) {
+      throw new AppError(
+        'Approving a Master One Request for Camp One requires camps write access',
+        403,
+        'FORBIDDEN'
+      );
+    }
+    return;
+  }
   if (!perms.has(PERMISSIONS.LOGISTICS_MASTER) && !perms.has(PERMISSIONS.LOGISTICS_WRITE)) {
     throw new AppError(
-      'Approving a Master One Request for inventory or movements requires Master One write access',
+      'Approving a Master One Request for Products or Expense Master requires Master One write access',
       403,
       'FORBIDDEN'
     );
@@ -615,11 +629,10 @@ export async function createMasterFromPayload({
         pathKey: 'expense-categories',
         Model: LogisticsExpenseCategory,
         entityType: 'LogisticsExpenseCategory',
-        required: ['name'],
-        codePrefix: 'EXP',
+        required: ['code', 'name'],
         normalize: (b) => ({
+          code: trimStr(b.code).toUpperCase(),
           name: trimStr(b.name),
-          covers: trimStr(b.covers),
           isActive: true,
         }),
         payload,

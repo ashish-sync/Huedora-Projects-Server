@@ -35,7 +35,14 @@ function match(doc, filter = {}) {
           ? current.every((item) => !values.includes(String(item)))
           : !values.includes(String(current));
       }
-      if (val.$ne) return String(get(doc, key)) !== String(val.$ne);
+      if (Object.prototype.hasOwnProperty.call(val, '$ne')) {
+        const current = get(doc, key);
+        const expected = val.$ne;
+        // Match Mongo semantics: null/undefined are unequal to any concrete value.
+        if (expected == null) return current != null && current !== '';
+        if (current == null) return expected != null;
+        return String(current) !== String(expected);
+      }
       if (val.$exists !== undefined) {
         const parts = key.split('.');
         let cur = doc;

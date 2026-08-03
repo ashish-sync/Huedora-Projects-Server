@@ -14,7 +14,13 @@ import { AppError } from '../../utils/helpers.js';
  * Map snake_case parser output → camelCase camp import row.
  * Ready for duplicate detection: client + doctor + date + time.
  */
-export function parsedFieldsToCampRow(parsedFields = {}, defaults = {}) {
+export function parsedFieldsToCampRow(parsedFields = {}, defaults = {}, pinMaster = null) {
+  const city = trimStr(parsedFields.city) || trimStr(pinMaster?.cityName);
+  const state = trimStr(parsedFields.state) || trimStr(pinMaster?.stateName);
+  const district = trimStr(parsedFields.district) || trimStr(pinMaster?.districtName) || city;
+  const zone = trimStr(parsedFields.zone)
+    || trimStr(pinMaster?.zone)
+    || (state ? (resolveZoneNameForState(state) || '') : '');
   return {
     clientName: trimStr(defaults.clientName),
     campaignType: trimStr(defaults.campaignType) || 'Screening',
@@ -24,9 +30,13 @@ export function parsedFieldsToCampRow(parsedFields = {}, defaults = {}) {
     endTime: trimStr(parsedFields.camp_end_time),
     doctorName: trimStr(parsedFields.doctor_name),
     doctorCode: trimStr(parsedFields.doctor_code),
-    city: trimStr(parsedFields.city),
-    pincode: trimStr(parsedFields.pincode),
-    hq: trimStr(parsedFields.hq) || trimStr(parsedFields.city),
+    city,
+    district,
+    state,
+    pincode: trimStr(parsedFields.pincode) || trimStr(pinMaster?.pinCode),
+    hq: trimStr(parsedFields.hq) || city || district,
+    zone,
+    campAddress: trimStr(parsedFields.camp_address) || trimStr(parsedFields.address),
     expectedPatients: Math.max(0, Number(parsedFields.expected_patients) || 0),
     fieldPersonName: trimStr(parsedFields.contact_person_name),
     fieldPersonPhone: trimStr(parsedFields.contact_person_number),
@@ -89,14 +99,21 @@ export async function parseCampRequestWithValidation(
 
   if (pinMaster) {
     if (!enrichedFields.city && pinMaster.cityName) {
-      enrichmentWarnings.push(
-        `City auto-suggested from PIN master: ${pinMaster.cityName} (not applied — review manually)`,
-      );
+      enrichedFields.city = pinMaster.cityName;
+      enrichmentWarnings.push(`City auto-filled from PIN master: ${pinMaster.cityName}`);
     }
-    if (!enrichedFields.hq && pinMaster.cityName) {
-      enrichmentWarnings.push(
-        `HQ can be set to ${pinMaster.cityName} based on PIN master`,
-      );
+    if (!enrichedFields.hq && (pinMaster.cityName || pinMaster.districtName)) {
+      enrichedFields.hq = pinMaster.districtName || pinMaster.cityName;
+      enrichmentWarnings.push(`HQ auto-filled from PIN master: ${enrichedFields.hq}`);
+    }
+    if (!enrichedFields.state && pinMaster.stateName) {
+      enrichedFields.state = pinMaster.stateName;
+    }
+    if (!enrichedFields.district && (pinMaster.districtName || pinMaster.cityName)) {
+      enrichedFields.district = pinMaster.districtName || pinMaster.cityName;
+    }
+    if (!enrichedFields.zone && pinMaster.zone) {
+      enrichedFields.zone = pinMaster.zone;
     }
   }
 
@@ -114,7 +131,7 @@ export async function parseCampRequestWithValidation(
 
   if (pinMaster && !enrichedFields.city) {
     validation.warnings.push(
-      `PIN ${pin} maps to city "${pinMaster.cityName}" in master — City field is empty`,
+      `PIN ${pin} maps to city "${pinMaster.cityName || ''}" in master — City field is empty`,
     );
   }
 

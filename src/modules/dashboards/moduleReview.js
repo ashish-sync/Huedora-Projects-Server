@@ -31,7 +31,7 @@ export const REVIEW_MODULES = [
   },
   {
     id: 'contacts',
-    label: 'Business Partners',
+    label: 'Contact Directory',
     linkTo: '/master-data?scope=document&entity=contacts',
     permissions: [PERMISSIONS.AGREEMENTS_READ, PERMISSIONS.AGREEMENTS_WRITE],
   },
@@ -77,7 +77,7 @@ export const REVIEW_MODULES = [
   },
   {
     id: 'movements',
-    label: 'Goods Issue Requests',
+    label: 'Goods Issuance Requests',
     linkTo: '/asset-requests',
     permissions: [PERMISSIONS.MOVEMENTS_READ, PERMISSIONS.MOVEMENTS_REQUEST, PERMISSIONS.MOVEMENTS_APPROVE],
   },

@@ -1,5 +1,4 @@
 import {
-  DEFAULT_EXPENSE_CATEGORIES,
   DEFAULT_MOVEMENT_TYPES,
   DEFAULT_REASON_CODES,
   DEFAULT_STOCK_STATUSES,
@@ -179,43 +178,16 @@ export async function ensureLogisticsSeed() {
     }
   }
 
-  const canonicalExpenseNames = new Set(
-    DEFAULT_EXPENSE_CATEGORIES.map((c) => c.name.toLowerCase())
-  );
-  for (const cat of DEFAULT_EXPENSE_CATEGORIES) {
-    const existing = await LogisticsExpenseCategory.findOne({
-      $or: [{ code: cat.code }, { name: cat.name }],
-      isDeleted: false,
-    });
-    if (!existing) {
-      await LogisticsExpenseCategory.create({
-        code: cat.code,
-        name: cat.name,
-        covers: cat.covers,
-        isSystem: true,
-        isActive: true,
-      });
-    } else {
-      existing.code = cat.code;
-      existing.name = cat.name;
-      existing.covers = cat.covers;
-      existing.isSystem = true;
-      existing.isActive = true;
-      await existing.save();
-    }
+  const EXPENSE_MASTER_RESET_CODE = '_EXPENSE_MASTER_RESET_2026';
+  const legacyReset = await LogisticsExpenseCategory.findOne({ code: EXPENSE_MASTER_RESET_CODE });
+  if (legacyReset) {
+    legacyReset.isDeleted = true;
+    legacyReset.isActive = false;
+    await legacyReset.save();
   }
-  // Soft-delete legacy seeded expense categories not in the finance master list
-  const legacyNames = new Set(['travel', 'meals', 'parts', 'shipping', 'service']);
-  const legacyExpense = await LogisticsExpenseCategory.find({ isDeleted: false });
-  for (const row of legacyExpense) {
-    const nameKey = String(row.name || '').toLowerCase();
-    if (canonicalExpenseNames.has(nameKey)) continue;
-    if (legacyNames.has(nameKey) || legacyNames.has(String(row.code || '').toLowerCase())) {
-      row.isDeleted = true;
-      row.isActive = false;
-      await row.save();
-    }
-  }
+
+  const { ensureExpenseMasterSeed } = await import('./expenseMaster.seed.js');
+  await ensureExpenseMasterSeed();
 
   for (const u of [...DEFAULT_UOMS, ...SUPPLEMENTAL_UOMS]) {
     await ensureUom(u);

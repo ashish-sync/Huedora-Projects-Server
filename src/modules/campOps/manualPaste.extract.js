@@ -214,8 +214,8 @@ export function extractManualPasteFields(text) {
 
   const resolvedCity = city || location.city;
   const resolvedState = state || location.state;
-  const resolvedDistrict = pickFieldValue(raw, 'district') || location.district || '';
-  const resolvedHq = hq || resolvedCity;
+  const resolvedDistrict = pickFieldValue(raw, 'district') || location.district || resolvedCity;
+  const resolvedHq = hq || resolvedCity || resolvedDistrict;
 
   const display = {
     campDate: withDefault(campDate),

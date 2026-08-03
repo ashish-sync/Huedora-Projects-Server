@@ -34,9 +34,31 @@ export const DEMO_TEMPLATE_NAMES = new Set([
   'Short-Term Demo Loan',
 ]);
 
+const TEST_DOCTOR_CODE_PREFIXES = [
+  'DEMO-',
+  'E2E-',
+  'QA-',
+  'REF-',
+  'TCPL-',
+  'DBG-',
+  'DBG2-',
+  'DBG3-',
+  'NOHCW-',
+  'PASTE',
+];
+
 function isDemoCamp(camp = {}) {
   const doctorCode = String(camp.doctorCode || '').trim().toUpperCase();
-  if (doctorCode.startsWith('DEMO-')) return true;
+  if (TEST_DOCTOR_CODE_PREFIXES.some((prefix) => doctorCode.startsWith(prefix))) return true;
+  const doctorName = String(camp.doctorName || '').trim().toLowerCase();
+  if (
+    doctorName.includes('e2e test')
+    || doctorName.includes('qa doctor')
+    || doctorName.includes('paste demo')
+    || doctorName.includes('debug')
+  ) {
+    return true;
+  }
   if (String(camp.clientName || '').trim() === CAMP_ONE_DEMO.clientName) return true;
   if (String(camp.createdByEmail || '').trim().toLowerCase() === CAMP_ONE_DEMO.adminEmail) return true;
   return false;
@@ -51,7 +73,9 @@ function isDemoClient(client = {}) {
 function isDemoClientMaster(row = {}) {
   const clientName = String(row.clientName || '').trim();
   const program = String(row.programName || '').trim();
-  return clientName === CAMP_ONE_DEMO.clientName || program === 'Demo Screening Program';
+  return clientName === CAMP_ONE_DEMO.clientName
+    || program === 'Demo Screening Program'
+    || /^E2E\b/i.test(program);
 }
 
 function isDemoContact(contact = {}) {
@@ -78,7 +102,13 @@ function isDemoAuditEntry(entry = {}) {
     || blob.includes('demo-')
     || blob.includes('campadmin@tylo.local')
     || blob.includes('@demo.tylo.local')
-    || blob.includes('priya.sharma@citycare.example');
+    || blob.includes('priya.sharma@citycare.example')
+    || blob.includes('qa-dash-')
+    || blob.includes('qa-paste-')
+    || blob.includes('qa-xls-')
+    || blob.includes('qa-parse-')
+    || blob.includes('e2e-')
+    || blob.includes('utr-qa-');
 }
 
 /**
@@ -218,6 +248,27 @@ export async function purgeDemoData({ dryRun = false } = {}) {
     }
   } catch {
     // ignore
+  }
+
+  // Builder / commercial docs created during local QA (file-store only noise)
+  try {
+    const { FinanceCommercialDocument } = await import('../modules/finance/finance.model.js');
+    const commercial = await FinanceCommercialDocument.find({ isDeleted: false });
+    const demoCommercial = commercial.filter((row) => {
+      const blob = JSON.stringify(row || {}).toLowerCase();
+      return blob.includes('demo pharma')
+        || blob.includes('@demo.tylo.local')
+        || blob.includes('campadmin@tylo.local')
+        || blob.includes('e2e billing')
+        || blob.includes('qa doctor');
+    });
+    await removeDocs('finance_commercial_documents', demoCommercial, async (docs) => {
+      for (const doc of docs) {
+        await softDeleteDoc(FinanceCommercialDocument, doc);
+      }
+    });
+  } catch {
+    summary.removed.finance_commercial_documents = 0;
   }
 
   // Dev audit noise tied to demo entities

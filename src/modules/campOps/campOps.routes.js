@@ -81,6 +81,7 @@ import {
   assertExecutionStageSave,
   assertExecutionConsumablesComplete,
   isExecutionReadyForFinance,
+  normalizeLifecycleStage,
   EXECUTION_DOC_TYPES,
   EXECUTION_STATUS,
   resolveInTimeSelfieUrl,
@@ -240,6 +241,17 @@ const canRead = requirePermission(
   PERMISSIONS.CAMPS_REQUEST,
   PERMISSIONS.CAMPS_APPROVE
 );
+/** Client Master (brands + programs) — readable by Request One / Finance One for association */
+const canReadClientMaster = requirePermission(
+  PERMISSIONS.CAMPS_READ,
+  PERMISSIONS.CAMPS_REQUEST,
+  PERMISSIONS.CAMPS_APPROVE,
+  PERMISSIONS.ASSET_REQUESTS_READ,
+  PERMISSIONS.ASSET_REQUESTS_REQUEST,
+  PERMISSIONS.ASSET_REQUESTS_APPROVE,
+  PERMISSIONS.FINANCE_READ,
+  PERMISSIONS.FINANCE_WRITE
+);
 const canRequest = requirePermission(PERMISSIONS.CAMPS_REQUEST, PERMISSIONS.CAMPS_APPROVE);
 const canApprove = requirePermission(PERMISSIONS.CAMPS_APPROVE);
 
@@ -275,20 +287,106 @@ async function ensureUniqueClientCode(baseCode) {
   return code;
 }
 
+function extractClientBilling(body = {}) {
+  const billing = body.billing && typeof body.billing === 'object' ? body.billing : body;
+  return {
+    address: trimStr(billing.address ?? billing.billingAddress),
+    gstin: trimStr(billing.gstin ?? billing.GSTIN).toUpperCase(),
+    pan: trimStr(billing.pan ?? billing.panNumber).toUpperCase(),
+    stateName: trimStr(billing.stateName ?? billing.state),
+    stateCode: trimStr(billing.stateCode),
+    contactPerson: trimStr(billing.contactPerson ?? billing.billingContact),
+    email: trimStr(billing.email ?? billing.billingEmail).toLowerCase(),
+    phone: trimStr(billing.phone ?? billing.billingPhone ?? billing.mobile),
+  };
+}
+
+function hasClientBillingPayload(body = {}) {
+  if (body.billing != null && typeof body.billing === 'object') return true;
+  return [
+    'address',
+    'billingAddress',
+    'gstin',
+    'GSTIN',
+    'pan',
+    'panNumber',
+    'stateName',
+    'state',
+    'stateCode',
+    'contactPerson',
+    'billingContact',
+    'email',
+    'billingEmail',
+    'phone',
+    'billingPhone',
+    'mobile',
+  ].some((key) => body[key] !== undefined);
+}
+
+function applyClientBilling(client, body = {}) {
+  if (!client || !hasClientBillingPayload(body)) return false;
+  const next = extractClientBilling(body);
+  let changed = false;
+  for (const [key, value] of Object.entries(next)) {
+    if (String(client[key] || '') !== value) {
+      client[key] = value;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function clientBillingView(client) {
+  if (!client) {
+    return {
+      address: '',
+      gstin: '',
+      pan: '',
+      stateName: '',
+      stateCode: '',
+      contactPerson: '',
+      email: '',
+      phone: '',
+    };
+  }
+  const row = client.toObject ? client.toObject() : client;
+  return {
+    address: trimStr(row.address),
+    gstin: trimStr(row.gstin),
+    pan: trimStr(row.pan),
+    stateName: trimStr(row.stateName),
+    stateCode: trimStr(row.stateCode),
+    contactPerson: trimStr(row.contactPerson),
+    email: trimStr(row.email),
+    phone: trimStr(row.phone),
+  };
+}
+
 async function resolveClientFromBody(body, { allowCreate = false } = {}) {
   const clientId = body.clientId || body.client;
   if (clientId) {
     const byId = await CampOpsClient.findOne({ _id: String(clientId), isDeleted: false });
-    if (byId) return byId;
+    if (byId) {
+      if (applyClientBilling(byId, body)) await byId.save();
+      return byId;
+    }
   }
   const name = formatTextValue(body.clientName, 'clientName');
   if (!name) return null;
   const existing = await CampOpsClient.findOne({ isDeleted: false, name });
-  if (existing) return existing;
+  if (existing) {
+    if (applyClientBilling(existing, body)) await existing.save();
+    return existing;
+  }
   if (!allowCreate) return null;
   const requestedCode = trimStr(body.clientCode).toUpperCase();
   const code = requestedCode || (await ensureUniqueClientCode(buildClientCode(name)));
-  return CampOpsClient.create({ name, code, isActive: true });
+  return CampOpsClient.create({
+    name,
+    code,
+    isActive: true,
+    ...extractClientBilling(body),
+  });
 }
 
 function campPayloadFromBody(body, existing = null, client = null, options = {}) {
@@ -661,12 +759,10 @@ router.get(
   '/camps/export',
   canRead,
   asyncHandler(async (req, res) => {
+    // Keep lifecycle / stage filters so export matches the Manage table view.
     const query = { ...req.query };
-    delete query.lifecycleStage;
-    delete query.stage;
-    delete query.assignmentFilter;
-    delete query.executionFilter;
-    delete query.financialFilter;
+    delete query.columns;
+    delete query.format;
     const camps = await fetchCampsForExport(req, query, { scopeCampFilter });
     const columns = parseExportColumnKeys(req.query.columns);
     const format = parseExportFormat(req.query.format);
@@ -715,12 +811,16 @@ router.post(
         }
 
         camp.status = config.nextStatus;
+        camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
         if (config.nextStatus === 'approved') {
           const blockers = getRequestStageBlockers(camp);
           if (blockers.length) throw new Error(blockers[0]);
           camp.approvedById = a.id;
           camp.approvedByEmail = a.email;
           applyRequestReviewTransition(camp, 'approve');
+          if (camp.lifecycleStage === 'request') {
+            camp.lifecycleStage = 'assignment';
+          }
         }
         if (config.nextStatus === 'rejected') {
           const rejectionReason = trimStr(req.body?.rejectionReason || req.body?.remarks);
@@ -728,6 +828,9 @@ router.post(
           applyRequestReviewTransition(camp, 'reject', { reason: rejectionReason });
         }
         if (config.nextStatus === 'executed') {
+          if (camp.assignmentDecision !== 'assign' || !camp.hcwContactId) {
+            throw new Error('Assign a healthcare worker before marking the camp executed');
+          }
           camp.executedById = a.id;
           camp.executedByEmail = a.email;
           camp.executedAt = new Date().toISOString();
@@ -890,10 +993,14 @@ router.put(
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
 
-    const stage = trimStr(req.body.editingStage)
-      || trimStr(req.body.lifecycleStage)
-      || camp.lifecycleStage
-      || 'request';
+    // Normalize dirty title-cased stages from older saves before edit checks.
+    camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
+    const stage = normalizeLifecycleStage(
+      trimStr(req.body.editingStage)
+        || trimStr(req.body.lifecycleStage)
+        || camp.lifecycleStage,
+      'request',
+    );
     const lifecycleOnly = req.body.lifecycleOnly === true;
 
     if (!canEditLifecycleStage(camp, stage)) {
@@ -981,10 +1088,13 @@ router.put(
       }
     }
 
-    if (camp.status === 'approved' && camp.lifecycleStage === 'request') {
+    if (camp.status === 'approved' && normalizeLifecycleStage(camp.lifecycleStage, 'request') === 'request') {
       camp.lifecycleStage = 'assignment';
     }
-    if (camp.status === 'executed' && ['request', 'assignment', 'execution'].includes(camp.lifecycleStage)) {
+    if (
+      camp.status === 'executed'
+      && ['request', 'assignment', 'execution'].includes(normalizeLifecycleStage(camp.lifecycleStage, 'request'))
+    ) {
       camp.lifecycleStage = 'financial';
     }
 
@@ -999,6 +1109,7 @@ router.post(
   canRequest,
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
+    camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
     if (!canEditLifecycleStage(camp, 'financial')) {
       throw new AppError('Financial stage is not editable for this camp', 400, 'VALIDATION_ERROR');
     }
@@ -1072,6 +1183,7 @@ router.get(
 
 async function transitionCamp(req, res, nextStatus, action) {
   const camp = await loadCampForUser(req, req.params.id);
+  camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
   if (!canTransition(camp.status, nextStatus)) {
     throw new AppError(
       `Cannot transition from ${camp.status} to ${nextStatus}`,
@@ -1096,7 +1208,7 @@ async function transitionCamp(req, res, nextStatus, action) {
     camp.approvedById = a.id;
     camp.approvedByEmail = a.email;
     applyRequestReviewTransition(camp, 'approve');
-    if (!camp.lifecycleStage || camp.lifecycleStage === 'request') {
+    if (normalizeLifecycleStage(camp.lifecycleStage, 'request') === 'request') {
       camp.lifecycleStage = 'assignment';
     }
   }
@@ -1108,6 +1220,13 @@ async function transitionCamp(req, res, nextStatus, action) {
     applyRequestReviewTransition(camp, 'reject', { reason: rejectionReason });
   }
   if (nextStatus === 'executed') {
+    if (camp.assignmentDecision !== 'assign' || !camp.hcwContactId) {
+      throw new AppError(
+        'Assign a healthcare worker before marking the camp executed',
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
     camp.executedById = a.id;
     camp.executedByEmail = a.email;
     camp.executedAt = new Date().toISOString();
@@ -1266,7 +1385,7 @@ router.delete(
 
 router.get(
   '/clients',
-  canRead,
+  canReadClientMaster,
   asyncHandler(async (req, res) => {
     const { page, limit, skip } = parsePagination(req.query);
     const filter = { isDeleted: false };
@@ -1285,7 +1404,7 @@ router.get(
 
 router.get(
   '/clients/:id',
-  canRead,
+  canReadClientMaster,
   asyncHandler(async (req, res) => {
     const client = await CampOpsClient.findOne({ _id: req.params.id, isDeleted: false });
     if (!client) throw new AppError('Client not found', 404, 'NOT_FOUND');
@@ -1315,6 +1434,7 @@ router.post(
       name,
       code,
       isActive: req.body.isActive !== false,
+      ...extractClientBilling(req.body),
     });
     await audit(req, 'camp_ops.client_create', 'camp_ops_client', client._id, null, client.toObject());
     res.status(201).json({ data: client });
@@ -1344,6 +1464,7 @@ router.put(
     client.name = name;
     client.code = code;
     if (req.body.isActive !== undefined) client.isActive = req.body.isActive !== false;
+    applyClientBilling(client, req.body);
     await client.save();
     await audit(req, 'camp_ops.client_update', 'camp_ops_client', client._id, before, client.toObject());
     res.json({ data: client });
@@ -1451,7 +1572,7 @@ function assertClientMasterPayload(payload) {
 
 router.get(
   '/client-masters',
-  canRead,
+  canReadClientMaster,
   asyncHandler(async (req, res) => {
     const { page, limit, skip } = parsePagination(req.query);
     const filter = { isDeleted: false };
@@ -1465,7 +1586,21 @@ router.get(
       CampOpsClientMaster.find(filter).sort('-updatedAt').skip(skip).limit(limit),
       CampOpsClientMaster.countDocuments(filter),
     ]);
-    res.json(paginated(data, total, page, limit));
+    const clientIds = [...new Set(data.map((row) => String(row.clientId || '')).filter(Boolean))];
+    const clients = clientIds.length
+      ? await CampOpsClient.find({ isDeleted: false, _id: { $in: clientIds } })
+      : [];
+    const clientsById = new Map(clients.map((c) => [String(c._id), c]));
+    const enriched = data.map((row) => {
+      const plain = row.toObject ? row.toObject() : { ...row };
+      const client = clientsById.get(String(plain.clientId || ''));
+      return {
+        ...plain,
+        clientCode: client?.code || '',
+        billing: clientBillingView(client),
+      };
+    });
+    res.json(paginated(enriched, total, page, limit));
   })
 );
 
@@ -1608,11 +1743,29 @@ router.get(
 
 router.get(
   '/client-masters/:id',
-  canRead,
+  canReadClientMaster,
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
-    res.json({ data: row });
+    const plain = row.toObject ? row.toObject() : { ...row };
+    const client = plain.clientId
+      ? await CampOpsClient.findOne({ _id: plain.clientId, isDeleted: false })
+      : null;
+    res.json({
+      data: {
+        ...plain,
+        clientCode: client?.code || '',
+        billing: clientBillingView(client),
+        client: client
+          ? {
+              _id: client._id,
+              name: client.name,
+              code: client.code,
+              ...clientBillingView(client),
+            }
+          : null,
+      },
+    });
   })
 );
 
@@ -1950,9 +2103,14 @@ router.post(
         doctorCode: row.doctorCode,
         campAddress: row.campAddress,
         city: row.city,
+        district: row.district || row.city || '',
         state: row.state,
         pincode: row.pincode,
+        hq: row.hq || row.city || '',
+        zone: row.zone || '',
         campDate: row.campDate,
+        requestDate: row.requestDate || new Date().toISOString().slice(0, 10),
+        lifecycleStage: 'request',
         ...schedule,
         expectedPatients: row.expectedPatients || 0,
         fieldPersonName: row.fieldPersonName,
@@ -2013,11 +2171,16 @@ router.post('/communications/email/messages/:id/archive', canRequest, asyncHandl
 
 router.post('/communications/email/messages/:id/restore', canRequest, asyncHandler(handleEmailRestore));
 
+function preserveMultilineText(value) {
+  // Do not use trimStr/cleanSpaces — those collapse newlines and break paste label parsing.
+  return String(value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+}
+
 router.post(
   '/communications/paste/extract',
   canRequest,
   asyncHandler(async (req, res) => {
-    const text = trimStr(req.body?.text);
+    const text = preserveMultilineText(req.body?.text);
     if (!text) throw new AppError('Paste text is required', 400, 'VALIDATION_ERROR');
     const defaults = {
       clientName: trimStr(req.body?.clientName),
@@ -2121,7 +2284,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const data = await parseCampRequestWithValidation(
       {
-        text: trimStr(req.body?.text),
+        text: preserveMultilineText(req.body?.text),
         clientId: trimStr(req.body?.clientId),
         clientName: trimStr(req.body?.clientName),
         storeAudit: req.body?.storeAudit !== false,
@@ -2145,7 +2308,12 @@ router.post(
       campaignType: trimStr(req.body?.campaignType),
       campaignName: trimStr(req.body?.campaignName),
     };
-    const row = parsedFieldsToCampRow(parsedFields, defaults);
+    const pinMaster = req.body?.pinMaster || req.body?.pin_master || null;
+    const row = parsedFieldsToCampRow(parsedFields, defaults, pinMaster);
+    // Infer address from city/state when parser only captured pin + locality.
+    if (!row.campAddress && (row.city || row.state || row.pincode)) {
+      row.campAddress = [row.city, row.district, row.state, row.pincode].filter(Boolean).join(', ');
+    }
     const { validRows, invalidRows } = validateMappedImportRows([row]);
     if (!validRows.length) {
       throw new AppError(
@@ -2172,11 +2340,13 @@ router.post(
       ...payload,
       campId: await generateCampId(payload.campDate),
       status: 'pending_review',
+      lifecycleStage: 'request',
       source: 'parser',
       createdById: actor(req).id,
       createdByEmail: actor(req).email,
       ...tracking,
     });
+    await audit(req, 'camp_ops.create', 'camp_ops_camp', camp._id, null, camp.toObject());
     res.status(201).json({
       data: withCampSchedule(camp),
       message: `Created camp ${camp.campId} from parser output`,
@@ -2196,7 +2366,7 @@ router.post(
     const data = await processManualPaste(
       {
         previewData: req.body?.previewData,
-        text: trimStr(req.body?.text),
+        text: preserveMultilineText(req.body?.text),
         defaults,
       },
       actor(req),

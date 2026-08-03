@@ -1,0 +1,530 @@
+{
+  "categories": [
+    {
+      "Code": "SLT",
+      "Expense Category": "Sales & Marketing"
+    },
+    {
+      "Code": "SWC",
+      "Expense Category": "Software & Cloud Services"
+    },
+    {
+      "Code": "HCO",
+      "Expense Category": "Healthcare Operations"
+    },
+    {
+      "Code": "ITH",
+      "Expense Category": "IT Hardware & Infrastructure"
+    },
+    {
+      "Code": "MED",
+      "Expense Category": "Medical Equipment"
+    },
+    {
+      "Code": "AST",
+      "Expense Category": "Office Assets"
+    },
+    {
+      "Code": "PLC",
+      "Expense Category": "Professional, Legal & Compliance"
+    },
+    {
+      "Code": "FIN",
+      "Expense Category": "Finance & Banking"
+    },
+    {
+      "Code": "ITP",
+      "Expense Category": "Internal Transactions (Non-P&L)"
+    },
+    {
+      "Code": "HRP",
+      "Expense Category": "Human Resources & Payroll"
+    },
+    {
+      "Code": "OFC",
+      "Expense Category": "Office & Facilities"
+    },
+    {
+      "Code": "DIR",
+      "Expense Category": "Director Expenses"
+    },
+    {
+      "Code": "GEN",
+      "Expense Category": "General & Miscellaneous"
+    },
+    {
+      "Code": "INS",
+      "Expense Category": "Corporate Insurance"
+    },
+    {
+      "Code": "LOG",
+      "Expense Category": "Logistics & Distribution"
+    },
+    {
+      "Code": "TEL",
+      "Expense Category": "Telecom & Communication"
+    },
+    {
+      "Code": "FLT",
+      "Expense Category": "Transportation & Fleet"
+    }
+  ],
+  "subCategories": [
+    {
+      "Expense Category": "Sales & Marketing",
+      "Sub Category": "Advertising"
+    },
+    {
+      "Expense Category": "Software & Cloud Services",
+      "Sub Category": "AI Platforms & Licensing"
+    },
+    {
+      "Expense Category": "Healthcare Operations",
+      "Sub Category": "Ambulance & Emergency Services"
+    },
+    {
+      "Expense Category": "IT Hardware & Infrastructure",
+      "Sub Category": "AMC"
+    },
+    {
+      "Expense Category": "Medical Equipment",
+      "Sub Category": "AMC"
+    },
+    {
+      "Expense Category": "Office Assets",
+      "Sub Category": "AMC"
+    },
+    {
+      "Expense Category": "Office Assets",
+      "Sub Category": "Asset Purchase (CapEx)"
+    },
+    {
+      "Expense Category": "IT Hardware & Infrastructure",
+      "Sub Category": "Asset Rental"
+    },
+    {
+      "Expense Category": "Office Assets",
+      "Sub Category": "Asset Rental"
+    },
+    {
+      "Expense Category": "Office Assets",
+      "Sub Category": "Asset Upgrade"
+    },
+    {
+      "Expense Category": "Professional, Legal & Compliance",
+      "Sub Category": "Audit"
+    },
+    {
+      "Expense Category": "Finance & Banking",
+      "Sub Category": "Bank Charges"
+    },
+    {
+      "Expense Category": "Internal Transactions (Non-P&L)",
+      "Sub Category": "Bank Reversals"
+    },
+    {
+      "Expense Category": "Finance & Banking",
+      "Sub Category": "Bill Discounting"
+    },
+    {
+      "Expense Category": "Healthcare Operations",
+      "Sub Category": "Biomedical Waste Management"
+    },
+    {
+      "Expense Category": "Human Resources & Payroll",
+      "Sub Category": "Bonuses & Incentives"
+    },
+    {
+      "Expense Category": "Sales & Marketing",
+      "Sub Category": "Branding & Design"
+    },
+    {
+      "Expense Category": "Office & Facilities",
+      "Sub Category": "Building Maintenance"
+    },
+    {
+      "Expense Category": "Director Expenses",
+      "Sub Category": "Business Entertainment"
+    },
+    {
+      "Expense Category": "Professional, Legal & Compliance",
+      "Sub Category": "CA / CS Services"
+    },
+    {
+      "Expense Category": "Healthcare Operations",
+      "Sub Category": "Camp Operations & Home Visits"
+    },
+    {
+      "Expense Category": "General & Miscellaneous",
+      "Sub Category": "Client Approved Expenses"
+    },
+    {
+      "Expense Category": "Sales & Marketing",
+      "Sub Category": "Client Meetings & Hospitality"
+    },
+    {
+      "Expense Category": "Software & Cloud Services",
+      "Sub Category": "Cloud Hosting"
+    },
+    {
+      "Expense Category": "Professional, Legal & Compliance",
+      "Sub Category": "Compliance Filings"
+    },
+    {
+      "Expense Category": "Sales & Marketing",
+      "Sub Category": "Content Creation"
+    },
+    {
+      "Expense Category": "Corporate Insurance",
+      "Sub Category": "Corporate Insurance"
+    },
+    {
+      "Expense Category": "Logistics & Distribution",
+      "Sub Category": "Courier & Shipping"
+    },
+    {
+      "Expense Category": "Telecom & Communication",
+      "Sub Category": "CRM & Communication Tools"
+    },
+    {
+      "Expense Category": "General & Miscellaneous",
+      "Sub Category": "CSR & Donations"
+    },
+    {
+      "Expense Category": "Software & Cloud Services",
+      "Sub Category": "Data Backup & Storage"
+    },
+    {
+      "Expense Category": "Healthcare Operations",
+      "Sub Category": "Diagnostic & Laboratory Services"
+    },
+    {
+      "Expense Category": "Sales & Marketing",
+      "Sub Category": "Digital Marketing"
+    },
+    {
+      "Expense Category": "Software & Cloud Services",
+      "Sub Category": "Domains & SSL"
+    },
+    {
+      "Expense Category": "Transportation & Fleet",
+      "Sub Category": "Driver Expenses"
+    },
+    {
+      "Expense Category": "Human Resources & Payroll",
+      "Sub Category": "Employee Benefits"
+    },
+    {
+      "Expense Category": "Human Resources & Payroll",
+      "Sub Category": "Employee Insurance"
+    },
+    {
+      "Expense Category": "Human Resources & Payroll",
+      "Sub Category": "Employee Loans & Advances"
+    },
+    {
+      "Expense Category": "Human Resources & Payroll",
+      "Sub Category": "Employee Reimbursements"
+    },
+    {
+      "Expense Category": "Human Resources & Payroll",
+      "Sub Category": "Employee Welfare & Engagement"
+    },
+    {
+      "Expense Category": "Medical Equipment",
+      "Sub Category": "Equipment Insurance"
+    },
+    {
+      "Expense Category": "Medical Equipment",
+      "Sub Category": "Equipment Purchase (CapEx)"
+    },
+    {
+      "Expense Category": "Medical Equipment",
+      "Sub Category": "Equipment Rental"
+    },
+    {
+      "Expense Category": "Sales & Marketing",
+      "Sub Category": "Events & Exhibitions"
+    },
+    {
+      "Expense Category": "Medical Equipment",
+      "Sub Category": "Free of Cost (FOC)"
+    },
+    {
+      "Expense Category": "Logistics & Distribution",
+      "Sub Category": "Freight & Logistics"
+    },
+    {
+      "Expense Category": "Transportation & Fleet",
+      "Sub Category": "Fuel"
+    },
+    {
+      "Expense Category": "Finance & Banking",
+      "Sub Category": "Fund Raising & M&A Expenses"
+    },
+    {
+      "Expense Category": "General & Miscellaneous",
+      "Sub Category": "Gifts"
+    },
+    {
+      "Expense Category": "Professional, Legal & Compliance",
+      "Sub Category": "Government Licenses"
+    },
+    {
+      "Expense Category": "Transportation & Fleet",
+      "Sub Category": "GPS & Tracking"
+    },
+    {
+      "Expense Category": "IT Hardware & Infrastructure",
+      "Sub Category": "Hardware Purchase (CapEx)"
+    },
+    {
+      "Expense Category": "IT Hardware & Infrastructure",
+      "Sub Category": "Hardware Upgrade"
+    },
+    {
+      "Expense Category": "Director Expenses",
+      "Sub Category": "Health Insurance"
+    },
+    {
+      "Expense Category": "Office & Facilities",
+      "Sub Category": "Housekeeping"
+    },
+    {
+      "Expense Category": "Software & Cloud Services",
+      "Sub Category": "Information &Cyber Security"
+    },
+    {
+      "Expense Category": "Internal Transactions (Non-P&L)",
+      "Sub Category": "Inter-Company Transfers"
+    },
+    {
+      "Expense Category": "Internal Transactions (Non-P&L)",
+      "Sub Category": "Internal Billing"
+    },
+    {
+      "Expense Category": "Internal Transactions (Non-P&L)",
+      "Sub Category": "Internal Loans"
+    },
+    {
+      "Expense Category": "Internal Transactions (Non-P&L)",
+      "Sub Category": "Internal Transfers"
+    },
+    {
+      "Expense Category": "Telecom & Communication",
+      "Sub Category": "Internet & Broadband"
+    },
+    {
+      "Expense Category": "Human Resources & Payroll",
+      "Sub Category": "Internship & Trainees"
+    },
+    {
+      "Expense Category": "Professional, Legal & Compliance",
+      "Sub Category": "ISO & Certifications"
+    },
+    {
+      "Expense Category": "IT Hardware & Infrastructure",
+      "Sub Category": "IT Peripherals"
+    },
+    {
+      "Expense Category": "IT Hardware & Infrastructure",
+      "Sub Category": "IT Support Services"
+    },
+    {
+      "Expense Category": "Telecom & Communication",
+      "Sub Category": "IVR & Call Center"
+    },
+    {
+      "Expense Category": "Professional, Legal & Compliance",
+      "Sub Category": "Legal Services"
+    },
+    {
+      "Expense Category": "Finance & Banking",
+      "Sub Category": "Loan Interest"
+    },
+    {
+      "Expense Category": "Director Expenses",
+      "Sub Category": "Loans & Advances"
+    },
+    {
+      "Expense Category": "Healthcare Operations",
+      "Sub Category": "Medical Consultation"
+    },
+    {
+      "Expense Category": "Healthcare Operations",
+      "Sub Category": "Medical Consumables"
+    },
+    {
+      "Expense Category": "Healthcare Operations",
+      "Sub Category": "Medicines & Pharmaceuticals"
+    },
+    {
+      "Expense Category": "General & Miscellaneous",
+      "Sub Category": "Miscellaneous Expenses"
+    },
+    {
+      "Expense Category": "Telecom & Communication",
+      "Sub Category": "Mobile & SIM"
+    },
+    {
+      "Expense Category": "Software & Cloud Services",
+      "Sub Category": "Network & Firewall"
+    },
+    {
+      "Expense Category": "Internal Transactions (Non-P&L)",
+      "Sub Category": "Non-Billable Transactions"
+    },
+    {
+      "Expense Category": "Office & Facilities",
+      "Sub Category": "Office Rent"
+    },
+    {
+      "Expense Category": "Office & Facilities",
+      "Sub Category": "Office Supplies & Pantry"
+    },
+    {
+      "Expense Category": "Logistics & Distribution",
+      "Sub Category": "Packaging Materials"
+    },
+    {
+      "Expense Category": "General & Miscellaneous",
+      "Sub Category": "Petty Cash"
+    },
+    {
+      "Expense Category": "Logistics & Distribution",
+      "Sub Category": "Porter & Hand Delivery"
+    },
+    {
+      "Expense Category": "Telecom & Communication",
+      "Sub Category": "PRI/SIP & Telephony"
+    },
+    {
+      "Expense Category": "Office & Facilities",
+      "Sub Category": "Printing & Stationery"
+    },
+    {
+      "Expense Category": "Finance & Banking",
+      "Sub Category": "Processing Fees"
+    },
+    {
+      "Expense Category": "Healthcare Operations",
+      "Sub Category": "Professional & Clinical Fees"
+    },
+    {
+      "Expense Category": "Corporate Insurance",
+      "Sub Category": "Property & Asset Insurance"
+    },
+    {
+      "Expense Category": "Human Resources & Payroll",
+      "Sub Category": "Recruitment & Hiring"
+    },
+    {
+      "Expense Category": "Transportation & Fleet",
+      "Sub Category": "Registration & Permits"
+    },
+    {
+      "Expense Category": "Director Expenses",
+      "Sub Category": "Reimbursements"
+    },
+    {
+      "Expense Category": "Director Expenses",
+      "Sub Category": "Remuneration"
+    },
+    {
+      "Expense Category": "IT Hardware & Infrastructure",
+      "Sub Category": "Repair & Maintenance"
+    },
+    {
+      "Expense Category": "Medical Equipment",
+      "Sub Category": "Repair & Maintenance"
+    },
+    {
+      "Expense Category": "Office Assets",
+      "Sub Category": "Repair & Maintenance"
+    },
+    {
+      "Expense Category": "Office & Facilities",
+      "Sub Category": "Repairs & Maintenance"
+    },
+    {
+      "Expense Category": "Transportation & Fleet",
+      "Sub Category": "Repairs & Maintenance"
+    },
+    {
+      "Expense Category": "Software & Cloud Services",
+      "Sub Category": "SaaS Subscriptions"
+    },
+    {
+      "Expense Category": "Human Resources & Payroll",
+      "Sub Category": "Salaries & Wages"
+    },
+    {
+      "Expense Category": "Sales & Marketing",
+      "Sub Category": "Sales Promotion"
+    },
+    {
+      "Expense Category": "Office & Facilities",
+      "Sub Category": "Security Services"
+    },
+    {
+      "Expense Category": "Software & Cloud Services",
+      "Sub Category": "Software Development"
+    },
+    {
+      "Expense Category": "Software & Cloud Services",
+      "Sub Category": "Software Licenses"
+    },
+    {
+      "Expense Category": "Medical Equipment",
+      "Sub Category": "Spare Parts"
+    },
+    {
+      "Expense Category": "Human Resources & Payroll",
+      "Sub Category": "Statutory Contributions & Payroll Taxes"
+    },
+    {
+      "Expense Category": "Transportation & Fleet",
+      "Sub Category": "Toll, Parking & FASTag"
+    },
+    {
+      "Expense Category": "Human Resources & Payroll",
+      "Sub Category": "Training & Development"
+    },
+    {
+      "Expense Category": "Director Expenses",
+      "Sub Category": "Travel & Accommodation"
+    },
+    {
+      "Expense Category": "Office & Facilities",
+      "Sub Category": "Utilities"
+    },
+    {
+      "Expense Category": "Transportation & Fleet",
+      "Sub Category": "Vehicle Insurance"
+    },
+    {
+      "Expense Category": "Transportation & Fleet",
+      "Sub Category": "Vehicle Purchase (CapEx)"
+    },
+    {
+      "Expense Category": "Transportation & Fleet",
+      "Sub Category": "Vehicle Rental"
+    },
+    {
+      "Expense Category": "Office & Facilities",
+      "Sub Category": "Warehouse Rent"
+    },
+    {
+      "Expense Category": "Sales & Marketing",
+      "Sub Category": "Website & SEO"
+    },
+    {
+      "Expense Category": "Telecom & Communication",
+      "Sub Category": "WhatsApp & SMS Services"
+    },
+    {
+      "Expense Category": "Finance & Banking",
+      "Sub Category": "Working Capital / CC / OD Charges"
+    }
+  ]
+}

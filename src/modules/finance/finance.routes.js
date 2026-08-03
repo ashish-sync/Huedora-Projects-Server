@@ -72,12 +72,15 @@ router.get(
   '/summary',
   canRead,
   asyncHandler(async (_req, res) => {
-    const [expenses, invoices, proformas, purchaseOrders] = await Promise.all([
-      FinanceExpense.find({ isDeleted: false }),
-      FinanceInvoice.find({ isDeleted: false }),
-      FinanceCommercialDocument.find({ isDeleted: false, documentType: 'proforma' }),
-      FinanceCommercialDocument.find({ isDeleted: false, documentType: 'purchase_order' }),
-    ]);
+    const [expenses, invoices, proformas, purchaseOrders, clientInvoices, creditNotes] =
+      await Promise.all([
+        FinanceExpense.find({ isDeleted: false }),
+        FinanceInvoice.find({ isDeleted: false }),
+        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'proforma' }),
+        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'purchase_order' }),
+        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'client_invoice' }),
+        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'credit_note' }),
+      ]);
 
     const expenseTotal = expenses.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     const expenseOpen = expenses.filter((r) =>
@@ -92,6 +95,16 @@ router.get(
     const poDraft = purchaseOrders.filter((r) => r.status === 'Draft' || r.status === 'Uploaded').length;
     const poIssued = purchaseOrders.filter((r) => r.status === 'Issued').length;
     const poTotal = purchaseOrders.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
+    const clientInvoiceDraft = clientInvoices.filter((r) =>
+      ['Draft', 'Uploaded', 'Submitted', 'Approved'].includes(r.status)
+    ).length;
+    const clientInvoiceIssued = clientInvoices.filter((r) => r.status === 'Issued').length;
+    const clientInvoiceTotal = clientInvoices.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
+    const creditNoteCount = creditNotes.length;
+    const creditNoteTotal = creditNotes.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
+    const commercialSubmitted = [...proformas, ...purchaseOrders, ...clientInvoices, ...creditNotes].filter(
+      (r) => r.status === 'Submitted'
+    ).length;
 
     res.json({
       data: {
@@ -109,6 +122,13 @@ router.get(
         purchaseOrderTotal: poTotal,
         purchaseOrderDraft: poDraft,
         purchaseOrderIssued: poIssued,
+        clientInvoiceCount: clientInvoices.length,
+        clientInvoiceTotal,
+        clientInvoiceDraft,
+        clientInvoiceIssued,
+        creditNoteCount,
+        creditNoteTotal,
+        commercialSubmitted,
       },
     });
   })

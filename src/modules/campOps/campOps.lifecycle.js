@@ -17,8 +17,23 @@ export const CAMP_LIFECYCLE_STAGES = [
   { id: 'financial', label: 'Finance & Settlement', short: 'Financial' },
 ];
 
+export function normalizeLifecycleStage(stage, fallback = 'request') {
+  const raw = localTrim(stage);
+  if (!raw) return fallback;
+  const byId = CAMP_LIFECYCLE_STAGES.find((s) => s.id === raw);
+  if (byId) return byId.id;
+  const lower = raw.toLowerCase();
+  const byLowerId = CAMP_LIFECYCLE_STAGES.find((s) => s.id === lower);
+  if (byLowerId) return byLowerId.id;
+  const byShort = CAMP_LIFECYCLE_STAGES.find(
+    (s) => s.short.toLowerCase() === lower || s.label.toLowerCase() === lower,
+  );
+  if (byShort) return byShort.id;
+  return fallback;
+}
+
 export function lifecycleStageIndex(stage) {
-  return CAMP_LIFECYCLE_STAGES.findIndex((s) => s.id === stage);
+  return CAMP_LIFECYCLE_STAGES.findIndex((s) => s.id === normalizeLifecycleStage(stage, ''));
 }
 
 export function hasReachedLifecycleStage(reachedStage, targetStage) {
@@ -31,9 +46,11 @@ export function hasReachedLifecycleStage(reachedStage, targetStage) {
 export function maxLifecycleStage(a, b) {
   const ai = lifecycleStageIndex(a || 'request');
   const bi = lifecycleStageIndex(b || 'request');
-  if (ai < 0) return b || 'request';
-  if (bi < 0) return a || 'request';
-  return ai >= bi ? a : b;
+  if (ai < 0) return normalizeLifecycleStage(b, 'request');
+  if (bi < 0) return normalizeLifecycleStage(a, 'request');
+  return ai >= bi
+    ? normalizeLifecycleStage(a, 'request')
+    : normalizeLifecycleStage(b, 'request');
 }
 
 export const CAMP_SLOTS = ['Morning', 'Noon', 'Evening'];
@@ -339,11 +356,10 @@ export function lifecyclePayloadFromBody(body, existing = null) {
 
   const pickStr = (key, fallback = '') => localTrim(pick(key, fallback));
 
-  const allowedStage = CAMP_LIFECYCLE_STAGES.find((s) => s.id === pickStr('lifecycleStage'));
-  const requestedStage = allowedStage ? allowedStage.id : '';
+  const requestedStage = normalizeLifecycleStage(pickStr('lifecycleStage'), '');
   const lifecycleStage = requestedStage
     ? maxLifecycleStage(existing?.lifecycleStage || 'request', requestedStage)
-    : existing?.lifecycleStage || 'request';
+    : normalizeLifecycleStage(existing?.lifecycleStage, 'request');
 
   const assignmentStatus = ASSIGNMENT_STATUSES.includes(pickStr('assignmentStatus'))
     ? pickStr('assignmentStatus')
@@ -464,6 +480,7 @@ export function lifecyclePayloadFromBody(body, existing = null) {
 
 export function withCampLifecycle(camp) {
   const obj = camp?.toObject ? camp.toObject() : { ...camp };
+  obj.lifecycleStage = normalizeLifecycleStage(obj.lifecycleStage, 'request');
   const derived = computeLifecycleDerived(obj);
   Object.assign(obj, derived);
   obj.patientsCount = obj.actualPatients ?? 0;
@@ -473,7 +490,11 @@ export function withCampLifecycle(camp) {
 }
 
 export function applyAssignmentStageOutcome(camp, body = {}) {
-  const stage = localTrim(body.lifecycleStage) || camp.lifecycleStage || 'request';
+  // Prefer editingStage — clients may send a target lifecycleStage for advancement.
+  const stage = normalizeLifecycleStage(
+    body.editingStage || body.lifecycleStage || camp.lifecycleStage,
+    'request',
+  );
   if (stage !== 'assignment') return;
 
   const decision = ASSIGNMENT_DECISIONS.includes(localTrim(body.assignmentDecision))
@@ -522,43 +543,58 @@ export function applyAssignmentStageOutcome(camp, body = {}) {
 }
 
 export function canEditLifecycleStage(camp, stage) {
-  const status = camp?.status;
+  const status = localTrim(camp?.status);
   if (status === 'cancelled') return false;
-  const reached = camp?.lifecycleStage || 'request';
-  const stageReachable = stage === 'financial'
+  const reached = normalizeLifecycleStage(camp?.lifecycleStage, 'request');
+  const target = normalizeLifecycleStage(stage, '');
+  if (!target) return false;
+  const stageReachable = target === 'financial'
     ? hasReachedLifecycleStage(reached, 'execution')
-    : hasReachedLifecycleStage(reached, stage);
+    : hasReachedLifecycleStage(reached, target);
   if (!stageReachable) return false;
-  if (stage === 'request') {
+  if (target === 'request') {
     return ['pending_review', 'approved', 'rejected', 'executed'].includes(status);
   }
-  if (stage === 'assignment') {
+  if (target === 'assignment') {
     if (['cancelled', 'rejected'].includes(status)) return false;
     return ['approved', 'executed'].includes(status);
   }
-  if (stage === 'execution') {
+  if (target === 'execution') {
     return ['approved', 'executed'].includes(status);
   }
-  if (stage === 'financial') {
+  if (target === 'financial') {
     if (!hasReachedLifecycleStage(reached, 'execution')) return false;
     return ['executed', 'approved'].includes(status);
   }
   return false;
 }
 
-/** Move executed camps stuck in earlier lifecycle stages into Finance & Settlement. */
+/** Normalize title-cased lifecycle stages and move executed camps into Finance & Settlement. */
 export async function repairExecutedCampLifecycleStages(CampModel = null) {
   const Camp = CampModel || (await import('./campOps.model.js')).CampOpsCamp;
-  const rows = await Camp.find({ isDeleted: false, status: 'executed' });
+  const rows = await Camp.find({ isDeleted: false });
   let repaired = 0;
   for (const camp of rows) {
-    if (!['request', 'assignment', 'execution'].includes(camp.lifecycleStage)) continue;
-    camp.lifecycleStage = 'financial';
-    if (camp.executionStatus !== 'Camp Completed') {
-      camp.executionStatus = 'Camp Completed';
+    let changed = false;
+    const normalized = normalizeLifecycleStage(camp.lifecycleStage, 'request');
+    if (camp.lifecycleStage !== normalized) {
+      camp.lifecycleStage = normalized;
+      changed = true;
     }
-    await camp.save();
-    repaired += 1;
+    if (
+      camp.status === 'executed'
+      && ['request', 'assignment', 'execution'].includes(normalized)
+    ) {
+      camp.lifecycleStage = 'financial';
+      if (camp.executionStatus !== 'Camp Completed') {
+        camp.executionStatus = 'Camp Completed';
+      }
+      changed = true;
+    }
+    if (changed) {
+      await camp.save();
+      repaired += 1;
+    }
   }
   return repaired;
 }

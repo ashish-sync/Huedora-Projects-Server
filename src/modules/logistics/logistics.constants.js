@@ -436,56 +436,5 @@ export const ENTRY_REQUIRED_FIELDS = {
   'Stock Adjustment': [],
 };
 
-/** Finance master. Expense Categories (Request Center reimbursements) */
-export const DEFAULT_EXPENSE_CATEGORIES = [
-  {
-    code: 'EMP_EXP',
-    name: 'Employee Expenses',
-    covers: 'Salaries, benefits, reimbursements, training',
-  },
-  {
-    code: 'MED_OPS',
-    name: 'Medical Operations',
-    covers: 'Devices, consumables, medicines, diagnostics, camps',
-  },
-  {
-    code: 'OFF_FAC',
-    name: 'Office & Facilities',
-    covers: 'Rent, utilities, housekeeping, office supplies',
-  },
-  {
-    code: 'IT_TECH',
-    name: 'IT & Technology',
-    covers: 'Hardware, software, SaaS, cloud, telecom',
-  },
-  {
-    code: 'LOG_TRV',
-    name: 'Logistics & Travel',
-    covers: 'Courier, freight, vehicles, travel, accommodation',
-  },
-  {
-    code: 'SALES_MKT',
-    name: 'Sales & Marketing',
-    covers: 'Advertising, branding, events, promotions',
-  },
-  {
-    code: 'PROF_SVC',
-    name: 'Professional Services',
-    covers: 'Consultants, legal, audit, recruitment',
-  },
-  {
-    code: 'FIN_COMP',
-    name: 'Finance & Compliance',
-    covers: 'Taxes, insurance, bank charges, licenses',
-  },
-  {
-    code: 'ASSET_MNT',
-    name: 'Asset & Maintenance',
-    covers: 'Purchase, AMC, repairs, rentals',
-  },
-  {
-    code: 'MISC',
-    name: 'Miscellaneous',
-    covers: 'Petty cash, internal transfers, uncategorized',
-  },
-];
+/** Finance master — Expense Master (Finance One Requests). User-managed; no defaults. */
+export const DEFAULT_EXPENSE_CATEGORIES = [];

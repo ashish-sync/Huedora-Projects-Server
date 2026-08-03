@@ -170,19 +170,30 @@ async function ensureClientMaster(client) {
 
 async function ensureHcwContact() {
   const email = 'ravi.tech@demo.tylo.local';
+  const financeReady = {
+    name: CAMP_ONE_DEMO.hcwName,
+    email,
+    contactCategory: 'Healthcare Worker',
+    profession: 'Technician',
+    contact: '9123456780',
+    mobile: '9123456780',
+    city: 'Pune',
+    state: 'Maharashtra',
+    pinCode: '411001',
+    address: '12 Demo Lane, Pune, Maharashtra 411001',
+    panNumber: 'ABCDE1234F',
+    ifscCode: 'HDFC0000212',
+    bankName: 'HDFC Bank',
+    accountNumber: '50100123456789',
+    passbookCopyUrl: '/uploads/demo/ravi-passbook.pdf',
+    panCardCopyUrl: '/uploads/demo/ravi-pan.pdf',
+  };
   let contact = await Contact.findOne({ email, isDeleted: false });
   if (!contact) {
-    contact = await Contact.create({
-      name: CAMP_ONE_DEMO.hcwName,
-      email,
-      contactCategory: 'Healthcare Worker',
-      profession: 'Technician',
-      contact: '9123456780',
-      mobile: '9123456780',
-      city: 'Pune',
-      state: 'Maharashtra',
-      pinCode: '411001',
-    });
+    contact = await Contact.create(financeReady);
+  } else {
+    Object.assign(contact, financeReady);
+    await contact.save();
   }
   return contact;
 }

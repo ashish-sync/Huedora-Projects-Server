@@ -8,6 +8,7 @@ import {
 } from './campOps.requestValidation.js';
 import { normalizeContactPersons } from './campContactPersons.js';
 import { cleanSpaces, formatTextValue } from '../../utils/textFormat.js';
+import { resolveZoneNameForState } from '../geo/geo.zones.js';
 
 export function trimStr(v) {
   return v == null ? '' : cleanSpaces(v);
@@ -216,7 +217,10 @@ export function buildCampFilter(query = {}) {
   if (requestReviewStatus) {
     if (requestReviewStatus === 'request_approved') filter.status = 'approved';
     else if (requestReviewStatus === 'request_rejected') filter.status = 'rejected';
-    else filter.status = 'pending_review';
+    else if (requestReviewStatus === 'information_requested') {
+      filter.status = 'pending_review';
+      filter.requestReviewStatus = 'information_requested';
+    } else filter.status = 'pending_review';
   } else if (status && !assignmentFilter) filter.status = status;
   if (client) filter.clientId = client;
   if (state) filter.state = state;
@@ -483,6 +487,13 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
       durationHours: row.durationHours,
     });
 
+    const city = trimStr(row.city);
+    const state = trimStr(row.state);
+    const district = trimStr(row.district) || city;
+    // Import/paste rows often omit HQ/zone — derive from city/state so confirm isn't blocked.
+    const hq = trimStr(row.hq) || city || district;
+    const zone = trimStr(row.zone) || (state ? (resolveZoneNameForState(state) || '') : '');
+
     const normalized = {
       ...row,
       source: trimStr(row.source) || source,
@@ -494,11 +505,11 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
       speciality: trimStr(row.speciality),
       hospitalName: trimStr(row.hospitalName),
       campAddress: trimStr(row.campAddress),
-      city: trimStr(row.city),
-      state: trimStr(row.state),
-      district: trimStr(row.district),
-      zone: trimStr(row.zone),
-      hq: trimStr(row.hq),
+      city,
+      state,
+      district,
+      zone,
+      hq,
       pincode: trimStr(row.pincode),
       campDate,
       startTime: schedule.startTime,

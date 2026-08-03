@@ -23,11 +23,12 @@ import {
 import { Asset } from '../assets/asset.model.js';
 import { AssetEvent } from '../assets/assetEvent.model.js';
 import { Contact } from '../contacts/contact.model.js';
-import { isVendorContact } from '../contacts/contact.constants.js';
 import {
   LogisticsExpenseCategory,
+  LogisticsExpenseSubCategory,
   LogisticsProduct,
 } from '../logistics/logistics.model.js';
+import { CampOpsClient, CampOpsClientMaster } from '../campOps/campOps.model.js';
 import {
   IN_OUT_PRODUCT_TYPES,
   IN_OUT_PRODUCT_TYPE_ALIASES,
@@ -108,7 +109,7 @@ function canManageRequest(req, row) {
 function assertProductImageAccess(req, row) {
   if (!['REPAIR', 'MAINTENANCE'].includes(row.requestType)) {
     throw new AppError(
-      'Product images are only available for Repair and Maintenance requests',
+      'Product images are only available for Repair & Service Request entries',
       400,
       'INVALID_REQUEST_TYPE'
     );
@@ -124,7 +125,7 @@ function assertProductImageAccess(req, row) {
 function assertBillAccess(req, row) {
   if (row.requestType !== 'REIMBURSEMENT') {
     throw new AppError(
-      'Bills are only available for Reimbursement requests',
+      'Bills are only available for Finance One Request entries',
       400,
       'INVALID_REQUEST_TYPE'
     );
@@ -140,7 +141,23 @@ function assertBillAccess(req, row) {
 function assertOtherAttachmentAccess(req, row) {
   if (!['OTHER', 'MASTER_ADD'].includes(row.requestType)) {
     throw new AppError(
-      'Attachments are only available here for Others and Add to master requests',
+      'Attachments are only available here for Other Requests and Master One Request',
+      400,
+      'INVALID_REQUEST_TYPE'
+    );
+  }
+  if (!['REQUESTED', 'APPROVED'].includes(row.status)) {
+    throw new AppError('Request is no longer active', 409, 'INVALID_STATUS');
+  }
+  if (!canManageRequest(req, row)) {
+    throw new AppError('Forbidden', 403, 'FORBIDDEN');
+  }
+}
+
+function assertJdAccess(req, row) {
+  if (row.requestType !== 'HIRING') {
+    throw new AppError(
+      'Job descriptions are only available for Hiring Request entries',
       400,
       'INVALID_REQUEST_TYPE'
     );
@@ -397,17 +414,10 @@ async function preferredVendorSnapshot(body) {
   if (!id) {
     return {
       preferredVendorContactId: null,
-      preferredVendor: trim(body.preferredVendor),
+      preferredVendor: '',
     };
   }
-  const contact = await Contact.findOne({ _id: id, isDeleted: false });
-  if (!contact || !isVendorContact(contact)) {
-    throw new AppError(
-      'Preferred vendor must reference an active Vendor contact',
-      400,
-      'VALIDATION_ERROR'
-    );
-  }
+  const contact = await resolveContact(id, 'Preferred vendor');
   return {
     preferredVendorContactId: contact._id,
     preferredVendor: trim(contact.organization) || trim(contact.name),
@@ -432,12 +442,26 @@ function pickDetails(body = {}) {
     preferredDate: body.preferredDate?.trim() || '',
     transportMode: body.transportMode?.trim() || '',
     trainingTopic: body.trainingTopic?.trim() || '',
+    trainingName: body.trainingName?.trim() || '',
+    trainingProductId: body.trainingProductId || null,
     trainingMode: body.trainingMode?.trim() || '',
     venue: body.venue?.trim() || '',
     amount: num(body.amount),
     currency: body.currency?.trim() || 'INR',
     expenseCategory: body.expenseCategory?.trim() || '',
+    expenseSubCategory: body.expenseSubCategory?.trim() || '',
     payeeName: body.payeeName?.trim() || '',
+    raisedFor: String(body.raisedFor || 'SELF').trim().toUpperCase() === 'OTHER' ? 'OTHER' : 'SELF',
+    raisedForContactId: body.raisedForContactId || null,
+    associateWithClient:
+      body.associateWithClient === true ||
+      String(body.associateWithClient || '').trim().toLowerCase() === 'true' ||
+      String(body.associateWithClient || '').trim().toUpperCase() === 'YES',
+    clientId: body.clientId || null,
+    clientName: body.clientName?.trim() || '',
+    clientCode: body.clientCode?.trim() || '',
+    clientMasterId: body.clientMasterId || null,
+    divisionTherapy: body.divisionTherapy?.trim() || '',
     expenseDate: body.expenseDate?.trim() || '',
     hiringType: body.hiringType?.trim() || '',
     hcwType: body.hcwType?.trim() || '',
@@ -487,18 +511,53 @@ function validateTypeDetails(requestType, details) {
       );
     }
   }
-  if (requestType === 'TRAINING' && !details.trainingTopic) {
-    throw new AppError('Training topic is required', 400, 'VALIDATION_ERROR');
+  if (requestType === 'TRAINING') {
+    if (!details.trainingTopic) {
+      throw new AppError('Training type is required', 400, 'VALIDATION_ERROR');
+    }
+    const topic = details.trainingTopic.toLowerCase();
+    const nonDevice = topic === 'non device refresher' || topic === 'refresher non device';
+    if (nonDevice && !details.trainingName) {
+      throw new AppError('Training name is required', 400, 'VALIDATION_ERROR');
+    }
+    if (!nonDevice && !details.trainingProductId && !details.trainingName) {
+      throw new AppError(
+        'Select an asset / device name from Product Master',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
   }
   if (requestType === 'REIMBURSEMENT') {
     if (details.amount == null || details.amount <= 0) {
-      throw new AppError('Amount is required for Reimbursement', 400, 'VALIDATION_ERROR');
+      throw new AppError(
+        'Expense amount (INR) is required for Finance One Request',
+        400,
+        'VALIDATION_ERROR'
+      );
     }
     if (!details.expenseCategory) {
       throw new AppError('Expense category is required', 400, 'VALIDATION_ERROR');
     }
+    if (!details.expenseSubCategory) {
+      throw new AppError('Expense sub-category is required', 400, 'VALIDATION_ERROR');
+    }
     if (!details.expenseDate) {
       throw new AppError('Expense date is required', 400, 'VALIDATION_ERROR');
+    }
+    if (details.raisedFor === 'OTHER' && !details.raisedForContactId) {
+      throw new AppError(
+        'Select who this expense is raised for from Contact Directory',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    if (details.associateWithClient && !details.clientMasterId) {
+      throw new AppError(
+        'Select Code and Division / Therapy from Client Master',
+        400,
+        'VALIDATION_ERROR'
+      );
     }
   }
   if (requestType === 'HIRING') {
@@ -514,26 +573,8 @@ function validateTypeDetails(requestType, details) {
     if (!HIRING_METHODS.includes(details.hiringMethod)) {
       throw new AppError('Select a valid Hiring method', 400, 'VALIDATION_ERROR');
     }
-    if (
-      !details.engagementDateTime ||
-      !Number.isFinite(Date.parse(details.engagementDateTime))
-    ) {
-      throw new AppError('A valid engagement date and time is required', 400, 'VALIDATION_ERROR');
-    }
-    if (
-      !details.hiringAddress ||
-      !details.hiringState ||
-      !details.hiringCity ||
-      !details.hiringName
-    ) {
-      throw new AppError(
-        'Name, address, state, and city are required',
-        400,
-        'VALIDATION_ERROR'
-      );
-    }
-    if (!/^\d{6}$/.test(details.hiringPinCode)) {
-      throw new AppError('Pin code must contain 6 digits', 400, 'VALIDATION_ERROR');
+    if (!details.hiringState || !details.hiringCity) {
+      throw new AppError('State and city are required', 400, 'VALIDATION_ERROR');
     }
     if (
       details.budgetMin == null ||
@@ -551,7 +592,7 @@ function validateTypeDetails(requestType, details) {
   if (requestType === 'OTHER') {
     const allowedOptions = OTHER_REQUEST_OPTIONS[details.otherCategory];
     if (!allowedOptions) {
-      throw new AppError('Select a valid Others category', 400, 'VALIDATION_ERROR');
+      throw new AppError('Select a valid Other Requests category', 400, 'VALIDATION_ERROR');
     }
     if (!allowedOptions.includes(details.otherSubcategory)) {
       throw new AppError(
@@ -710,24 +751,24 @@ router.get(
       .sort('-createdAt');
     sendExcel(
       res,
-      'Request_Center.xlsx',
+      'Request_One.xlsx',
       [
         'Request Number',
         'Type',
         'Status',
         'Asset Name',
-        'Custody',
+        'Asset Custody',
         'Custodian Name',
         'Custodian Contact',
-        'City',
-        'State',
-        'Priority',
+        'Custodian City',
+        'Custodian State',
         'Category / Kind',
         'Request Option',
         'Products',
-        'Amount',
+        'Expense Amount (INR)',
         'Currency',
-        'Training Topic',
+        'Training Type',
+        'Training Name / Device',
         'Trainee Name',
         'Hiring Type',
         'HCW Type',
@@ -742,7 +783,9 @@ router.get(
         'Budget Minimum (INR)',
         'Budget Maximum (INR)',
         'Preferred Vendor',
-        'Reason',
+        'Raised For',
+        'Client',
+        'Remarks',
         'Requestor',
         'Approver',
         'Created At',
@@ -757,11 +800,12 @@ router.get(
         r.custodianContact || '',
         r.custodianCity || '',
         r.custodianState || '',
-        r.priority || '',
         r.issueCategory ||
           r.maintenanceKind ||
           r.logisticsKind ||
-          r.expenseCategory ||
+          (r.requestType === 'REIMBURSEMENT'
+            ? [r.expenseCategory, r.expenseSubCategory].filter(Boolean).join(' · ')
+            : r.expenseCategory) ||
           r.otherCategory ||
           '',
         r.otherSubcategory || '',
@@ -769,6 +813,7 @@ router.get(
         r.amount ?? '',
         r.currency || '',
         r.trainingTopic || '',
+        r.trainingName || r.assetName || '',
         r.traineeName || '',
         r.hiringType || '',
         r.hcwType || '',
@@ -783,6 +828,14 @@ router.get(
         r.budgetMin ?? '',
         r.budgetMax ?? '',
         r.preferredVendor || '',
+        r.requestType === 'REIMBURSEMENT'
+          ? r.raisedFor === 'OTHER' || (r.payeeName && r.payeeName !== 'Self')
+            ? r.payeeName || 'Other'
+            : 'Self'
+          : r.payeeName || '',
+        r.requestType === 'REIMBURSEMENT' && r.associateWithClient
+          ? [r.clientCode, r.divisionTherapy || r.clientName].filter(Boolean).join(' · ')
+          : '',
         r.reason || '',
         r.requestorId?.fullName || r.requestorId?.email || '',
         r.approverId?.fullName || r.approverId?.email || '',
@@ -984,6 +1037,70 @@ router.post(
   })
 );
 
+router.get(
+  '/:id/jd',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Request not found', 404);
+    if (row.requestType !== 'HIRING') {
+      throw new AppError('Job description is not available for this request type', 400);
+    }
+    const filePath = existingAttachmentFilePath(row.jdAttachment);
+    if (!filePath) throw new AppError('Job description not found', 404);
+    res.type(row.jdAttachment.mimeType || 'application/octet-stream');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="jd${path.extname(filePath)}"`
+    );
+    await new Promise((resolve, reject) => {
+      res.sendFile(filePath, (error) => (error ? reject(error) : resolve()));
+    });
+  })
+);
+
+router.post(
+  '/:id/jd',
+  asyncHandler(async (req, _res, next) => {
+    const row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Request not found', 404);
+    assertJdAccess(req, row);
+    req.assetRequest = row;
+    next();
+  }),
+  requestAttachmentUpload,
+  asyncHandler(async (req, res) => {
+    if (!req.file) throw new AppError('Job description file is required', 400, 'VALIDATION_ERROR');
+    const attachment = imageMetadata(req.file, 'HIRING_JD', req.user._id);
+    const updated = await AssetRequest.findOneAndUpdate(
+      {
+        _id: req.assetRequest._id,
+        isDeleted: false,
+        requestType: 'HIRING',
+        status: { $in: ['REQUESTED', 'APPROVED'] },
+      },
+      { $set: { jdAttachment: attachment } }
+    );
+    if (!updated) {
+      removeAttachmentFile(attachment);
+      throw new AppError('Request is no longer active', 409, 'INVALID_STATUS');
+    }
+    if (req.assetRequest.jdAttachment) {
+      removeAttachmentFile(req.assetRequest.jdAttachment);
+    }
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'ASSET_REQUEST.HIRING_JD.UPLOAD',
+      entityType: 'AssetRequest',
+      entityId: req.assetRequest._id,
+      after: attachment,
+      requestId: req.requestId,
+    });
+    res.json({ data: { jdAttachment: attachment } });
+  })
+);
+
 router.post(
   '/:id/product-image-link',
   asyncHandler(async (req, res) => {
@@ -1079,7 +1196,7 @@ router.post(
     const rawType = String(req.body.requestType || '').toUpperCase();
     if (!ALL_REQUEST_TYPES.includes(rawType) && !ALL_REQUEST_TYPES.includes(normalizeRequestType(rawType))) {
       throw new AppError(
-        'requestType must be Repair, Maintenance, Goods Issue, Training, Reimbursement, Hiring, Others, or Add to master',
+        'requestType must be Repair & Service Request, Goods Issuance Request, Training Request, Finance One Request, Hiring Request, Other Requests, or Master One Request',
         400,
         'VALIDATION_ERROR'
       );
@@ -1098,14 +1215,77 @@ router.post(
       });
       if (!expenseCategory) {
         throw new AppError(
-          'Select a valid category from Expense Categories Master',
+          'Select a valid expense category from Expense Master',
+          400,
+          'VALIDATION_ERROR'
+        );
+      }
+      const expenseSubCategory = await LogisticsExpenseSubCategory.findOne({
+        categoryId: expenseCategory._id,
+        name: details.expenseSubCategory,
+        isDeleted: false,
+        isActive: true,
+      });
+      if (!expenseSubCategory) {
+        throw new AppError(
+          'Select a valid expense sub-category from Expense Master',
           400,
           'VALIDATION_ERROR'
         );
       }
       details.expenseCategory = expenseCategory.name;
+      details.expenseSubCategory = expenseSubCategory.name;
       details.currency = 'INR';
-      details.payeeName = '';
+      if (details.raisedFor === 'OTHER') {
+        const raisedForContact = await resolveContact(
+          details.raisedForContactId || req.body.raisedForContactId,
+          'Raised for'
+        );
+        if (!raisedForContact) {
+          throw new AppError(
+            'Select who this expense is raised for from Contact Directory',
+            400,
+            'VALIDATION_ERROR'
+          );
+        }
+        details.raisedFor = 'OTHER';
+        details.raisedForContactId = raisedForContact._id;
+        details.payeeName = raisedForContact.name || details.payeeName || '';
+      } else {
+        details.raisedFor = 'SELF';
+        details.raisedForContactId = null;
+        details.payeeName = 'Self';
+      }
+      if (details.associateWithClient) {
+        const master = await CampOpsClientMaster.findOne({
+          _id: details.clientMasterId || req.body.clientMasterId,
+          isDeleted: false,
+        });
+        if (!master) {
+          throw new AppError(
+            'Select a valid Code and Division / Therapy from Client Master',
+            400,
+            'VALIDATION_ERROR'
+          );
+        }
+        const client = master.clientId
+          ? await CampOpsClient.findOne({ _id: master.clientId, isDeleted: false })
+          : null;
+        details.associateWithClient = true;
+        details.clientMasterId = master._id;
+        details.clientId = client?._id || master.clientId || null;
+        details.clientName = client?.name || master.clientName || '';
+        details.clientCode = client?.code || details.clientCode || '';
+        details.divisionTherapy =
+          master.programName || master.drugTherapyName || details.divisionTherapy || '';
+      } else {
+        details.associateWithClient = false;
+        details.clientMasterId = null;
+        details.clientId = null;
+        details.clientName = '';
+        details.clientCode = '';
+        details.divisionTherapy = '';
+      }
     }
 
     const logisticsProducts =
@@ -1157,6 +1337,34 @@ router.post(
     }
 
     const vendor = await preferredVendorSnapshot(req.body);
+    if (requestType === 'TRAINING') {
+      const topic = String(details.trainingTopic || '').toLowerCase();
+      const nonDevice = topic === 'non device refresher' || topic === 'refresher non device';
+      if (!nonDevice && details.trainingProductId) {
+        const product = await LogisticsProduct.findOne({
+          _id: details.trainingProductId,
+          isDeleted: false,
+        });
+        if (!product) {
+          throw new AppError(
+            'Select a valid asset / device from Product Master',
+            400,
+            'VALIDATION_ERROR'
+          );
+        }
+        details.trainingProductId = product._id;
+        details.trainingName =
+          details.trainingName ||
+          product.name ||
+          product.productName ||
+          product.model ||
+          product.deviceNameSnapshot ||
+          '';
+        req.body.assetName = details.trainingName;
+      } else if (nonDevice) {
+        details.trainingProductId = null;
+      }
+    }
     const traineeContact =
       requestType === 'TRAINING' && req.body.traineeContactId
         ? await resolveContact(req.body.traineeContactId, 'Trainee')
@@ -1299,7 +1507,7 @@ router.post(
     }
     if (row.requestType === 'REIMBURSEMENT' && !row.billAttachment) {
       throw new AppError(
-        'A bill must be uploaded before this Reimbursement request can be approved',
+        'A bill must be uploaded before this Finance One Request can be approved',
         409,
         'BILL_REQUIRED'
       );

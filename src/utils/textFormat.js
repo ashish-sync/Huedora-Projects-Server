@@ -15,6 +15,11 @@ const PLAIN_FIELDS = new Set([
   'resourceType', 'contactCategory', 'productType', 'assignmentStatus', 'executionStatus',
   'chargeableStatus', 'attire', 'labCoat', 'speciality', 'profession', 'supplyCategory',
   'healthcareWorker', 'hcwCategory', 'zone', 'method',
+  // Machine enums / ids — never title-case (breaks lifecycle & status checks)
+  'lifecycleStage', 'status', 'assignmentDecision', 'assignmentRefusalReason',
+  'requestReviewStatus', 'paymentSubmitStatus', 'financePaymentStatus',
+  'closureType', 'closureReasonCode', 'closureSubReason', 'closureReasonCategory',
+  'cancelledBy', 'editingStage', 'campSlot',
 ]);
 
 const CODE_FIELDS = new Set([
