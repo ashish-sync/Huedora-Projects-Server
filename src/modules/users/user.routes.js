@@ -54,6 +54,47 @@ function asRoleIdList(roleIds) {
 
 router.use(authenticate);
 
+router.post(
+  '/system/fresh-start',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    if (String(req.body?.confirm || '').trim() !== 'FRESH_START_KEEP_USERS') {
+      throw new AppError(
+        'Confirmation required. Send { "confirm": "FRESH_START_KEEP_USERS" }',
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
+
+    const { freshStartKeepUsers } = await import('../../utils/freshStartKeepUsers.js');
+    const { ensureSeed } = await import('../../seed.js');
+    const result = await freshStartKeepUsers();
+    await ensureSeed();
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'SYSTEM.FRESH_START_KEEP_USERS',
+      entityType: 'System',
+      entityId: null,
+      after: {
+        clearedCount: result.cleared.length,
+        kept: result.kept,
+      },
+      requestId: req.requestId,
+    });
+
+    res.json({
+      data: {
+        ok: true,
+        message: 'Application data cleared. Users and logins were preserved.',
+        clearedCount: result.cleared.length,
+        kept: result.kept,
+      },
+    });
+  })
+);
+
 router.get(
   '/designations',
   requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),

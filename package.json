@@ -10,6 +10,7 @@
     "prestart": "npm run build:parsers",
     "seed": "node src/seed.js",
     "reset:data": "node scripts/reset-all-data.js",
+    "fresh-start:keep-users": "node scripts/fresh-start-keep-users.js",
     "purge:demo": "node scripts/purge-demo-data.js",
     "purge:demo:dry": "node scripts/purge-demo-data.js --dry-run",
     "predeploy:verify": "node scripts/predeploy-verify.js",

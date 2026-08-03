@@ -4,6 +4,7 @@ import { env } from './config/env.js';
 import { ensureSeed } from './seed.js';
 import { forceReseedGeoMasters } from './modules/geo/geo.seed.js';
 import { resetApplicationData } from './utils/resetApplicationData.js';
+import { freshStartKeepUsers } from './utils/freshStartKeepUsers.js';
 import { hydrateEmailIngestState } from './modules/campOps/communications/services/emailIngestSince.js';
 import { ensureUploadDirs } from './config/paths.js';
 import fs from 'fs';
@@ -14,6 +15,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const freshStartTrigger = path.resolve(__dirname, '../.fresh-start');
 
 async function maybeFreshStart() {
+  const keepUsersBoot =
+    String(process.env.FRESH_START_KEEP_USERS_ON_BOOT || '').toLowerCase() === 'true';
+  if (keepUsersBoot) {
+    await freshStartKeepUsers();
+    console.warn(
+      '[fresh-start] FRESH_START_KEEP_USERS_ON_BOOT=true — set it back to false after this deploy',
+    );
+    return;
+  }
+
   const fromEnv = String(process.env.RESET_ALL_DATA_ON_BOOT || '').toLowerCase() === 'true';
   const fromMarker = fs.existsSync(freshStartTrigger);
   if (!fromEnv && !fromMarker) return;
