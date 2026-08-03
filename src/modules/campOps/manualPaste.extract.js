@@ -1,6 +1,10 @@
 import { trimStr, parseLocalDateInput } from './campOps.helpers.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
-import { formatDoctorName, formatContactPersonName } from '../../utils/textFormat.js';
+import {
+  formatDoctorName,
+  formatContactPersonName,
+  formatTextValue,
+} from '../../utils/textFormat.js';
 import { findStateInText } from '../geo/indianStateNames.js';
 import {
   compactFieldName,
@@ -224,12 +228,12 @@ export function extractManualPasteFields(text) {
     doctorName: withDefault(formatExtractedDoctorName(doctorName)),
     doctorCode: withDefault(doctorCode),
     speciality: withDefault(speciality),
-    hospitalName: withDefault(hospitalName),
-    campAddress: withDefault(campAddress),
-    state: withDefault(resolvedState),
-    district: withDefault(resolvedDistrict),
-    city: withDefault(resolvedCity),
-    hq: withDefault(resolvedHq),
+    hospitalName: withDefault(formatTextValue(hospitalName, 'hospitalName')),
+    campAddress: withDefault(formatTextValue(campAddress, 'campAddress')),
+    state: withDefault(formatTextValue(resolvedState, 'state')),
+    district: withDefault(formatTextValue(resolvedDistrict, 'district')),
+    city: withDefault(formatTextValue(resolvedCity, 'city')),
+    hq: withDefault(formatTextValue(resolvedHq, 'hq')),
     pincode: withDefault(pincode),
     zone: withDefault(zone),
     expectedPatients: withDefault(expectedPatientsMatch ? expectedPatientsMatch[0] : ''),
@@ -244,15 +248,15 @@ export function extractManualPasteFields(text) {
       doctorName: toCampValue(formatExtractedDoctorName(doctorName)),
       doctorCode: toCampValue(doctorCode),
       speciality: toCampValue(speciality),
-      hospitalName: toCampValue(hospitalName),
+      hospitalName: toCampValue(formatTextValue(hospitalName, 'hospitalName')),
       campDate: toCampValue(campDate),
       startTime: toCampValue(startTime) || '09:00',
       endTime: toCampValue(endTime),
-      campAddress: toCampValue(campAddress),
-      state: toCampValue(resolvedState),
-      district: toCampValue(resolvedDistrict),
-      city: toCampValue(resolvedCity),
-      hq: toCampValue(resolvedHq),
+      campAddress: toCampValue(formatTextValue(campAddress, 'campAddress')),
+      state: toCampValue(formatTextValue(resolvedState, 'state')),
+      district: toCampValue(formatTextValue(resolvedDistrict, 'district')),
+      city: toCampValue(formatTextValue(resolvedCity, 'city')),
+      hq: toCampValue(formatTextValue(resolvedHq, 'hq')),
       pincode: toCampValue(pincode),
       zone: toCampValue(zone),
       expectedPatients: expectedPatientsMatch ? Number(expectedPatientsMatch[0]) : 0,

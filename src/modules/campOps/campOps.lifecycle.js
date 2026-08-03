@@ -5,10 +5,14 @@ import {
   getCampStartDateTime,
   getCampEndDateTime,
 } from './campOps.helpers.js';
+import { daysFromToday, localTodayIso } from './campDatePolicy.js';
 
 function localTrim(v) {
   return v == null ? '' : String(v).trim();
 }
+
+/** Assigned camps enter Execution starting one calendar day before camp date. */
+export const EXECUTION_ADVANCE_DAYS_BEFORE = 1;
 
 export const CAMP_LIFECYCLE_STAGES = [
   { id: 'request', label: 'Request Stage', short: 'Request' },
@@ -134,6 +138,44 @@ export function normalizeExecutionDocType(docType) {
 
 function hasExecutionDocType(docs, targetType) {
   return (docs || []).some((doc) => normalizeExecutionDocType(doc?.docType) === targetType);
+}
+
+export const MARK_EXECUTED_MINUTES_AFTER_START = 30;
+
+export function getMarkExecutedFieldBlockers(camp = {}) {
+  const blockers = [];
+  if (!localTrim(camp.chargeableStatus)) blockers.push('Select Chargeable Status');
+  if (!localTrim(camp.inTime)) blockers.push('Enter In Time');
+  if (!localTrim(camp.attire)) blockers.push('Select Attire');
+  return blockers;
+}
+
+export function isMarkExecutedTimingOpen(camp = {}, now = new Date()) {
+  const start = getCampStartDateTime(camp);
+  if (!start) return false;
+  const earliest = start.getTime() + MARK_EXECUTED_MINUTES_AFTER_START * 60 * 1000;
+  return now.getTime() >= earliest;
+}
+
+export function getMarkExecutedTimingBlockers(camp = {}, now = new Date()) {
+  if (isMarkExecutedTimingOpen(camp, now)) return [];
+  return [
+    `Camp can be marked executed only after ${MARK_EXECUTED_MINUTES_AFTER_START} minutes from start time`,
+  ];
+}
+
+export function assertCanMarkCampExecuted(camp = {}, now = new Date()) {
+  if (camp.assignmentDecision !== 'assign' || !camp.hcwContactId) {
+    throw new Error('Assign a healthcare worker before marking the camp executed');
+  }
+  const fieldBlockers = getMarkExecutedFieldBlockers(camp);
+  if (fieldBlockers.length) {
+    throw new Error(fieldBlockers[0]);
+  }
+  const timingBlockers = getMarkExecutedTimingBlockers(camp, now);
+  if (timingBlockers.length) {
+    throw new Error(timingBlockers[0]);
+  }
 }
 
 export function getExecutionFinanceBlockers(camp = {}, mappedConsumables = []) {
@@ -512,8 +554,9 @@ export function applyAssignmentStageOutcome(camp, body = {}) {
     camp.assignmentDecision = 'assign';
     camp.assignmentStatus = 'Assigned';
     camp.assignmentRefusalReason = '';
-    camp.lifecycleStage = 'execution';
+    camp.lifecycleStage = 'assignment';
     camp.executionStatus = syncExecutionStatusForSave(camp);
+    promoteAssignedCampToExecutionIfDue(camp);
     return;
   }
 
@@ -540,6 +583,71 @@ export function applyAssignmentStageOutcome(camp, body = {}) {
     camp.cancelledBy = reason === 'Cancelled by Client' ? 'brand' : 'khw';
     camp.remarks = reason;
   }
+}
+
+/**
+ * True when camp date is tomorrow or earlier (D-1 window for Execution).
+ * Missing camp dates are treated as not ready.
+ */
+export function isCampDateDueForExecution(camp = {}, now = new Date()) {
+  const campDate = localTrim(camp?.campDate);
+  if (!campDate) return false;
+  return daysFromToday(campDate, now) <= EXECUTION_ADVANCE_DAYS_BEFORE;
+}
+
+export function isAssignedForExecutionAdvance(camp = {}) {
+  if (['cancelled', 'rejected'].includes(localTrim(camp?.status))) return false;
+  if (localTrim(camp?.assignmentDecision) !== 'assign') return false;
+  if (localTrim(camp?.assignmentStatus) === 'Assigned') return true;
+  return Boolean(localTrim(camp?.hcwContactId) || localTrim(camp?.hcwName));
+}
+
+/** Move an assigned camp from Assignment → Execution when within D-1 of camp date. */
+export function promoteAssignedCampToExecutionIfDue(camp, now = new Date()) {
+  if (!camp) return false;
+  const stage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
+  if (stage !== 'assignment') return false;
+  if (!isAssignedForExecutionAdvance(camp)) return false;
+  if (!isCampDateDueForExecution(camp, now)) return false;
+
+  camp.lifecycleStage = 'execution';
+  camp.executionStatus = syncExecutionStatusForSave(camp, now);
+  return true;
+}
+
+/**
+ * Persist Assignment → Execution promotions for camps whose date is within D-1.
+ * Called on camp list/detail reads so stages advance without a separate cron.
+ */
+export async function promoteDueAssignedCampsToExecution(CampModel = null, now = new Date()) {
+  const Camp = CampModel || (await import('./campOps.model.js')).CampOpsCamp;
+  const maxCampDate = (() => {
+    const date = new Date(now);
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() + EXECUTION_ADVANCE_DAYS_BEFORE);
+    return localTodayIso(date);
+  })();
+
+  const candidates = await Camp.find({
+    isDeleted: false,
+    status: { $nin: ['cancelled', 'rejected'] },
+    lifecycleStage: 'assignment',
+    assignmentDecision: 'assign',
+    campDate: { $lte: maxCampDate, $ne: '' },
+    $or: [
+      { assignmentStatus: 'Assigned' },
+      { hcwContactId: { $exists: true, $nin: [null, ''] } },
+      { hcwName: { $exists: true, $nin: [null, ''] } },
+    ],
+  });
+
+  let promoted = 0;
+  for (const camp of candidates) {
+    if (!promoteAssignedCampToExecutionIfDue(camp, now)) continue;
+    await camp.save();
+    promoted += 1;
+  }
+  return promoted;
 }
 
 export function canEditLifecycleStage(camp, stage) {

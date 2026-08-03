@@ -494,13 +494,13 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
     const hq = trimStr(row.hq) || city || district;
     const zone = trimStr(row.zone) || (state ? (resolveZoneNameForState(state) || '') : '');
 
-    const normalized = {
+    const normalized = formatCampTextPayload({
       ...row,
       source: trimStr(row.source) || source,
       clientName: trimStr(row.clientName),
       campaignName: normalizeCampName(row.campaignName),
       campaignType: trimStr(row.campaignType) || 'Screening',
-      doctorName: formatTextValue(trimStr(row.doctorName), 'doctorName'),
+      doctorName: trimStr(row.doctorName),
       doctorCode: trimStr(row.doctorCode),
       speciality: trimStr(row.speciality),
       hospitalName: trimStr(row.hospitalName),
@@ -518,10 +518,10 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
       expectedPatients: expectedPatients || 0,
       contactPersonLevel: trimStr(row.contactPersonLevel),
       contactPersons: normalizeContactPersons(row),
-      fieldPersonName: formatTextValue(trimStr(row.fieldPersonName), 'fieldPersonName'),
+      fieldPersonName: trimStr(row.fieldPersonName),
       fieldPersonPhone: trimStr(row.fieldPersonPhone),
       remarks: trimStr(row.remarks),
-    };
+    });
 
     const blockers = getRequestStageBlockers(normalized);
     const completion = getRequestStageCompletion(normalized);

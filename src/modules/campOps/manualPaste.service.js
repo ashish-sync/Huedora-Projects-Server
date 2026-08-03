@@ -12,7 +12,12 @@ import {
 import { normalizeCampName } from './campOps.constants.js';
 import { extractManualPasteFields, formatManualPasteOutput } from './manualPaste.extract.js';
 import { enrichPasteLocationFromPin } from './manualPaste.enrich.js';
-import { assertHistoricalCampDatesAllowed } from './campDatePolicy.js';
+import {
+  assertHistoricalCampDatesAllowed,
+  canSetHistoricalCampDates,
+  getHistoricalCampDateErrors,
+  localTodayIso,
+} from './campDatePolicy.js';
 
 const BLOCK_SEPARATOR = /(?:^|\n)\s*(?:---+|===+|\*\*\*+)\s*(?:\n|$)/;
 
@@ -151,7 +156,26 @@ async function enrichExtractedPasteFields(extracted) {
   };
 }
 
-async function buildBodyPreview(text, defaults = {}) {
+function applyHistoricalDatePreviewFlags(entry, user) {
+  if (!entry?.row) return entry;
+  const campDate = parseLocalDateInput(entry.row.campDate) || trimStr(entry.row.campDate);
+  if (!campDate) return entry;
+
+  const historicalErrors = getHistoricalCampDateErrors(
+    { campDate, requestDate: localTodayIso() },
+    { canSetHistorical: canSetHistoricalCampDates(user) },
+  );
+  if (!historicalErrors.length) return entry;
+
+  entry.errors = [...(entry.errors || []), ...historicalErrors];
+  entry.historicalDateBlocked = true;
+  // Keep row data for edit, but do not treat as importable until date is fixed.
+  entry.valid = false;
+  entry.partial = false;
+  return entry;
+}
+
+async function buildBodyPreview(text, defaults = {}, { user } = {}) {
   const blocks = splitPasteBlocks(text);
 
   return Promise.all(
@@ -206,12 +230,12 @@ async function buildBodyPreview(text, defaults = {}) {
         ];
       }
 
-      return entry;
+      return applyHistoricalDatePreviewFlags(entry, user);
     }),
   );
 }
 
-export async function extractManualPastePreview({ text = '', defaults = {} } = {}) {
+export async function extractManualPastePreview({ text = '', defaults = {}, user } = {}) {
   const bodyText = String(text || '').trim();
   if (!bodyText) {
     throw new AppError('Paste some camp details before extracting', 400, 'VALIDATION_ERROR');
@@ -222,10 +246,10 @@ export async function extractManualPastePreview({ text = '', defaults = {} } = {
     throw new AppError(defaultErrors.join('. '), 400, 'VALIDATION_ERROR');
   }
 
-  const bodyPreview = await buildBodyPreview(bodyText, defaults);
+  const bodyPreview = await buildBodyPreview(bodyText, defaults, { user });
 
   const creatableRows = bodyPreview.filter(
-    (row) => (row.valid || row.partial) && !row.duplicateOf,
+    (row) => (row.valid || row.partial) && !row.duplicateOf && !row.historicalDateBlocked,
   );
 
   return {
@@ -286,6 +310,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
         { clientName: entry.row.clientName || 'Unassigned' },
         { allowCreate: true },
       );
+      const today = localTodayIso();
       const payload = campPayloadFromBody(
         {
           ...entry.row,
@@ -297,19 +322,21 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
         { allowPartial: Boolean(entry.partial) },
       );
 
+      // Missing dates default to local today before policy checks (UTC ISO can be "yesterday").
+      const requestDate = parseLocalDateInput(payload.requestDate) || today;
+      if (!parseLocalDateInput(payload.campDate) && !trimStr(payload.campDate)) {
+        payload.campDate = requestDate;
+      }
+      payload.requestDate = requestDate;
+
       assertHistoricalCampDatesAllowed(
         helpers.user,
         helpers.permissions,
         {
           campDate: payload.campDate,
-          requestDate: payload.requestDate || new Date().toISOString().slice(0, 10),
+          requestDate: payload.requestDate,
         },
       );
-
-      const requestDate = payload.requestDate || new Date().toISOString().slice(0, 10);
-      if (!payload.campDate) {
-        payload.campDate = requestDate;
-      }
 
       const camp = await CampOpsCamp.create({
         ...payload,
@@ -334,6 +361,10 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
         partialFields: entry.partialFields || [],
       });
     } catch (error) {
+      // Surface policy failures immediately (do not bury as generic validation).
+      if (error instanceof AppError && (error.status === 403 || error.code === 'FORBIDDEN')) {
+        throw error;
+      }
       results.push({
         status: 'invalid',
         rowNumber: entry.rowNumber,

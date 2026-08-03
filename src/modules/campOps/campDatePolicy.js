@@ -22,10 +22,10 @@ function localDateFromIso(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-export function daysFromToday(dateValue) {
+export function daysFromToday(dateValue, now = new Date()) {
   const target = localDateFromIso(dateValue);
   if (!target) return 0;
-  const today = new Date();
+  const today = new Date(now);
   today.setHours(0, 0, 0, 0);
   return Math.round((target.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
 }
@@ -81,6 +81,15 @@ export function assertHistoricalCampDatesAllowed(user, _permissions, dates, { ex
   if (errors.length) {
     throw new AppError(errors[0], 403, 'FORBIDDEN');
   }
+}
+
+export function localTodayIso(now = new Date()) {
+  const date = new Date(now);
+  date.setHours(0, 0, 0, 0);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 export function minAllowedCampDateIso() {

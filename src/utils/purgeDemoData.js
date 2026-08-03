@@ -20,6 +20,8 @@ export const DEMO_USER_EMAILS = new Set([
 
 export const DEMO_CONTACT_EMAILS = new Set([
   'ravi.tech@demo.tylo.local',
+  'neha.phleb@demo.tylo.local',
+  'asha.diet@demo.tylo.local',
   'priya.sharma@citycare.example',
 ]);
 

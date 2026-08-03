@@ -29,6 +29,8 @@ export const CAMP_FINANCE_EXPORT_COLUMNS = [
   { key: 'hcwName', label: 'HCW Name' },
   { key: 'hcwContact', label: 'HCW Contact' },
   { key: 'hcwCategory', label: 'HCW Category' },
+  { key: 'expenseCategory', label: 'Expense Category' },
+  { key: 'expenseSubCategory', label: 'Expense Sub-Category' },
   { key: 'inTime', label: 'In Time' },
   { key: 'outTime', label: 'Out Time' },
   { key: 'patientsCount', label: 'Patients Count' },

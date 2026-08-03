@@ -28,6 +28,7 @@ import {
   normalizeClientMasterDuration,
   parseClientMasterImportRow,
 } from './clientMaster.excel.js';
+import { normalizeHealthcareWorkers } from './healthcareWorkers.js';
 import {
   CampOpsCamp,
   CampOpsClient,
@@ -36,10 +37,16 @@ import {
   CampOpsImportTemplate,
   CampOpsExportTemplate,
 } from './campOps.model.js';
-import { LogisticsProduct, LogisticsUom } from '../logistics/logistics.model.js';
+import { LogisticsProduct, LogisticsUom, LogisticsExpenseSubCategory } from '../logistics/logistics.model.js';
 import { Contact } from '../contacts/contact.model.js';
 import { getHcwFinanceBlockers } from '../contacts/hcwFinanceReadiness.js';
+import { resolveCampPayoutPayeeContact } from '../contacts/campPayoutPayee.js';
 import { formatTextValue } from '../../utils/textFormat.js';
+import {
+  CAMP_FINANCE_EXPENSE_CATEGORY,
+  CAMP_FINANCE_EXPENSE_SUB_CATEGORY,
+  campFinanceExpenseDefaults,
+} from './campFinanceExpense.js';
 import {
   trimStr,
   formatCampTextPayload,
@@ -80,8 +87,11 @@ import {
   applyAssignmentStageOutcome,
   assertExecutionStageSave,
   assertExecutionConsumablesComplete,
+  assertCanMarkCampExecuted,
   isExecutionReadyForFinance,
   normalizeLifecycleStage,
+  promoteDueAssignedCampsToExecution,
+  promoteAssignedCampToExecutionIfDue,
   EXECUTION_DOC_TYPES,
   EXECUTION_STATUS,
   resolveInTimeSelfieUrl,
@@ -613,6 +623,7 @@ router.get(
   '/camps',
   canRead,
   asyncHandler(async (req, res) => {
+    await promoteDueAssignedCampsToExecution();
     const { page, limit, skip } = parsePagination(req.query);
     const overdueOnly = req.query.overdue === '1' || req.query.overdue === 'true';
     const reactionRequired = req.query.reactionRequired === '1' || req.query.reactionRequired === 'true';
@@ -828,8 +839,10 @@ router.post(
           applyRequestReviewTransition(camp, 'reject', { reason: rejectionReason });
         }
         if (config.nextStatus === 'executed') {
-          if (camp.assignmentDecision !== 'assign' || !camp.hcwContactId) {
-            throw new Error('Assign a healthcare worker before marking the camp executed');
+          try {
+            assertCanMarkCampExecuted(camp);
+          } catch (err) {
+            throw new Error(err.message || 'Cannot mark camp executed');
           }
           camp.executedById = a.id;
           camp.executedByEmail = a.email;
@@ -872,6 +885,9 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
+    if (promoteAssignedCampToExecutionIfDue(camp)) {
+      await camp.save();
+    }
     const overdue = await persistRequestReviewOverdue(camp);
     if (overdue.becameOverdue) {
       await notifyCampWorkflow({ camp, action: 'review_overdue', actorId: null });
@@ -1139,11 +1155,23 @@ router.post(
     if (!hcwContactId) {
       throw new AppError('Assign a healthcare worker before submitting to Finance', 400, 'VALIDATION_ERROR');
     }
-    const hcwContact = await Contact.findOne({ _id: hcwContactId, isDeleted: false });
-    const hcwBlockers = getHcwFinanceBlockers(hcwContact);
+    const payeeResolved = await resolveCampPayoutPayeeContact(hcwContactId);
+    if (!payeeResolved.assignedContact && !String(hcwContactId).startsWith('spe:')) {
+      throw new AppError('Assigned healthcare worker was not found in Contact Directory', 400, 'VALIDATION_ERROR');
+    }
+    if (payeeResolved.payeeIsServiceProvider && !payeeResolved.payeeContact) {
+      throw new AppError(
+        'Service Provider profile is missing in Contact Directory for this assignment',
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
+    const payeeContact = payeeResolved.payeeContact || payeeResolved.assignedContact;
+    const payeeLabel = payeeResolved.payeeIsServiceProvider ? 'Service Provider' : 'HCW';
+    const hcwBlockers = getHcwFinanceBlockers(payeeContact, { label: payeeLabel });
     if (hcwBlockers.length) {
       throw new AppError(
-        `Complete assigned HCW profile before Finance submit: ${hcwBlockers.join('; ')}`,
+        `Complete ${payeeLabel} profile before Finance submit: ${hcwBlockers.join('; ')}`,
         400,
         'VALIDATION_ERROR',
       );
@@ -1157,6 +1185,17 @@ router.post(
     camp.submittedToFinanceById = a.id;
     camp.submittedToFinanceByEmail = a.email;
     camp.lifecycleStage = 'financial';
+
+    const expenseDefaults = campFinanceExpenseDefaults();
+    camp.expenseCategory = expenseDefaults.expenseCategory;
+    camp.expenseSubCategory = expenseDefaults.expenseSubCategory;
+    const expenseSub = await LogisticsExpenseSubCategory.findOne({
+      isDeleted: false,
+      isActive: true,
+      name: CAMP_FINANCE_EXPENSE_SUB_CATEGORY,
+      categoryName: CAMP_FINANCE_EXPENSE_CATEGORY,
+    });
+    camp.expenseSubCategoryId = expenseSub?._id || null;
 
     await camp.save();
     await audit(req, 'camp_ops.submit_to_finance', 'camp_ops_camp', camp._id, before, camp.toObject());
@@ -1220,12 +1259,10 @@ async function transitionCamp(req, res, nextStatus, action) {
     applyRequestReviewTransition(camp, 'reject', { reason: rejectionReason });
   }
   if (nextStatus === 'executed') {
-    if (camp.assignmentDecision !== 'assign' || !camp.hcwContactId) {
-      throw new AppError(
-        'Assign a healthcare worker before marking the camp executed',
-        400,
-        'VALIDATION_ERROR',
-      );
+    try {
+      assertCanMarkCampExecuted(camp);
+    } catch (err) {
+      throw new AppError(err.message || 'Cannot mark camp executed', 400, 'VALIDATION_ERROR');
     }
     camp.executedById = a.id;
     camp.executedByEmail = a.email;
@@ -1497,7 +1534,6 @@ const MASTER_STRING_FIELDS = [
   'campName',
   'campType',
   'coordinatorName',
-  'healthcareWorker',
   'campDuration',
   'spocName',
   'spocNumber',
@@ -1536,6 +1572,9 @@ function buildMasterPayload(body, client) {
         payload[field] = trimStr(body[field]);
       }
     }
+  }
+  if (body.healthcareWorker !== undefined) {
+    payload.healthcareWorker = normalizeHealthcareWorkers(body.healthcareWorker);
   }
   for (const field of MASTER_NUMERIC_FIELDS) {
     if (body[field] !== undefined) {
@@ -2093,7 +2132,7 @@ router.post(
         requestDate: row.requestDate,
       });
       const tracking = captureSubmissionTracking();
-      const camp = await CampOpsCamp.create({
+      const camp = await CampOpsCamp.create(formatCampTextPayload({
         campId: await generateCampId(row.campDate),
         clientId: client._id,
         clientName: client.name,
@@ -2121,7 +2160,7 @@ router.post(
         createdById: a.id,
         createdByEmail: a.email,
         ...tracking,
-      });
+      }));
       created.push(enrichCamp(camp));
     }
 
@@ -2187,7 +2226,7 @@ router.post(
       campaignType: trimStr(req.body?.campaignType),
       campaignName: trimStr(req.body?.campaignName),
     };
-    const data = await extractManualPastePreview({ text, defaults });
+    const data = await extractManualPastePreview({ text, defaults, user: req.user });
     res.json({ data });
   })
 );

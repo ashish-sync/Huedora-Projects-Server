@@ -29,6 +29,11 @@ import {
 } from '../campOps/campFinanceExport.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import {
+  CAMP_FINANCE_EXPENSE_CATEGORY,
+  CAMP_FINANCE_EXPENSE_SUB_CATEGORY,
+} from '../campOps/campFinanceExpense.js';
+import { enrichCampPayoutsWithPayee } from '../contacts/campPayoutPayee.js';
 
 const router = Router();
 router.use(authenticate);
@@ -485,17 +490,28 @@ router.delete(
   })
 );
 
+function campMonthKey(campDate) {
+  const raw = String(campDate || '').slice(0, 7);
+  return /^\d{4}-\d{2}$/.test(raw) ? raw : '';
+}
+
 function campPayoutSummary(camp) {
   const row = camp?.toObject ? camp.toObject() : { ...camp };
   const derived = computeLifecycleDerived(row);
+  const month = campMonthKey(row.campDate);
   return {
     _id: row._id,
     campId: row.campId,
+    clientId: row.clientId,
     clientName: row.clientName,
+    campaignType: row.campaignType || '',
     campaignName: row.campaignName,
     campDate: row.campDate,
+    campMonth: month,
+    hcwCategory: row.hcwCategory || '',
     hcwName: row.hcwName,
     hcwContact: row.hcwContact,
+    hcwContactId: row.hcwContactId || '',
     totalPayout: derived.totalPayout,
     balance: derived.balance,
     paymentSubmitStatus: row.paymentSubmitStatus,
@@ -503,13 +519,89 @@ function campPayoutSummary(camp) {
     paidAmount: row.paidAmount,
     transactionId: row.transactionId,
     paymentRemark: row.paymentRemark,
+    expenseCategory: row.expenseCategory || CAMP_FINANCE_EXPENSE_CATEGORY,
+    expenseSubCategory: row.expenseSubCategory || CAMP_FINANCE_EXPENSE_SUB_CATEGORY,
+    expenseSubCategoryId: row.expenseSubCategoryId || null,
     submittedToFinanceAt: row.submittedToFinanceAt,
     submittedToFinanceByEmail: row.submittedToFinanceByEmail,
     financeProcessedAt: row.financeProcessedAt,
     financeProcessedByEmail: row.financeProcessedByEmail,
     lifecycleStage: row.lifecycleStage,
     status: row.status,
+    payeeContactId: '',
+    payeeName: row.hcwName || '',
+    payeeIsServiceProvider: false,
+    assignedHcwName: row.hcwName || '',
+    bankName: '',
+    accountNumber: '',
+    ifscCode: '',
+    panCardCopyUrl: '',
+    passbookCopyUrl: '',
   };
+}
+
+async function campPayoutSummaryWithPayeeBank(camp) {
+  const [enriched] = await enrichCampPayoutsWithPayee([campPayoutSummary(camp)]);
+  return enriched;
+}
+
+function applyCampPayoutFields(camp, body = {}, actor = {}) {
+  const status = normalizeFinancePaymentStatus(body.financePaymentStatus || camp.financePaymentStatus);
+  if (!status || !FINANCE_PAYMENT_STATUSES.includes(status)) {
+    throw new AppError(
+      'financePaymentStatus must be paid, not_paid, or under_review',
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+
+  camp.financePaymentStatus = status;
+
+  if (status === 'paid') {
+    const paidAmount = toAmount(body.paidAmount ?? camp.paidAmount);
+    const transactionId = trimStr(body.transactionId ?? camp.transactionId);
+    if (!paidAmount) {
+      throw new AppError('Paid Amount is required when status is Paid', 400, 'VALIDATION_ERROR');
+    }
+    if (!transactionId) {
+      throw new AppError('Transaction ID / UTR is required when status is Paid', 400, 'VALIDATION_ERROR');
+    }
+    camp.paidAmount = paidAmount;
+    camp.transactionId = transactionId;
+    camp.paymentRemark = trimStr(body.paymentRemark ?? camp.paymentRemark);
+  } else {
+    if (body.paidAmount !== undefined) camp.paidAmount = toAmount(body.paidAmount);
+    if (body.transactionId !== undefined) camp.transactionId = trimStr(body.transactionId);
+    if (body.paymentRemark !== undefined) camp.paymentRemark = trimStr(body.paymentRemark);
+  }
+
+  const derived = computeLifecycleDerived(camp);
+  camp.balance = derived.balance;
+  camp.totalPayout = derived.totalPayout;
+  camp.financeProcessedAt = new Date().toISOString();
+  camp.financeProcessedById = actor?._id || null;
+  camp.financeProcessedByEmail = actor?.email || '';
+  return camp;
+}
+
+function buildCampPayoutFilter(query = {}) {
+  const filter = { isDeleted: false, submittedToFinanceAt: { $ne: null } };
+  if (query.status) {
+    filter.financePaymentStatus = normalizeFinancePaymentStatus(query.status);
+  }
+  if (query.q) {
+    const re = new RegExp(escapeRegex(String(query.q)), 'i');
+    filter.$or = [
+      { campId: re },
+      { clientName: re },
+      { hcwName: re },
+      { hcwCategory: re },
+      { campaignName: re },
+      { campaignType: re },
+      { transactionId: re },
+    ];
+  }
+  return filter;
 }
 
 router.get(
@@ -517,22 +609,12 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const { page, limit, skip } = parsePagination(req.query);
-    const filter = { isDeleted: false, submittedToFinanceAt: { $ne: null } };
-    if (req.query.status) {
-      filter.financePaymentStatus = normalizeFinancePaymentStatus(req.query.status);
-    }
-    if (req.query.q) {
-      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
-      filter.$or = [
-        { campId: re },
-        { clientName: re },
-        { hcwName: re },
-        { transactionId: re },
-      ];
-    }
+    const filter = buildCampPayoutFilter(req.query);
     const rows = await CampOpsCamp.find(filter).sort('-submittedToFinanceAt');
     const total = rows.length;
-    const data = rows.slice(skip, skip + limit).map(campPayoutSummary);
+    const data = await enrichCampPayoutsWithPayee(
+      rows.slice(skip, skip + limit).map(campPayoutSummary),
+    );
     res.json(paginated(data, total, page, limit));
   })
 );
@@ -541,19 +623,7 @@ router.get(
   '/camp-payouts/export',
   canRead,
   asyncHandler(async (req, res) => {
-    const filter = { isDeleted: false, submittedToFinanceAt: { $ne: null } };
-    if (req.query.status) {
-      filter.financePaymentStatus = normalizeFinancePaymentStatus(req.query.status);
-    }
-    if (req.query.q) {
-      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
-      filter.$or = [
-        { campId: re },
-        { clientName: re },
-        { hcwName: re },
-        { transactionId: re },
-      ];
-    }
+    const filter = buildCampPayoutFilter(req.query);
     const camps = await CampOpsCamp.find(filter).sort('-submittedToFinanceAt');
     sendExcel(
       res,
@@ -562,6 +632,95 @@ router.get(
       campFinanceExportRows(camps),
       { sheetName: 'Camp Payouts' },
     );
+  })
+);
+
+router.post(
+  '/camp-payouts/bulk',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const ids = Array.isArray(req.body?.ids)
+      ? req.body.ids.map((id) => String(id || '').trim()).filter(Boolean)
+      : [];
+    if (!ids.length) {
+      throw new AppError('Select at least one camp payout', 400, 'VALIDATION_ERROR');
+    }
+
+    const status = normalizeFinancePaymentStatus(req.body?.financePaymentStatus);
+    if (!status || !FINANCE_PAYMENT_STATUSES.includes(status)) {
+      throw new AppError(
+        'financePaymentStatus must be paid, not_paid, or under_review',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+
+    const transactionId = trimStr(req.body?.transactionId);
+    const paymentRemark = trimStr(req.body?.paymentRemark);
+    const sharedPaidAmount = req.body?.paidAmount !== undefined && req.body?.paidAmount !== ''
+      ? toAmount(req.body.paidAmount)
+      : null;
+
+    if (status === 'paid' && !transactionId) {
+      throw new AppError('Transaction ID / UTR is required when status is Paid', 400, 'VALIDATION_ERROR');
+    }
+
+    const camps = await CampOpsCamp.find({
+      _id: { $in: ids },
+      isDeleted: false,
+      submittedToFinanceAt: { $ne: null },
+    });
+    if (!camps.length) {
+      throw new AppError('No matching camp payouts found', 404);
+    }
+
+    const a = req.user;
+    const updated = [];
+    for (const camp of camps) {
+      const derived = computeLifecycleDerived(camp);
+      const paidAmount = status === 'paid'
+        ? (sharedPaidAmount != null && camps.length === 1
+          ? sharedPaidAmount
+          : derived.totalPayout || toAmount(camp.paidAmount) || 0)
+        : (sharedPaidAmount != null ? sharedPaidAmount : camp.paidAmount);
+
+      if (status === 'paid' && !paidAmount) {
+        throw new AppError(
+          `Paid Amount is required for ${camp.campId || camp._id}`,
+          400,
+          'VALIDATION_ERROR',
+        );
+      }
+
+      applyCampPayoutFields(camp, {
+        financePaymentStatus: status,
+        paidAmount,
+        transactionId: status === 'paid' ? transactionId : (req.body?.transactionId ?? camp.transactionId),
+        paymentRemark: paymentRemark || camp.paymentRemark,
+      }, a);
+      await camp.save();
+      updated.push(await campPayoutSummaryWithPayeeBank(camp));
+    }
+
+    await writeAudit({
+      actorId: a?._id || null,
+      actorEmail: a?.email || null,
+      action: 'FINANCE.CAMP_PAYOUT_BULK_UPDATE',
+      entityType: 'camp_ops_camp',
+      entityId: null,
+      after: {
+        count: updated.length,
+        financePaymentStatus: status,
+        transactionId: status === 'paid' ? transactionId : undefined,
+        ids: updated.map((row) => row._id),
+      },
+      requestId: req.requestId,
+    });
+
+    res.json({
+      data: updated,
+      message: `Updated ${updated.length} camp payout${updated.length === 1 ? '' : 's'}`,
+    });
   })
 );
 
@@ -597,44 +756,8 @@ router.patch(
     });
     if (!camp) throw new AppError('Camp payout not found', 404);
 
-    const status = normalizeFinancePaymentStatus(req.body.financePaymentStatus || camp.financePaymentStatus);
-    if (!status || !FINANCE_PAYMENT_STATUSES.includes(status)) {
-      throw new AppError(
-        'financePaymentStatus must be paid, not_paid, or under_review',
-        400,
-        'VALIDATION_ERROR'
-      );
-    }
-
-    camp.financePaymentStatus = status;
-
-    if (status === 'paid') {
-      const paidAmount = toAmount(req.body.paidAmount ?? camp.paidAmount);
-      const transactionId = trimStr(req.body.transactionId ?? camp.transactionId);
-      if (!paidAmount) {
-        throw new AppError('Paid Amount is required when status is Paid', 400, 'VALIDATION_ERROR');
-      }
-      if (!transactionId) {
-        throw new AppError('Transaction ID / UTR is required when status is Paid', 400, 'VALIDATION_ERROR');
-      }
-      camp.paidAmount = paidAmount;
-      camp.transactionId = transactionId;
-      camp.paymentRemark = trimStr(req.body.paymentRemark ?? camp.paymentRemark);
-    } else {
-      if (req.body.paidAmount !== undefined) camp.paidAmount = toAmount(req.body.paidAmount);
-      if (req.body.transactionId !== undefined) camp.transactionId = trimStr(req.body.transactionId);
-      if (req.body.paymentRemark !== undefined) camp.paymentRemark = trimStr(req.body.paymentRemark);
-    }
-
-    const derived = computeLifecycleDerived(camp);
-    camp.balance = derived.balance;
-    camp.totalPayout = derived.totalPayout;
-
     const a = req.user;
-    camp.financeProcessedAt = new Date().toISOString();
-    camp.financeProcessedById = a?._id || null;
-    camp.financeProcessedByEmail = a?.email || '';
-
+    applyCampPayoutFields(camp, req.body, a);
     await camp.save();
 
     await writeAudit({
@@ -652,7 +775,7 @@ router.patch(
       requestId: req.requestId,
     });
 
-    res.json({ data: campPayoutSummary(camp) });
+    res.json({ data: await campPayoutSummaryWithPayeeBank(camp) });
   })
 );
 

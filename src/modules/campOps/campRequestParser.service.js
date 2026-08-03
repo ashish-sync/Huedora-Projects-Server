@@ -7,7 +7,7 @@ import { enrichPinRecord } from '../geo/pinCode.service.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
 import { CampOpsParserAudit } from './campOps.model.js';
 import { parseCampRequest, listClientParserConfigs, validateCityPincodeMatch } from './parsers/dist/index.js';
-import { trimStr } from './campOps.helpers.js';
+import { trimStr, formatCampTextPayload } from './campOps.helpers.js';
 import { AppError } from '../../utils/helpers.js';
 
 /**
@@ -21,7 +21,7 @@ export function parsedFieldsToCampRow(parsedFields = {}, defaults = {}, pinMaste
   const zone = trimStr(parsedFields.zone)
     || trimStr(pinMaster?.zone)
     || (state ? (resolveZoneNameForState(state) || '') : '');
-  return {
+  return formatCampTextPayload({
     clientName: trimStr(defaults.clientName),
     campaignType: trimStr(defaults.campaignType) || 'Screening',
     campaignName: trimStr(defaults.campaignName) || 'BMD',
@@ -42,7 +42,7 @@ export function parsedFieldsToCampRow(parsedFields = {}, defaults = {}, pinMaste
     fieldPersonPhone: trimStr(parsedFields.contact_person_number),
     remarks: '',
     source: 'parser',
-  };
+  });
 }
 
 async function lookupPinMaster(pincode) {
