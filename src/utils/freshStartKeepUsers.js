@@ -13,6 +13,12 @@ export const FRESH_START_KEEP_COLLECTIONS = new Set([
   'users',
   'roles',
   'refresh_tokens',
+  // India geo / city master (state-wise city list) — do not wipe
+  'geo_states',
+  'geo_districts',
+  'geo_cities',
+  'geo_zones',
+  'geo_pin_codes',
 ]);
 
 function clearDirectory(dir) {
@@ -73,7 +79,7 @@ export async function freshStartKeepUsers({ clearUploads = true } = {}) {
 
   cleared.sort();
   console.warn(
-    `[fresh-start] Cleared ${cleared.length} collection(s); kept users/roles/refresh_tokens`,
+    `[fresh-start] Cleared ${cleared.length} collection(s); kept users/roles/refresh_tokens and geo city masters`,
   );
   return { cleared, kept: [...FRESH_START_KEEP_COLLECTIONS] };
 }

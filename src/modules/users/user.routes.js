@@ -87,7 +87,7 @@ router.post(
     res.json({
       data: {
         ok: true,
-        message: 'Application data cleared. Users and logins were preserved.',
+        message: 'Application data cleared. Users, logins, and geo city masters were preserved.',
         clearedCount: result.cleared.length,
         kept: result.kept,
       },

@@ -1,6 +1,6 @@
 /**
  * Production-safe wipe: clears camps, assets, products, masters, finance, etc.
- * Keeps users, roles, and refresh tokens.
+ * Keeps users, roles, refresh tokens, and geo city masters (state-wise cities).
  *
  * Usage (from server/ with production MONGODB_URI):
  *   node scripts/fresh-start-keep-users.js
@@ -44,7 +44,7 @@ const dryRun = process.argv.includes('--dry-run');
 async function main() {
   await connectDb();
   if (dryRun) {
-    console.log('[fresh-start] Dry run — would clear all collections except users, roles, refresh_tokens');
+    console.log('[fresh-start] Dry run — would clear all collections except users, roles, refresh_tokens, and geo masters');
     console.log(`[fresh-start] Persistence mode: ${env.nodeEnv}`);
     await disconnectDb();
     return;
