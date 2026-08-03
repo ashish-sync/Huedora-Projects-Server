@@ -2,7 +2,7 @@
  * Bulk-create TYLO One login accounts from a CSV file.
  *
  * Usage (from server/):
- *   $env:BULK_USERS_DEFAULT_PASSWORD="TyloCare@2026"
+ *   $env:BULK_USERS_DEFAULT_PASSWORD="<strong-temp-password>"
  *   node scripts/bulk-import-users.js --file scripts/data/team-users-tylocare.csv
  *
  * Options:

@@ -1,11 +1,13 @@
 import { CampOpsCamp as Camp } from './models.js';
-import { trimStr } from '../campOps.helpers.js';
-import { normalizeCampName } from '../campOps.constants.js';
 import {
+  trimStr,
+  formatCampTextPayload,
   generateCampId,
   resolveCampSchedule,
   captureSubmissionTracking,
 } from '../campOps.helpers.js';
+import { normalizeCampName } from '../campOps.constants.js';
+import { assertHistoricalCampDatesAllowed } from '../campDatePolicy.js';
 import { CampDuplicateError, findExistingDuplicateCamp } from './utils/campDuplicateHelpers.js';
 
 export { CampDuplicateError, findExistingDuplicateCamp };
@@ -17,11 +19,17 @@ export async function createCampFromRow({
   source = 'api',
   submittedAt,
   extras = {},
+  permissions = null,
 }) {
   const duplicate = await findExistingDuplicateCamp({ client, row });
   if (duplicate) {
     throw new CampDuplicateError(duplicate);
   }
+
+  assertHistoricalCampDatesAllowed(createdBy, permissions, {
+    campDate: row.campDate,
+    requestDate: row.requestDate,
+  });
 
   const campId = await generateCampId(row.campDate);
   const schedule = resolveCampSchedule({
@@ -33,7 +41,7 @@ export async function createCampFromRow({
   const actorId = createdBy?._id || createdBy?.id || null;
   const actorEmail = createdBy?.email || '';
 
-  const payload = {
+  const payload = formatCampTextPayload({
     campId,
     clientId: client._id,
     clientName: client.name,
@@ -49,6 +57,7 @@ export async function createCampFromRow({
     campAddress: trimStr(row.campAddress),
     city: trimStr(row.city),
     state: trimStr(row.state),
+    district: trimStr(row.district),
     pincode: trimStr(row.pincode),
     campDate: row.campDate,
     startTime: schedule.startTime,
@@ -66,7 +75,7 @@ export async function createCampFromRow({
     createdByEmail: actorEmail,
     ...tracking,
     ...extras,
-  };
+  });
 
   for (const key of ['whatsappMessageId', 'emailIngestId']) {
     if (payload[key] == null || payload[key] === '') {

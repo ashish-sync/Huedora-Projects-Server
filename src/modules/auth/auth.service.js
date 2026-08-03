@@ -31,12 +31,10 @@ function signRefresh(user) {
   );
 }
 
+import { collectUserPermissions } from '../users/userAccess.js';
+
 export function collectPermissions(user) {
-  const set = new Set();
-  for (const role of user.roleIds || []) {
-    for (const p of role.permissions || []) set.add(p);
-  }
-  return [...set];
+  return [...collectUserPermissions(user)];
 }
 
 export function publicUser(user) {
@@ -65,6 +63,7 @@ export function publicUser(user) {
       id: r?._id || r,
       name: r?.name || '',
     })),
+    grantedPermissions: Array.isArray(user.grantedPermissions) ? user.grantedPermissions : [],
     permissions: collectPermissions(user),
     lastLoginAt: user.lastLoginAt,
     passwordChangedAt: user.passwordChangedAt || null,

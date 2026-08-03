@@ -345,10 +345,10 @@ export function normalizePurchaseOrderPayload(body = {}, orgProfile = DEFAULT_OR
 }
 
 export function validatePurchaseOrderPayload(payload, { requireLines = true } = {}) {
-  if (!payload.recipientName) {
+  if (requireLines && !payload.recipientName) {
     throw new AppError('Vendor name is required', 400, 'VALIDATION_ERROR');
   }
-  if (!payload.placeOfSupply) {
+  if (requireLines && !payload.placeOfSupply) {
     throw new AppError('Vendor address is required', 400, 'VALIDATION_ERROR');
   }
   if (requireLines && (!payload.lineItems || !payload.lineItems.length)) {
@@ -441,7 +441,7 @@ export const validateClientInvoicePayload = validateProformaPayload;
 export const validateCreditNotePayload = validateProformaPayload;
 
 export function validateProformaPayload(payload, { requireLines = true } = {}) {
-  if (!payload.recipientName) {
+  if (requireLines && !payload.recipientName) {
     throw new AppError('Recipient name is required', 400, 'VALIDATION_ERROR');
   }
   if (requireLines && (!payload.lineItems || !payload.lineItems.length)) {
@@ -465,9 +465,50 @@ export function assertEditableStatus(status) {
 }
 
 export function assertIssuable(status) {
-  if (!['Draft', 'Uploaded'].includes(status)) {
+  if (!['Draft', 'Uploaded', 'Submitted', 'Approved'].includes(status)) {
     throw new AppError('Document cannot be issued in its current status', 400, 'VALIDATION_ERROR');
   }
+}
+
+export function assertSubmittable(status) {
+  if (!['Draft', 'Uploaded'].includes(status)) {
+    throw new AppError('Only draft documents can be submitted for approval', 400, 'VALIDATION_ERROR');
+  }
+}
+
+export function assertApprovable(status) {
+  if (status !== 'Submitted') {
+    throw new AppError('Only submitted documents can be approved', 400, 'VALIDATION_ERROR');
+  }
+}
+
+export function assertRejectable(status) {
+  if (status !== 'Submitted') {
+    throw new AppError('Only submitted documents can be rejected', 400, 'VALIDATION_ERROR');
+  }
+}
+
+export function assertCancellable(status) {
+  if (['Issued', 'Cancelled', 'Converted'].includes(status)) {
+    throw new AppError('Document cannot be cancelled in its current status', 400, 'VALIDATION_ERROR');
+  }
+}
+
+/** Extra UI fields stored alongside normalized commercial payload */
+export function extractBuilderExtras(body = {}) {
+  const out = {};
+  if (body.builderForm !== undefined) {
+    out.builderForm = body.builderForm && typeof body.builderForm === 'object' ? body.builderForm : null;
+  }
+  if (body.declaration !== undefined) out.declaration = trimStr(body.declaration);
+  if (body.shipToName !== undefined) out.shipToName = trimStr(body.shipToName);
+  if (body.shipToContactPerson !== undefined) {
+    out.shipToContactPerson = trimStr(body.shipToContactPerson);
+  }
+  if (body.shipToAddress !== undefined) out.shipToAddress = trimStr(body.shipToAddress);
+  if (body.vehicleNo !== undefined) out.vehicleNo = trimStr(body.vehicleNo);
+  if (body.transporterName !== undefined) out.transporterName = trimStr(body.transporterName);
+  return out;
 }
 
 export function isValidCommercialStatus(status) {

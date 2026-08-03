@@ -1,4 +1,4 @@
-/** Finance One expense types (reimbursement line items). Not the Movement One expense-categories master. */
+/** Finance One expense types (expense line items). Not the Movement One Expense Master. */
 export const EXPENSE_CATEGORIES = [
   'Travel',
   'Training',
@@ -37,6 +37,8 @@ export const COMMERCIAL_DOC_TYPES = [
 
 export const COMMERCIAL_DOC_STATUSES = [
   'Draft',
+  'Submitted',
+  'Approved',
   'Issued',
   'Uploaded',
   'Cancelled',

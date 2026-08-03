@@ -3,6 +3,7 @@ import { env } from '../config/env.js';
 import { User } from '../modules/users/user.model.js';
 import { AppError } from '../utils/helpers.js';
 import { PERMISSIONS } from '../config/constants.js';
+import { collectUserPermissions } from '../modules/users/userAccess.js';
 
 export async function authenticate(req, _res, next) {
   try {
@@ -25,10 +26,7 @@ export async function authenticate(req, _res, next) {
       throw new AppError('Session invalidated', 401, 'UNAUTHORIZED');
     }
 
-    const permissions = new Set();
-    for (const role of user.roleIds || []) {
-      for (const p of role.permissions || []) permissions.add(p);
-    }
+    const permissions = collectUserPermissions(user);
 
     req.user = user;
     req.permissions = permissions;
@@ -53,11 +51,7 @@ export function hasPermission(req, permission) {
 }
 
 export function collectPermissions(user) {
-  const permissions = new Set();
-  for (const role of user?.roleIds || []) {
-    for (const p of role.permissions || []) permissions.add(p);
-  }
-  return permissions;
+  return collectUserPermissions(user);
 }
 
 export function userHasAnyPermission(user, ...needed) {

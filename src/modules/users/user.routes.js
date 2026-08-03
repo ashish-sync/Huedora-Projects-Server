@@ -17,11 +17,11 @@ import {
   buildHierarchyTree,
   clearReportingManagerForUser,
 } from './user.hierarchy.js';
+import { DESIGNATION_ACCESS_TEMPLATES } from './designationAccess.js';
 import {
-  DESIGNATION_ACCESS_TEMPLATES,
-  getDesignationAccessTemplate,
-  resolveDesignationRoleIds,
-} from './designationAccess.js';
+  assertAccessPayload,
+  normalizeGrantedPermissions,
+} from './userAccess.js';
 
 const router = Router();
 
@@ -300,9 +300,13 @@ router.post(
   '/',
   requirePermission(PERMISSIONS.USERS_WRITE),
   asyncHandler(async (req, res) => {
-    const { email, username, fullName, password, phone, roleIds, designation, reportingManagerId } =
+    const { email, username, fullName, password, phone, roleIds, grantedPermissions, designation, reportingManagerId } =
       req.body;
-    if (!email || !username || !fullName || !password || !roleIds?.length) {
+    const access = assertAccessPayload({ roleIds, grantedPermissions });
+    if (!access.ok) {
+      throw new AppError(access.message, 400, 'VALIDATION_ERROR');
+    }
+    if (!email || !username || !fullName || !password) {
       throw new AppError('Missing required fields', 400, 'VALIDATION_ERROR');
     }
     if (password.length < 12) throw new AppError('Password must be at least 12 characters', 400, 'VALIDATION_ERROR');
@@ -313,7 +317,6 @@ router.post(
     const managerId = await assertReportingManager({ reportingManagerId });
     const passwordHash = await bcrypt.hash(password, 12);
     const designationValue = normalizeDesignation(designation);
-    const templateRoleIds = await resolveDesignationRoleIds(designationValue, Role);
     const user = await User.create({
       email: emailKey,
       username: usernameKey,
@@ -321,7 +324,8 @@ router.post(
       phone: phoneKey || String(phone || '').trim(),
       designation: designationValue,
       reportingManagerId: managerId,
-      roleIds: templateRoleIds || asRoleIdList(roleIds),
+      roleIds: access.roleIds,
+      grantedPermissions: access.grantedPermissions,
       passwordHash,
       passwordChangedAt: new Date().toISOString(),
     });
@@ -378,21 +382,28 @@ router.patch(
     if (req.body.designation !== undefined) {
       user.designation = normalizeDesignation(req.body.designation);
     }
-    const designationTemplate = getDesignationAccessTemplate(user.designation);
-    if (designationTemplate) {
-      const templateRoleIds = await resolveDesignationRoleIds(user.designation, Role);
-      if (templateRoleIds?.length) {
-        user.roleIds = templateRoleIds;
+    if (req.body.roleIds !== undefined || req.body.grantedPermissions !== undefined) {
+      const nextIds =
+        req.body.roleIds !== undefined ? asRoleIdList(req.body.roleIds) : asRoleIdList(user.roleIds);
+      const nextPerms =
+        req.body.grantedPermissions !== undefined
+          ? normalizeGrantedPermissions(req.body.grantedPermissions)
+          : normalizeGrantedPermissions(user.grantedPermissions);
+      const access = assertAccessPayload({ roleIds: nextIds, grantedPermissions: nextPerms });
+      if (!access.ok) {
+        throw new AppError(access.message, 400, 'VALIDATION_ERROR');
       }
-    } else if (req.body.roleIds !== undefined) {
-      const nextIds = asRoleIdList(req.body.roleIds);
-      if (!nextIds.length) throw new AppError('Select at least one role', 400, 'VALIDATION_ERROR');
-      const roleRows = await Role.find({ isDeleted: false });
-      const valid = new Set(roleRows.map((r) => String(r._id)));
-      if (nextIds.some((id) => !valid.has(id))) {
-        throw new AppError('One or more roles are invalid', 400, 'VALIDATION_ERROR');
+      if (req.body.roleIds !== undefined) {
+        const roleRows = await Role.find({ isDeleted: false });
+        const valid = new Set(roleRows.map((r) => String(r._id)));
+        if (access.roleIds.some((id) => !valid.has(id))) {
+          throw new AppError('One or more roles are invalid', 400, 'VALIDATION_ERROR');
+        }
+        user.roleIds = access.roleIds;
       }
-      user.roleIds = nextIds;
+      if (req.body.grantedPermissions !== undefined) {
+        user.grantedPermissions = access.grantedPermissions;
+      }
     }
     if (req.body.reportingManagerId !== undefined) {
       user.reportingManagerId = await assertReportingManager({

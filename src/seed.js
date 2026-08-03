@@ -261,8 +261,11 @@ export async function ensureSeed() {
 
   if (env.seedCampOneDemo) {
     const campSeed = await ensureCampOpsSeed();
-    if (campSeed.createdCamps > 0) {
-      console.log(`[seed] Camp One demo: ${campSeed.createdCamps} camp(s), client "${campSeed.client.name}"`);
+    if (campSeed.createdCamps > 0 || campSeed.updatedCamps > 0) {
+      console.log(
+        `[seed] Camp One demo: ${campSeed.createdCamps} camp(s) created, `
+          + `${campSeed.updatedCamps} updated — client "${campSeed.client.name}"`,
+      );
     }
     console.log(`[seed] Camp One operator: ${CAMP_ONE_DEMO.adminEmail}`);
   }

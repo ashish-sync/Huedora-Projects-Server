@@ -28,6 +28,7 @@ import {
   normalizeClientMasterDuration,
   parseClientMasterImportRow,
 } from './clientMaster.excel.js';
+import { normalizeHealthcareWorkers } from './healthcareWorkers.js';
 import {
   CampOpsCamp,
   CampOpsClient,
@@ -36,10 +37,16 @@ import {
   CampOpsImportTemplate,
   CampOpsExportTemplate,
 } from './campOps.model.js';
-import { LogisticsProduct, LogisticsUom } from '../logistics/logistics.model.js';
+import { LogisticsProduct, LogisticsUom, LogisticsExpenseSubCategory } from '../logistics/logistics.model.js';
 import { Contact } from '../contacts/contact.model.js';
 import { getHcwFinanceBlockers } from '../contacts/hcwFinanceReadiness.js';
+import { resolveCampPayoutPayeeContact } from '../contacts/campPayoutPayee.js';
 import { formatTextValue } from '../../utils/textFormat.js';
+import {
+  CAMP_FINANCE_EXPENSE_CATEGORY,
+  CAMP_FINANCE_EXPENSE_SUB_CATEGORY,
+  campFinanceExpenseDefaults,
+} from './campFinanceExpense.js';
 import {
   trimStr,
   formatCampTextPayload,
@@ -80,7 +87,11 @@ import {
   applyAssignmentStageOutcome,
   assertExecutionStageSave,
   assertExecutionConsumablesComplete,
+  assertCanMarkCampExecuted,
   isExecutionReadyForFinance,
+  normalizeLifecycleStage,
+  promoteDueAssignedCampsToExecution,
+  promoteAssignedCampToExecutionIfDue,
   EXECUTION_DOC_TYPES,
   EXECUTION_STATUS,
   resolveInTimeSelfieUrl,
@@ -110,6 +121,7 @@ import {
   parseExportFormat,
 } from './campOps.export.js';
 import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.requestValidation.js';
+import { assertHistoricalCampDatesAllowed } from './campDatePolicy.js';
 import {
   resolveCampClientScope,
   applyClientScopeToFilter,
@@ -142,8 +154,11 @@ import {
   handleEmailSync,
 } from './communications.handlers.js';
 import multer from 'multer';
+import fs from 'fs';
+import path from 'path';
 import { uploadDir } from '../../config/paths.js';
 import { signUploadFileUrl } from '../files/file.routes.js';
+import { buildExecutionDocumentFileName } from './executionDocumentName.js';
 
 const campUploadRoot = uploadDir('camp-ops');
 
@@ -239,6 +254,17 @@ const canRead = requirePermission(
   PERMISSIONS.CAMPS_REQUEST,
   PERMISSIONS.CAMPS_APPROVE
 );
+/** Client Master (brands + programs) — readable by Request One / Finance One for association */
+const canReadClientMaster = requirePermission(
+  PERMISSIONS.CAMPS_READ,
+  PERMISSIONS.CAMPS_REQUEST,
+  PERMISSIONS.CAMPS_APPROVE,
+  PERMISSIONS.ASSET_REQUESTS_READ,
+  PERMISSIONS.ASSET_REQUESTS_REQUEST,
+  PERMISSIONS.ASSET_REQUESTS_APPROVE,
+  PERMISSIONS.FINANCE_READ,
+  PERMISSIONS.FINANCE_WRITE
+);
 const canRequest = requirePermission(PERMISSIONS.CAMPS_REQUEST, PERMISSIONS.CAMPS_APPROVE);
 const canApprove = requirePermission(PERMISSIONS.CAMPS_APPROVE);
 
@@ -274,23 +300,110 @@ async function ensureUniqueClientCode(baseCode) {
   return code;
 }
 
+function extractClientBilling(body = {}) {
+  const billing = body.billing && typeof body.billing === 'object' ? body.billing : body;
+  return {
+    address: trimStr(billing.address ?? billing.billingAddress),
+    gstin: trimStr(billing.gstin ?? billing.GSTIN).toUpperCase(),
+    pan: trimStr(billing.pan ?? billing.panNumber).toUpperCase(),
+    stateName: trimStr(billing.stateName ?? billing.state),
+    stateCode: trimStr(billing.stateCode),
+    contactPerson: trimStr(billing.contactPerson ?? billing.billingContact),
+    email: trimStr(billing.email ?? billing.billingEmail).toLowerCase(),
+    phone: trimStr(billing.phone ?? billing.billingPhone ?? billing.mobile),
+  };
+}
+
+function hasClientBillingPayload(body = {}) {
+  if (body.billing != null && typeof body.billing === 'object') return true;
+  return [
+    'address',
+    'billingAddress',
+    'gstin',
+    'GSTIN',
+    'pan',
+    'panNumber',
+    'stateName',
+    'state',
+    'stateCode',
+    'contactPerson',
+    'billingContact',
+    'email',
+    'billingEmail',
+    'phone',
+    'billingPhone',
+    'mobile',
+  ].some((key) => body[key] !== undefined);
+}
+
+function applyClientBilling(client, body = {}) {
+  if (!client || !hasClientBillingPayload(body)) return false;
+  const next = extractClientBilling(body);
+  let changed = false;
+  for (const [key, value] of Object.entries(next)) {
+    if (String(client[key] || '') !== value) {
+      client[key] = value;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function clientBillingView(client) {
+  if (!client) {
+    return {
+      address: '',
+      gstin: '',
+      pan: '',
+      stateName: '',
+      stateCode: '',
+      contactPerson: '',
+      email: '',
+      phone: '',
+    };
+  }
+  const row = client.toObject ? client.toObject() : client;
+  return {
+    address: trimStr(row.address),
+    gstin: trimStr(row.gstin),
+    pan: trimStr(row.pan),
+    stateName: trimStr(row.stateName),
+    stateCode: trimStr(row.stateCode),
+    contactPerson: trimStr(row.contactPerson),
+    email: trimStr(row.email),
+    phone: trimStr(row.phone),
+  };
+}
+
 async function resolveClientFromBody(body, { allowCreate = false } = {}) {
   const clientId = body.clientId || body.client;
   if (clientId) {
     const byId = await CampOpsClient.findOne({ _id: String(clientId), isDeleted: false });
-    if (byId) return byId;
+    if (byId) {
+      if (applyClientBilling(byId, body)) await byId.save();
+      return byId;
+    }
   }
   const name = formatTextValue(body.clientName, 'clientName');
   if (!name) return null;
   const existing = await CampOpsClient.findOne({ isDeleted: false, name });
-  if (existing) return existing;
+  if (existing) {
+    if (applyClientBilling(existing, body)) await existing.save();
+    return existing;
+  }
   if (!allowCreate) return null;
   const requestedCode = trimStr(body.clientCode).toUpperCase();
   const code = requestedCode || (await ensureUniqueClientCode(buildClientCode(name)));
-  return CampOpsClient.create({ name, code, isActive: true });
+  return CampOpsClient.create({
+    name,
+    code,
+    isActive: true,
+    ...extractClientBilling(body),
+  });
 }
 
-function campPayloadFromBody(body, existing = null, client = null) {
+function campPayloadFromBody(body, existing = null, client = null, options = {}) {
+  const allowPartial = options.allowPartial === true;
   const schedule = resolveCampSchedule({
     startTime: body.startTime ?? existing?.startTime ?? '09:00',
     endTime: body.endTime ?? existing?.endTime ?? '',
@@ -299,7 +412,7 @@ function campPayloadFromBody(body, existing = null, client = null) {
 
   const campDateRaw = body.campDate ?? existing?.campDate;
   const campDate = parseLocalDateInput(campDateRaw) || trimStr(campDateRaw);
-  if (!campDate && !existing) {
+  if (!campDate && !existing && !allowPartial) {
     throw new AppError('Camp date is required', 400, 'VALIDATION_ERROR');
   }
 
@@ -513,6 +626,7 @@ router.get(
   '/camps',
   canRead,
   asyncHandler(async (req, res) => {
+    await promoteDueAssignedCampsToExecution();
     const { page, limit, skip } = parsePagination(req.query);
     const overdueOnly = req.query.overdue === '1' || req.query.overdue === 'true';
     const reactionRequired = req.query.reactionRequired === '1' || req.query.reactionRequired === 'true';
@@ -659,12 +773,10 @@ router.get(
   '/camps/export',
   canRead,
   asyncHandler(async (req, res) => {
+    // Keep lifecycle / stage filters so export matches the Manage table view.
     const query = { ...req.query };
-    delete query.lifecycleStage;
-    delete query.stage;
-    delete query.assignmentFilter;
-    delete query.executionFilter;
-    delete query.financialFilter;
+    delete query.columns;
+    delete query.format;
     const camps = await fetchCampsForExport(req, query, { scopeCampFilter });
     const columns = parseExportColumnKeys(req.query.columns);
     const format = parseExportFormat(req.query.format);
@@ -713,12 +825,16 @@ router.post(
         }
 
         camp.status = config.nextStatus;
+        camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
         if (config.nextStatus === 'approved') {
           const blockers = getRequestStageBlockers(camp);
           if (blockers.length) throw new Error(blockers[0]);
           camp.approvedById = a.id;
           camp.approvedByEmail = a.email;
           applyRequestReviewTransition(camp, 'approve');
+          if (camp.lifecycleStage === 'request') {
+            camp.lifecycleStage = 'assignment';
+          }
         }
         if (config.nextStatus === 'rejected') {
           const rejectionReason = trimStr(req.body?.rejectionReason || req.body?.remarks);
@@ -726,6 +842,11 @@ router.post(
           applyRequestReviewTransition(camp, 'reject', { reason: rejectionReason });
         }
         if (config.nextStatus === 'executed') {
+          try {
+            assertCanMarkCampExecuted(camp);
+          } catch (err) {
+            throw new Error(err.message || 'Cannot mark camp executed');
+          }
           camp.executedById = a.id;
           camp.executedByEmail = a.email;
           camp.executedAt = new Date().toISOString();
@@ -767,6 +888,9 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
+    if (promoteAssignedCampToExecutionIfDue(camp)) {
+      await camp.save();
+    }
     const overdue = await persistRequestReviewOverdue(camp);
     if (overdue.becameOverdue) {
       await notifyCampWorkflow({ camp, action: 'review_overdue', actorId: null });
@@ -808,17 +932,61 @@ router.post(
     const before = camp.toObject();
     const existing = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
     const uploadedAt = new Date().toISOString();
-    const added = files.map((file) => ({
-      id: file.filename,
-      fileName: file.originalname,
-      storedName: file.filename,
-      docType,
-      ...(docNote ? { docNote } : {}),
-      mimeType: file.mimetype,
-      fileSize: file.size,
-      url: `/uploads/camp-ops/${file.filename}`,
-      uploadedAt,
-    }));
+    const usedNames = existing.flatMap((doc) => [doc.fileName, doc.storedName]).filter(Boolean);
+    const added = [];
+
+    for (const [index, file] of files.entries()) {
+      const { fileName: displayName, storedName } = buildExecutionDocumentFileName({
+        doctorName: camp.doctorName,
+        campDate: camp.campDate,
+        docType,
+        originalName: file.originalname,
+        existingNames: usedNames,
+        index,
+        campScope: camp.campId || camp._id,
+      });
+      usedNames.push(displayName, storedName);
+
+      const tempPath = path.join(campUploadRoot, file.filename);
+      const finalPath = path.join(campUploadRoot, storedName);
+      if (tempPath !== finalPath) {
+        try {
+          if (fs.existsSync(finalPath)) {
+            // Only replace a file already owned by this camp's document set.
+            const owned = existing.some((doc) => doc.storedName === storedName || doc.fileName === storedName);
+            if (!owned) {
+              throw new AppError(
+                `Execution document name conflict for ${displayName}`,
+                409,
+                'UPLOAD_NAME_CONFLICT',
+              );
+            }
+            fs.unlinkSync(finalPath);
+          }
+          fs.renameSync(tempPath, finalPath);
+        } catch (err) {
+          if (err instanceof AppError) throw err;
+          throw new AppError(
+            `Could not save execution document as ${displayName}`,
+            500,
+            'UPLOAD_RENAME_FAILED',
+          );
+        }
+      }
+
+      added.push({
+        id: storedName,
+        fileName: displayName,
+        storedName,
+        originalFileName: file.originalname,
+        docType,
+        ...(docNote ? { docNote } : {}),
+        mimeType: file.mimetype,
+        fileSize: file.size,
+        url: `/uploads/camp-ops/${storedName}`,
+        uploadedAt,
+      });
+    }
 
     camp.executionDocuments = [...existing, ...added];
 
@@ -857,6 +1025,11 @@ router.post(
       throw new AppError(err.message || 'Complete all request stage fields', 400, 'VALIDATION_ERROR');
     }
 
+    assertHistoricalCampDatesAllowed(req.user, req.permissions, {
+      campDate: payload.campDate,
+      requestDate: payload.requestDate,
+    });
+
     const tracking = captureSubmissionTracking();
     const a = actor(req);
     const camp = await CampOpsCamp.create({
@@ -883,10 +1056,14 @@ router.put(
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
 
-    const stage = trimStr(req.body.editingStage)
-      || trimStr(req.body.lifecycleStage)
-      || camp.lifecycleStage
-      || 'request';
+    // Normalize dirty title-cased stages from older saves before edit checks.
+    camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
+    const stage = normalizeLifecycleStage(
+      trimStr(req.body.editingStage)
+        || trimStr(req.body.lifecycleStage)
+        || camp.lifecycleStage,
+      'request',
+    );
     const lifecycleOnly = req.body.lifecycleOnly === true;
 
     if (!canEditLifecycleStage(camp, stage)) {
@@ -915,6 +1092,19 @@ router.put(
     if (stage !== 'financial') {
       financialOnlyKeys.forEach((key) => { delete payload[key]; });
     }
+
+    if (stage === 'request' || !lifecycleOnly) {
+      assertHistoricalCampDatesAllowed(
+        req.user,
+        req.permissions,
+        {
+          campDate: payload.campDate ?? camp.campDate,
+          requestDate: payload.requestDate ?? camp.requestDate,
+        },
+        { existing: camp },
+      );
+    }
+
     Object.assign(camp, payload);
 
     if (!lifecycleOnly || stage === 'request') {
@@ -961,10 +1151,13 @@ router.put(
       }
     }
 
-    if (camp.status === 'approved' && camp.lifecycleStage === 'request') {
+    if (camp.status === 'approved' && normalizeLifecycleStage(camp.lifecycleStage, 'request') === 'request') {
       camp.lifecycleStage = 'assignment';
     }
-    if (camp.status === 'executed' && ['request', 'assignment', 'execution'].includes(camp.lifecycleStage)) {
+    if (
+      camp.status === 'executed'
+      && ['request', 'assignment', 'execution'].includes(normalizeLifecycleStage(camp.lifecycleStage, 'request'))
+    ) {
       camp.lifecycleStage = 'financial';
     }
 
@@ -979,6 +1172,7 @@ router.post(
   canRequest,
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
+    camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
     if (!canEditLifecycleStage(camp, 'financial')) {
       throw new AppError('Financial stage is not editable for this camp', 400, 'VALIDATION_ERROR');
     }
@@ -1008,11 +1202,23 @@ router.post(
     if (!hcwContactId) {
       throw new AppError('Assign a healthcare worker before submitting to Finance', 400, 'VALIDATION_ERROR');
     }
-    const hcwContact = await Contact.findOne({ _id: hcwContactId, isDeleted: false });
-    const hcwBlockers = getHcwFinanceBlockers(hcwContact);
+    const payeeResolved = await resolveCampPayoutPayeeContact(hcwContactId);
+    if (!payeeResolved.assignedContact && !String(hcwContactId).startsWith('spe:')) {
+      throw new AppError('Assigned healthcare worker was not found in Contact Directory', 400, 'VALIDATION_ERROR');
+    }
+    if (payeeResolved.payeeIsServiceProvider && !payeeResolved.payeeContact) {
+      throw new AppError(
+        'Service Provider profile is missing in Contact Directory for this assignment',
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
+    const payeeContact = payeeResolved.payeeContact || payeeResolved.assignedContact;
+    const payeeLabel = payeeResolved.payeeIsServiceProvider ? 'Service Provider' : 'HCW';
+    const hcwBlockers = getHcwFinanceBlockers(payeeContact, { label: payeeLabel });
     if (hcwBlockers.length) {
       throw new AppError(
-        `Complete assigned HCW profile before Finance submit: ${hcwBlockers.join('; ')}`,
+        `Complete ${payeeLabel} profile before Finance submit: ${hcwBlockers.join('; ')}`,
         400,
         'VALIDATION_ERROR',
       );
@@ -1026,6 +1232,17 @@ router.post(
     camp.submittedToFinanceById = a.id;
     camp.submittedToFinanceByEmail = a.email;
     camp.lifecycleStage = 'financial';
+
+    const expenseDefaults = campFinanceExpenseDefaults();
+    camp.expenseCategory = expenseDefaults.expenseCategory;
+    camp.expenseSubCategory = expenseDefaults.expenseSubCategory;
+    const expenseSub = await LogisticsExpenseSubCategory.findOne({
+      isDeleted: false,
+      isActive: true,
+      name: CAMP_FINANCE_EXPENSE_SUB_CATEGORY,
+      categoryName: CAMP_FINANCE_EXPENSE_CATEGORY,
+    });
+    camp.expenseSubCategoryId = expenseSub?._id || null;
 
     await camp.save();
     await audit(req, 'camp_ops.submit_to_finance', 'camp_ops_camp', camp._id, before, camp.toObject());
@@ -1052,6 +1269,7 @@ router.get(
 
 async function transitionCamp(req, res, nextStatus, action) {
   const camp = await loadCampForUser(req, req.params.id);
+  camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
   if (!canTransition(camp.status, nextStatus)) {
     throw new AppError(
       `Cannot transition from ${camp.status} to ${nextStatus}`,
@@ -1076,7 +1294,7 @@ async function transitionCamp(req, res, nextStatus, action) {
     camp.approvedById = a.id;
     camp.approvedByEmail = a.email;
     applyRequestReviewTransition(camp, 'approve');
-    if (!camp.lifecycleStage || camp.lifecycleStage === 'request') {
+    if (normalizeLifecycleStage(camp.lifecycleStage, 'request') === 'request') {
       camp.lifecycleStage = 'assignment';
     }
   }
@@ -1088,6 +1306,11 @@ async function transitionCamp(req, res, nextStatus, action) {
     applyRequestReviewTransition(camp, 'reject', { reason: rejectionReason });
   }
   if (nextStatus === 'executed') {
+    try {
+      assertCanMarkCampExecuted(camp);
+    } catch (err) {
+      throw new AppError(err.message || 'Cannot mark camp executed', 400, 'VALIDATION_ERROR');
+    }
     camp.executedById = a.id;
     camp.executedByEmail = a.email;
     camp.executedAt = new Date().toISOString();
@@ -1246,7 +1469,7 @@ router.delete(
 
 router.get(
   '/clients',
-  canRead,
+  canReadClientMaster,
   asyncHandler(async (req, res) => {
     const { page, limit, skip } = parsePagination(req.query);
     const filter = { isDeleted: false };
@@ -1265,7 +1488,7 @@ router.get(
 
 router.get(
   '/clients/:id',
-  canRead,
+  canReadClientMaster,
   asyncHandler(async (req, res) => {
     const client = await CampOpsClient.findOne({ _id: req.params.id, isDeleted: false });
     if (!client) throw new AppError('Client not found', 404, 'NOT_FOUND');
@@ -1295,6 +1518,7 @@ router.post(
       name,
       code,
       isActive: req.body.isActive !== false,
+      ...extractClientBilling(req.body),
     });
     await audit(req, 'camp_ops.client_create', 'camp_ops_client', client._id, null, client.toObject());
     res.status(201).json({ data: client });
@@ -1324,6 +1548,7 @@ router.put(
     client.name = name;
     client.code = code;
     if (req.body.isActive !== undefined) client.isActive = req.body.isActive !== false;
+    applyClientBilling(client, req.body);
     await client.save();
     await audit(req, 'camp_ops.client_update', 'camp_ops_client', client._id, before, client.toObject());
     res.json({ data: client });
@@ -1356,7 +1581,6 @@ const MASTER_STRING_FIELDS = [
   'campName',
   'campType',
   'coordinatorName',
-  'healthcareWorker',
   'campDuration',
   'spocName',
   'spocNumber',
@@ -1396,6 +1620,9 @@ function buildMasterPayload(body, client) {
       }
     }
   }
+  if (body.healthcareWorker !== undefined) {
+    payload.healthcareWorker = normalizeHealthcareWorkers(body.healthcareWorker);
+  }
   for (const field of MASTER_NUMERIC_FIELDS) {
     if (body[field] !== undefined) {
       const n = Number(body[field]);
@@ -1431,7 +1658,7 @@ function assertClientMasterPayload(payload) {
 
 router.get(
   '/client-masters',
-  canRead,
+  canReadClientMaster,
   asyncHandler(async (req, res) => {
     const { page, limit, skip } = parsePagination(req.query);
     const filter = { isDeleted: false };
@@ -1445,7 +1672,21 @@ router.get(
       CampOpsClientMaster.find(filter).sort('-updatedAt').skip(skip).limit(limit),
       CampOpsClientMaster.countDocuments(filter),
     ]);
-    res.json(paginated(data, total, page, limit));
+    const clientIds = [...new Set(data.map((row) => String(row.clientId || '')).filter(Boolean))];
+    const clients = clientIds.length
+      ? await CampOpsClient.find({ isDeleted: false, _id: { $in: clientIds } })
+      : [];
+    const clientsById = new Map(clients.map((c) => [String(c._id), c]));
+    const enriched = data.map((row) => {
+      const plain = row.toObject ? row.toObject() : { ...row };
+      const client = clientsById.get(String(plain.clientId || ''));
+      return {
+        ...plain,
+        clientCode: client?.code || '',
+        billing: clientBillingView(client),
+      };
+    });
+    res.json(paginated(enriched, total, page, limit));
   })
 );
 
@@ -1588,11 +1829,29 @@ router.get(
 
 router.get(
   '/client-masters/:id',
-  canRead,
+  canReadClientMaster,
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
-    res.json({ data: row });
+    const plain = row.toObject ? row.toObject() : { ...row };
+    const client = plain.clientId
+      ? await CampOpsClient.findOne({ _id: plain.clientId, isDeleted: false })
+      : null;
+    res.json({
+      data: {
+        ...plain,
+        clientCode: client?.code || '',
+        billing: clientBillingView(client),
+        client: client
+          ? {
+              _id: client._id,
+              name: client.name,
+              code: client.code,
+              ...clientBillingView(client),
+            }
+          : null,
+      },
+    });
   })
 );
 
@@ -1915,8 +2174,12 @@ router.post(
         endTime: row.endTime,
         durationHours: row.durationHours,
       });
+      assertHistoricalCampDatesAllowed(req.user, req.permissions, {
+        campDate: row.campDate,
+        requestDate: row.requestDate,
+      });
       const tracking = captureSubmissionTracking();
-      const camp = await CampOpsCamp.create({
+      const camp = await CampOpsCamp.create(formatCampTextPayload({
         campId: await generateCampId(row.campDate),
         clientId: client._id,
         clientName: client.name,
@@ -1926,9 +2189,14 @@ router.post(
         doctorCode: row.doctorCode,
         campAddress: row.campAddress,
         city: row.city,
+        district: row.district || row.city || '',
         state: row.state,
         pincode: row.pincode,
+        hq: row.hq || row.city || '',
+        zone: row.zone || '',
         campDate: row.campDate,
+        requestDate: row.requestDate || new Date().toISOString().slice(0, 10),
+        lifecycleStage: 'request',
         ...schedule,
         expectedPatients: row.expectedPatients || 0,
         fieldPersonName: row.fieldPersonName,
@@ -1939,7 +2207,7 @@ router.post(
         createdById: a.id,
         createdByEmail: a.email,
         ...tracking,
-      });
+      }));
       created.push(enrichCamp(camp));
     }
 
@@ -1989,18 +2257,23 @@ router.post('/communications/email/messages/:id/archive', canRequest, asyncHandl
 
 router.post('/communications/email/messages/:id/restore', canRequest, asyncHandler(handleEmailRestore));
 
+function preserveMultilineText(value) {
+  // Do not use trimStr/cleanSpaces — those collapse newlines and break paste label parsing.
+  return String(value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+}
+
 router.post(
   '/communications/paste/extract',
   canRequest,
   asyncHandler(async (req, res) => {
-    const text = trimStr(req.body?.text);
+    const text = preserveMultilineText(req.body?.text);
     if (!text) throw new AppError('Paste text is required', 400, 'VALIDATION_ERROR');
     const defaults = {
       clientName: trimStr(req.body?.clientName),
       campaignType: trimStr(req.body?.campaignType),
       campaignName: trimStr(req.body?.campaignName),
     };
-    const data = await extractManualPastePreview({ text, defaults });
+    const data = await extractManualPastePreview({ text, defaults, user: req.user });
     res.json({ data });
   })
 );
@@ -2097,7 +2370,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const data = await parseCampRequestWithValidation(
       {
-        text: trimStr(req.body?.text),
+        text: preserveMultilineText(req.body?.text),
         clientId: trimStr(req.body?.clientId),
         clientName: trimStr(req.body?.clientName),
         storeAudit: req.body?.storeAudit !== false,
@@ -2121,7 +2394,12 @@ router.post(
       campaignType: trimStr(req.body?.campaignType),
       campaignName: trimStr(req.body?.campaignName),
     };
-    const row = parsedFieldsToCampRow(parsedFields, defaults);
+    const pinMaster = req.body?.pinMaster || req.body?.pin_master || null;
+    const row = parsedFieldsToCampRow(parsedFields, defaults, pinMaster);
+    // Infer address from city/state when parser only captured pin + locality.
+    if (!row.campAddress && (row.city || row.state || row.pincode)) {
+      row.campAddress = [row.city, row.district, row.state, row.pincode].filter(Boolean).join(', ');
+    }
     const { validRows, invalidRows } = validateMappedImportRows([row]);
     if (!validRows.length) {
       throw new AppError(
@@ -2139,16 +2417,22 @@ router.post(
       null,
       client,
     );
+    assertHistoricalCampDatesAllowed(req.user, req.permissions, {
+      campDate: payload.campDate,
+      requestDate: payload.requestDate,
+    });
     const tracking = captureSubmissionTracking();
     const camp = await CampOpsCamp.create({
       ...payload,
       campId: await generateCampId(payload.campDate),
       status: 'pending_review',
+      lifecycleStage: 'request',
       source: 'parser',
       createdById: actor(req).id,
       createdByEmail: actor(req).email,
       ...tracking,
     });
+    await audit(req, 'camp_ops.create', 'camp_ops_camp', camp._id, null, camp.toObject());
     res.status(201).json({
       data: withCampSchedule(camp),
       message: `Created camp ${camp.campId} from parser output`,
@@ -2168,11 +2452,11 @@ router.post(
     const data = await processManualPaste(
       {
         previewData: req.body?.previewData,
-        text: trimStr(req.body?.text),
+        text: preserveMultilineText(req.body?.text),
         defaults,
       },
       actor(req),
-      { resolveClientFromBody, campPayloadFromBody },
+      { resolveClientFromBody, campPayloadFromBody, user: req.user, permissions: req.permissions },
     );
     res.json({
       data,

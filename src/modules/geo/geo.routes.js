@@ -47,6 +47,15 @@ const canUsePlaces = requirePermission(
   PERMISSIONS.AGREEMENTS_WRITE
 );
 
+const canWritePinGeography = requirePermission(
+  PERMISSIONS.CAMPS_REQUEST,
+  PERMISSIONS.CAMPS_APPROVE,
+  PERMISSIONS.LOGISTICS_MASTER,
+  PERMISSIONS.AGREEMENTS_WRITE,
+  PERMISSIONS.USERS_WRITE,
+  PERMISSIONS.ALL
+);
+
 function publicRow(row) {
   if (!row) return null;
   const o = row.toObject ? row.toObject() : { ...row };
@@ -285,7 +294,7 @@ router.get(
 
 router.post(
   '/pin-codes/import',
-  requirePermission(PERMISSIONS.AGREEMENTS_WRITE, PERMISSIONS.USERS_WRITE, PERMISSIONS.ALL),
+  canWritePinGeography,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
     if (!req.file) throw new AppError('Excel file required', 400, 'VALIDATION_ERROR');
@@ -376,7 +385,7 @@ router.get(
 
 router.post(
   '/pin-codes',
-  requirePermission(PERMISSIONS.AGREEMENTS_WRITE, PERMISSIONS.USERS_WRITE, PERMISSIONS.ALL),
+  canWritePinGeography,
   asyncHandler(async (req, res) => {
     const pinCode = String(req.body.pinCode || '').replace(/\D+/g, '');
     const { city, district, state } = await resolvePinTargets(req.body);
@@ -407,7 +416,7 @@ router.post(
 
 router.patch(
   '/pin-codes/:id',
-  requirePermission(PERMISSIONS.AGREEMENTS_WRITE, PERMISSIONS.USERS_WRITE, PERMISSIONS.ALL),
+  canWritePinGeography,
   asyncHandler(async (req, res) => {
     const row = await GeoPinCode.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('PIN code mapping not found', 404);

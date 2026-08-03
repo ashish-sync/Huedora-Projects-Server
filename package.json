@@ -29,6 +29,7 @@
     "test:camp-parser": "npm run build:parsers && node scripts/test-camp-request-parser.js",
     "build:parsers": "tsc -p src/modules/campOps/parsers/tsconfig.json",
     "test:camp-one": "node scripts/camp-one-e2e-test.js",
+    "test:camp-lifecycle-qa": "node scripts/camp-one-lifecycle-qa.js",
     "seed:camp-one": "node -e \"import('./src/config/db.js').then(async ({connectDb,disconnectDb})=>{await connectDb(); const {ensureSeed}=await import('./src/seed.js'); await ensureSeed(); await disconnectDb();})\"",
     "bulk:users:template": "node scripts/bulk-import-users.js --generate-template",
     "bulk:users": "node scripts/bulk-import-users.js",

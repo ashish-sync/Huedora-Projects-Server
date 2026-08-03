@@ -1,4 +1,5 @@
 import { normalizeCampName } from './campOps.constants.js';
+import { normalizeHealthcareWorkers, formatHealthcareWorkers } from './healthcareWorkers.js';
 
 /** Excel columns aligned with Client Master form labels. */
 export const CLIENT_MASTER_HEADERS = [
@@ -30,7 +31,7 @@ export const CLIENT_MASTER_SAMPLE_ROW = [
   'Acme Health',
   'Oncology Screening',
   'BMD',
-  'HCW + Device',
+  'HCW + Device (Light Device)',
   'Ravi Kumar',
   'Technician',
   '4:00',
@@ -128,7 +129,7 @@ export function parseClientMasterImportRow(row) {
     campName,
     campType,
     coordinatorName: cellValue(row, IMPORT_ALIASES.coordinatorName),
-    healthcareWorker: cellValue(row, IMPORT_ALIASES.healthcareWorker),
+    healthcareWorker: normalizeHealthcareWorkers(cellValue(row, IMPORT_ALIASES.healthcareWorker)),
     campDuration: normalizeClientMasterDuration(cellValue(row, IMPORT_ALIASES.campDuration)),
     spocName: cellValue(row, IMPORT_ALIASES.spocName),
     spocNumber: cellValue(row, IMPORT_ALIASES.spocNumber),
@@ -159,7 +160,7 @@ export function clientMasterToExcelRow(record) {
     record.campName,
     record.campType,
     record.coordinatorName,
-    record.healthcareWorker,
+    formatHealthcareWorkers(record.healthcareWorker),
     record.campDuration,
     record.spocName,
     record.spocNumber,

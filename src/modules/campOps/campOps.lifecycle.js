@@ -5,10 +5,14 @@ import {
   getCampStartDateTime,
   getCampEndDateTime,
 } from './campOps.helpers.js';
+import { daysFromToday, localTodayIso } from './campDatePolicy.js';
 
 function localTrim(v) {
   return v == null ? '' : String(v).trim();
 }
+
+/** Assigned camps enter Execution starting one calendar day before camp date. */
+export const EXECUTION_ADVANCE_DAYS_BEFORE = 1;
 
 export const CAMP_LIFECYCLE_STAGES = [
   { id: 'request', label: 'Request Stage', short: 'Request' },
@@ -17,8 +21,23 @@ export const CAMP_LIFECYCLE_STAGES = [
   { id: 'financial', label: 'Finance & Settlement', short: 'Financial' },
 ];
 
+export function normalizeLifecycleStage(stage, fallback = 'request') {
+  const raw = localTrim(stage);
+  if (!raw) return fallback;
+  const byId = CAMP_LIFECYCLE_STAGES.find((s) => s.id === raw);
+  if (byId) return byId.id;
+  const lower = raw.toLowerCase();
+  const byLowerId = CAMP_LIFECYCLE_STAGES.find((s) => s.id === lower);
+  if (byLowerId) return byLowerId.id;
+  const byShort = CAMP_LIFECYCLE_STAGES.find(
+    (s) => s.short.toLowerCase() === lower || s.label.toLowerCase() === lower,
+  );
+  if (byShort) return byShort.id;
+  return fallback;
+}
+
 export function lifecycleStageIndex(stage) {
-  return CAMP_LIFECYCLE_STAGES.findIndex((s) => s.id === stage);
+  return CAMP_LIFECYCLE_STAGES.findIndex((s) => s.id === normalizeLifecycleStage(stage, ''));
 }
 
 export function hasReachedLifecycleStage(reachedStage, targetStage) {
@@ -31,9 +50,11 @@ export function hasReachedLifecycleStage(reachedStage, targetStage) {
 export function maxLifecycleStage(a, b) {
   const ai = lifecycleStageIndex(a || 'request');
   const bi = lifecycleStageIndex(b || 'request');
-  if (ai < 0) return b || 'request';
-  if (bi < 0) return a || 'request';
-  return ai >= bi ? a : b;
+  if (ai < 0) return normalizeLifecycleStage(b, 'request');
+  if (bi < 0) return normalizeLifecycleStage(a, 'request');
+  return ai >= bi
+    ? normalizeLifecycleStage(a, 'request')
+    : normalizeLifecycleStage(b, 'request');
 }
 
 export const CAMP_SLOTS = ['Morning', 'Noon', 'Evening'];
@@ -117,6 +138,44 @@ export function normalizeExecutionDocType(docType) {
 
 function hasExecutionDocType(docs, targetType) {
   return (docs || []).some((doc) => normalizeExecutionDocType(doc?.docType) === targetType);
+}
+
+export const MARK_EXECUTED_MINUTES_AFTER_START = 30;
+
+export function getMarkExecutedFieldBlockers(camp = {}) {
+  const blockers = [];
+  if (!localTrim(camp.chargeableStatus)) blockers.push('Select Chargeable Status');
+  if (!localTrim(camp.inTime)) blockers.push('Enter In Time');
+  if (!localTrim(camp.attire)) blockers.push('Select Attire');
+  return blockers;
+}
+
+export function isMarkExecutedTimingOpen(camp = {}, now = new Date()) {
+  const start = getCampStartDateTime(camp);
+  if (!start) return false;
+  const earliest = start.getTime() + MARK_EXECUTED_MINUTES_AFTER_START * 60 * 1000;
+  return now.getTime() >= earliest;
+}
+
+export function getMarkExecutedTimingBlockers(camp = {}, now = new Date()) {
+  if (isMarkExecutedTimingOpen(camp, now)) return [];
+  return [
+    `Camp can be marked executed only after ${MARK_EXECUTED_MINUTES_AFTER_START} minutes from start time`,
+  ];
+}
+
+export function assertCanMarkCampExecuted(camp = {}, now = new Date()) {
+  if (camp.assignmentDecision !== 'assign' || !camp.hcwContactId) {
+    throw new Error('Assign a healthcare worker before marking the camp executed');
+  }
+  const fieldBlockers = getMarkExecutedFieldBlockers(camp);
+  if (fieldBlockers.length) {
+    throw new Error(fieldBlockers[0]);
+  }
+  const timingBlockers = getMarkExecutedTimingBlockers(camp, now);
+  if (timingBlockers.length) {
+    throw new Error(timingBlockers[0]);
+  }
 }
 
 export function getExecutionFinanceBlockers(camp = {}, mappedConsumables = []) {
@@ -339,11 +398,10 @@ export function lifecyclePayloadFromBody(body, existing = null) {
 
   const pickStr = (key, fallback = '') => localTrim(pick(key, fallback));
 
-  const allowedStage = CAMP_LIFECYCLE_STAGES.find((s) => s.id === pickStr('lifecycleStage'));
-  const requestedStage = allowedStage ? allowedStage.id : '';
+  const requestedStage = normalizeLifecycleStage(pickStr('lifecycleStage'), '');
   const lifecycleStage = requestedStage
     ? maxLifecycleStage(existing?.lifecycleStage || 'request', requestedStage)
-    : existing?.lifecycleStage || 'request';
+    : normalizeLifecycleStage(existing?.lifecycleStage, 'request');
 
   const assignmentStatus = ASSIGNMENT_STATUSES.includes(pickStr('assignmentStatus'))
     ? pickStr('assignmentStatus')
@@ -464,6 +522,7 @@ export function lifecyclePayloadFromBody(body, existing = null) {
 
 export function withCampLifecycle(camp) {
   const obj = camp?.toObject ? camp.toObject() : { ...camp };
+  obj.lifecycleStage = normalizeLifecycleStage(obj.lifecycleStage, 'request');
   const derived = computeLifecycleDerived(obj);
   Object.assign(obj, derived);
   obj.patientsCount = obj.actualPatients ?? 0;
@@ -473,7 +532,11 @@ export function withCampLifecycle(camp) {
 }
 
 export function applyAssignmentStageOutcome(camp, body = {}) {
-  const stage = localTrim(body.lifecycleStage) || camp.lifecycleStage || 'request';
+  // Prefer editingStage — clients may send a target lifecycleStage for advancement.
+  const stage = normalizeLifecycleStage(
+    body.editingStage || body.lifecycleStage || camp.lifecycleStage,
+    'request',
+  );
   if (stage !== 'assignment') return;
 
   const decision = ASSIGNMENT_DECISIONS.includes(localTrim(body.assignmentDecision))
@@ -491,8 +554,9 @@ export function applyAssignmentStageOutcome(camp, body = {}) {
     camp.assignmentDecision = 'assign';
     camp.assignmentStatus = 'Assigned';
     camp.assignmentRefusalReason = '';
-    camp.lifecycleStage = 'execution';
+    camp.lifecycleStage = 'assignment';
     camp.executionStatus = syncExecutionStatusForSave(camp);
+    promoteAssignedCampToExecutionIfDue(camp);
     return;
   }
 
@@ -521,44 +585,124 @@ export function applyAssignmentStageOutcome(camp, body = {}) {
   }
 }
 
+/**
+ * True when camp date is tomorrow or earlier (D-1 window for Execution).
+ * Missing camp dates are treated as not ready.
+ */
+export function isCampDateDueForExecution(camp = {}, now = new Date()) {
+  const campDate = localTrim(camp?.campDate);
+  if (!campDate) return false;
+  return daysFromToday(campDate, now) <= EXECUTION_ADVANCE_DAYS_BEFORE;
+}
+
+export function isAssignedForExecutionAdvance(camp = {}) {
+  if (['cancelled', 'rejected'].includes(localTrim(camp?.status))) return false;
+  if (localTrim(camp?.assignmentDecision) !== 'assign') return false;
+  if (localTrim(camp?.assignmentStatus) === 'Assigned') return true;
+  return Boolean(localTrim(camp?.hcwContactId) || localTrim(camp?.hcwName));
+}
+
+/** Move an assigned camp from Assignment → Execution when within D-1 of camp date. */
+export function promoteAssignedCampToExecutionIfDue(camp, now = new Date()) {
+  if (!camp) return false;
+  const stage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
+  if (stage !== 'assignment') return false;
+  if (!isAssignedForExecutionAdvance(camp)) return false;
+  if (!isCampDateDueForExecution(camp, now)) return false;
+
+  camp.lifecycleStage = 'execution';
+  camp.executionStatus = syncExecutionStatusForSave(camp, now);
+  return true;
+}
+
+/**
+ * Persist Assignment → Execution promotions for camps whose date is within D-1.
+ * Called on camp list/detail reads so stages advance without a separate cron.
+ */
+export async function promoteDueAssignedCampsToExecution(CampModel = null, now = new Date()) {
+  const Camp = CampModel || (await import('./campOps.model.js')).CampOpsCamp;
+  const maxCampDate = (() => {
+    const date = new Date(now);
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() + EXECUTION_ADVANCE_DAYS_BEFORE);
+    return localTodayIso(date);
+  })();
+
+  const candidates = await Camp.find({
+    isDeleted: false,
+    status: { $nin: ['cancelled', 'rejected'] },
+    lifecycleStage: 'assignment',
+    assignmentDecision: 'assign',
+    campDate: { $lte: maxCampDate, $ne: '' },
+    $or: [
+      { assignmentStatus: 'Assigned' },
+      { hcwContactId: { $exists: true, $nin: [null, ''] } },
+      { hcwName: { $exists: true, $nin: [null, ''] } },
+    ],
+  });
+
+  let promoted = 0;
+  for (const camp of candidates) {
+    if (!promoteAssignedCampToExecutionIfDue(camp, now)) continue;
+    await camp.save();
+    promoted += 1;
+  }
+  return promoted;
+}
+
 export function canEditLifecycleStage(camp, stage) {
-  const status = camp?.status;
+  const status = localTrim(camp?.status);
   if (status === 'cancelled') return false;
-  const reached = camp?.lifecycleStage || 'request';
-  const stageReachable = stage === 'financial'
+  const reached = normalizeLifecycleStage(camp?.lifecycleStage, 'request');
+  const target = normalizeLifecycleStage(stage, '');
+  if (!target) return false;
+  const stageReachable = target === 'financial'
     ? hasReachedLifecycleStage(reached, 'execution')
-    : hasReachedLifecycleStage(reached, stage);
+    : hasReachedLifecycleStage(reached, target);
   if (!stageReachable) return false;
-  if (stage === 'request') {
+  if (target === 'request') {
     return ['pending_review', 'approved', 'rejected', 'executed'].includes(status);
   }
-  if (stage === 'assignment') {
+  if (target === 'assignment') {
     if (['cancelled', 'rejected'].includes(status)) return false;
     return ['approved', 'executed'].includes(status);
   }
-  if (stage === 'execution') {
+  if (target === 'execution') {
     return ['approved', 'executed'].includes(status);
   }
-  if (stage === 'financial') {
+  if (target === 'financial') {
     if (!hasReachedLifecycleStage(reached, 'execution')) return false;
     return ['executed', 'approved'].includes(status);
   }
   return false;
 }
 
-/** Move executed camps stuck in earlier lifecycle stages into Finance & Settlement. */
+/** Normalize title-cased lifecycle stages and move executed camps into Finance & Settlement. */
 export async function repairExecutedCampLifecycleStages(CampModel = null) {
   const Camp = CampModel || (await import('./campOps.model.js')).CampOpsCamp;
-  const rows = await Camp.find({ isDeleted: false, status: 'executed' });
+  const rows = await Camp.find({ isDeleted: false });
   let repaired = 0;
   for (const camp of rows) {
-    if (!['request', 'assignment', 'execution'].includes(camp.lifecycleStage)) continue;
-    camp.lifecycleStage = 'financial';
-    if (camp.executionStatus !== 'Camp Completed') {
-      camp.executionStatus = 'Camp Completed';
+    let changed = false;
+    const normalized = normalizeLifecycleStage(camp.lifecycleStage, 'request');
+    if (camp.lifecycleStage !== normalized) {
+      camp.lifecycleStage = normalized;
+      changed = true;
     }
-    await camp.save();
-    repaired += 1;
+    if (
+      camp.status === 'executed'
+      && ['request', 'assignment', 'execution'].includes(normalized)
+    ) {
+      camp.lifecycleStage = 'financial';
+      if (camp.executionStatus !== 'Camp Completed') {
+        camp.executionStatus = 'Camp Completed';
+      }
+      changed = true;
+    }
+    if (changed) {
+      await camp.save();
+      repaired += 1;
+    }
   }
   return repaired;
 }

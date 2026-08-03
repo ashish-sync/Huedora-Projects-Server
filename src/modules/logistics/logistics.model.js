@@ -162,8 +162,24 @@ export const LogisticsExpenseCategory = defineCollection('logistics_expense_cate
   ...softDelete,
   code: '',
   name: '',
-  /** What this category covers (shown in masters + reimbursement picker) */
+  /** @deprecated Legacy field — consolidated master uses sub-categories instead */
   covers: '',
+  isSystem: false,
+  isActive: true,
+});
+
+export const LogisticsExpenseType = defineCollection('logistics_expense_types', {
+  ...softDelete,
+  name: '',
+  isSystem: false,
+  isActive: true,
+});
+
+export const LogisticsExpenseSubCategory = defineCollection('logistics_expense_sub_categories', {
+  ...softDelete,
+  categoryId: null,
+  categoryName: '',
+  name: '',
   isSystem: false,
   isActive: true,
 });
@@ -252,7 +268,7 @@ export const LogisticsInOutEntry = defineCollection('logistics_in_out_entries', 
   createdBy: '',
   createdById: null,
 
-  /** Inventory masters + Request Center link */
+  /** Inventory masters + Request One link */
   productId: null,
   productName: '',
   programProject: '',

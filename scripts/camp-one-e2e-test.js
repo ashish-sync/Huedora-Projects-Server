@@ -54,21 +54,33 @@ async function api(path, { method = 'GET', body, auth = true } = {}) {
   return json;
 }
 
+function isoToday() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function addDaysIso(isoDate, days) {
+  const d = new Date(`${isoDate}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 function campPayload(overrides = {}) {
-  const campDate = overrides.campDate || '2026-09-01';
+  const today = isoToday();
+  const campDate = overrides.campDate || addDaysIso(today, 21);
   return {
     clientName: CAMP_ONE_DEMO.clientName,
     campaignType: CAMP_ONE_DEMO.division,
     campaignName: CAMP_ONE_DEMO.method,
     source: 'dashboard',
     campDate,
-    requestDate: '2026-07-25',
+    requestDate: today,
     startTime: '10:00',
     endTime: '13:00',
     doctorName: 'Dr. E2E Test',
     doctorCode: `E2E-${Date.now()}`,
     campAddress: '45 FC Road, Pune, Maharashtra 411004',
     city: 'Pune',
+    district: 'Pune',
     state: 'Maharashtra',
     pincode: '411004',
     hq: 'Pune',
@@ -186,7 +198,7 @@ async function main() {
       method: 'PUT',
       body: {
         editingStage: 'assignment',
-        lifecycleStage: 'execution',
+        lifecycleStage: 'assignment',
         lifecycleOnly: true,
         assignmentDecision: 'assign',
         hcwContactId,
@@ -198,6 +210,9 @@ async function main() {
     const res = await api(`/camp-ops/camps/${createdCampMongoId}`);
     if (res.data.assignmentDecision !== 'assign') throw new Error('Assignment not saved');
     if (res.data.lifecycleStage !== 'execution') throw new Error('Should advance to execution');
+    if (String(res.data.hcwContactId) !== String(hcwContactId)) {
+      throw new Error('HCW contact id not linked on camp');
+    }
   });
 
   await runStep('Update execution stage fields', async () => {
@@ -239,8 +254,77 @@ async function main() {
         travelling: 500,
         campRevenue: 20000,
         paidAmount: 10000,
+        paymentSubmitStatus: 'payment_confirmed',
       },
     });
+  });
+
+  await runStep('Submit camp to Finance One', async () => {
+    await api(`/camp-ops/camps/${createdCampMongoId}/submit-to-finance`, {
+      method: 'POST',
+      body: { paymentSubmitStatus: 'payment_confirmed' },
+    });
+    const res = await api(`/camp-ops/camps/${createdCampMongoId}`);
+    if (res.data.financePaymentStatus !== 'under_review') {
+      throw new Error(`Expected under_review, got ${res.data.financePaymentStatus}`);
+    }
+    if (!res.data.submittedToFinanceAt) throw new Error('submittedToFinanceAt missing');
+  });
+
+  await runStep('Finance payouts list includes submitted camp', async () => {
+    const res = await api('/finance/camp-payouts?limit=50');
+    const rows = Array.isArray(res.data) ? res.data : (res.data?.data || []);
+    const found = rows.find(
+      (row) => String(row._id) === String(createdCampMongoId) || String(row.campId) === String(createdCampId)
+    );
+    if (!found) throw new Error('Submitted camp not visible in finance camp payouts');
+  });
+
+  await runStep('Reject execute without HCW assignment', async () => {
+    const res = await api('/camp-ops/camps', {
+      method: 'POST',
+      body: campPayload({ doctorCode: `NOHCW-${Date.now()}` }),
+    });
+    const id = res.data._id;
+    await api(`/camp-ops/camps/${id}/approve`, { method: 'POST' });
+    let blocked = false;
+    try {
+      await api(`/camp-ops/camps/${id}/execute`, { method: 'POST', body: { actualPatients: 1 } });
+    } catch (err) {
+      blocked = /healthcare worker/i.test(err.message);
+    }
+    if (!blocked) throw new Error('Execute should require HCW assignment');
+  });
+
+  await runStep('Create Client Master program with billing', async () => {
+    const res = await api('/camp-ops/client-masters', {
+      method: 'POST',
+      body: {
+        clientName: CAMP_ONE_DEMO.clientName,
+        clientCode: CAMP_ONE_DEMO.clientCode,
+        programName: `E2E Billing ${Date.now()}`,
+        campName: CAMP_ONE_DEMO.method,
+        campType: 'HCW + Device',
+        coordinatorName: 'E2E Coord',
+        healthcareWorker: 'Technician',
+        spocName: 'E2E Spoc',
+        spocNumber: '9876543210',
+        spocEmail: 'e2e.spoc@demo.tylo.local',
+        billing: {
+          address: '216 Corporate Avenue, Mumbai',
+          gstin: '27AADCK4268L1Z4',
+          pan: 'AADCK4268L',
+          stateName: 'Maharashtra',
+          stateCode: '27',
+          contactPerson: 'Billing Desk',
+          email: 'billing@demo.tylo.local',
+          phone: '02261131400',
+        },
+      },
+    });
+    if (!res.data?._id) throw new Error('Client master not created');
+    const detail = await api(`/camp-ops/client-masters/${res.data._id}`);
+    if (!detail.data?.billing?.gstin) throw new Error('Client billing GSTIN not persisted');
   });
 
   await runStep('Create camp for refusal flow', async () => {
@@ -288,7 +372,7 @@ async function main() {
   await runStep('Manual paste extract preview', async () => {
     const text = `
 Date: 20/08/2026
-Doctor Name: Dr. Paste Demo
+Doctor Name: Paste Demo
 Doctor Code: PASTE01
 Camp Address: 1 Demo Street, Pune, Maharashtra 411001
 Expected Patients: 30
@@ -308,6 +392,10 @@ SE Mobile: 9000000001
     });
     const preview = res.data?.bodyPreview || [];
     if (!preview.length || !preview[0].pasteDisplay) throw new Error('Paste preview missing display fields');
+    const row = preview[0].row || {};
+    if (!row.campDate) throw new Error('Paste extract lost campDate (newlines may be collapsed)');
+    if (!row.doctorName) throw new Error('Paste extract lost doctorName');
+    if (!row.doctorCode) throw new Error('Paste extract lost doctorCode');
   });
 
   await runStep('Geo zones resolve for Maharashtra', async () => {

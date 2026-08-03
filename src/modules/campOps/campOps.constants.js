@@ -16,7 +16,15 @@ export const CAMP_OPS_STATUS_TRANSITIONS = {
   executed: ['cancelled'],
 };
 
-export const CAMP_OPS_SOURCES = ['whatsapp', 'email', 'excel', 'dashboard', 'api', 'paste'];
+export const CAMP_OPS_SOURCES = [
+  'whatsapp',
+  'email',
+  'excel',
+  'dashboard',
+  'api',
+  'paste',
+  'parser',
+];
 
 export const CONTACT_PERSON_LEVELS = [
   'Territory Manager',

@@ -11,6 +11,13 @@ import { DocumentTemplate } from '../templates/template.model.js';
 import { SignatureMaster } from '../signatures/signature.model.js';
 import { Role } from '../users/role.model.js';
 import { User } from '../users/user.model.js';
+import { AssetRequest } from '../assetRequests/assetRequest.model.js';
+import { CampOpsCamp } from '../campOps/campOps.model.js';
+import {
+  FinanceExpense,
+  FinanceInvoice,
+  FinanceCommercialDocument,
+} from '../finance/finance.model.js';
 import { sendExcel, sendMultiSheetExcel } from '../../utils/excelExport.js';
 import {
   ASSET_STATUS_OPTIONS,
@@ -22,6 +29,37 @@ import {
 } from '../verifications/verification.condition.js';
 import { VerificationCampaign, VerificationRecord } from '../verifications/verification.model.js';
 import { listReviewModulesForUser, runModuleReview } from './moduleReview.js';
+
+function countMap(rows) {
+  return Object.fromEntries((rows || []).map((x) => [x._id || 'Unknown', x.count]));
+}
+
+function sumAmount(rows, key = 'amount') {
+  return (rows || []).reduce((s, r) => s + (Number(r[key]) || 0), 0);
+}
+
+function healthFromSignals({ alerts, pendingTotal }) {
+  let score = 100;
+  for (const a of alerts) {
+    if (a.severity === 'critical') score -= 18;
+    else if (a.severity === 'high') score -= 12;
+    else if (a.severity === 'medium') score -= 6;
+    else score -= 3;
+  }
+  if (pendingTotal > 25) score -= 8;
+  else if (pendingTotal > 10) score -= 4;
+  score = Math.max(0, Math.min(100, score));
+  let label = 'Healthy';
+  let tone = 'ok';
+  if (score < 50) {
+    label = 'At risk';
+    tone = 'critical';
+  } else if (score < 75) {
+    label = 'Needs attention';
+    tone = 'warn';
+  }
+  return { score, label, tone };
+}
 
 const router = Router();
 router.use(authenticate);
@@ -100,6 +138,395 @@ async function ensureRecord(campaign, asset, userId) {
   }
   return record;
 }
+
+/**
+ * Executive one-page overview: KPIs, pending actions, risks, financials, module health.
+ */
+router.get(
+  '/overview',
+  asyncHandler(async (_req, res) => {
+    const now = new Date();
+    const in30 = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+    const [
+      assetCount,
+      contactCount,
+      assetsByStatusRows,
+      agreementsByStatusRows,
+      agreementsActive,
+      agreementsExpiring,
+      agreementsExpired,
+      openRepairs,
+      repairOpenItems,
+      pendingMovements,
+      movementsByStatusRows,
+      verificationExceptions,
+      verificationByStatusRows,
+      requestsByStatusRows,
+      requestsByTypeRows,
+      pendingRequests,
+      campsByStatusRows,
+      campTotal,
+      expenses,
+      invoices,
+      proformas,
+      purchaseOrders,
+      commercialGstDocs,
+    ] = await Promise.all([
+      Asset.countDocuments({ isDeleted: false }),
+      Contact.countDocuments({ isDeleted: false }),
+      Asset.aggregate([
+        { $match: { isDeleted: false } },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      Agreement.aggregate([
+        { $match: { isDeleted: false } },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      Agreement.countDocuments({ isDeleted: false, status: 'ACTIVE', endDate: { $gte: in30 } }),
+      Agreement.countDocuments({
+        isDeleted: false,
+        status: { $in: ['ACTIVE', 'EXPIRING'] },
+        endDate: { $gte: now, $lt: in30 },
+      }),
+      Agreement.countDocuments({
+        isDeleted: false,
+        $or: [{ status: 'EXPIRED' }, { status: 'ACTIVE', endDate: { $lt: now } }],
+      }),
+      RepairTicket.countDocuments({ isDeleted: false, status: { $nin: ['CLOSED'] } }),
+      RepairTicket.find({ isDeleted: false, status: { $nin: ['CLOSED'] } })
+        .select('slaDueAt')
+        .limit(200),
+      Movement.countDocuments({ isDeleted: false, status: 'REQUESTED' }),
+      Movement.aggregate([
+        { $match: { isDeleted: false } },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      VerificationRecord.countDocuments({ isDeleted: false, status: 'EXCEPTION' }),
+      VerificationRecord.aggregate([
+        { $match: { isDeleted: false } },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      AssetRequest.aggregate([
+        { $match: { isDeleted: false } },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      AssetRequest.aggregate([
+        { $match: { isDeleted: false } },
+        { $group: { _id: '$requestType', count: { $sum: 1 } } },
+      ]),
+      AssetRequest.countDocuments({ isDeleted: false, status: 'REQUESTED' }),
+      CampOpsCamp.aggregate([
+        { $match: { isDeleted: false } },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      CampOpsCamp.countDocuments({ isDeleted: false }),
+      FinanceExpense.find({ isDeleted: false }),
+      FinanceInvoice.find({ isDeleted: false }),
+      FinanceCommercialDocument.find({ isDeleted: false, documentType: 'proforma' }),
+      FinanceCommercialDocument.find({ isDeleted: false, documentType: 'purchase_order' }),
+      FinanceCommercialDocument.find({
+        isDeleted: false,
+        documentType: { $in: ['client_invoice', 'credit_note'] },
+      }),
+    ]);
+
+    const slaBreached = (repairOpenItems || []).filter(
+      (t) => t.slaDueAt && new Date(t.slaDueAt) < now
+    ).length;
+
+    const expenseTotal = sumAmount(expenses, 'amount');
+    const expenseOpen = expenses.filter((r) =>
+      ['Draft', 'Submitted', 'Approved'].includes(r.status)
+    ).length;
+    const invoiceTotal = sumAmount(invoices, 'totalAmount');
+    const invoiceOpen = invoices.filter(
+      (r) => r.status === 'Open' || r.status === 'Partially paid'
+    ).length;
+    const proformaDraft = proformas.filter(
+      (r) => r.status === 'Draft' || r.status === 'Uploaded'
+    ).length;
+    const poDraft = purchaseOrders.filter(
+      (r) => r.status === 'Draft' || r.status === 'Uploaded'
+    ).length;
+    const commercialDraft = (commercialGstDocs || []).filter((r) =>
+      ['Draft', 'Uploaded', 'Submitted', 'Approved'].includes(r.status)
+    ).length;
+    const commercialSubmitted = [...proformas, ...purchaseOrders, ...(commercialGstDocs || [])].filter(
+      (r) => r.status === 'Submitted'
+    ).length;
+    const clientInvoiceTotal = (commercialGstDocs || [])
+      .filter((r) => r.documentType === 'client_invoice')
+      .reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
+    const clientInvoiceCount = (commercialGstDocs || []).filter(
+      (r) => r.documentType === 'client_invoice'
+    ).length;
+
+    const assetsByStatus = countMap(assetsByStatusRows);
+    const agreementsByStatus = countMap(agreementsByStatusRows);
+    const movementsByStatus = countMap(movementsByStatusRows);
+    const verificationByStatus = countMap(verificationByStatusRows);
+    const requestsByStatus = countMap(requestsByStatusRows);
+    const requestsByType = countMap(requestsByTypeRows);
+    const campsByStatus = countMap(campsByStatusRows);
+
+    const pending = [
+      {
+        id: 'requests',
+        label: 'Request One awaiting approval',
+        count: pendingRequests,
+        severity: pendingRequests > 10 ? 'high' : pendingRequests > 0 ? 'medium' : 'ok',
+        href: '/asset-requests',
+        module: 'asset-requests',
+      },
+      {
+        id: 'movements',
+        label: 'Goods movements pending',
+        count: pendingMovements,
+        severity: pendingMovements > 5 ? 'high' : pendingMovements > 0 ? 'medium' : 'ok',
+        href: '/logistics',
+        module: 'logistics',
+      },
+      {
+        id: 'repairs',
+        label: 'Open repair tickets',
+        count: openRepairs,
+        severity: slaBreached > 0 ? 'critical' : openRepairs > 0 ? 'medium' : 'ok',
+        href: '/asset-requests',
+        module: 'asset-requests',
+      },
+      {
+        id: 'finance-expenses',
+        label: 'Open finance expenses',
+        count: expenseOpen,
+        severity: expenseOpen > 15 ? 'high' : expenseOpen > 0 ? 'medium' : 'ok',
+        href: '/finance',
+        module: 'finance',
+      },
+      {
+        id: 'finance-invoices',
+        label: 'Open / partial invoices',
+        count: invoiceOpen,
+        severity: invoiceOpen > 10 ? 'high' : invoiceOpen > 0 ? 'medium' : 'ok',
+        href: '/finance',
+        module: 'finance',
+      },
+      {
+        id: 'docs-draft',
+        label: 'Draft commercial documents',
+        count: proformaDraft + poDraft + commercialDraft,
+        severity: proformaDraft + poDraft + commercialDraft > 10 ? 'medium' : 'ok',
+        href: '/finance',
+        module: 'finance',
+      },
+      {
+        id: 'docs-submitted',
+        label: 'Commercial docs awaiting approval',
+        count: commercialSubmitted,
+        severity: commercialSubmitted > 5 ? 'high' : commercialSubmitted > 0 ? 'medium' : 'ok',
+        href: '/finance',
+        module: 'finance',
+      },
+    ].filter((p) => p.count > 0);
+
+    const alerts = [];
+    if (slaBreached > 0) {
+      alerts.push({
+        id: 'sla',
+        severity: 'critical',
+        label: 'Repair SLA breached',
+        detail: `${slaBreached} open ticket${slaBreached === 1 ? '' : 's'} past SLA due date`,
+        href: '/asset-requests',
+        module: 'asset-requests',
+      });
+    }
+    if (verificationExceptions > 0) {
+      alerts.push({
+        id: 'verify-exception',
+        severity: 'high',
+        label: 'Verification exceptions',
+        detail: `${verificationExceptions} asset verification exception${verificationExceptions === 1 ? '' : 's'} need review`,
+        href: '/verifications',
+        module: 'verifications',
+      });
+    }
+    if (agreementsExpired > 0) {
+      alerts.push({
+        id: 'agreements-expired',
+        severity: 'high',
+        label: 'Expired agreements',
+        detail: `${agreementsExpired} agreement${agreementsExpired === 1 ? '' : 's'} expired or past end date`,
+        href: '/agreements',
+        module: 'agreements',
+      });
+    }
+    if (agreementsExpiring > 0) {
+      alerts.push({
+        id: 'agreements-expiring',
+        severity: 'medium',
+        label: 'Agreements expiring in 30 days',
+        detail: `${agreementsExpiring} active agreement${agreementsExpiring === 1 ? '' : 's'} due within 30 days`,
+        href: '/agreements',
+        module: 'agreements',
+      });
+    }
+    if (pendingRequests > 15) {
+      alerts.push({
+        id: 'request-backlog',
+        severity: 'medium',
+        label: 'Request approval backlog',
+        detail: `${pendingRequests} Request One items still awaiting approval`,
+        href: '/asset-requests',
+        module: 'asset-requests',
+      });
+    }
+
+    const pendingTotal = pending.reduce((s, p) => s + p.count, 0);
+    const health = healthFromSignals({ alerts, pendingTotal });
+
+    const modules = [
+      {
+        id: 'assets',
+        label: 'Asset One',
+        href: '/asset-inventory',
+        primary: assetCount,
+        primaryLabel: 'Assets',
+        secondary: Object.keys(assetsByStatus).length,
+        secondaryLabel: 'Statuses',
+        status: 'ok',
+      },
+      {
+        id: 'agreements',
+        label: 'Document One',
+        href: '/agreements',
+        primary: agreementsActive + agreementsExpiring + agreementsExpired,
+        primaryLabel: 'Agreements',
+        secondary: agreementsExpiring + agreementsExpired,
+        secondaryLabel: 'Expiring / expired',
+        status: agreementsExpired > 0 ? 'critical' : agreementsExpiring > 0 ? 'warn' : 'ok',
+      },
+      {
+        id: 'verifications',
+        label: 'Verification One',
+        href: '/verifications',
+        primary: Object.values(verificationByStatus).reduce((s, n) => s + n, 0),
+        primaryLabel: 'Records',
+        secondary: verificationExceptions,
+        secondaryLabel: 'Exceptions',
+        status: verificationExceptions > 0 ? 'warn' : 'ok',
+      },
+      {
+        id: 'camps',
+        label: 'Camp One',
+        href: '/camps/manage',
+        primary: campTotal,
+        primaryLabel: 'Camps',
+        secondary: Object.keys(campsByStatus).length,
+        secondaryLabel: 'Statuses',
+        status: 'ok',
+      },
+      {
+        id: 'asset-requests',
+        label: 'Request One',
+        href: '/asset-requests',
+        primary: pendingRequests,
+        primaryLabel: 'Pending',
+        secondary: Object.values(requestsByStatus).reduce((s, n) => s + n, 0),
+        secondaryLabel: 'Total',
+        status: pendingRequests > 10 ? 'warn' : 'ok',
+      },
+      {
+        id: 'logistics',
+        label: 'Movement One',
+        href: '/logistics',
+        primary: pendingMovements,
+        primaryLabel: 'Pending',
+        secondary: Object.values(movementsByStatus).reduce((s, n) => s + n, 0),
+        secondaryLabel: 'Movements',
+        status: pendingMovements > 5 ? 'warn' : 'ok',
+      },
+      {
+        id: 'finance',
+        label: 'Finance One',
+        href: '/finance',
+        primary: invoiceOpen + expenseOpen,
+        primaryLabel: 'Open items',
+        secondary: expenses.length + invoices.length,
+        secondaryLabel: 'Docs',
+        status: invoiceOpen + expenseOpen > 15 ? 'warn' : 'ok',
+      },
+      {
+        id: 'contacts',
+        label: 'Contact Directory',
+        href: '/master-data?scope=document&entity=contacts',
+        primary: contactCount,
+        primaryLabel: 'Contacts',
+        secondary: 0,
+        secondaryLabel: '',
+        status: 'ok',
+      },
+    ];
+
+    res.json({
+      data: {
+        generatedAt: now.toISOString(),
+        health,
+        kpis: [
+          { id: 'assets', label: 'Assets', value: assetCount, href: '/asset-inventory' },
+          {
+            id: 'contacts',
+            label: 'Contacts',
+            value: contactCount,
+            href: '/master-data?scope=document&entity=contacts',
+          },
+          { id: 'pending-requests', label: 'Pending requests', value: pendingRequests, href: '/asset-requests', tone: pendingRequests ? 'warn' : 'ok' },
+          { id: 'open-repairs', label: 'Open repairs', value: openRepairs, href: '/asset-requests', tone: slaBreached ? 'critical' : openRepairs ? 'warn' : 'ok' },
+          { id: 'verify-exceptions', label: 'Verify exceptions', value: verificationExceptions, href: '/verifications', tone: verificationExceptions ? 'warn' : 'ok' },
+          { id: 'camps', label: 'Camps', value: campTotal, href: '/camps/manage' },
+          { id: 'expense-total', label: 'Expense total (INR)', value: Math.round(expenseTotal), href: '/finance', format: 'currency' },
+          { id: 'invoice-open', label: 'Open invoices', value: invoiceOpen, href: '/finance', tone: invoiceOpen ? 'warn' : 'ok' },
+        ],
+        pending,
+        alerts,
+        financials: {
+          expenseCount: expenses.length,
+          expenseTotal: Math.round(expenseTotal * 100) / 100,
+          expenseOpen,
+          invoiceCount: invoices.length,
+          invoiceTotal: Math.round(invoiceTotal * 100) / 100,
+          invoiceOpen,
+          proformaCount: proformas.length,
+          proformaDraft,
+          purchaseOrderCount: purchaseOrders.length,
+          purchaseOrderDraft: poDraft,
+          clientInvoiceCount,
+          clientInvoiceTotal: Math.round(clientInvoiceTotal * 100) / 100,
+          commercialDraft,
+          commercialSubmitted,
+        },
+        agreementsHealth: {
+          active: agreementsActive,
+          expiring: agreementsExpiring,
+          expired: agreementsExpired,
+        },
+        repairsSla: {
+          openCount: openRepairs,
+          breached: slaBreached,
+        },
+        modules,
+        breakdowns: {
+          assetsByStatus,
+          agreementsByStatus,
+          movementsByStatus,
+          verificationByStatus,
+          requestsByStatus,
+          requestsByType,
+          campsByStatus,
+        },
+      },
+    });
+  })
+);
 
 router.get(
   '/summary',

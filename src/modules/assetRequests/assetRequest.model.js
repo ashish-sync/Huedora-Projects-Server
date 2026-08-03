@@ -19,14 +19,14 @@ export const LEGACY_REQUEST_TYPES = ['MOVEMENT'];
 export const ALL_REQUEST_TYPES = [...REQUEST_TYPES, ...LEGACY_REQUEST_TYPES];
 
 export const REQUEST_TYPE_LABELS = {
-  REPAIR: 'Repair',
-  MAINTENANCE: 'Maintenance',
-  LOGISTICS: 'Goods Issue',
-  MOVEMENT: 'Goods Issue',
-  TRAINING: 'Training',
-  REIMBURSEMENT: 'Reimbursement',
-  HIRING: 'Hiring',
-  OTHER: 'Others',
+  REPAIR: 'Repair & Service Request',
+  MAINTENANCE: 'Repair & Service Request',
+  LOGISTICS: 'Goods Issuance Request',
+  MOVEMENT: 'Goods Issuance Request',
+  TRAINING: 'Training Request',
+  REIMBURSEMENT: 'Finance One Request',
+  HIRING: 'Hiring Request',
+  OTHER: 'Other Requests',
   MASTER_ADD: 'Master One Request',
 };
 
@@ -82,7 +82,7 @@ export const REQUEST_STATUSES = ['REQUESTED', 'APPROVED', 'REJECTED', 'CANCELLED
 /** Types that always require a linked Asset Registry asset. */
 export const ASSET_REQUIRED_TYPES = ['REPAIR', 'MAINTENANCE'];
 
-/** Canonical values accepted for newly-created Goods Issue requests. */
+/** Canonical values accepted for newly-created Goods Issuance requests. */
 export const LOGISTICS_KINDS = ['Fresh Dispatch', 'Inter Transfer', 'Recall / Pickup'];
 /** Legacy kind still accepted and normalized to Fresh Dispatch */
 export const LOGISTICS_KIND_ALIASES = {
@@ -91,14 +91,12 @@ export const LOGISTICS_KIND_ALIASES = {
   Delivery: 'Fresh Dispatch',
 };
 export const LOGISTICS_MODES = [
-  'Hand Delivery',
-  'Regular Courier',
-  'Apex',
+  'Fragile',
+  'Air Delivery',
   'Porter',
-  'Other',
+  'Hand Delivery',
   'Blue Dart',
   'DTDC',
-  'Other Courier',
 ];
 
 export function normalizeLogisticsKind(raw) {
@@ -134,9 +132,12 @@ export const AssetRequest = defineCollection('asset_requests', {
   productImage: null,
   billAttachment: null,
   requestAttachment: null,
+  jdAttachment: null,
   logisticsProducts: [],
   traineeContactId: null,
   traineeName: '',
+  trainingName: '',
+  trainingProductId: null,
   otherSubcategory: '',
   hiringType: '',
   hcwType: '',
@@ -171,6 +172,20 @@ export const AssetRequest = defineCollection('asset_requests', {
   masterPayload: null,
   createdMasterId: null,
   createdMasterCode: '',
+  expenseCategory: '',
+  expenseSubCategory: '',
+  raisedFor: 'SELF',
+  raisedForContactId: null,
+  payeeName: '',
+  associateWithClient: false,
+  clientId: null,
+  clientName: '',
+  clientCode: '',
+  clientMasterId: null,
+  divisionTherapy: '',
+  expenseDate: '',
+  amount: null,
+  currency: 'INR',
 });
 
 /** Single-use, hashed upload invitation for a request custodian. */

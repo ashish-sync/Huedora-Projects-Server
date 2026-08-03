@@ -14,8 +14,13 @@ import { FinanceCommercialDocument } from './finance.model.js';
 import { COMMERCIAL_DOC_STATUSES } from './finance.constants.js';
 import { DOCUMENT_NUMBER_STANDARDS, documentNumberPeriod, validateManualDocumentNumber } from './documentNumbering.js';
 import {
+  assertApprovable,
+  assertCancellable,
   assertEditableStatus,
   assertIssuable,
+  assertRejectable,
+  assertSubmittable,
+  extractBuilderExtras,
   fiscalYearLabel,
   getOrCreateOrgProfile,
   mergeOrgProfile,
@@ -129,6 +134,143 @@ router.get(
   })
 );
 
+async function loadCommercialById(id) {
+  const row = await FinanceCommercialDocument.findOne({ _id: id, isDeleted: false });
+  if (!row) throw new AppError('Document not found', 404);
+  return row;
+}
+
+function auditCommercial(req, action, row, before = null) {
+  return writeAudit({
+    actorId: req.user._id,
+    actorEmail: req.user.email,
+    action,
+    entityType: 'FinanceCommercialDocument',
+    entityId: row._id,
+    before,
+    after: row.toObject ? row.toObject() : row,
+    requestId: req.requestId,
+  });
+}
+
+function stampUpdater(row, user) {
+  row.updatedById = user._id;
+  row.updatedByEmail = user.email;
+}
+
+router.get(
+  '/commercial-documents/:id',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const row = await loadCommercialById(req.params.id);
+    res.json({ data: row });
+  })
+);
+
+router.post(
+  '/commercial-documents/:id/submit',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const row = await loadCommercialById(req.params.id);
+    assertSubmittable(row.status);
+    const orgProfile = await getOrCreateOrgProfile();
+    const normalizers = {
+      proforma: [normalizeProformaPayload, validateProformaPayload],
+      client_invoice: [normalizeClientInvoicePayload, validateClientInvoicePayload],
+      purchase_order: [normalizePurchaseOrderPayload, validatePurchaseOrderPayload],
+      credit_note: [normalizeCreditNotePayload, validateCreditNotePayload],
+    };
+    const pair = normalizers[row.documentType];
+    if (!pair) throw new AppError('Unsupported document type', 400);
+    const [normalize, validate] = pair;
+    const payload = normalize(row.toObject(), orgProfile);
+    validate(payload);
+    Object.assign(row, payload);
+    const before = row.toObject ? row.toObject() : { ...row };
+    row.status = 'Submitted';
+    row.submittedAt = new Date().toISOString();
+    row.submittedById = req.user._id;
+    row.submittedByEmail = req.user.email;
+    stampUpdater(row, req.user);
+    await row.save();
+    await auditCommercial(req, 'FINANCE.COMMERCIAL.SUBMIT', row, before);
+    res.json({ data: row });
+  })
+);
+
+router.post(
+  '/commercial-documents/:id/approve',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const row = await loadCommercialById(req.params.id);
+    assertApprovable(row.status);
+    const before = row.toObject ? row.toObject() : { ...row };
+    row.status = 'Approved';
+    row.approvedAt = new Date().toISOString();
+    row.approvedById = req.user._id;
+    row.approvedByEmail = req.user.email;
+    stampUpdater(row, req.user);
+    await row.save();
+    await auditCommercial(req, 'FINANCE.COMMERCIAL.APPROVE', row, before);
+    res.json({ data: row });
+  })
+);
+
+router.post(
+  '/commercial-documents/:id/reject',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const row = await loadCommercialById(req.params.id);
+    assertRejectable(row.status);
+    const before = row.toObject ? row.toObject() : { ...row };
+    row.status = 'Draft';
+    row.submittedAt = null;
+    row.submittedById = null;
+    row.submittedByEmail = '';
+    stampUpdater(row, req.user);
+    await row.save();
+    await auditCommercial(req, 'FINANCE.COMMERCIAL.REJECT', row, before);
+    res.json({ data: row });
+  })
+);
+
+router.post(
+  '/commercial-documents/:id/cancel',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const row = await loadCommercialById(req.params.id);
+    assertCancellable(row.status);
+    const before = row.toObject ? row.toObject() : { ...row };
+    row.status = 'Cancelled';
+    row.cancelledAt = new Date().toISOString();
+    row.cancelledById = req.user._id;
+    row.cancelledByEmail = req.user.email;
+    stampUpdater(row, req.user);
+    await row.save();
+    await auditCommercial(req, 'FINANCE.COMMERCIAL.CANCEL', row, before);
+    res.json({ data: row });
+  })
+);
+
+router.delete(
+  '/commercial-documents/:id',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const row = await loadCommercialById(req.params.id);
+    if (!['Draft', 'Uploaded', 'Cancelled'].includes(row.status)) {
+      throw new AppError('Only draft, uploaded, or cancelled documents can be deleted', 400);
+    }
+    const before = row.toObject ? row.toObject() : { ...row };
+    row.isDeleted = true;
+    row.deletedAt = new Date().toISOString();
+    row.deletedBy = req.user._id;
+    stampUpdater(row, req.user);
+    await row.save();
+    await auditCommercial(req, 'FINANCE.COMMERCIAL.DELETE', row, before);
+    res.json({ data: { ok: true } });
+  })
+);
+
 router.get(
   '/org-profile',
   canRead,
@@ -198,7 +340,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const orgProfile = await getOrCreateOrgProfile();
     const payload = normalizeProformaPayload(req.body, orgProfile);
-    validateProformaPayload(payload);
+    validateProformaPayload(payload, { requireLines: false });
 
     let documentNumber = trimStr(req.body.documentNumber);
     if (documentNumber) {
@@ -214,6 +356,7 @@ router.post(
       createdById: req.user._id,
       createdByEmail: req.user.email,
       ...payload,
+      ...extractBuilderExtras(req.body),
     });
 
     await writeAudit({
@@ -250,14 +393,17 @@ router.patch(
       lineItems: req.body.lineItems != null ? req.body.lineItems : row.lineItems,
     };
     const payload = normalizeProformaPayload(merged, orgProfile);
-    validateProformaPayload(payload);
+    validateProformaPayload(payload, { requireLines: false });
 
-    Object.assign(row, payload);
+    const before = row.toObject ? row.toObject() : { ...row };
+    Object.assign(row, payload, extractBuilderExtras(req.body));
     if (req.body.documentNumber != null) {
       const manual = trimStr(req.body.documentNumber);
       row.documentNumber = manual ? validateManualDocumentNumber(manual, 'proforma') : '';
     }
+    stampUpdater(row, req.user);
     await row.save();
+    await auditCommercial(req, 'FINANCE.PROFORMA.UPDATE', row, before);
     res.json({ data: row });
   })
 );
@@ -473,7 +619,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const orgProfile = await getOrCreateOrgProfile();
     const payload = normalizePurchaseOrderPayload(req.body, orgProfile);
-    validatePurchaseOrderPayload(payload);
+    validatePurchaseOrderPayload(payload, { requireLines: false });
 
     let documentNumber = trimStr(req.body.documentNumber);
     if (documentNumber) {
@@ -489,6 +635,7 @@ router.post(
       createdById: req.user._id,
       createdByEmail: req.user.email,
       ...payload,
+      ...extractBuilderExtras(req.body),
     });
 
     await writeAudit({
@@ -529,14 +676,17 @@ router.patch(
       lineItems: req.body.lineItems != null ? req.body.lineItems : row.lineItems,
     };
     const payload = normalizePurchaseOrderPayload(merged, orgProfile);
-    validatePurchaseOrderPayload(payload);
+    validatePurchaseOrderPayload(payload, { requireLines: false });
 
-    Object.assign(row, payload);
+    const before = row.toObject ? row.toObject() : { ...row };
+    Object.assign(row, payload, extractBuilderExtras(req.body));
     if (req.body.documentNumber != null) {
       const manual = trimStr(req.body.documentNumber);
       row.documentNumber = manual ? validateManualDocumentNumber(manual, 'purchase_order') : '';
     }
+    stampUpdater(row, req.user);
     await row.save();
+    await auditCommercial(req, 'FINANCE.PO.UPDATE', row, before);
     res.json({ data: row });
   })
 );
@@ -770,7 +920,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const orgProfile = await getOrCreateOrgProfile();
     const payload = normalizeClientInvoicePayload(req.body, orgProfile);
-    validateClientInvoicePayload(payload);
+    validateClientInvoicePayload(payload, { requireLines: false });
 
     let documentNumber = trimStr(req.body.documentNumber);
     if (documentNumber) {
@@ -786,6 +936,7 @@ router.post(
       createdById: req.user._id,
       createdByEmail: req.user.email,
       ...payload,
+      ...extractBuilderExtras(req.body),
     });
 
     await writeAudit({
@@ -822,14 +973,17 @@ router.patch(
       lineItems: req.body.lineItems != null ? req.body.lineItems : row.lineItems,
     };
     const payload = normalizeClientInvoicePayload(merged, orgProfile);
-    validateClientInvoicePayload(payload);
+    validateClientInvoicePayload(payload, { requireLines: false });
 
-    Object.assign(row, payload);
+    const before = row.toObject ? row.toObject() : { ...row };
+    Object.assign(row, payload, extractBuilderExtras(req.body));
     if (req.body.documentNumber != null) {
       const manual = trimStr(req.body.documentNumber);
       row.documentNumber = manual ? validateManualDocumentNumber(manual, 'client_invoice') : '';
     }
+    stampUpdater(row, req.user);
     await row.save();
+    await auditCommercial(req, 'FINANCE.CLIENT_INVOICE.UPDATE', row, before);
     res.json({ data: row });
   })
 );
@@ -978,7 +1132,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const orgProfile = await getOrCreateOrgProfile();
     const payload = normalizeCreditNotePayload(req.body, orgProfile);
-    validateCreditNotePayload(payload);
+    validateCreditNotePayload(payload, { requireLines: false });
 
     let documentNumber = trimStr(req.body.documentNumber);
     if (documentNumber) {
@@ -994,6 +1148,7 @@ router.post(
       createdById: req.user._id,
       createdByEmail: req.user.email,
       ...payload,
+      ...extractBuilderExtras(req.body),
     });
 
     await writeAudit({
@@ -1030,14 +1185,17 @@ router.patch(
       lineItems: req.body.lineItems != null ? req.body.lineItems : row.lineItems,
     };
     const payload = normalizeCreditNotePayload(merged, orgProfile);
-    validateCreditNotePayload(payload);
+    validateCreditNotePayload(payload, { requireLines: false });
 
-    Object.assign(row, payload);
+    const before = row.toObject ? row.toObject() : { ...row };
+    Object.assign(row, payload, extractBuilderExtras(req.body));
     if (req.body.documentNumber != null) {
       const manual = trimStr(req.body.documentNumber);
       row.documentNumber = manual ? validateManualDocumentNumber(manual, 'credit_note') : '';
     }
+    stampUpdater(row, req.user);
     await row.save();
+    await auditCommercial(req, 'FINANCE.CREDIT_NOTE.UPDATE', row, before);
     res.json({ data: row });
   })
 );

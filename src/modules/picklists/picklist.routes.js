@@ -145,6 +145,11 @@ router.get(
     const filter = { isDeleted: false };
     if (req.query.status) filter.status = String(req.query.status).toUpperCase();
     if (req.query.picklistKey) filter.picklistKey = String(req.query.picklistKey);
+    const q = String(req.query.q || '').trim();
+    if (q) {
+      const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [{ value: re }, { picklistKey: re }, { source: re }];
+    }
     const [data, total] = await Promise.all([
       PicklistSuggestion.find(filter)
         .sort(sort || '-createdAt')

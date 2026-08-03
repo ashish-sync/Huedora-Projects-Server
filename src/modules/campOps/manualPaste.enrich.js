@@ -13,14 +13,24 @@ export async function enrichPasteLocationFromPin(row = {}, display = {}) {
   const pin = String(row.pincode || '').replace(/\D/g, '').slice(0, 6);
   if (pin.length !== 6) {
     const zone = row.state ? resolveZoneNameForState(row.state) : '';
-    if (zone) {
-      return {
-        row: { ...row, zone },
-        display: { ...display, zone: withDefault(zone) },
-        locationSource: row.state ? 'state-zone' : '',
-      };
-    }
-    return { row, display, locationSource: '' };
+    const district = trimStr(row.district) || trimStr(row.city);
+    const hq = trimStr(row.hq) || district || trimStr(row.city);
+    const nextRow = {
+      ...row,
+      district,
+      hq,
+      zone: zone || row.zone || '',
+    };
+    return {
+      row: nextRow,
+      display: {
+        ...display,
+        district: withDefault(district),
+        hq: withDefault(hq),
+        zone: withDefault(zone || display.zone),
+      },
+      locationSource: row.state ? 'state-zone' : '',
+    };
   }
 
   const matches = await GeoPinCode.find({

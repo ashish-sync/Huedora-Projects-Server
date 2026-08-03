@@ -68,6 +68,8 @@ import {
   LogisticsMovementType,
   LogisticsReasonCode,
   LogisticsExpenseCategory,
+  LogisticsExpenseSubCategory,
+  LogisticsExpenseType,
   LogisticsStockItem,
   LogisticsLedgerEntry,
   LogisticsInOutEntry,
@@ -234,6 +236,15 @@ router.use(authenticate);
 const canRead = requirePermission(PERMISSIONS.LOGISTICS_READ, PERMISSIONS.LOGISTICS_WRITE);
 const canWrite = requirePermission(PERMISSIONS.LOGISTICS_WRITE, PERMISSIONS.LOGISTICS_MASTER);
 const canMaster = requirePermission(PERMISSIONS.LOGISTICS_MASTER, PERMISSIONS.LOGISTICS_WRITE);
+const canReadExpenseMaster = requirePermission(
+  PERMISSIONS.LOGISTICS_READ,
+  PERMISSIONS.LOGISTICS_WRITE,
+  PERMISSIONS.ASSET_REQUESTS_READ,
+  PERMISSIONS.ASSET_REQUESTS_REQUEST,
+  PERMISSIONS.ASSET_REQUESTS_APPROVE,
+  PERMISSIONS.FINANCE_READ,
+  PERMISSIONS.FINANCE_WRITE
+);
 
 function trimStr(v) {
   return v == null ? '' : String(v).trim();
@@ -255,6 +266,7 @@ function registerMasterCrud({
   skuPrefix,
   uniqueFields = [],
   excel = null,
+  canRead: readGuard = canRead,
 }) {
   async function assertUniqueFields(body, excludeId) {
     for (const field of uniqueFields) {
@@ -289,7 +301,7 @@ function registerMasterCrud({
 
   router.get(
     `/${path}`,
-    canRead,
+    readGuard,
     asyncHandler(async (req, res) => {
       const { page, limit, skip, sort } = parsePagination(req.query);
       const filter = { isDeleted: false, ...(listFilter || {}) };
@@ -308,6 +320,7 @@ function registerMasterCrud({
         filter.productCategory = String(req.query.productCategory).trim();
       }
       if (req.query.isActive === 'false') filter.isActive = false;
+      if (req.query.categoryId) filter.categoryId = req.query.categoryId;
       if (req.query.q) {
         const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
         filter.$or = searchFields.map((f) => ({ [f]: re }));
@@ -497,7 +510,7 @@ function registerMasterCrud({
       Model,
       listFilter,
       excel,
-      canRead,
+      canRead: readGuard,
       canImport: canMaster,
       entityType,
       writeAudit,
@@ -1170,30 +1183,72 @@ registerMasterCrud({
   path: 'expense-categories',
   Model: LogisticsExpenseCategory,
   entityType: 'LogisticsExpenseCategory',
-  searchFields: ['name', 'code', 'covers'],
-  codePrefix: 'EXP',
+  canRead: canReadExpenseMaster,
+  searchFields: ['name', 'code'],
+  required: ['code', 'name'],
   normalize: (b) => ({
-    code: trimStr(b.code).toUpperCase().replace(/\s+/g, '_'),
+    code: trimStr(b.code).toUpperCase().replace(/\s+/g, ''),
     name: trimStr(b.name),
-    covers: trimStr(b.covers),
     isActive: b.isActive !== false,
   }),
   excel: {
-    filename: 'Expense_Categories.xlsx',
+    filename: 'Expense_Master_Categories.xlsx',
     sheetName: 'Expense Categories',
     headers: EXPENSE_CATEGORY_HEADERS,
     sampleHeaders: EXPENSE_CATEGORY_SAMPLE_HEADERS,
-    rowFromDoc: (r) => [r.name, r.covers, r.isActive === false ? 'No' : 'Yes'],
+    rowFromDoc: (r) => [r.code, r.name, r.isActive === false ? 'No' : 'Yes'],
     sampleRows: EXPENSE_CATEGORY_SAMPLE_ROWS,
     importColumns: EXPENSE_CATEGORY_IMPORT_COLUMNS,
   },
 });
 
+registerMasterCrud({
+  path: 'expense-types',
+  Model: LogisticsExpenseType,
+  entityType: 'LogisticsExpenseType',
+  searchFields: ['name'],
+  required: ['name'],
+  normalize: (b) => ({
+    name: trimStr(b.name),
+    isActive: b.isActive !== false,
+  }),
+});
+
+registerMasterCrud({
+  path: 'expense-subcategories',
+  Model: LogisticsExpenseSubCategory,
+  entityType: 'LogisticsExpenseSubCategory',
+  canRead: canReadExpenseMaster,
+  searchFields: ['name', 'categoryName'],
+  required: ['categoryId', 'name'],
+  normalize: (b) => ({
+    categoryId: b.categoryId,
+    categoryName: trimStr(b.categoryName),
+    name: trimStr(b.name),
+    isActive: b.isActive !== false,
+  }),
+});
+
+router.get(
+  '/expense-master',
+  canReadExpenseMaster,
+  asyncHandler(async (_req, res) => {
+    const [expenseCategories, expenseSubCategories] = await Promise.all([
+      LogisticsExpenseCategory.find({ isDeleted: false, isActive: true }).sort('name'),
+      LogisticsExpenseSubCategory.find({ isDeleted: false, isActive: true }).sort('name'),
+    ]);
+    expenseCategories.sort((a, b) =>
+      String(a.name || '').localeCompare(String(b.name || ''))
+    );
+    res.json({ data: { expenseCategories, expenseSubCategories } });
+  })
+);
+
 router.get(
   '/meta',
   canRead,
   asyncHandler(async (_req, res) => {
-    const [warehouses, categories, uoms, statuses, movementTypes, reasonCodes, expenseCategories, products, parties, transporters] =
+    const [warehouses, categories, uoms, statuses, movementTypes, reasonCodes, expenseCategories, expenseTypes, expenseSubCategories, products, parties, transporters] =
       await Promise.all([
         LogisticsWarehouse.find({ isDeleted: false, isActive: true }).sort('name'),
         LogisticsCategory.find({ isDeleted: false, isActive: true }).sort('name'),
@@ -1202,6 +1257,8 @@ router.get(
         LogisticsMovementType.find({ isDeleted: false, isActive: true }).sort('name'),
         LogisticsReasonCode.find({ isDeleted: false, isActive: true }).sort('name'),
         LogisticsExpenseCategory.find({ isDeleted: false, isActive: true }).sort('name'),
+        LogisticsExpenseType.find({ isDeleted: false, isActive: true }).sort('name'),
+        LogisticsExpenseSubCategory.find({ isDeleted: false, isActive: true }).sort('name'),
         LogisticsProduct.find({ isDeleted: false, isActive: true }).sort('name'),
         LogisticsSupplier.find({ isDeleted: false, isActive: true }).sort('name'),
         LogisticsTransporter.find({ isDeleted: false, isActive: true }).sort('name'),
@@ -1212,6 +1269,9 @@ router.get(
       DEFAULT_EXPENSE_CATEGORIES.map((c, i) => [c.name.toLowerCase(), i])
     );
     expenseCategories.sort((a, b) => {
+      if (!expenseOrder.size) {
+        return String(a.name || '').localeCompare(String(b.name || ''));
+      }
       const ai = expenseOrder.has(String(a.name || '').toLowerCase())
         ? expenseOrder.get(String(a.name || '').toLowerCase())
         : 999;
@@ -1231,6 +1291,8 @@ router.get(
         movementTypes,
         reasonCodes,
         expenseCategories,
+        expenseTypes,
+        expenseSubCategories,
         products,
         suppliers,
         vendors,
