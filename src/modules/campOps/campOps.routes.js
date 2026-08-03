@@ -154,8 +154,11 @@ import {
   handleEmailSync,
 } from './communications.handlers.js';
 import multer from 'multer';
+import fs from 'fs';
+import path from 'path';
 import { uploadDir } from '../../config/paths.js';
 import { signUploadFileUrl } from '../files/file.routes.js';
+import { buildExecutionDocumentFileName } from './executionDocumentName.js';
 
 const campUploadRoot = uploadDir('camp-ops');
 
@@ -929,17 +932,61 @@ router.post(
     const before = camp.toObject();
     const existing = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
     const uploadedAt = new Date().toISOString();
-    const added = files.map((file) => ({
-      id: file.filename,
-      fileName: file.originalname,
-      storedName: file.filename,
-      docType,
-      ...(docNote ? { docNote } : {}),
-      mimeType: file.mimetype,
-      fileSize: file.size,
-      url: `/uploads/camp-ops/${file.filename}`,
-      uploadedAt,
-    }));
+    const usedNames = existing.flatMap((doc) => [doc.fileName, doc.storedName]).filter(Boolean);
+    const added = [];
+
+    for (const [index, file] of files.entries()) {
+      const { fileName: displayName, storedName } = buildExecutionDocumentFileName({
+        doctorName: camp.doctorName,
+        campDate: camp.campDate,
+        docType,
+        originalName: file.originalname,
+        existingNames: usedNames,
+        index,
+        campScope: camp.campId || camp._id,
+      });
+      usedNames.push(displayName, storedName);
+
+      const tempPath = path.join(campUploadRoot, file.filename);
+      const finalPath = path.join(campUploadRoot, storedName);
+      if (tempPath !== finalPath) {
+        try {
+          if (fs.existsSync(finalPath)) {
+            // Only replace a file already owned by this camp's document set.
+            const owned = existing.some((doc) => doc.storedName === storedName || doc.fileName === storedName);
+            if (!owned) {
+              throw new AppError(
+                `Execution document name conflict for ${displayName}`,
+                409,
+                'UPLOAD_NAME_CONFLICT',
+              );
+            }
+            fs.unlinkSync(finalPath);
+          }
+          fs.renameSync(tempPath, finalPath);
+        } catch (err) {
+          if (err instanceof AppError) throw err;
+          throw new AppError(
+            `Could not save execution document as ${displayName}`,
+            500,
+            'UPLOAD_RENAME_FAILED',
+          );
+        }
+      }
+
+      added.push({
+        id: storedName,
+        fileName: displayName,
+        storedName,
+        originalFileName: file.originalname,
+        docType,
+        ...(docNote ? { docNote } : {}),
+        mimeType: file.mimetype,
+        fileSize: file.size,
+        url: `/uploads/camp-ops/${storedName}`,
+        uploadedAt,
+      });
+    }
 
     camp.executionDocuments = [...existing, ...added];
 

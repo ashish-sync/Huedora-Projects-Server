@@ -1,5 +1,6 @@
 import { Contact } from './contact.model.js';
 import { isServiceProviderContact } from './contact.constants.js';
+import { signUploadFileUrl } from '../files/file.routes.js';
 
 /** Embedded roster employee ids look like `spe:<providerId>:<employeeId>`. */
 export function embeddedServiceProviderId(assignmentId = '') {
@@ -9,7 +10,7 @@ export function embeddedServiceProviderId(assignmentId = '') {
   return String(parts[1] || '').trim();
 }
 
-export function payeeBankFieldsFromContact(contact) {
+export function payeeBankFieldsFromContact(contact, { signUrls = false } = {}) {
   if (!contact) {
     return {
       bankName: '',
@@ -20,13 +21,23 @@ export function payeeBankFieldsFromContact(contact) {
     };
   }
   const row = contact.toObject ? contact.toObject() : contact;
+  const panCardCopyUrl = String(row.panCardCopyUrl || '').trim();
+  const passbookCopyUrl = String(row.passbookCopyUrl || '').trim();
   return {
     bankName: String(row.bankName || '').trim(),
     accountNumber: String(row.accountNumber || '').trim(),
     ifscCode: String(row.ifscCode || '').trim(),
-    panCardCopyUrl: String(row.panCardCopyUrl || '').trim(),
-    passbookCopyUrl: String(row.passbookCopyUrl || '').trim(),
+    panCardCopyUrl: signUrls ? signContactUploadUrl(panCardCopyUrl) : panCardCopyUrl,
+    passbookCopyUrl: signUrls ? signContactUploadUrl(passbookCopyUrl) : passbookCopyUrl,
   };
+}
+
+function signContactUploadUrl(url = '') {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  const match = raw.match(/\/uploads\/(.+)$/);
+  if (!match) return raw;
+  return signUploadFileUrl(match[1]);
 }
 
 /**
@@ -130,7 +141,7 @@ export async function enrichCampPayoutsWithPayee(summaries = []) {
       payeeName: resolved.payeeName || fallbackName,
       payeeIsServiceProvider: Boolean(resolved.payeeIsServiceProvider),
       assignedHcwName: fallbackName,
-      ...payeeBankFieldsFromContact(payee),
+      ...payeeBankFieldsFromContact(payee, { signUrls: true }),
     };
   });
 }

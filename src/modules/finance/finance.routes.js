@@ -608,7 +608,9 @@ router.get(
   '/camp-payouts',
   canRead,
   asyncHandler(async (req, res) => {
-    const { page, limit, skip } = parsePagination(req.query);
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 200));
+    const skip = (page - 1) * limit;
     const filter = buildCampPayoutFilter(req.query);
     const rows = await CampOpsCamp.find(filter).sort('-submittedToFinanceAt');
     const total = rows.length;
