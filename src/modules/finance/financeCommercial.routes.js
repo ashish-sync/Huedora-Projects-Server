@@ -16,10 +16,14 @@ import { DOCUMENT_NUMBER_STANDARDS, documentNumberPeriod, validateManualDocument
 import {
   assertApprovable,
   assertCancellable,
+  assertCommercialApprover,
+  assertOrgMasterEditor,
   assertEditableStatus,
   assertIssuable,
   assertRejectable,
   assertSubmittable,
+  assignCommercialDocumentNumber,
+  applyCommercialPayment,
   extractBuilderExtras,
   fiscalYearLabel,
   getOrCreateOrgProfile,
@@ -188,6 +192,8 @@ router.post(
     Object.assign(row, payload);
     const before = row.toObject ? row.toObject() : { ...row };
     row.status = 'Submitted';
+    row.documentNumber = '';
+    row.documentPeriod = '';
     row.submittedAt = new Date().toISOString();
     row.submittedById = req.user._id;
     row.submittedByEmail = req.user.email;
@@ -202,13 +208,18 @@ router.post(
   '/commercial-documents/:id/approve',
   canWrite,
   asyncHandler(async (req, res) => {
+    assertCommercialApprover(req.user, req.permissions);
     const row = await loadCommercialById(req.params.id);
     assertApprovable(row.status);
     const before = row.toObject ? row.toObject() : { ...row };
-    row.status = 'Approved';
+
+    await assignCommercialDocumentNumber(row, { force: true });
+    row.status = 'Issued';
     row.approvedAt = new Date().toISOString();
     row.approvedById = req.user._id;
     row.approvedByEmail = req.user.email;
+    row.issuedAt = row.issuedAt || new Date().toISOString();
+    row.source = row.source || 'generated';
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.COMMERCIAL.APPROVE', row, before);
@@ -220,6 +231,7 @@ router.post(
   '/commercial-documents/:id/reject',
   canWrite,
   asyncHandler(async (req, res) => {
+    assertCommercialApprover(req.user, req.permissions);
     const row = await loadCommercialById(req.params.id);
     assertRejectable(row.status);
     const before = row.toObject ? row.toObject() : { ...row };
@@ -248,6 +260,22 @@ router.post(
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.COMMERCIAL.CANCEL', row, before);
+    res.json({ data: row });
+  })
+);
+
+router.post(
+  '/commercial-documents/:id/payment',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const row = await loadCommercialById(req.params.id);
+    const before = row.toObject ? row.toObject() : { ...row };
+    applyCommercialPayment(row, req.body?.amount);
+    row.paidById = req.user._id;
+    row.paidByEmail = req.user.email;
+    stampUpdater(row, req.user);
+    await row.save();
+    await auditCommercial(req, 'FINANCE.COMMERCIAL.PAYMENT', row, before);
     res.json({ data: row });
   })
 );
@@ -284,6 +312,7 @@ router.patch(
   '/org-profile',
   canWrite,
   asyncHandler(async (req, res) => {
+    assertOrgMasterEditor(req.user, req.permissions);
     const profile = await getOrCreateOrgProfile();
     Object.assign(profile, mergeOrgProfile(req.body));
     profile.updatedById = req.user._id;
@@ -342,15 +371,10 @@ router.post(
     const payload = normalizeProformaPayload(req.body, orgProfile);
     validateProformaPayload(payload, { requireLines: false });
 
-    let documentNumber = trimStr(req.body.documentNumber);
-    if (documentNumber) {
-      documentNumber = validateManualDocumentNumber(documentNumber, 'proforma');
-    }
-
     const row = await FinanceCommercialDocument.create({
       docKey: await nextSequence('financeCommercialDoc', 'PF'),
       documentType: 'proforma',
-      documentNumber,
+      documentNumber: '',
       status: 'Draft',
       source: 'generated',
       createdById: req.user._id,
@@ -397,10 +421,7 @@ router.patch(
 
     const before = row.toObject ? row.toObject() : { ...row };
     Object.assign(row, payload, extractBuilderExtras(req.body));
-    if (req.body.documentNumber != null) {
-      const manual = trimStr(req.body.documentNumber);
-      row.documentNumber = manual ? validateManualDocumentNumber(manual, 'proforma') : '';
-    }
+    row.documentNumber = '';
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.PROFORMA.UPDATE', row, before);
@@ -621,15 +642,10 @@ router.post(
     const payload = normalizePurchaseOrderPayload(req.body, orgProfile);
     validatePurchaseOrderPayload(payload, { requireLines: false });
 
-    let documentNumber = trimStr(req.body.documentNumber);
-    if (documentNumber) {
-      documentNumber = validateManualDocumentNumber(documentNumber, 'purchase_order');
-    }
-
     const row = await FinanceCommercialDocument.create({
       docKey: await nextSequence('financeCommercialDoc', 'PO'),
       documentType: 'purchase_order',
-      documentNumber,
+      documentNumber: '',
       status: 'Draft',
       source: 'generated',
       createdById: req.user._id,
@@ -680,10 +696,7 @@ router.patch(
 
     const before = row.toObject ? row.toObject() : { ...row };
     Object.assign(row, payload, extractBuilderExtras(req.body));
-    if (req.body.documentNumber != null) {
-      const manual = trimStr(req.body.documentNumber);
-      row.documentNumber = manual ? validateManualDocumentNumber(manual, 'purchase_order') : '';
-    }
+    row.documentNumber = '';
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.PO.UPDATE', row, before);
@@ -922,15 +935,10 @@ router.post(
     const payload = normalizeClientInvoicePayload(req.body, orgProfile);
     validateClientInvoicePayload(payload, { requireLines: false });
 
-    let documentNumber = trimStr(req.body.documentNumber);
-    if (documentNumber) {
-      documentNumber = validateManualDocumentNumber(documentNumber, 'client_invoice');
-    }
-
     const row = await FinanceCommercialDocument.create({
       docKey: await nextSequence('financeCommercialDoc', 'INV'),
       documentType: 'client_invoice',
-      documentNumber,
+      documentNumber: '',
       status: 'Draft',
       source: 'generated',
       createdById: req.user._id,
@@ -977,10 +985,7 @@ router.patch(
 
     const before = row.toObject ? row.toObject() : { ...row };
     Object.assign(row, payload, extractBuilderExtras(req.body));
-    if (req.body.documentNumber != null) {
-      const manual = trimStr(req.body.documentNumber);
-      row.documentNumber = manual ? validateManualDocumentNumber(manual, 'client_invoice') : '';
-    }
+    row.documentNumber = '';
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.CLIENT_INVOICE.UPDATE', row, before);
@@ -1134,15 +1139,10 @@ router.post(
     const payload = normalizeCreditNotePayload(req.body, orgProfile);
     validateCreditNotePayload(payload, { requireLines: false });
 
-    let documentNumber = trimStr(req.body.documentNumber);
-    if (documentNumber) {
-      documentNumber = validateManualDocumentNumber(documentNumber, 'credit_note');
-    }
-
     const row = await FinanceCommercialDocument.create({
       docKey: await nextSequence('financeCommercialDoc', 'CN'),
       documentType: 'credit_note',
-      documentNumber,
+      documentNumber: '',
       status: 'Draft',
       source: 'generated',
       createdById: req.user._id,
@@ -1189,10 +1189,7 @@ router.patch(
 
     const before = row.toObject ? row.toObject() : { ...row };
     Object.assign(row, payload, extractBuilderExtras(req.body));
-    if (req.body.documentNumber != null) {
-      const manual = trimStr(req.body.documentNumber);
-      row.documentNumber = manual ? validateManualDocumentNumber(manual, 'credit_note') : '';
-    }
+    row.documentNumber = '';
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.CREDIT_NOTE.UPDATE', row, before);
@@ -1287,7 +1284,7 @@ router.get(
       data: {
         commercialStatuses: COMMERCIAL_DOC_STATUSES,
         documentNumberStandards: DOCUMENT_NUMBER_STANDARDS,
-        documentNumberFormat: 'PREFIX-YY-MM-SEQ',
+        documentNumberFormat: 'PREFIX/FY/MM/SEQ',
       },
     });
   })

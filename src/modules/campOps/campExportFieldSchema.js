@@ -200,7 +200,7 @@ export const CAMP_EXPORT_SAMPLE_ROW = {
   overtimeExpense: 0,
   otherExpenses: 0,
   totalPayout: 4000,
-  paymentSubmitStatus: 'Payment Confirmed',
+  paymentSubmitStatus: 'Validation Completed',
   financePaymentStatus: 'Under Review',
   paidAmount: 0,
   transactionId: '',

@@ -1189,7 +1189,7 @@ router.post(
     );
     if (!paymentSubmitStatus) {
       throw new AppError(
-        'Select Payment Confirmed, Payment Not Checked, or Payment Hold before submitting',
+        'Select Validation Completed, Validation Pending, or Payment On Hold before submitting',
         400,
         'VALIDATION_ERROR'
       );

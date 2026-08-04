@@ -8,6 +8,7 @@ export const USER_DESIGNATIONS = [
   'Senior Manager',
   'Product Manager',
   'Operations Manager',
+  'Operations Head',
   'Director',
   'Head of Department',
   'Vice President',

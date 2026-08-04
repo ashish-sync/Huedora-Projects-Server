@@ -32,15 +32,15 @@ export const INVOICE_STATUSES = [
 export const PAYMENT_MODES = ['Bank transfer', 'UPI', 'Cheque', 'Cash', 'Card', 'Other'];
 
 export const CAMP_PAYOUT_SUBMIT_STATUSES = [
-  { value: 'payment_confirmed', label: 'Payment Confirmed' },
-  { value: 'payment_not_checked', label: 'Payment Not Checked' },
-  { value: 'payment_hold', label: 'Payment Hold' },
+  { value: 'payment_confirmed', label: 'Validation Completed' },
+  { value: 'payment_not_checked', label: 'Validation Pending' },
+  { value: 'payment_hold', label: 'Payment On Hold' },
 ];
 
 export const CAMP_FINANCE_PAYMENT_STATUSES = [
   { value: 'not_paid', label: 'Not Paid' },
   { value: 'under_review', label: 'Under Review' },
-  { value: 'paid', label: 'Paid' },
+  { value: 'paid', label: 'Payment Completed' },
 ];
 
 export const COMMERCIAL_DOC_TYPES = [
@@ -59,6 +59,8 @@ export const COMMERCIAL_DOC_STATUSES = [
   'Cancelled',
   'Converted',
 ];
+
+export const COMMERCIAL_PAYMENT_STATUSES = ['Unpaid', 'Partially paid', 'Fully paid'];
 
 export const DEFAULT_SAC_CODE = '999316';
 

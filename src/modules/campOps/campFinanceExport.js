@@ -6,15 +6,15 @@ import {
 import { AppError } from '../../utils/helpers.js';
 
 const PAYMENT_SUBMIT_LABELS = {
-  payment_confirmed: 'Payment Confirmed',
-  payment_not_checked: 'Payment Not Checked',
-  payment_hold: 'Payment Hold',
+  payment_confirmed: 'Validation Completed',
+  payment_not_checked: 'Validation Pending',
+  payment_hold: 'Payment On Hold',
 };
 
 const FINANCE_PAYMENT_LABELS = {
   not_paid: 'Not Paid',
   under_review: 'Under Review',
-  paid: 'Paid',
+  paid: 'Payment Completed',
 };
 
 export const CAMP_FINANCE_EXPORT_COLUMNS = [

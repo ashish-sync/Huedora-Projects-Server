@@ -760,7 +760,7 @@ export function buildCommercialDocumentPdf(docRow, orgProfile, documentType) {
 
   const meta = {
     typeLabel,
-    docNumber: docRow.documentNumber || docRow.docKey || 'Draft',
+    docNumber: docRow.documentNumber || 'Draft',
     docDate: formatDisplayDateErp(docRow.documentDate),
     dueDate: formatDisplayDateErp(docRow.dueDate),
     pageLabel: '1',

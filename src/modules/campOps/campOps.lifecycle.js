@@ -262,10 +262,13 @@ export function normalizePaymentSubmitStatus(raw) {
   const aliases = {
     payment_confirmed: 'payment_confirmed',
     confirmed: 'payment_confirmed',
+    validation_completed: 'payment_confirmed',
     payment_not_checked: 'payment_not_checked',
     not_checked: 'payment_not_checked',
+    validation_pending: 'payment_not_checked',
     payment_hold: 'payment_hold',
     hold: 'payment_hold',
+    payment_on_hold: 'payment_hold',
   };
   return aliases[v] || (PAYMENT_SUBMIT_STATUSES.includes(v) ? v : '');
 }
@@ -274,6 +277,7 @@ export function normalizeFinancePaymentStatus(raw) {
   const v = String(raw || '').trim().toLowerCase().replace(/\s+/g, '_');
   const aliases = {
     paid: 'paid',
+    payment_completed: 'paid',
     not_paid: 'not_paid',
     unpaid: 'not_paid',
     under_review: 'under_review',

@@ -6,6 +6,7 @@ import {
 } from './finance.constants.js';
 import {
   documentNumberPeriod,
+  fiscalYearLabel,
   nextCommercialDocumentNumber,
 } from './documentNumbering.js';
 import { FinanceOrgProfile } from './finance.model.js';
@@ -23,15 +24,7 @@ export function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Indian FY label e.g. 26-27 for dates in Apr 2026 – Mar 2027 */
-export function fiscalYearLabel(dateIso) {
-  const d = dateIso ? new Date(dateIso) : new Date();
-  const month = d.getMonth();
-  const year = d.getFullYear();
-  const startYear = month >= 3 ? year : year - 1;
-  const endShort = String(startYear + 1).slice(-2);
-  return `${String(startYear).slice(-2)}-${endShort}`;
-}
+export { fiscalYearLabel };
 
 export function formatDisplayDate(iso) {
   if (!iso) return '';
@@ -255,8 +248,13 @@ export function mergeOrgProfile(body = {}) {
   return out;
 }
 
-export { nextCommercialDocumentNumber as nextProformaNumber } from './documentNumbering.js';
-export { nextCommercialDocumentNumber as nextPurchaseOrderNumber } from './documentNumbering.js';
+export async function nextProformaNumber(documentDate) {
+  return nextCommercialDocumentNumber('proforma', documentDate);
+}
+
+export async function nextPurchaseOrderNumber(documentDate) {
+  return nextCommercialDocumentNumber('purchase_order', documentDate);
+}
 
 export async function nextClientInvoiceNumber(documentDate) {
   return nextCommercialDocumentNumber('client_invoice', documentDate);
@@ -264,6 +262,21 @@ export async function nextClientInvoiceNumber(documentDate) {
 
 export async function nextCreditNoteNumber(documentDate) {
   return nextCommercialDocumentNumber('credit_note', documentDate);
+}
+
+export async function nextDebitNoteNumber(documentDate) {
+  return nextCommercialDocumentNumber('debit_note', documentDate);
+}
+
+/** Assign official document number on approval (PREFIX/FY/MM/SEQ). */
+export async function assignCommercialDocumentNumber(row, { force = false } = {}) {
+  if (!force && trimStr(row.documentNumber)) return row.documentNumber;
+  const number = await nextCommercialDocumentNumber(row.documentType, row.documentDate);
+  row.documentNumber = number;
+  const period = documentNumberPeriod(row.documentDate);
+  row.documentPeriod = period.periodKey;
+  row.fiscalYear = period.fy;
+  return number;
 }
 
 export function normalizePoLineItem(raw = {}, index = 0) {
@@ -480,6 +493,85 @@ export function assertApprovable(status) {
   if (status !== 'Submitted') {
     throw new AppError('Only submitted documents can be approved', 400, 'VALIDATION_ERROR');
   }
+}
+
+/** Designations allowed to approve/reject commercial documents (either one). */
+export const COMMERCIAL_APPROVER_DESIGNATIONS = ['operations head', 'senior manager'];
+
+/** Who may edit Organisation master (Admin via *). */
+export const ORG_MASTER_EDITOR_DESIGNATIONS = [
+  'operations head',
+  'senior manager',
+  'manager',
+];
+
+export function normalizeDesignationKey(designation) {
+  return String(designation || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+export function isCommercialApproverDesignation(designation) {
+  return COMMERCIAL_APPROVER_DESIGNATIONS.includes(normalizeDesignationKey(designation));
+}
+
+export function isOrgMasterEditorDesignation(designation) {
+  return ORG_MASTER_EDITOR_DESIGNATIONS.includes(normalizeDesignationKey(designation));
+}
+
+/**
+ * Operations Head or Senior Manager may approve/reject; Admin (*) always can.
+ */
+export function assertCommercialApprover(user, permissions) {
+  const perms = permissions instanceof Set ? permissions : new Set(permissions || []);
+  if (perms.has('*')) return;
+  if (isCommercialApproverDesignation(user?.designation)) return;
+  throw new AppError(
+    'Only Operations Head or Senior Manager can approve commercial documents',
+    403,
+    'FORBIDDEN',
+  );
+}
+
+/**
+ * Admin, Operations Head, Senior Manager, or Manager may edit Organisation master.
+ */
+export function assertOrgMasterEditor(user, permissions) {
+  const perms = permissions instanceof Set ? permissions : new Set(permissions || []);
+  if (perms.has('*')) return;
+  if (isOrgMasterEditorDesignation(user?.designation)) return;
+  throw new AppError(
+    'Only Admin, Operations Head, Senior Manager, or Manager can edit Organisation master',
+    403,
+    'FORBIDDEN',
+  );
+}
+
+/**
+ * Record a payment against an issued commercial document.
+ * Same amount as grand total → Fully paid; otherwise Partially paid.
+ */
+export function applyCommercialPayment(row, amountInput) {
+  if (!['Issued', 'Approved'].includes(row.status)) {
+    throw new AppError('Only issued or approved documents can record payment', 400, 'VALIDATION_ERROR');
+  }
+  const amount = toAmount(amountInput);
+  if (!(amount > 0)) {
+    throw new AppError('Enter a payment amount greater than zero', 400, 'VALIDATION_ERROR');
+  }
+  const invoiceAmount = toAmount(row.grandTotal);
+  if (!(invoiceAmount > 0)) {
+    throw new AppError('Document has no invoice amount to pay against', 400, 'VALIDATION_ERROR');
+  }
+  if (amount > invoiceAmount + 0.009) {
+    throw new AppError('Payment cannot exceed the invoice amount', 400, 'VALIDATION_ERROR');
+  }
+  const fullyPaid = Math.abs(amount - invoiceAmount) < 0.01;
+  row.paidAmount = amount;
+  row.paymentStatus = fullyPaid ? 'Fully paid' : 'Partially paid';
+  row.paidAt = new Date().toISOString();
+  return row;
 }
 
 export function assertRejectable(status) {

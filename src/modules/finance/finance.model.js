@@ -166,6 +166,12 @@ export const FinanceCommercialDocument = defineCollection('finance_commercial_do
   cancelledAt: null,
   cancelledById: null,
   cancelledByEmail: '',
+  /** Receipt against issued commercial documents (Billing Center). */
+  paidAmount: 0,
+  paymentStatus: 'Unpaid',
+  paidAt: null,
+  paidById: null,
+  paidByEmail: '',
   createdById: null,
   createdByEmail: '',
   updatedById: null,
