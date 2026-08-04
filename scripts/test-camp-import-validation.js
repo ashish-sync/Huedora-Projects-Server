@@ -4,10 +4,33 @@
  */
 import { validateMappedImportRows } from '../src/modules/campOps/campOps.helpers.js';
 import { matchImportColumns } from '../src/modules/campOps/import/importColumnMatcher.js';
+import { getCampImportFields } from '../src/modules/campOps/import/campRequestFieldSchema.js';
+import { normalizeImportSource } from '../src/modules/campOps/import/importRowEnrichment.js';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
+
+const EXPECTED_HEADERS = [
+  'Source of Request',
+  'Client Name',
+  'Division / Therapy',
+  'Method',
+  'Camp Date',
+  'Request Date',
+  'Camp Start Time',
+  'Camp End Time',
+  'Doctor Name',
+  'Doctor Code',
+  'Doctor Type / Specialty',
+  'Camp / Clinic Address',
+  'PIN Code',
+  'City',
+  'Expected Patients',
+  'Contact Person Level',
+  'Contact Person Name',
+  'Contact Person Number',
+];
 
 const validRow = {
   source: 'excel',
@@ -15,10 +38,12 @@ const validRow = {
   campaignType: 'Cardio',
   campaignName: 'BMD',
   campDate: '2026-07-22',
+  requestDate: '2026-07-20',
   startTime: '09:00',
   endTime: '12:00',
   doctorName: 'Dr Sharma',
   doctorCode: 'D001',
+  speciality: 'Orthopedics',
   campAddress: '12 MG Road',
   pincode: '560001',
   state: 'Karnataka',
@@ -27,12 +52,31 @@ const validRow = {
   hq: 'Bengaluru',
   zone: 'South Zone',
   expectedPatients: 50,
+  contactPersonLevel: 'Territory Manager',
   fieldPersonName: 'Ravi Kumar',
   fieldPersonPhone: '9876543210',
-  remarks: 'Morning camp',
 };
 
 const cases = [
+  {
+    name: 'sample template headers match Create Camp form order',
+    run: () => {
+      const labels = getCampImportFields().map((field) => field.label);
+      assert(labels.length === EXPECTED_HEADERS.length, `expected ${EXPECTED_HEADERS.length} headers, got ${labels.length}`);
+      EXPECTED_HEADERS.forEach((label, index) => {
+        assert(labels[index] === label, `header ${index + 1} expected "${label}", got "${labels[index]}"`);
+      });
+    },
+  },
+  {
+    name: 'source labels normalize to canonical values',
+    run: () => {
+      assert(normalizeImportSource('Import') === 'excel', 'Import → excel');
+      assert(normalizeImportSource('WhatsApp') === 'whatsapp', 'WhatsApp → whatsapp');
+      assert(normalizeImportSource('dashboard') === 'dashboard', 'dashboard stays');
+      assert(normalizeImportSource('') === 'excel', 'blank defaults to excel');
+    },
+  },
   {
     name: 'valid complete row',
     rows: [validRow],
@@ -119,6 +163,18 @@ const cases = [
       assert(result.mapping.campDate === 'Camp Date', 'campDate should map');
     },
   },
+  {
+    name: 'new template headers map to internal keys',
+    run: () => {
+      const result = matchImportColumns(EXPECTED_HEADERS);
+      assert(result.mapping.source === 'Source of Request', 'source maps');
+      assert(result.mapping.requestDate === 'Request Date', 'requestDate maps');
+      assert(result.mapping.speciality === 'Doctor Type / Specialty', 'speciality maps');
+      assert(result.mapping.campAddress === 'Camp / Clinic Address', 'campAddress maps');
+      assert(result.mapping.contactPersonLevel === 'Contact Person Level', 'contactPersonLevel maps');
+      assert(!result.missingRequiredFields.length, `unexpected missing: ${result.missingRequiredFields.join(', ')}`);
+    },
+  },
 ];
 
 let passed = 0;
@@ -148,9 +204,9 @@ for (const testCase of cases) {
     }
     passed += 1;
     console.log(`PASS  ${testCase.name}`);
-  } catch (error) {
+  } catch (err) {
     failed += 1;
-    console.error(`FAIL  ${testCase.name}: ${error.message}`);
+    console.error(`FAIL  ${testCase.name}: ${err.message}`);
   }
 }
 

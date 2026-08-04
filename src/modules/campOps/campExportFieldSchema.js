@@ -10,6 +10,7 @@ export const CAMP_SOURCE_LABELS = {
   excel: 'Excel Import',
   paste: 'Manual Paste',
   api: 'API',
+  parser: 'Request Parser',
 };
 
 export const CAMP_EXPORT_SECTIONS = [

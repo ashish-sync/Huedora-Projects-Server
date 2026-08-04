@@ -73,14 +73,33 @@ function buildCanonicalDefinitions() {
   });
 
   Object.entries(manualPasteConfig.importOnlyFields || {}).forEach(([key, def]) => {
-    definitions.set(key, {
+    const existing = definitions.get(key) || {
       key,
       label: def.label || fieldLabels[key] || key,
       required: Boolean(def.required),
-      aliases: [...(def.aliases || [])],
+      aliases: [],
       canonicalKeys: [],
-    });
+    };
+    existing.label = def.label || existing.label;
+    existing.required = Boolean(def.required ?? existing.required);
+    existing.aliases.push(...(def.aliases || []));
+    definitions.set(key, existing);
   });
+
+  // Ensure Create Camp upload template fields are always matchable (labels + order source of truth).
+  for (const field of manualPasteConfig.requestStageFields || []) {
+    const existing = definitions.get(field.key) || {
+      key: field.key,
+      label: field.label,
+      required: Boolean(field.required),
+      aliases: [],
+      canonicalKeys: [],
+    };
+    existing.label = field.label || existing.label;
+    existing.required = Boolean(field.required);
+    existing.aliases.push(field.label, field.key);
+    definitions.set(field.key, existing);
+  }
 
   for (const def of definitions.values()) {
     def.aliases = [...new Set(

@@ -1,34 +1,53 @@
 {
-  "version": "1.1",
+  "version": "1.2",
   "ignore_case": true,
   "ignore_special_characters": true,
   "trim_whitespace": true,
   "remove_symbols": ["*", ":", "-", "_", "."],
   "requestStageFields": [
+    { "key": "source", "label": "Source of Request", "required": true },
     { "key": "clientName", "label": "Client Name", "required": true, "contextOnly": true },
     { "key": "campaignType", "label": "Division / Therapy", "required": true, "contextOnly": true },
     { "key": "campaignName", "label": "Method", "required": true, "contextOnly": true },
     { "key": "campDate", "label": "Camp Date", "required": true },
+    { "key": "requestDate", "label": "Request Date", "required": true },
     { "key": "startTime", "label": "Camp Start Time", "required": true },
     { "key": "endTime", "label": "Camp End Time", "required": true },
     { "key": "doctorName", "label": "Doctor Name", "required": true },
     { "key": "doctorCode", "label": "Doctor Code", "required": true },
-    { "key": "speciality", "label": "Doctor Speciality", "required": false },
-    { "key": "hospitalName", "label": "Clinic / Hospital Name", "required": false },
-    { "key": "campAddress", "label": "Camp Address", "required": true },
+    { "key": "speciality", "label": "Doctor Type / Specialty", "required": false },
+    { "key": "campAddress", "label": "Camp / Clinic Address", "required": true },
     { "key": "pincode", "label": "PIN Code", "required": true },
-    { "key": "state", "label": "State", "required": true },
-    { "key": "zone", "label": "Zone", "required": true },
-    { "key": "district", "label": "District", "required": true },
     { "key": "city", "label": "City", "required": true },
-    { "key": "hq", "label": "HQ", "required": true },
+    { "key": "expectedPatients", "label": "Expected Patients", "required": true },
     { "key": "contactPersonLevel", "label": "Contact Person Level", "required": true },
     { "key": "fieldPersonName", "label": "Contact Person Name", "required": true },
-    { "key": "expectedPatients", "label": "Expected Patients", "required": true },
-    { "key": "fieldPersonPhone", "label": "Contact Person Number", "required": true },
-    { "key": "remarks", "label": "Remarks", "required": false }
+    { "key": "fieldPersonPhone", "label": "Contact Person Number", "required": true }
   ],
   "importOnlyFields": {
+    "source": {
+      "label": "Source of Request",
+      "required": true,
+      "aliases": [
+        "source of request",
+        "source",
+        "request source",
+        "camp source",
+        "channel",
+        "intake channel"
+      ]
+    },
+    "requestDate": {
+      "label": "Request Date",
+      "required": true,
+      "aliases": [
+        "request date",
+        "date of request",
+        "requested on",
+        "request received date",
+        "received date"
+      ]
+    },
     "clientName": {
       "label": "Client Name",
       "required": true,
@@ -43,15 +62,46 @@
       "label": "Method",
       "required": true,
       "aliases": ["method", "camp name", "campaign name", "campaign", "camp method"]
+    },
+    "contactPersonLevel": {
+      "label": "Contact Person Level",
+      "required": true,
+      "aliases": [
+        "contact person level",
+        "contact level",
+        "person level",
+        "designation",
+        "contact designation"
+      ]
     }
   },
   "canonical_fields": {
     "camp_type": ["camp", "camp name", "camp type", "activity", "program", "campaign", "title", "subject"],
     "doctor_name": ["doctor", "doctor name", "dr", "dr.", "dr name", "physician", "consultant", "plan dr"],
     "doctor_code": ["doctor code", "dr code", "doctor id", "doctor number", "doctor no", "doctor unique id", "sc code", "sccode", "scode", "plan dr"],
-    "doctor_speciality": ["speciality", "specialty", "specialization", "department", "stream"],
+    "doctor_speciality": [
+      "speciality",
+      "specialty",
+      "specialization",
+      "department",
+      "stream",
+      "doctor type",
+      "doctor type specialty",
+      "doctor specialty",
+      "doctor speciality"
+    ],
     "clinic_name": ["clinic", "clinic name", "hospital", "hospital name", "facility", "facility name", "centre", "center", "diagnostic center", "diagnostic centre", "polyclinic", "venue", "camp venue", "name"],
-    "camp_address": ["address", "clinic address", "full clinic address", "complete address", "full address", "venue address", "camp address", "location"],
+    "camp_address": [
+      "address",
+      "clinic address",
+      "camp clinic address",
+      "full clinic address",
+      "complete address",
+      "full address",
+      "venue address",
+      "camp address",
+      "location"
+    ],
     "city": ["city", "camp city", "name of city", "town"],
     "state": ["state", "province", "region"],
     "zone": ["zone", "camp zone", "regional zone"],
@@ -61,6 +111,7 @@
     "headquarter": ["hq", "headquarter", "headquarters", "base location"],
     "camp_date": ["date", "camp date", "date of camp", "date of the camp", "clinic date", "event date", "visit date"],
     "camp_day": ["day"],
+    "request_date": ["request date", "date of request", "requested on", "received date"],
     "start_time": ["start time", "from", "from time", "begin time", "camp start time"],
     "end_time": ["end time", "to", "to time", "finish time", "camp end time"],
     "expected_patients": ["expected patient", "expected patients", "expected patient count", "patients", "patient count", "no of patients", "number of patients", "patient volume"],
@@ -95,6 +146,7 @@
     "station": "hq",
     "headquarter": "hq",
     "camp_date": "campDate",
+    "request_date": "requestDate",
     "start_time": "startTime",
     "end_time": "endTime",
     "expected_patients": "expectedPatients",
@@ -117,37 +169,38 @@
     "BO": "Field Person"
   },
   "field_required": {
+    "source": true,
     "clientName": true,
     "campaignType": true,
     "campaignName": true,
     "campDate": true,
+    "requestDate": true,
     "startTime": true,
     "endTime": true,
     "doctorName": true,
     "doctorCode": true,
     "campAddress": true,
     "pincode": true,
-    "state": true,
-    "zone": true,
-    "district": true,
     "city": true,
-    "hq": true,
+    "contactPersonLevel": true,
     "fieldPersonName": true,
     "fieldPersonPhone": true,
     "expectedPatients": true
   },
   "field_labels": {
+    "source": "Source of Request",
     "clientName": "Client Name",
     "campaignType": "Division / Therapy",
     "campaignName": "Method",
     "campDate": "Camp Date",
+    "requestDate": "Request Date",
     "startTime": "Camp Start Time",
     "endTime": "Camp End Time",
     "doctorName": "Doctor Name",
     "doctorCode": "Doctor Code",
-    "speciality": "Doctor Speciality",
+    "speciality": "Doctor Type / Specialty",
     "hospitalName": "Clinic / Hospital Name",
-    "campAddress": "Camp Address",
+    "campAddress": "Camp / Clinic Address",
     "pincode": "PIN Code",
     "state": "State",
     "zone": "Zone",
@@ -155,6 +208,7 @@
     "city": "City",
     "hq": "HQ",
     "expectedPatients": "Expected Patients",
+    "contactPersonLevel": "Contact Person Level",
     "fieldPersonName": "Contact Person Name",
     "fieldPersonPhone": "Contact Person Number",
     "remarks": "Remarks"

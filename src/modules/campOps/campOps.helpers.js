@@ -9,6 +9,7 @@ import {
 import { normalizeContactPersons } from './campContactPersons.js';
 import { cleanSpaces, formatTextValue } from '../../utils/textFormat.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
+import { normalizeImportSource } from './import/importRowEnrichment.js';
 
 export function trimStr(v) {
   return v == null ? '' : cleanSpaces(v);
@@ -475,6 +476,12 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
     const campDate = parseLocalDateInput(row.campDate);
     if (trimStr(row.campDate) && !campDate) errors.push('Camp date is invalid');
 
+    const requestDateRaw = trimStr(row.requestDate);
+    const requestDate = requestDateRaw
+      ? parseLocalDateInput(row.requestDate)
+      : '';
+    if (requestDateRaw && !requestDate) errors.push('Request date is invalid');
+
     const expectedPatients =
       row.expectedPatients === '' || row.expectedPatients == null
         ? 0
@@ -490,13 +497,13 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
     const city = trimStr(row.city);
     const state = trimStr(row.state);
     const district = trimStr(row.district) || city;
-    // Import/paste rows often omit HQ/zone — derive from city/state so confirm isn't blocked.
+    // Import/paste rows often omit HQ/zone — derive from city/state (or PIN enrichment) so confirm isn't blocked.
     const hq = trimStr(row.hq) || city || district;
     const zone = trimStr(row.zone) || (state ? (resolveZoneNameForState(state) || '') : '');
 
     const normalized = formatCampTextPayload({
       ...row,
-      source: trimStr(row.source) || source,
+      source: normalizeImportSource(row.source, source),
       clientName: trimStr(row.clientName),
       campaignName: normalizeCampName(row.campaignName),
       campaignType: trimStr(row.campaignType) || 'Screening',
@@ -512,6 +519,7 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
       hq,
       pincode: trimStr(row.pincode),
       campDate,
+      requestDate: requestDate || requestDateRaw || '',
       startTime: schedule.startTime,
       endTime: schedule.endTime,
       durationHours: schedule.durationHours,

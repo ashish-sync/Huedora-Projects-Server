@@ -76,6 +76,10 @@ import {
 } from './pasteImport.service.js';
 import { matchImportColumns, CAMP_PASTE_TABULAR_FIELD_KEYS } from './import/importColumnMatcher.js';
 import {
+  enrichMappedImportRowsFromPin,
+  normalizeImportSource,
+} from './import/importRowEnrichment.js';
+import {
   parseCampRequestWithValidation,
   parsedFieldsToCampRow,
   listClientParserConfigs,
@@ -2016,42 +2020,47 @@ router.get(
   canRead,
   asyncHandler(async (_req, res) => {
     const headers = CAMP_IMPORT_FIELDS.map((f) => f.label);
+    // Keep sample cells aligned 1:1 with CAMP_IMPORT_FIELDS / Create Camp form labels.
     const rows = [
       [
+        'Import',
         'Acme Pharma',
         'Screening',
         'BMD',
-        'Dr Example',
-        'D001',
-        '12 Main Street',
-        'Mumbai',
-        'Maharashtra',
-        '400001',
-        '01-08-26',
+        '01/08/2026',
+        '30/07/2026',
         '09:00',
         '12:00',
+        'Dr Example',
+        'D001',
+        'General Practitioner',
+        '12 Main Street',
+        '400001',
+        'Mumbai',
         '40',
+        'Territory Manager',
         'Rep One',
         '9999999999',
-        'Sample camp row',
       ],
       [
+        'Email',
         'Acme Pharma',
         'Oncology',
         'Neuro & Physio',
-        'Dr Sharma',
-        'D002',
-        '45 Park Avenue',
-        'Pune',
-        'Maharashtra',
-        '411001',
-        '15-08-26',
+        '15/08/2026',
+        '10/08/2026',
         '10:00',
         '14:00',
+        'Dr Sharma',
+        'D002',
+        'Orthopedics',
+        '45 Park Avenue',
+        '411001',
+        'Pune',
         '25',
+        'Area Manager',
         'Rep Two',
         '9888888888',
-        '',
       ],
     ];
     sendExcel(res, 'camp-import-sample.xlsx', headers, rows, { sheetName: 'Camps' });
@@ -2124,7 +2133,8 @@ router.post(
       throw new AppError('Rows and mapping are required', 400, 'VALIDATION_ERROR');
     }
     const mappedRows = mapImportRows(rows, mapping, defaultClientName);
-    const { validRows, invalidRows } = validateMappedImportRows(mappedRows);
+    const enrichedRows = await enrichMappedImportRowsFromPin(mappedRows);
+    const { validRows, invalidRows } = validateMappedImportRows(enrichedRows);
     res.json({
       summary: {
         total: mappedRows.length,
@@ -2147,7 +2157,8 @@ router.post(
       throw new AppError('Rows and mapping are required', 400, 'VALIDATION_ERROR');
     }
     const mappedRows = mapImportRows(rows, mapping, defaultClientName);
-    const { validRows, invalidRows } = validateMappedImportRows(mappedRows);
+    const enrichedRows = await enrichMappedImportRowsFromPin(mappedRows);
+    const { validRows, invalidRows } = validateMappedImportRows(enrichedRows);
     if (!validRows.length) {
       throw new AppError('No valid rows to import', 400, 'VALIDATION_ERROR', { invalidRows });
     }
@@ -2179,6 +2190,7 @@ router.post(
         requestDate: row.requestDate,
       });
       const tracking = captureSubmissionTracking();
+      const contactFields = resolveContactPersonFields(row);
       const camp = await CampOpsCamp.create(formatCampTextPayload({
         campId: await generateCampId(row.campDate),
         clientId: client._id,
@@ -2187,6 +2199,8 @@ router.post(
         campaignType: row.campaignType || 'Screening',
         doctorName: row.doctorName,
         doctorCode: row.doctorCode,
+        speciality: row.speciality || '',
+        hospitalName: row.hospitalName || '',
         campAddress: row.campAddress,
         city: row.city,
         district: row.district || row.city || '',
@@ -2199,10 +2213,11 @@ router.post(
         lifecycleStage: 'request',
         ...schedule,
         expectedPatients: row.expectedPatients || 0,
+        ...contactFields,
         fieldPersonName: row.fieldPersonName,
         fieldPersonPhone: row.fieldPersonPhone,
-        remarks: row.remarks,
-        source: 'excel',
+        remarks: row.remarks || '',
+        source: normalizeImportSource(row.source, 'excel'),
         status: 'pending_review',
         createdById: a.id,
         createdByEmail: a.email,

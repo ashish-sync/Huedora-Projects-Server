@@ -1,6 +1,7 @@
 import XLSX from 'xlsx';
 import { CAMP_NAME_OPTIONS } from '../config/campNames.js';
 import { CAMP_IMPORT_FIELDS } from './importMapper.js';
+import { CONTACT_PERSON_LEVELS } from '../../campOps.constants.js';
 
 const SAMPLE_CLIENTS = [
   'Sun Pharma',
@@ -18,12 +19,22 @@ const SAMPLE_DIVISIONS = [
   'Cachet India BMD Camps',
 ];
 
+const SAMPLE_SOURCES = ['Import', 'Email', 'WhatsApp', 'Dashboard', 'Manual Paste'];
+
+const SAMPLE_SPECIALTIES = [
+  'General Practitioner',
+  'Orthopedics',
+  'Cardiology',
+  'Neurology',
+  'Diabetology',
+];
+
 const SAMPLE_CITIES = [
-  { city: 'Mumbai', state: 'Maharashtra', pincode: '400001' },
-  { city: 'Ahmedabad', state: 'Gujarat', pincode: '380001' },
-  { city: 'Bengaluru', state: 'Karnataka', pincode: '560001' },
-  { city: 'New Delhi', state: 'Delhi', pincode: '110001' },
-  { city: 'Chennai', state: 'Tamil Nadu', pincode: '600001' },
+  { city: 'Mumbai', pincode: '400001' },
+  { city: 'Ahmedabad', pincode: '380001' },
+  { city: 'Bengaluru', pincode: '560001' },
+  { city: 'New Delhi', pincode: '110001' },
+  { city: 'Chennai', pincode: '600001' },
 ];
 
 const SAMPLE_DURATIONS = [3, 4, 5, 6, 8];
@@ -54,22 +65,24 @@ function buildSampleRow(index) {
   const endTime = computeEndTime(startTime, durationHours);
 
   return {
+    'Source of Request': SAMPLE_SOURCES[index % SAMPLE_SOURCES.length],
     'Client Name': SAMPLE_CLIENTS[index % SAMPLE_CLIENTS.length],
     'Division / Therapy': SAMPLE_DIVISIONS[index % SAMPLE_DIVISIONS.length],
-    'Method': CAMP_NAME_OPTIONS[index % CAMP_NAME_OPTIONS.length],
+    Method: CAMP_NAME_OPTIONS[index % CAMP_NAME_OPTIONS.length],
+    'Camp Date': formatCampDate(index + 3),
+    'Request Date': formatCampDate(index + 1),
+    'Camp Start Time': startTime,
+    'Camp End Time': endTime,
     'Doctor Name': `Dr. Sample ${index + 1}`,
     'Doctor Code': `DOC${101 + index}`,
-    'Camp Address': `${10 + index} Main Road, ${location.city}`,
-    'City': location.city,
-    'State': location.state,
-    'Pincode': location.pincode,
-    'Camp Date': formatCampDate(index + 3),
-    'Start Time': startTime,
-    'End Time': endTime,
-    'Expected Patients': 40 + (index * 3),
-    'Field Person Name': `Field Rep ${index + 1}`,
-    'Field Person Contact': `98765${String(43210 + index).slice(-5)}`,
-    'Remarks': `Sample camp row ${index + 1} — replace with your camp details`,
+    'Doctor Type / Specialty': SAMPLE_SPECIALTIES[index % SAMPLE_SPECIALTIES.length],
+    'Camp / Clinic Address': `${10 + index} Main Road, ${location.city}`,
+    'PIN Code': location.pincode,
+    City: location.city,
+    'Expected Patients': 40 + index * 3,
+    'Contact Person Level': CONTACT_PERSON_LEVELS[index % CONTACT_PERSON_LEVELS.length],
+    'Contact Person Name': `Field Rep ${index + 1}`,
+    'Contact Person Number': `98765${String(43210 + index).slice(-5)}`,
   };
 }
 
