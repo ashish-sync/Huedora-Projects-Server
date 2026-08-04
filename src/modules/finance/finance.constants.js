@@ -12,7 +12,22 @@ export const EXPENSE_CATEGORIES = [
 
 export const EXPENSE_STATUSES = ['Draft', 'Submitted', 'Approved', 'Paid', 'Rejected'];
 
-export const INVOICE_STATUSES = ['Open', 'Partially paid', 'Paid', 'Cancelled'];
+/** @deprecated Prefer VENDOR_BILL_STATUSES — kept for older Open/Paid rows during migration. */
+export const INVOICE_STATUSES = [
+  'draft',
+  'submitted',
+  'under_verification',
+  'verified',
+  'approved',
+  'rejected',
+  'partially_paid',
+  'paid',
+  'cancelled',
+  'Open',
+  'Partially paid',
+  'Paid',
+  'Cancelled',
+];
 
 export const PAYMENT_MODES = ['Bank transfer', 'UPI', 'Cheque', 'Cash', 'Card', 'Other'];
 

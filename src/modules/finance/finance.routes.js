@@ -13,7 +13,9 @@ import {
 import { DOCUMENT_NUMBER_STANDARDS } from './documentNumbering.js';
 import { FinanceExpense, FinanceInvoice, FinanceCommercialDocument } from './finance.model.js';
 import financeCommercialRoutes from './financeCommercial.routes.js';
+import vendorBillRoutes from './vendorBill.routes.js';
 import { CampOpsCamp } from '../campOps/campOps.model.js';
+import { VENDOR_BILL_ACTIVE_STATUSES, normalizeVendorBillStatus } from './vendorBill.constants.js';
 import {
   computeLifecycleDerived,
   normalizeFinancePaymentStatus,
@@ -42,6 +44,7 @@ const canRead = requirePermission(PERMISSIONS.FINANCE_READ, PERMISSIONS.FINANCE_
 const canWrite = requirePermission(PERMISSIONS.FINANCE_WRITE);
 
 router.use(financeCommercialRoutes);
+router.use(vendorBillRoutes);
 
 function trimStr(v) {
   return v == null ? '' : String(v).trim();
@@ -92,8 +95,9 @@ router.get(
       ['Draft', 'Submitted', 'Approved'].includes(r.status)
     ).length;
     const invoiceTotal = invoices.reduce((s, r) => s + (Number(r.totalAmount) || 0), 0);
-    const invoiceOpen = invoices.filter((r) => r.status === 'Open' || r.status === 'Partially paid')
-      .length;
+    const invoiceOpen = invoices.filter((r) =>
+      VENDOR_BILL_ACTIVE_STATUSES.has(normalizeVendorBillStatus(r.status))
+    ).length;
     const proformaDraft = proformas.filter((r) => r.status === 'Draft' || r.status === 'Uploaded').length;
     const proformaIssued = proformas.filter((r) => r.status === 'Issued').length;
     const proformaTotal = proformas.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
@@ -298,188 +302,6 @@ router.delete(
       actorEmail: req.user.email,
       action: 'FINANCE.EXPENSE.DELETE',
       entityType: 'FinanceExpense',
-      entityId: row._id,
-      before,
-      after: row.toObject ? row.toObject() : row,
-      requestId: req.requestId,
-    });
-
-    res.json({ data: { ok: true } });
-  })
-);
-
-router.get(
-  '/invoices',
-  canRead,
-  asyncHandler(async (req, res) => {
-    const { page, limit, skip, sort } = parsePagination(req.query);
-    const filter = { isDeleted: false };
-    if (req.query.status) filter.status = String(req.query.status);
-    if (req.query.q) {
-      const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
-      filter.$or = [
-        { invoiceKey: re },
-        { invoiceNumber: re },
-        { vendorName: re },
-        { remarks: re },
-      ];
-    }
-    const [data, total] = await Promise.all([
-      FinanceInvoice.find(filter).sort(sort || '-invoiceDate').skip(skip).limit(limit),
-      FinanceInvoice.countDocuments(filter),
-    ]);
-    res.json(paginated(data, total, page, limit));
-  })
-);
-
-router.post(
-  '/invoices',
-  canWrite,
-  asyncHandler(async (req, res) => {
-    const invoiceNumber = trimStr(req.body.invoiceNumber);
-    if (!invoiceNumber) throw new AppError('Invoice number is required', 400, 'VALIDATION_ERROR');
-    const vendorName = trimStr(req.body.vendorName);
-    if (!vendorName) throw new AppError('Vendor name is required', 400, 'VALIDATION_ERROR');
-    const amount = toAmount(req.body.amount);
-    const taxAmount = toAmount(req.body.taxAmount);
-    const totalAmount =
-      req.body.totalAmount != null && req.body.totalAmount !== ''
-        ? toAmount(req.body.totalAmount)
-        : Math.round((amount + taxAmount) * 100) / 100;
-    if (!(totalAmount > 0)) {
-      throw new AppError('Total amount must be greater than zero', 400, 'VALIDATION_ERROR');
-    }
-    const status = trimStr(req.body.status) || 'Open';
-    if (!INVOICE_STATUSES.includes(status)) {
-      throw new AppError(
-        `Status must be one of: ${INVOICE_STATUSES.join(', ')}`,
-        400,
-        'VALIDATION_ERROR'
-      );
-    }
-    const paymentMode = trimStr(req.body.paymentMode);
-    if (paymentMode && /^other$/i.test(paymentMode)) {
-      throw new AppError('Enter a specific payment mode instead of Other', 400, 'VALIDATION_ERROR');
-    }
-
-    const row = await FinanceInvoice.create({
-      invoiceKey: await nextSequence('financeInvoice', 'INV'),
-      invoiceNumber,
-      vendorName,
-      contactId: req.body.contactId || null,
-      amount,
-      taxAmount,
-      totalAmount,
-      invoiceDate: trimStr(req.body.invoiceDate) || todayIso(),
-      dueDate: trimStr(req.body.dueDate),
-      status,
-      paymentMode,
-      linkedInOutId: req.body.linkedInOutId || null,
-      remarks: trimStr(req.body.remarks),
-      createdById: req.user._id,
-      createdByEmail: req.user.email,
-    });
-
-    await writeAudit({
-      actorId: req.user._id,
-      actorEmail: req.user.email,
-      action: 'FINANCE.INVOICE.CREATE',
-      entityType: 'FinanceInvoice',
-      entityId: row._id,
-      after: row.toObject ? row.toObject() : row,
-      requestId: req.requestId,
-    });
-
-    res.status(201).json({ data: row });
-  })
-);
-
-router.patch(
-  '/invoices/:id',
-  canWrite,
-  asyncHandler(async (req, res) => {
-    const row = await FinanceInvoice.findOne({ _id: req.params.id, isDeleted: false });
-    if (!row) throw new AppError('Invoice not found', 404);
-    const before = row.toObject ? row.toObject() : { ...row };
-
-    if (req.body.invoiceNumber != null) {
-      const invoiceNumber = trimStr(req.body.invoiceNumber);
-      if (!invoiceNumber) throw new AppError('Invoice number is required', 400, 'VALIDATION_ERROR');
-      row.invoiceNumber = invoiceNumber;
-    }
-    if (req.body.vendorName != null) {
-      const vendorName = trimStr(req.body.vendorName);
-      if (!vendorName) throw new AppError('Vendor name is required', 400, 'VALIDATION_ERROR');
-      row.vendorName = vendorName;
-    }
-    if (req.body.amount != null) row.amount = toAmount(req.body.amount);
-    if (req.body.taxAmount != null) row.taxAmount = toAmount(req.body.taxAmount);
-    if (req.body.totalAmount != null) {
-      const totalAmount = toAmount(req.body.totalAmount);
-      if (!(totalAmount > 0)) {
-        throw new AppError('Total amount must be greater than zero', 400, 'VALIDATION_ERROR');
-      }
-      row.totalAmount = totalAmount;
-    } else if (req.body.amount != null || req.body.taxAmount != null) {
-      row.totalAmount = Math.round((Number(row.amount) + Number(row.taxAmount)) * 100) / 100;
-    }
-    if (req.body.invoiceDate != null) row.invoiceDate = trimStr(req.body.invoiceDate);
-    if (req.body.dueDate != null) row.dueDate = trimStr(req.body.dueDate);
-    if (req.body.status != null) {
-      const status = trimStr(req.body.status);
-      if (!INVOICE_STATUSES.includes(status)) {
-        throw new AppError(
-          `Status must be one of: ${INVOICE_STATUSES.join(', ')}`,
-          400,
-          'VALIDATION_ERROR'
-        );
-      }
-      row.status = status;
-    }
-    if (req.body.paymentMode != null) {
-      const paymentMode = trimStr(req.body.paymentMode);
-      if (paymentMode && /^other$/i.test(paymentMode)) {
-        throw new AppError('Enter a specific payment mode instead of Other', 400, 'VALIDATION_ERROR');
-      }
-      row.paymentMode = paymentMode;
-    }
-    if (req.body.contactId !== undefined) row.contactId = req.body.contactId || null;
-    if (req.body.linkedInOutId !== undefined) row.linkedInOutId = req.body.linkedInOutId || null;
-    if (req.body.remarks != null) row.remarks = trimStr(req.body.remarks);
-
-    await row.save();
-
-    await writeAudit({
-      actorId: req.user._id,
-      actorEmail: req.user.email,
-      action: 'FINANCE.INVOICE.UPDATE',
-      entityType: 'FinanceInvoice',
-      entityId: row._id,
-      before,
-      after: row.toObject ? row.toObject() : row,
-      requestId: req.requestId,
-    });
-
-    res.json({ data: row });
-  })
-);
-
-router.delete(
-  '/invoices/:id',
-  requireAdmin,
-  asyncHandler(async (req, res) => {
-    const row = await FinanceInvoice.findOne({ _id: req.params.id, isDeleted: false });
-    if (!row) throw new AppError('Invoice not found', 404);
-    const before = row.toObject ? row.toObject() : { ...row };
-    row.isDeleted = true;
-    row.deletedAt = new Date().toISOString();
-    await row.save();
-
-    await writeAudit({
-      actorId: req.user._id,
-      actorEmail: req.user.email,
-      action: 'FINANCE.INVOICE.DELETE',
-      entityType: 'FinanceInvoice',
       entityId: row._id,
       before,
       after: row.toObject ? row.toObject() : row,
