@@ -95,6 +95,41 @@ router.post(
   })
 );
 
+router.post(
+  '/system/purge-all-camps',
+  requirePermission(PERMISSIONS.CAMPS_APPROVE, PERMISSIONS.ALL),
+  asyncHandler(async (req, res) => {
+    if (String(req.body?.confirm || '').trim() !== 'PURGE_ALL_CAMPS') {
+      throw new AppError(
+        'Confirmation required. Send { "confirm": "PURGE_ALL_CAMPS" }',
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
+
+    const { purgeAllCamps } = await import('../../utils/purgeAllCamps.js');
+    const result = await purgeAllCamps({ actorId: req.user._id });
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'SYSTEM.PURGE_ALL_CAMPS',
+      entityType: 'camp_ops_camp',
+      entityId: null,
+      after: result,
+      requestId: req.requestId,
+    });
+
+    res.json({
+      data: {
+        ok: true,
+        message: 'All Camp One camps were soft-deleted across every lifecycle stage.',
+        ...result,
+      },
+    });
+  })
+);
+
 router.get(
   '/designations',
   requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),
