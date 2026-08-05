@@ -760,7 +760,27 @@ registerMasterCrud({
       calibrationRequired: false,
     };
     let trackingKind = trimStr(b.trackingKind ?? existing?.trackingKind) || defaults.trackingKind;
+    const trackingAliases = {
+      Quantity: 'None',
+      Qty: 'None',
+      None: 'None',
+      Batch: 'Batch',
+      Serial: 'Serial',
+      'Serial Number': 'Serial',
+      SerialNumber: 'Serial',
+      'Batch + Serial': 'Serial',
+      'Batch and Serial': 'Serial',
+    };
+    if (trackingAliases[trackingKind]) trackingKind = trackingAliases[trackingKind];
+    else {
+      const aliasHit = Object.entries(trackingAliases).find(
+        ([k]) => k.toLowerCase() === trackingKind.toLowerCase()
+      );
+      if (aliasHit) trackingKind = aliasHit[1];
+    }
     if (!PRODUCT_TRACKING_KINDS.includes(trackingKind)) trackingKind = defaults.trackingKind;
+    // Product master uses Quantity / Batch / Serial Number only.
+    if (trackingKind === 'Batch + Serial') trackingKind = 'Serial';
 
     let inventoryType = resolveInventoryTypeForProductType(
       productType,
@@ -895,9 +915,15 @@ registerMasterCrud({
       uomId: b.uomId !== undefined ? b.uomId || null : existing?.uomId || null,
       unitsPerPack: Math.max(1, toNum(b.unitsPerPack ?? existing?.unitsPerPack, 1)),
       gstRate: toNum(b.gstRate ?? existing?.gstRate, 0),
-      minStock: toNum(b.reorderLevel ?? b.minStock ?? existing?.reorderLevel ?? existing?.minStock, 0),
+      minStock:
+        productType === 'Consumable'
+          ? toNum(b.reorderLevel ?? b.minStock ?? existing?.reorderLevel ?? existing?.minStock, 0)
+          : 0,
       maxStock: toNum(b.maxStock ?? existing?.maxStock, 0),
-      reorderLevel: toNum(b.reorderLevel ?? b.minStock ?? existing?.reorderLevel ?? existing?.minStock, 0),
+      reorderLevel:
+        productType === 'Consumable'
+          ? toNum(b.reorderLevel ?? b.minStock ?? existing?.reorderLevel ?? existing?.minStock, 0)
+          : 0,
       shelfLifeMonths,
       shelfLifeDays,
       expiryApplicable: !!expiryApplicable,
@@ -966,25 +992,25 @@ registerMasterCrud({
           ? `${uom.name} (${uom.code})`
           : uom.name || uom.code
         : '';
+      const tracking =
+        r.trackingKind === 'None' || !r.trackingKind
+          ? 'Quantity'
+          : r.trackingKind === 'Batch'
+            ? 'Batch'
+            : 'Serial Number';
       return [
-      r.productType,
-      r.code,
-      r.productCategory || '',
-      r.brand || r.manufacturer,
-      r.model || r.partNumber || '',
-      r.name || '',
-      r.description || '',
-      uomLabel,
-      r.unitsPerPack ?? 1,
-      r.standardCost ?? r.defaultPerUnitCost ?? 0,
-      r.gstRate ?? 0,
-      r.inventoryType,
-      r.expiryApplicable ? 'Yes' : 'No',
-      r.warrantyPeriodMonths ?? 0,
-      r.reorderLevel ?? r.minStock ?? 0,
-      r.isActive === false ? 'No' : 'Yes',
-      r.internalRemarks || '',
-    ];
+        r.productType,
+        r.code,
+        r.productCategory || '',
+        r.brand || r.manufacturer,
+        r.model || r.partNumber || '',
+        r.name || '',
+        uomLabel,
+        tracking,
+        r.expiryApplicable ? 'Yes' : 'No',
+        r.productType === 'Consumable' ? r.reorderLevel ?? r.minStock ?? 0 : '',
+        r.isActive === false ? 'Inactive' : 'Active',
+      ];
     },
     sampleRows: PRODUCT_SAMPLE_ROWS,
     importColumns: PRODUCT_IMPORT_COLUMNS,
@@ -1008,6 +1034,30 @@ registerMasterCrud({
       if (body.productType === 'Medical Device') {
         body.productCategory =
           resolveMedicalDeviceProductCategory(body.productCategory) || 'BMD';
+      }
+      if (body.productType !== 'Consumable') {
+        body.reorderLevel = 0;
+        body.minStock = 0;
+      }
+      const trackingRaw = trimStr(body.trackingKind);
+      if (trackingRaw) {
+        const trackingAliases = {
+          Quantity: 'None',
+          Qty: 'None',
+          None: 'None',
+          Batch: 'Batch',
+          Serial: 'Serial',
+          'Serial Number': 'Serial',
+          SerialNumber: 'Serial',
+          'Batch + Serial': 'Serial',
+          'Batch and Serial': 'Serial',
+        };
+        body.trackingKind =
+          trackingAliases[trackingRaw] ||
+          Object.entries(trackingAliases).find(
+            ([k]) => k.toLowerCase() === trackingRaw.toLowerCase()
+          )?.[1] ||
+          trackingRaw;
       }
       return body;
     },

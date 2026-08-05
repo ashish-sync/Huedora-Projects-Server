@@ -74,7 +74,7 @@ export const LogisticsProduct = defineCollection('logistics_products', {
   productCategory: '',
   /** Asset | Inventory */
   inventoryType: 'Asset',
-  trackingKind: 'None', // None | Serial | Batch | Batch + Serial
+  trackingKind: 'None', // None (Quantity) | Serial | Batch — set via Product Master Track Inventory By
   uomId: null,
   unitsPerPack: 1,
   hsnCode: '',

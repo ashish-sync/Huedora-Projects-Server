@@ -245,7 +245,7 @@ export const IN_OUT_PRODUCT_TYPE_ALIASES = {
   Others: 'Other',
 };
 
-/** How items are tracked. from Product Master */
+/** How items are tracked — set once on Product Master (Track Inventory By). */
 export const PRODUCT_TRACKING_KINDS = ['None', 'Serial', 'Batch', 'Batch + Serial'];
 
 /**
@@ -279,7 +279,7 @@ export const PRODUCT_CATEGORY_DEFAULTS = {
   },
   'Spare Part': {
     expiryApplicable: false,
-    trackingKind: 'Batch + Serial',
+    trackingKind: 'Batch',
     inventoryType: 'Inventory',
     calibrationRequired: false,
   },
