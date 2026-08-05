@@ -20,7 +20,7 @@ const OWNERSHIP_TYPE_ALIASES = {
 
 /** Sheet label: Asset Status */
 export const AGREEMENT_STATUS_OPTIONS = [
-  'With TCPL',
+  'Tylo Office',
   'Lost/Stolen',
   'Agreement Signed',
   'Not Initiated',
@@ -55,6 +55,8 @@ const AGREEMENT_STATUS_ALIASES = {
   'not applicable': 'Not Initiated',
   na: 'Not Initiated',
   'n/a': 'Not Initiated',
+  'with tcpl': 'Tylo Office',
+  'tylo office': 'Tylo Office',
 };
 
 /** Statuses treated as signed for verification board inclusion */
@@ -62,10 +64,10 @@ export const AGREEMENT_SIGNED_EQUIVALENTS = ['Agreement Signed', 'Active'];
 
 /**
  * Medical Device asset statuses included on Verification One (monthly rounds).
- * With TCPL, Agreement Signed, and Not Initiated.
+ * Tylo Office, Agreement Signed, and Not Initiated.
  */
 export const VERIFICATION_ONE_ELIGIBLE_STATUSES = [
-  'With TCPL',
+  'Tylo Office',
   'Agreement Signed',
   'Not Initiated',
 ];

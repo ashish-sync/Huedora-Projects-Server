@@ -1000,8 +1000,8 @@ registerMasterCrud({
             : 'Serial Number';
       return [
         r.productType,
-        r.code,
         r.productCategory || '',
+        r.code,
         r.brand || r.manufacturer,
         r.model || r.partNumber || '',
         r.name || '',

@@ -204,48 +204,18 @@ export async function ensureLogisticsSeed() {
     }
   }
 
-  const defaultProducts = [
+  // Remove legacy demo seed products from the catalog.
+  await LogisticsProduct.updateMany(
     {
-      code: 'OT0001',
-      name: 'Glucose Test Strips',
-      productType: 'Other',
-      inventoryType: 'Asset',
-      sku: 'SKU-SEED01',
-      brand: 'Generic',
-      manufacturer: 'Generic',
-      expiryApplicable: true,
-      shelfLifeMonths: 24,
-      trackingKind: 'Batch',
-      unitsPerPack: 100,
-      standardCost: 12,
-      defaultPerUnitCost: 12,
-      gstRate: 12,
-    },
-    {
-      code: 'MD0001',
-      name: 'BP Monitor',
-      productType: 'Medical Device',
-      inventoryType: 'Asset',
-      sku: 'SKU-SEED02',
-      brand: 'Generic',
-      manufacturer: 'Generic',
-      expiryApplicable: false,
-      trackingKind: 'Serial',
-      unitsPerPack: 1,
-      standardCost: 2500,
-      defaultPerUnitCost: 2500,
-      gstRate: 18,
-    },
-  ];
-  for (const p of defaultProducts) {
-    const existing = await LogisticsProduct.findOne({
-      $or: [{ code: p.code }, { sku: p.sku }],
       isDeleted: false,
-    });
-    if (!existing) {
-      await LogisticsProduct.create({ ...p, isActive: true });
-    }
-  }
+      $or: [
+        { code: { $in: ['OT0001', 'MD0001'] } },
+        { sku: { $in: ['SKU-SEED01', 'SKU-SEED02'] } },
+        { name: { $in: ['Glucose Test Strips', 'BP Monitor'] } },
+      ],
+    },
+    { $set: { isDeleted: true, isActive: false } }
+  );
 
   const catalogProducts = await LogisticsProduct.find({ isDeleted: false });
   for (const row of catalogProducts) {

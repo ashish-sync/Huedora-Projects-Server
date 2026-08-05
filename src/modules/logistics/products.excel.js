@@ -15,11 +15,11 @@ export const PRODUCT_SAMPLE_HEADERS = [
   'Status',
 ];
 
-/** Export includes auto-generated / derived fields. */
+/** Export matches the same field order as the New Product form. */
 export const PRODUCT_EXPORT_HEADERS = [
   'Product Category',
-  'Product Code',
   'Method',
+  'Product Code',
   'Brand - Manufacturer',
   'Model - Variant',
   'Display Name',
@@ -51,8 +51,8 @@ export const PRODUCT_SAMPLE_ROWS = [
     'BMD',
     '',
     'CarePlus',
-    'BP Monitor Pro',
-    'CarePlus — BP Monitor Pro',
+    'ProScan X1',
+    'CarePlus — ProScan X1',
     'Each (EA)',
     'Serial Number',
     'No',
@@ -67,12 +67,12 @@ export const PRODUCT_IMPORT_COLUMNS = [
     field: 'productType',
     required: true,
   },
-  { labels: ['Product Code', 'Code'], field: 'code', optional: true },
   {
     labels: ['Method', 'Product Category', 'Category'],
     field: 'productCategory',
     optional: true,
   },
+  { labels: ['Product Code', 'Code'], field: 'code', optional: true },
   {
     labels: ['Brand - Manufacturer', 'Brand / Manufacturer', 'Brand'],
     field: 'brand',
