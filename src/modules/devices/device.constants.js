@@ -1,26 +1,26 @@
 import { INDIAN_STATE_NAMES } from '../geo/indianStateNames.js';
 
 export const OWNERSHIP_TYPE_OPTIONS = [
-  'Company Owned',
-  'Rented',
   'Client Owned',
-  'Hybrid',
+  'Tylo Owned',
+  'Rented Asset',
 ];
 
 const OWNERSHIP_TYPE_ALIASES = {
-  owned: 'Company Owned',
-  'company owned': 'Company Owned',
-  'company-owned': 'Company Owned',
-  rented: 'Rented',
+  owned: 'Tylo Owned',
+  'company owned': 'Tylo Owned',
+  'company-owned': 'Tylo Owned',
+  'tylo owned': 'Tylo Owned',
+  rented: 'Rented Asset',
+  'rented asset': 'Rented Asset',
   'client owned': 'Client Owned',
   'client-owned': 'Client Owned',
-  hybrid: 'Hybrid',
+  hybrid: 'Tylo Owned',
 };
 
-/** Sheet label: Asset Status. 8 inventory types */
+/** Sheet label: Asset Status */
 export const AGREEMENT_STATUS_OPTIONS = [
   'With TCPL',
-  'Not Applicable',
   'Lost/Stolen',
   'Agreement Signed',
   'Not Initiated',
@@ -34,8 +34,7 @@ export const ASSET_STATUS_OPTIONS = AGREEMENT_STATUS_OPTIONS;
 /** Sheet label: Asset Custody */
 export const DEVICE_CUSTODY_OPTIONS = [
   'Client / Rented',
-  'TCPL - Head Office',
-  'TPCL - Warehouse',
+  'Tylo Office',
   'Individual',
   'Service Provider',
 ];
@@ -53,9 +52,9 @@ const AGREEMENT_STATUS_ALIASES = {
   expired: 'Not Initiated',
   inactive: 'Not Initiated',
   'not initiated': 'Not Initiated',
-  'not applicable': 'Not Applicable',
-  na: 'Not Applicable',
-  'n/a': 'Not Applicable',
+  'not applicable': 'Not Initiated',
+  na: 'Not Initiated',
+  'n/a': 'Not Initiated',
 };
 
 /** Statuses treated as signed for verification board inclusion */
@@ -63,11 +62,10 @@ export const AGREEMENT_SIGNED_EQUIVALENTS = ['Agreement Signed', 'Active'];
 
 /**
  * Medical Device asset statuses included on Verification One (monthly rounds).
- * With TCPL, Not Applicable, Agreement Signed, and Not Initiated.
+ * With TCPL, Agreement Signed, and Not Initiated.
  */
 export const VERIFICATION_ONE_ELIGIBLE_STATUSES = [
   'With TCPL',
-  'Not Applicable',
   'Agreement Signed',
   'Not Initiated',
 ];
@@ -123,12 +121,14 @@ export function normalizeDeviceCustody(raw) {
   const v = String(raw || '').trim();
   if (!v) return null;
   const aliases = {
-    'tcpl - mumbai warehouse': 'TPCL - Warehouse',
-    'tcpl - hyderabad warehouse': 'TPCL - Warehouse',
-    'tcpl - delhi warehouse': 'TPCL - Warehouse',
-    'tcpl - ho': 'TCPL - Head Office',
-    'tcpl - head office': 'TCPL - Head Office',
-    'tpcl - warehouse': 'TPCL - Warehouse',
+    'tylo office': 'Tylo Office',
+    'tcpl - mumbai warehouse': 'Tylo Office',
+    'tcpl - hyderabad warehouse': 'Tylo Office',
+    'tcpl - delhi warehouse': 'Tylo Office',
+    'tcpl - ho': 'Tylo Office',
+    'tcpl - head office': 'Tylo Office',
+    'tpcl - warehouse': 'Tylo Office',
+    'tcpl - warehouse': 'Tylo Office',
   };
   const alias = aliases[v.toLowerCase()];
   if (alias) return alias;

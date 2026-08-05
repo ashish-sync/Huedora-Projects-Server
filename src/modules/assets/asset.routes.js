@@ -565,9 +565,18 @@ router.patch(
           asset.deviceNameSnapshot = resolvedName;
           masterPatch.name = resolvedName;
         }
-        const cost = productPurchaseCost(product);
-        asset.deviceValue = cost;
-        masterPatch.cost = cost;
+        const providedCost =
+          req.body.cost != null || req.body.deviceValue != null || req.body.assetValue != null
+            ? Number(req.body.deviceValue ?? req.body.cost ?? req.body.assetValue)
+            : null;
+        if (providedCost != null && Number.isFinite(providedCost) && providedCost >= 0) {
+          asset.deviceValue = providedCost;
+          masterPatch.cost = providedCost;
+        } else {
+          const cost = productPurchaseCost(product);
+          asset.deviceValue = cost;
+          masterPatch.cost = cost;
+        }
       } else {
         masterPatch.productId = null;
       }

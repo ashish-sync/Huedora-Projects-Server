@@ -5,7 +5,7 @@ export const DeviceMaster = defineCollection('device_masters', {
   ...softDelete,
   isActive: true,
   name: '',
-  assetType: null, // Ownership Type: Company Owned | Rented | Client Owned | Hybrid
+  assetType: null, // Ownership Type: Client Owned | Tylo Owned | Rented Asset
   description: null,
   cost: null, // Asset Value
   purchaseMonth: null, // MM/YYYY

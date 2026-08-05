@@ -18,7 +18,6 @@ import {
   OWNERSHIP_TYPE_OPTIONS,
   AGREEMENT_STATUS_OPTIONS,
   DEVICE_CUSTODY_OPTIONS,
-  INDIAN_STATES_AND_UTS,
   normalizeAgreementStatus,
   normalizeDeviceCustody,
   normalizeAssetType,
@@ -34,18 +33,15 @@ const canWriteDevicesOrAssets = requirePermission(
 );
 
 const ASSET_MASTER_HEADERS = [
-  'Asset Name',
-  'Ownership Type',
+  'Asset Type (Product Type)',
+  'Model / Variant',
   'Serial Number',
-  'Asset Value',
-  'Purchase (MM/YYYY)',
+  'Purchase Month & Year',
+  'Purchase Amount',
+  'Ownership Type',
   'Asset Status',
   'Asset Custody',
-  'Custodian Name',
-  'Custodian Contact',
-  'Custodian City',
-  'Custodian State',
-  'Description',
+  'Asset & Peripheral Remarks',
 ];
 
 const router = Router();
@@ -130,7 +126,7 @@ function parseMasterFields(input) {
 
   const cost = input.cost == null || input.cost === '' ? null : Number(input.cost);
   if (cost == null || !Number.isFinite(cost) || cost < 0) {
-    throw new AppError('Asset Value is required and must be a non-negative number', 400, 'VALIDATION_ERROR');
+    throw new AppError('Purchase Amount is required and must be a non-negative number', 400, 'VALIDATION_ERROR');
   }
 
   const statusRaw = input.agreementStatus ?? input.assetStatus;
@@ -155,20 +151,17 @@ function parseMasterFields(input) {
     );
   }
 
-  const custodianName = formatTextValue(String(input.custodianName || ''), 'custodianName');
-  if (!custodianName) throw new AppError('Custodian Name is required', 400, 'VALIDATION_ERROR');
-
-  const custodianContact = formatTextValue(String(input.custodianContact || ''), 'custodianContact');
-  if (!custodianContact) throw new AppError('Custodian Contact is required', 400, 'VALIDATION_ERROR');
-  assertValidPhoneOrEmail(custodianContact, 'Custodian Contact');
-
-  const custodianCity = formatTextValue(String(input.custodianCity || input.city || ''), 'city');
-  if (!custodianCity) throw new AppError('Custodian City is required', 400, 'VALIDATION_ERROR');
-
-  const custodianState = normalizeCustodianState(input.custodianState);
-  if (!custodianState) {
-    throw new AppError('Custodian State is required (Indian state or union territory)', 400, 'VALIDATION_ERROR');
+  const custodianName = formatTextValue(String(input.custodianName || ''), 'custodianName') || '';
+  const custodianContact =
+    formatTextValue(String(input.custodianContact || ''), 'custodianContact') || '';
+  if (custodianContact) {
+    assertValidPhoneOrEmail(custodianContact, 'Custodian Contact');
   }
+
+  const custodianCity =
+    formatTextValue(String(input.custodianCity || input.city || ''), 'city') || '';
+  const custodianState = normalizeCustodianState(input.custodianState) || '';
+  // Custodian is optional on Add Asset; Contact Directory link remains available when provided.
 
   const description = formatTextValue(String(input.description || ''), 'peripheralRemarks') || null;
 
@@ -236,7 +229,12 @@ async function resolveInputFromProduct(input = {}) {
     );
   }
   const name = String(input.name || '').trim() || productMasterAssetName(product);
-  const cost = productPurchaseCost(product);
+  const providedCost =
+    input.cost == null || input.cost === '' ? null : Number(input.cost);
+  const cost =
+    providedCost != null && Number.isFinite(providedCost) && providedCost >= 0
+      ? providedCost
+      : productPurchaseCost(product);
   return {
     ...input,
     productId,
@@ -359,24 +357,21 @@ router.get(
 router.get(
   '/export',
   asyncHandler(async (_req, res) => {
-    const rows = await DeviceMaster.find({ isDeleted: false }).sort('name');
+    const rows = await DeviceMaster.find({ isDeleted: false }).sort('name').populate('productId', 'productType name');
     sendExcel(
       res,
       'Asset_Inventory.xlsx',
       ASSET_MASTER_HEADERS,
       rows.map((d) => [
+        d.productId?.productType || '',
         d.name,
-        d.assetType ? formatOwnershipType(d.assetType) : '',
         d.serialNumber,
-        d.cost,
         d.purchaseMonth,
+        d.cost,
+        d.assetType ? formatOwnershipType(d.assetType) : '',
         d.agreementStatus,
         d.custody,
-        d.custodianName,
-        d.custodianContact,
-        d.custodianCity,
-        d.custodianState,
-        d.description,
+        d.description || '',
       ]),
       { sheetName: 'Asset Registry' }
     );
@@ -391,49 +386,44 @@ router.get(
     const ws = XLSX.utils.aoa_to_sheet([
       ASSET_MASTER_HEADERS,
       [
-        'Ultrasound Probe X2',
-        'Company Owned',
+        'Medical Device',
+        'CarePlus — BP Monitor Pro',
         'SN-1001',
-        125000,
         '07/2026',
+        125000,
+        'Tylo Owned',
         'Not Initiated',
-        'TPCL - Warehouse',
-        'Ravi Kumar',
-        '9876543210',
-        'Mumbai',
-        'Maharashtra',
-        'Sample vendor batch',
+        'Tylo Office',
+        'Includes cuff kit',
       ],
       [
-        'BP Monitor A1',
-        'Rented',
+        'Non-Medical Device',
+        'Dell — Latitude 5420',
         'SN-1002',
-        8500,
         '06/2026',
-        'Agreement Signed',
-        'Client / Rented',
-        'Priya Sharma',
-        'priya@example.com',
-        'Hyderabad',
-        'Telangana',
+        85000,
+        'Tylo Owned',
+        'With TCPL',
+        'Tylo Office',
         '',
       ],
     ]);
     ws['!cols'] = [
-      { wch: 22 },
-      { wch: 12 },
-      { wch: 14 },
-      { wch: 12 },
-      { wch: 18 },
-      { wch: 16 },
-      { wch: 26 },
-      { wch: 18 },
-      { wch: 18 },
-      { wch: 14 },
-      { wch: 28 },
       { wch: 24 },
+      { wch: 28 },
+      { wch: 14 },
+      { wch: 20 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 20 },
+      { wch: 28 },
     ];
     const help = XLSX.utils.aoa_to_sheet([
+      ['Asset Type (Product Type) options'],
+      ['Medical Device'],
+      ['Non-Medical Device'],
+      [''],
       ['Ownership Type options'],
       ...OWNERSHIP_TYPE_OPTIONS.map((o) => [o]),
       [''],
@@ -443,8 +433,9 @@ router.get(
       ['Asset Custody options'],
       ...DEVICE_CUSTODY_OPTIONS.map((o) => [o]),
       [''],
-      ['Custodian State options (28 states + 8 UTs)'],
-      ...INDIAN_STATES_AND_UTS.map((o) => [o]),
+      ['Note'],
+      ['Model / Variant must match an active Product Master display name.'],
+      ['Purchase Month & Year use MM/YYYY (e.g. 07/2026).'],
     ]);
     XLSX.utils.book_append_sheet(wb, ws, 'Asset Registry');
     XLSX.utils.book_append_sheet(wb, help, 'Options');
@@ -509,12 +500,25 @@ router.post(
       const rowNum = i + 2;
       try {
         const name = String(
-          normKey(row, ['Asset Name', 'Device Name', 'deviceName', 'Name'])
+          normKey(row, [
+            'Model / Variant',
+            'Asset Name',
+            'Device Name',
+            'deviceName',
+            'Name',
+            'Display Name',
+          ])
+        ).trim();
+        const productType = String(
+          normKey(row, [
+            'Asset Type (Product Type)',
+            'Product Type',
+            'productType',
+            'Asset Type',
+          ])
         ).trim();
         const assetType = String(normKey(row, [
           'Ownership Type',
-          'Asset Type',
-          'assetType',
           'ownershipType',
           'Type',
         ])).trim();
@@ -528,10 +532,18 @@ router.post(
           ])
         ).trim();
         const cost = Number(
-          normKey(row, ['Asset Value', 'Cost', 'deviceValue', 'Device Value', 'Price'])
+          normKey(row, [
+            'Purchase Amount',
+            'Asset Value',
+            'Cost',
+            'deviceValue',
+            'Device Value',
+            'Price',
+          ])
         );
         const purchaseMonth = purchaseFromExcel(
           normKey(row, [
+            'Purchase Month & Year',
             'Purchase (MM/YYYY)',
             'Purchase',
             'purchaseMonth',
@@ -540,7 +552,13 @@ router.post(
           ])
         );
         const description = String(
-          normKey(row, ['Description', 'description', 'Remarks', 'Notes'])
+          normKey(row, [
+            'Asset & Peripheral Remarks',
+            'Description',
+            'description',
+            'Remarks',
+            'Notes',
+          ])
         ).trim();
         const agreementStatus = String(
           normKey(row, ['Asset Status', 'Agreement Status', 'agreementStatus', 'assetStatus'])
@@ -561,9 +579,25 @@ router.post(
           normKey(row, ['Custodian State', 'custodianState', 'State'])
         ).trim();
 
+        let productId = '';
+        if (name) {
+          const product = await LogisticsProduct.findOne({
+            isDeleted: false,
+            isActive: { $ne: false },
+            $or: [
+              { name: new RegExp(`^${escapeRegex(name)}$`, 'i') },
+              { model: new RegExp(`^${escapeRegex(name)}$`, 'i') },
+            ],
+            ...(productType ? { productType } : {}),
+          }).select('_id name productType');
+          if (product) productId = String(product._id);
+        }
+
         const record = await createDeviceRecord(
           {
             name,
+            productId: productId || undefined,
+            productType: productType || undefined,
             assetType,
             serialNumber,
             cost,
@@ -727,36 +761,21 @@ router.patch(
       updates.custody = custody;
     }
     if (req.body.custodianName != null) {
-      const custodianName = String(req.body.custodianName).trim();
-      if (!custodianName) {
-        throw new AppError('Custodian Name is required', 400, 'VALIDATION_ERROR');
-      }
-      updates.custodianName = custodianName;
+      updates.custodianName = String(req.body.custodianName).trim();
     }
     if (req.body.custodianContact != null) {
       const custodianContact = String(req.body.custodianContact).trim();
-      if (!custodianContact) {
-        throw new AppError('Custodian Contact is required', 400, 'VALIDATION_ERROR');
+      if (custodianContact) {
+        assertValidPhoneOrEmail(custodianContact, 'Custodian Contact');
       }
       updates.custodianContact = custodianContact;
     }
     if (req.body.custodianCity != null || req.body.city != null) {
-      const custodianCity = String(req.body.custodianCity ?? req.body.city).trim();
-      if (!custodianCity) {
-        throw new AppError('Custodian City is required', 400, 'VALIDATION_ERROR');
-      }
-      updates.custodianCity = custodianCity;
+      updates.custodianCity = String(req.body.custodianCity ?? req.body.city).trim();
     }
     if (req.body.custodianState != null) {
       const custodianState = normalizeCustodianState(req.body.custodianState);
-      if (!custodianState) {
-        throw new AppError(
-          'Custodian State must be a valid Indian state or union territory',
-          400,
-          'VALIDATION_ERROR'
-        );
-      }
-      updates.custodianState = custodianState;
+      updates.custodianState = custodianState || '';
     }
     if (req.body.isActive != null) updates.isActive = Boolean(req.body.isActive);
 
