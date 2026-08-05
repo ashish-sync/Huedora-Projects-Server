@@ -1,4 +1,4 @@
-/** Brand / Manufacturer – Model/Variant/Name (canonical display for assets & movements). */
+/** Shared product display helpers (aligned with Product Master Display Name). */
 
 export function productBrandLabel(product) {
   if (!product) return '';
@@ -7,29 +7,29 @@ export function productBrandLabel(product) {
 
 export function productModelLabel(product) {
   if (!product) return '';
-  return String(product.model || product.partNumber || product.name || '').trim();
+  return String(product.model || product.partNumber || '').trim();
 }
 
-/** Full asset / catalog name: "Brand - Model" */
-export function productMasterAssetName(product) {
+/** Product Master Display Name (`name`), with Brand — Model fallback. */
+export function productMasterDisplayName(product) {
   if (!product) return '';
+  const display = String(product.name || '').trim();
+  if (display) return display;
   const brand = productBrandLabel(product);
   const model = productModelLabel(product);
-  if (brand && model) return `${brand} - ${model}`;
+  if (brand && model) return `${brand} — ${model}`;
   return model || brand || '';
 }
 
-/** Dropdown label for Model/Variant/Name picker */
-export function productMasterOptionLabel(product) {
-  if (!product) return '';
-  const model = productModelLabel(product);
-  if (!model) return product.code ? String(product.code) : '';
-  return product.code ? `${model} (${product.code})` : model;
+/** @deprecated Prefer productMasterDisplayName — kept for existing imports. */
+export function productMasterAssetName(product) {
+  return productMasterDisplayName(product);
 }
 
 export function productPurchaseCost(product) {
   if (!product) return 0;
-  const cost = product.standardCost ?? product.defaultPerUnitCost ?? product.lastPurchaseCost ?? 0;
+  const cost =
+    product.standardCost ?? product.defaultPerUnitCost ?? product.purchaseCost ?? product.lastPurchaseCost ?? 0;
   const n = Number(cost);
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }

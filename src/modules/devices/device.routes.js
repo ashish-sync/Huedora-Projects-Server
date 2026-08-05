@@ -34,7 +34,7 @@ const canWriteDevicesOrAssets = requirePermission(
 
 const ASSET_MASTER_HEADERS = [
   'Asset Type (Product Type)',
-  'Model / Variant',
+  'Display Name',
   'Serial Number',
   'Purchase Month & Year',
   'Purchase Amount',
@@ -434,7 +434,7 @@ router.get(
       ...DEVICE_CUSTODY_OPTIONS.map((o) => [o]),
       [''],
       ['Note'],
-      ['Model / Variant must match an active Product Master display name.'],
+      ['Display Name must match an active Product Master display name.'],
       ['Purchase Month & Year use MM/YYYY (e.g. 07/2026).'],
     ]);
     XLSX.utils.book_append_sheet(wb, ws, 'Asset Registry');
@@ -501,12 +501,12 @@ router.post(
       try {
         const name = String(
           normKey(row, [
+            'Display Name',
             'Model / Variant',
             'Asset Name',
             'Device Name',
             'deviceName',
             'Name',
-            'Display Name',
           ])
         ).trim();
         const productType = String(
