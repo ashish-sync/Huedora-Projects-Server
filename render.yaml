@@ -1,13 +1,13 @@
 # Render Blueprint for TYLO One API (huedora-projects-server)
+# Uses Docker so LibreOffice can convert Document Template DOCX → PDF with Word fidelity.
 # https://render.com/docs/blueprint-spec
 services:
   - type: web
     name: huedora-projects-server
-    runtime: node
+    runtime: docker
     plan: free
-    rootDir: .
-    buildCommand: npm install && npm run build:parsers
-    startCommand: node --max-old-space-size=384 src/index.js
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /api/v1/health
     envVars:
       - key: NODE_ENV

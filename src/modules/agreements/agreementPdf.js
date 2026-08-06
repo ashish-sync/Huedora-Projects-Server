@@ -1,8 +1,8 @@
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 import { AgreementDocument } from './agreement.model.js';
 import { parseDocxBufferBlocks, textToPdfBuffer } from '../templates/docxPlaceholders.js';
+import { buildTemplatePdf } from '../templates/buildTemplatePdf.js';
 import { uploadDir } from '../../config/paths.js';
 
 export const agreementUploadRoot = uploadDir('agreements');
@@ -70,8 +70,16 @@ export async function buildAgreementPdfBuffer(agreement, pdfOptions = {}) {
   if (filledDocx?.storageKey) {
     const full = path.join(agreementUploadRoot, filledDocx.storageKey);
     if (fs.existsSync(full)) {
-      const { plain, blocks } = await parseDocxBufferBlocks(fs.readFileSync(full));
-      return textToPdfBuffer(agreement.title, plain || bodyText, { ...options, blocks });
+      const docxBuf = fs.readFileSync(full);
+      const { plain, blocks } = await parseDocxBufferBlocks(docxBuf);
+      const { buffer } = await buildTemplatePdf({
+        title: agreement.title,
+        filledDocxBuffer: docxBuf,
+        filledText: plain || bodyText,
+        blocks,
+        pdfOptions: options,
+      });
+      return buffer;
     }
   }
 
@@ -93,8 +101,16 @@ export async function buildAgreementPdfBuffer(agreement, pdfOptions = {}) {
         return fs.readFileSync(full);
       }
       if (isWordDocument(fileDoc)) {
-        const { plain, blocks } = await parseDocxBufferBlocks(fs.readFileSync(full));
-        return textToPdfBuffer(agreement.title, plain, { ...options, blocks });
+        const docxBuf = fs.readFileSync(full);
+        const { plain, blocks } = await parseDocxBufferBlocks(docxBuf);
+        const { buffer } = await buildTemplatePdf({
+          title: agreement.title,
+          filledDocxBuffer: docxBuf,
+          filledText: plain,
+          blocks,
+          pdfOptions: options,
+        });
+        return buffer;
       }
     }
   }

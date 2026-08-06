@@ -15,11 +15,11 @@ import {
   extractPlaceholdersFromText,
   fillDocxBuffer,
   fillTextPlaceholders,
-  textToPdfBuffer,
   validatePlaceholderValue,
   writeBuffer,
   ensureDir,
 } from './docxPlaceholders.js';
+import { buildTemplatePdf } from './buildTemplatePdf.js';
 import { previewStore } from './previewStore.js';
 import { sendExcel, sendCsv } from '../../utils/excelExport.js';
 import { cellValue, excelUpload, sampleCsvFilename } from '../../utils/masterExcel.js';
@@ -183,6 +183,25 @@ router.get(
 );
 
 router.get(
+  '/preview/:token.docx',
+  asyncHandler(async (req, res) => {
+    const entry = previewStore.get(req.params.token);
+    if (!entry || entry.expires < Date.now()) {
+      throw new AppError('Preview expired. Fill placeholders again.', 404, 'PREVIEW_EXPIRED');
+    }
+    if (!entry.filledDocxKey) throw new AppError('Filled Word file not available', 404);
+    const full = path.join(previewRoot, entry.filledDocxKey);
+    if (!fs.existsSync(full)) throw new AppError('Filled Word file missing', 404);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    );
+    res.setHeader('Content-Disposition', 'inline; filename="preview-filled.docx"');
+    fs.createReadStream(full).pipe(res);
+  })
+);
+
+router.get(
   '/preview-meta/:token',
   asyncHandler(async (req, res) => {
     const entry = previewStore.get(req.params.token);
@@ -196,7 +215,11 @@ router.get(
         templateId: entry.templateId,
         title: entry.title,
         previewUrl: `/api/v1/templates/preview/${req.params.token}.pdf`,
+        filledDocxUrl: entry.filledDocxKey
+          ? `/api/v1/templates/preview/${req.params.token}.docx`
+          : null,
         filledDocxKey: entry.filledDocxKey,
+        pdfEngine: entry.pdfEngine || 'pdfkit',
       },
     });
   })
@@ -470,6 +493,7 @@ router.post(
 
     let filledText = fillTextPlaceholders(tpl.bodyHtml || '', values, placeholders);
     let filledDocxKey = null;
+    let filledDocxBuffer = null;
     let blocks = null;
 
     if (tpl.sourceType === 'DOCX' && tpl.storageKey) {
@@ -483,6 +507,7 @@ router.post(
       });
       filledText = filled.filledText;
       blocks = filled.blocks;
+      filledDocxBuffer = filled.filledBuffer;
       filledDocxKey = `${uuid()}-filled.docx`;
       writeBuffer(path.join(previewRoot, filledDocxKey), filled.filledBuffer);
     }
@@ -492,11 +517,16 @@ router.post(
       req.body.signingType === 'NON_SIGNING' || tpl.signingType === 'NON_SIGNING'
         ? 'NON_SIGNING'
         : 'SIGNING';
-    const pdfBuffer = await textToPdfBuffer(title, filledText, {
-      signingType,
-      showSignatures: signingType === 'SIGNING',
-      senderSample: tpl.defaultSenderSignature?.name || 'Sender',
+    const { buffer: pdfBuffer, engine: pdfEngine } = await buildTemplatePdf({
+      title,
+      filledDocxBuffer,
+      filledText,
       blocks,
+      pdfOptions: {
+        signingType,
+        showSignatures: signingType === 'SIGNING',
+        senderSample: tpl.defaultSenderSignature?.name || 'Sender',
+      },
     });
     const token = uuid();
     const pdfName = `${token}.pdf`;
@@ -512,6 +542,7 @@ router.post(
       filledDocxKey,
       title,
       signingType,
+      pdfEngine,
       expires: Date.now() + 60 * 60 * 1000,
     });
 
@@ -519,6 +550,8 @@ router.post(
       data: {
         previewToken: token,
         previewUrl: `/api/v1/templates/preview/${token}.pdf`,
+        filledDocxUrl: filledDocxKey ? `/api/v1/templates/preview/${token}.docx` : null,
+        pdfEngine,
         filledText,
         placeholders,
         repeatableTables,
