@@ -6,7 +6,7 @@ import { writeAudit } from '../../utils/audit.js';
 import { assertValidEmail, assertValidPhone, normalizeEmail } from '../../utils/identityNormalize.js';
 import { sendExcel, sendCsv } from '../../utils/excelExport.js';
 import { formatDate } from '../../utils/dateFormat.js';
-import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
+import { cellValue, excelUpload, parseSheetRows, assertSpreadsheetUpload, discardUploadBuffer } from '../../utils/masterExcel.js';
 import { User } from '../users/user.model.js';
 import {
   CAMP_OPS_STATUSES,
@@ -1728,8 +1728,9 @@ router.post(
   canRequest,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    if (!req.file) throw new AppError('Excel file required', 400, 'VALIDATION_ERROR');
+    assertSpreadsheetUpload(req.file);
     const rows = parseSheetRows(req.file.buffer);
+    discardUploadBuffer(req.file);
     const errors = [];
     let created = 0;
     let updated = 0;
@@ -2073,9 +2074,12 @@ router.post(
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
     if (req.file?.buffer) {
+      assertSpreadsheetUpload(req.file);
       const parsed = await parsePasteImportFile(req.file.buffer);
+      const fileName = req.file.originalname || 'upload';
+      discardUploadBuffer(req.file);
       res.json({
-        fileName: req.file.originalname || 'upload',
+        fileName,
         sheetName: parsed.sheetName,
         headers: parsed.headers,
         sampleRows: parsed.sampleRows,
@@ -2298,16 +2302,16 @@ router.post(
   canRequest,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    if (!req.file?.buffer) {
-      throw new AppError('Excel or CSV file is required', 400, 'VALIDATION_ERROR');
-    }
+    assertSpreadsheetUpload(req.file);
     const parsed = await parsePasteImportFile(req.file.buffer, {
       fieldKeys: CAMP_PASTE_TABULAR_FIELD_KEYS,
     });
+    const fileName = req.file.originalname || 'upload';
+    discardUploadBuffer(req.file);
     res.json({
       data: {
         ...parsed,
-        fileName: req.file.originalname || 'upload',
+        fileName,
       },
     });
   })
@@ -2318,9 +2322,7 @@ router.post(
   canRequest,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    if (!req.file?.buffer) {
-      throw new AppError('Excel or CSV file is required', 400, 'VALIDATION_ERROR');
-    }
+    assertSpreadsheetUpload(req.file);
     const defaults = {
       clientName: trimStr(req.body?.clientName),
       campaignType: trimStr(req.body?.campaignType),
@@ -2342,6 +2344,7 @@ router.post(
       defaults,
       mapping,
     });
+    discardUploadBuffer(req.file);
     res.json({ data });
   })
 );

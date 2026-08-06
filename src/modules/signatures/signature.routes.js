@@ -6,7 +6,7 @@ import { SignatureMaster, normalizeSignaturePayload } from './signature.model.js
 import { SIGNATURE_ROLES } from './signature.constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
-import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
+import { cellValue, excelUpload, parseSheetRows, assertSpreadsheetUpload, discardUploadBuffer } from '../../utils/masterExcel.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 
 const router = Router();
@@ -100,8 +100,9 @@ router.post(
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    if (!req.file) throw new AppError('Excel file required', 400, 'VALIDATION_ERROR');
+    assertSpreadsheetUpload(req.file);
     const rows = parseSheetRows(req.file.buffer);
+    discardUploadBuffer(req.file);
     const errors = [];
     let created = 0;
 

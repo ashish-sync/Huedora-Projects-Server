@@ -4,7 +4,7 @@ import { authenticate, requirePermission } from '../../middleware/auth.js';
 import { asyncHandler, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { Notification } from './notification.model.js';
-import { resolveImportErrorReportPath } from '../imports/importErrorReport.js';
+import { resolveImportErrorReport } from '../imports/importErrorReport.js';
 
 const router = Router();
 router.use(authenticate);
@@ -61,16 +61,25 @@ router.get(
       throw new AppError('No error report on this notification', 404, 'NOT_FOUND');
     }
 
-    const filePath = resolveImportErrorReportPath(n.meta || {});
-    if (!filePath) throw new AppError('Error report file not found', 404, 'NOT_FOUND');
+    const report = resolveImportErrorReport(n.meta || {});
+    if (!report?.buffer) throw new AppError('Error report file not found', 404, 'NOT_FOUND');
 
-    const fileName = String(n.meta?.fileName || 'Import_Errors.xlsx').replace(/[^\w.\- ]+/g, '_');
+    const fileName = String(report.fileName || 'Import_Errors.xlsx').replace(/[^\w.\- ]+/g, '_');
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     );
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-    fs.createReadStream(filePath).pipe(res);
+    res.send(report.buffer);
+
+    // Best-effort cleanup of legacy on-disk reports after first successful download.
+    if (report.legacyPath) {
+      try {
+        fs.unlinkSync(report.legacyPath);
+      } catch {
+        /* ignore */
+      }
+    }
   })
 );
 

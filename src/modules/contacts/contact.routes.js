@@ -26,6 +26,11 @@ import {
 import { normalizePhone } from '../../utils/identityNormalize.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { uploadDir } from '../../config/paths.js';
+import {
+  assertSpreadsheetUpload,
+  discardUploadBuffer,
+  excelUpload,
+} from '../../utils/masterExcel.js';
 
 const contactUploadRoot = uploadDir('contacts');
 
@@ -87,8 +92,6 @@ async function enrichContactsWithProviders(contacts = []) {
       : '',
   }));
 }
-
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const kycUpload = multer({
   storage: multer.diskStorage({
@@ -412,11 +415,12 @@ router.post(
 router.post(
   '/import',
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
-  upload.single('file'),
+  excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    if (!req.file) throw new AppError('Excel file required', 400, 'VALIDATION_ERROR');
+    assertSpreadsheetUpload(req.file);
     const mode = req.body.mode === 'DRY_RUN' ? 'DRY_RUN' : 'COMMIT';
     const rows = sheetRows(req.file.buffer);
+    discardUploadBuffer(req.file);
     const errors = [];
     let created = 0;
     let updated = 0;

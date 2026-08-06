@@ -22,7 +22,7 @@ import {
 } from './docxPlaceholders.js';
 import { previewStore } from './previewStore.js';
 import { sendExcel } from '../../utils/excelExport.js';
-import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
+import { cellValue, excelUpload, parseSheetRows, assertSpreadsheetUpload, discardUploadBuffer } from '../../utils/masterExcel.js';
 import { uploadDir } from '../../config/paths.js';
 
 const templateRoot = uploadDir('templates');
@@ -121,8 +121,9 @@ router.post(
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    if (!req.file) throw new AppError('Excel file required', 400, 'VALIDATION_ERROR');
+    assertSpreadsheetUpload(req.file);
     const rows = parseSheetRows(req.file.buffer);
+    discardUploadBuffer(req.file);
     const errors = [];
     let created = 0;
 

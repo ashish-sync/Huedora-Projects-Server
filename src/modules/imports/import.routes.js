@@ -1,6 +1,4 @@
 import { Router } from 'express';
-import multer from 'multer';
-import XLSX from 'xlsx';
 import { authenticate, requirePermission } from '../../middleware/auth.js';
 import { asyncHandler, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
@@ -21,16 +19,19 @@ import {
 import { writeAudit } from '../../utils/audit.js';
 import { notifyImportFailures } from './importErrorReport.js';
 import { normalizeEmail, normalizePhone } from '../../utils/identityNormalize.js';
+import {
+  assertSpreadsheetUpload,
+  discardUploadBuffer,
+  excelUpload,
+  parseSheetRows,
+} from '../../utils/masterExcel.js';
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const router = Router();
 router.use(authenticate);
 router.use(requirePermission(PERMISSIONS.IMPORTS_EXECUTE));
 
 function sheetRows(buffer) {
-  const wb = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  return parseSheetRows(buffer);
 }
 
 function normKey(row, candidates) {
@@ -277,7 +278,9 @@ function getNth(row, names, index) {
 
 async function runImport(type, mode, req) {
   if (!req.file) throw new AppError('Excel file required', 400, 'VALIDATION_ERROR');
+  assertSpreadsheetUpload(req.file);
   const rows = sheetRows(req.file.buffer);
+  discardUploadBuffer(req.file);
   const job = await ImportJob.create({
     type,
     mode,
@@ -345,7 +348,7 @@ async function runImport(type, mode, req) {
 
 router.post(
   '/inventory/dry-run',
-  upload.single('file'),
+  excelUpload.single('file'),
   asyncHandler(async (req, res) => {
     const job = await runImport('INVENTORY', 'DRY_RUN', req);
     res.json({ data: job });
@@ -354,7 +357,7 @@ router.post(
 
 router.post(
   '/inventory/commit',
-  upload.single('file'),
+  excelUpload.single('file'),
   asyncHandler(async (req, res) => {
     const job = await runImport('INVENTORY', 'COMMIT', req);
     res.json({ data: job });
@@ -363,7 +366,7 @@ router.post(
 
 router.post(
   '/verification/dry-run',
-  upload.single('file'),
+  excelUpload.single('file'),
   asyncHandler(async (req, res) => {
     const job = await runImport('VERIFICATION', 'DRY_RUN', req);
     res.json({ data: job });
@@ -372,7 +375,7 @@ router.post(
 
 router.post(
   '/verification/commit',
-  upload.single('file'),
+  excelUpload.single('file'),
   asyncHandler(async (req, res) => {
     const job = await runImport('VERIFICATION', 'COMMIT', req);
     res.json({ data: job });

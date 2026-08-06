@@ -4,7 +4,7 @@ import { asyncHandler, AppError, parsePagination, paginated } from '../../utils/
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { sendExcel } from '../../utils/excelExport.js';
-import { cellValue, excelUpload, parseSheetRows } from '../../utils/masterExcel.js';
+import { cellValue, excelUpload, parseSheetRows, assertSpreadsheetUpload, discardUploadBuffer } from '../../utils/masterExcel.js';
 import { forceReseedGeoMasters } from './geo.seed.js';
 import { resolveZoneForStateRecord, resolveZoneNameForState } from './geo.zones.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState, GeoZone } from './geo.model.js';
@@ -297,8 +297,9 @@ router.post(
   canWritePinGeography,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    if (!req.file) throw new AppError('Excel file required', 400, 'VALIDATION_ERROR');
+    assertSpreadsheetUpload(req.file);
     const rows = parseSheetRows(req.file.buffer);
+    discardUploadBuffer(req.file);
     const parsedRows = [];
 
     for (let i = 0; i < rows.length; i++) {

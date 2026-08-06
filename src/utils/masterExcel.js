@@ -1,11 +1,61 @@
 import multer from 'multer';
+import path from 'path';
 import XLSX from 'xlsx';
 import { asyncHandler, AppError } from './helpers.js';
 import { sendExcel } from './excelExport.js';
 
+/**
+ * Ephemeral spreadsheet import policy
+ * -----------------------------------
+ * User uploads .xlsx / .xls / .csv → validate → read workbook in memory →
+ * validate rows → import into DB → return import report → discard buffer.
+ * Do NOT write the upload, a CSV conversion, or a gzip artifact to disk.
+ */
+
+const SPREADSHEET_EXT = new Set(['.xlsx', '.xls', '.csv']);
+const SPREADSHEET_MIME = new Set([
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  'application/excel',
+  'text/csv',
+  'application/csv',
+  'text/plain',
+  'application/octet-stream',
+]);
+
+export function assertSpreadsheetUpload(file) {
+  if (!file) throw new AppError('Excel or CSV file required', 400, 'VALIDATION_ERROR');
+  const ext = path.extname(String(file.originalname || '')).toLowerCase();
+  if (!SPREADSHEET_EXT.has(ext)) {
+    throw new AppError('Only .xlsx, .xls, or .csv files are accepted', 400, 'VALIDATION_ERROR');
+  }
+  const mime = String(file.mimetype || '').toLowerCase();
+  if (mime && !SPREADSHEET_MIME.has(mime) && !mime.includes('sheet') && !mime.includes('csv')) {
+    throw new AppError('Invalid spreadsheet file type', 400, 'VALIDATION_ERROR');
+  }
+  if (!file.buffer || !Buffer.isBuffer(file.buffer)) {
+    throw new AppError('Upload must be processed in memory (no disk storage)', 400, 'VALIDATION_ERROR');
+  }
+  return file;
+}
+
+/** Release upload buffer after parse — do not persist original file. */
+export function discardUploadBuffer(file) {
+  if (file && file.buffer) {
+    file.buffer = Buffer.alloc(0);
+  }
+}
+
 export const excelUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(String(file.originalname || '')).toLowerCase();
+    if (!SPREADSHEET_EXT.has(ext)) {
+      return cb(new AppError('Only .xlsx, .xls, or .csv files are accepted', 400, 'VALIDATION_ERROR'));
+    }
+    return cb(null, true);
+  },
 });
 
 export function parseSheetRows(buffer) {
@@ -61,7 +111,7 @@ function rowToBody(row, importColumns) {
  */
 export function attachMasterExcelRoutes(router, opts) {
   const {
-    path,
+    path: routePath,
     Model,
     listFilter = null,
     excel,
@@ -88,7 +138,7 @@ export function attachMasterExcelRoutes(router, opts) {
   const sampleColumnHeaders = sampleHeaders?.length ? sampleHeaders : headers;
 
   router.get(
-    `/${path}/export`,
+    `/${routePath}/export`,
     canRead,
     asyncHandler(async (_req, res) => {
       let docs = (
@@ -103,7 +153,7 @@ export function attachMasterExcelRoutes(router, opts) {
   );
 
   router.get(
-    `/${path}/sample`,
+    `/${routePath}/sample`,
     canRead,
     asyncHandler(async (_req, res) => {
       const sampleName = String(filename || 'master.xlsx').replace(/\.xlsx$/i, '_Sample.xlsx');
@@ -114,12 +164,14 @@ export function attachMasterExcelRoutes(router, opts) {
   if (!importColumns?.length || !createFromImport) return;
 
   router.post(
-    `/${path}/import`,
+    `/${routePath}/import`,
     canImport,
     excelUpload.single('file'),
     asyncHandler(async (req, res) => {
-      if (!req.file) throw new AppError('Excel file required', 400, 'VALIDATION_ERROR');
+      assertSpreadsheetUpload(req.file);
       const rows = parseSheetRows(req.file.buffer);
+      discardUploadBuffer(req.file);
+
       const errors = [];
       let created = 0;
       let updated = 0;

@@ -1,12 +1,14 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { v4 as uuid } from 'uuid';
 import { workbookBuffer } from '../../utils/excelExport.js';
 import { Notification } from '../notifications/notification.model.js';
 import { uploadDir } from '../../config/paths.js';
 
+/** Legacy disk location — new reports are not written here. */
 export const importErrorReportRoot = uploadDir('import-errors');
+
+const MAX_STORED_ERRORS = 2000;
 
 function stamp() {
   const d = new Date();
@@ -21,38 +23,35 @@ function safeBase(name) {
     .slice(0, 48);
 }
 
+function normalizeErrors(errors) {
+  return (Array.isArray(errors) ? errors.filter(Boolean) : [])
+    .slice(0, MAX_STORED_ERRORS)
+    .map((e) => ({
+      row: e.row ?? '',
+      field: e.field || '',
+      message: e.message || e.reason || 'Import failed',
+    }));
+}
+
+/** Build failed-rows workbook in memory (never persisted as an upload). */
+export function buildImportErrorReportBuffer(errors) {
+  const rows = normalizeErrors(errors).map((e) => [e.row, e.field, e.message]);
+  return workbookBuffer(['Row', 'Field', 'Reason'], rows, {
+    sheetName: 'Failed rows',
+    colWidths: [10, 18, 60],
+  });
+}
+
 /**
- * Build a failed-rows Excel, store it, and notify the importer.
- * @param {{
- *   userId: string,
- *   importType: string,
- *   sourceFileName?: string,
- *   totalRows?: number,
- *   successRows?: number,
- *   errors: Array<{ row?: number|string, field?: string, message?: string, reason?: string }>,
- *   entityType?: string,
- *   entityId?: string,
- * }} opts
+ * Build a failed-rows Excel in memory, notify the importer, and keep row errors in
+ * notification meta so downloads are regenerated — no Excel/CSV files are stored.
  */
 export async function notifyImportFailures(opts) {
-  const errors = Array.isArray(opts.errors) ? opts.errors.filter(Boolean) : [];
+  const errors = normalizeErrors(opts.errors);
   if (!errors.length || !opts.userId) return null;
 
   const reportId = uuid();
   const fileName = `Import_Errors_${safeBase(opts.sourceFileName)}_${stamp()}.xlsx`;
-  const absolutePath = path.join(importErrorReportRoot, `${reportId}.xlsx`);
-
-  const headers = ['Row', 'Field', 'Reason'];
-  const rows = errors.map((e) => [
-    e.row ?? '',
-    e.field || '',
-    e.message || e.reason || 'Import failed',
-  ]);
-  const buf = workbookBuffer(headers, rows, {
-    sheetName: 'Failed rows',
-    colWidths: [10, 18, 60],
-  });
-  fs.writeFileSync(absolutePath, buf);
 
   const totalRows = Number(opts.totalRows) || 0;
   const successRows =
@@ -76,13 +75,15 @@ export async function notifyImportFailures(opts) {
     meta: {
       reportId,
       fileName,
-      absolutePath,
       importType: opts.importType || 'IMPORT',
       sourceFileName: opts.sourceFileName || '',
       errorRows: errors.length,
       totalRows,
       successRows,
-      downloadPath: null, // filled after we know notification id
+      /** Row errors kept in DB so the report workbook is rebuilt on download (no disk file). */
+      errors,
+      ephemeral: true,
+      downloadPath: null,
     },
   });
 
@@ -101,12 +102,41 @@ export async function notifyImportFailures(opts) {
   };
 }
 
-export function resolveImportErrorReportPath(meta) {
-  if (!meta?.reportId) return null;
-  const absolutePath = path.join(importErrorReportRoot, `${meta.reportId}.xlsx`);
-  if (!fs.existsSync(absolutePath)) {
-    if (meta.absolutePath && fs.existsSync(meta.absolutePath)) return meta.absolutePath;
-    return null;
+/**
+ * Resolve a downloadable error report buffer.
+ * Prefers regenerating from stored row errors; falls back to legacy disk files.
+ */
+export function resolveImportErrorReport(meta = {}) {
+  if (Array.isArray(meta.errors) && meta.errors.length) {
+    return {
+      buffer: buildImportErrorReportBuffer(meta.errors),
+      fileName: String(meta.fileName || 'Import_Errors.xlsx').replace(/[^\w.\- ]+/g, '_'),
+    };
   }
-  return absolutePath;
+
+  // Legacy reports written before ephemeral storage.
+  if (meta.reportId) {
+    const absolutePath = path.join(importErrorReportRoot, `${meta.reportId}.xlsx`);
+    if (fs.existsSync(absolutePath)) {
+      return {
+        buffer: fs.readFileSync(absolutePath),
+        fileName: String(meta.fileName || 'Import_Errors.xlsx').replace(/[^\w.\- ]+/g, '_'),
+        legacyPath: absolutePath,
+      };
+    }
+  }
+  if (meta.absolutePath && fs.existsSync(meta.absolutePath)) {
+    return {
+      buffer: fs.readFileSync(meta.absolutePath),
+      fileName: String(meta.fileName || 'Import_Errors.xlsx').replace(/[^\w.\- ]+/g, '_'),
+      legacyPath: meta.absolutePath,
+    };
+  }
+  return null;
+}
+
+/** @deprecated Use resolveImportErrorReport — kept for older call sites. */
+export function resolveImportErrorReportPath(meta) {
+  const resolved = resolveImportErrorReport(meta);
+  return resolved?.legacyPath || null;
 }

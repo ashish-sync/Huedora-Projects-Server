@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import multer from 'multer';
 import XLSX from 'xlsx';
 import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
@@ -26,6 +25,11 @@ import {
 } from './device.constants.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { formatTextValue, cleanSpaces } from '../../utils/textFormat.js';
+import {
+  assertSpreadsheetUpload,
+  discardUploadBuffer,
+  excelUpload,
+} from '../../utils/masterExcel.js';
 
 const canWriteDevicesOrAssets = requirePermission(
   PERMISSIONS.DEVICES_WRITE,
@@ -52,8 +56,6 @@ router.use((req, res, next) => {
   if (req.method !== 'GET') return next();
   return canReadDevices(req, res, next);
 });
-
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const PURCHASE_RE = /^(0[1-9]|1[0-2])\/\d{4}$/;
 
@@ -482,11 +484,12 @@ router.post(
 router.post(
   '/import',
   canWriteDevicesOrAssets,
-  upload.single('file'),
+  excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    if (!req.file?.buffer) throw new AppError('Excel file is required', 400, 'VALIDATION_ERROR');
+    assertSpreadsheetUpload(req.file);
 
     const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+    discardUploadBuffer(req.file);
     const sheet = wb.Sheets[wb.SheetNames[0]];
     if (!sheet) throw new AppError('Excel sheet is empty', 400, 'VALIDATION_ERROR');
     const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
