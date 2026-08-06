@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate, requirePermission } from '../../middleware/auth.js';
 import { asyncHandler, AppError } from '../../utils/helpers.js';
+import { importAppError } from '../../utils/importErrors.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { ImportJob } from './importJob.model.js';
 import { Contact } from '../contacts/contact.model.js';
@@ -25,6 +26,8 @@ import {
   excelUpload,
   parseSheetRows,
 } from '../../utils/masterExcel.js';
+import { importRateLimiter } from '../../middleware/importRateLimit.js';
+import { loadCappedRowsFromUpload } from './streaming/loadCappedRows.js';
 
 const router = Router();
 router.use(authenticate);
@@ -277,18 +280,20 @@ function getNth(row, names, index) {
 }
 
 async function runImport(type, mode, req) {
-  if (!req.file) throw new AppError('Excel file required', 400, 'VALIDATION_ERROR');
-  assertSpreadsheetUpload(req.file);
-  const rows = sheetRows(req.file.buffer);
-  discardUploadBuffer(req.file);
+  if (!req.file) throw importAppError('FILE_REQUIRED');
+  const { rows, fileName } = await loadCappedRowsFromUpload(req.file);
   const job = await ImportJob.create({
     type,
     mode,
     status: 'RUNNING',
-    fileName: req.file.originalname,
+    phase: 'streaming',
+    fileName,
     totalRows: rows.length,
+    processedRows: 0,
+    percent: 0,
     startedBy: req.user._id,
     idempotencyKey: req.headers['idempotency-key'] || undefined,
+    startedAt: new Date().toISOString(),
   });
 
   try {
@@ -298,11 +303,14 @@ async function runImport(type, mode, req) {
         : await processVerification(rows, mode, req.user);
 
     job.status = 'SUCCEEDED';
+    job.phase = 'done';
     job.successRows = result.success;
+    job.processedRows = rows.length;
+    job.percent = 100;
     job.errorRows = result.errors.length;
     job.rowErrors = result.errors.slice(0, 500);
     job.summary = result.summary;
-    job.finishedAt = new Date();
+    job.finishedAt = new Date().toISOString();
     await job.save();
 
     await writeAudit({
@@ -319,7 +327,7 @@ async function runImport(type, mode, req) {
       const report = await notifyImportFailures({
         userId: req.user._id,
         importType: `${type}_${mode}`,
-        sourceFileName: req.file.originalname,
+        sourceFileName: fileName,
         totalRows: rows.length,
         successRows: result.success,
         errors: result.errors,
@@ -339,7 +347,8 @@ async function runImport(type, mode, req) {
     return job;
   } catch (err) {
     job.status = 'FAILED';
-    job.finishedAt = new Date();
+    job.phase = 'error';
+    job.finishedAt = new Date().toISOString();
     job.rowErrors = [{ row: 0, field: 'system', message: err.message }];
     await job.save();
     throw err;
@@ -348,6 +357,7 @@ async function runImport(type, mode, req) {
 
 router.post(
   '/inventory/dry-run',
+  importRateLimiter,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
     const job = await runImport('INVENTORY', 'DRY_RUN', req);
@@ -357,6 +367,7 @@ router.post(
 
 router.post(
   '/inventory/commit',
+  importRateLimiter,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
     const job = await runImport('INVENTORY', 'COMMIT', req);
@@ -366,6 +377,7 @@ router.post(
 
 router.post(
   '/verification/dry-run',
+  importRateLimiter,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
     const job = await runImport('VERIFICATION', 'DRY_RUN', req);
@@ -375,6 +387,7 @@ router.post(
 
 router.post(
   '/verification/commit',
+  importRateLimiter,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
     const job = await runImport('VERIFICATION', 'COMMIT', req);
@@ -387,6 +400,37 @@ router.get(
   asyncHandler(async (_req, res) => {
     const data = await ImportJob.find().sort({ startedAt: -1 }).limit(50);
     res.json({ data });
+  })
+);
+
+router.get(
+  '/jobs/:id',
+  asyncHandler(async (req, res) => {
+    const job = await ImportJob.findById(req.params.id);
+    if (!job) throw new AppError('Import job not found', 404);
+    if (String(job.startedBy) !== String(req.user._id) && !req.user.isAdmin) {
+      // allow same user; admins via permission already on router
+    }
+    res.json({
+      data: {
+        _id: job._id,
+        type: job.type,
+        mode: job.mode,
+        status: job.status,
+        phase: job.phase,
+        fileName: job.fileName,
+        totalRows: job.totalRows,
+        processedRows: job.processedRows,
+        successRows: job.successRows,
+        errorRows: job.errorRows,
+        percent: job.percent,
+        summary: job.summary,
+        rowErrors: (job.rowErrors || []).slice(0, 50),
+        errorReport: job.errorReport,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+      },
+    });
   })
 );
 

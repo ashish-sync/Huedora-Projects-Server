@@ -5,8 +5,17 @@ import { PERMISSIONS } from '../../config/constants.js';
 import { SignatureMaster, normalizeSignaturePayload } from './signature.model.js';
 import { SIGNATURE_ROLES } from './signature.constants.js';
 import { writeAudit } from '../../utils/audit.js';
-import { sendExcel } from '../../utils/excelExport.js';
-import { cellValue, excelUpload, parseSheetRows, assertSpreadsheetUpload, discardUploadBuffer } from '../../utils/masterExcel.js';
+import { sendExcel, sendCsv } from '../../utils/excelExport.js';
+import { importRateLimiter } from '../../middleware/importRateLimit.js';
+import { executeUploadedImport } from '../imports/streaming/runStreamingImport.js';
+import {
+  cellValue,
+  excelUpload,
+  parseSheetRows,
+  assertSpreadsheetUpload,
+  discardUploadBuffer,
+  sampleCsvFilename,
+} from '../../utils/masterExcel.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 
 const router = Router();
@@ -85,12 +94,11 @@ import { SIGNATURE_EXPORT_HEADERS, SIGNATURE_HEADERS, SIGNATURE_SAMPLE_ROWS } fr
 router.get(
   '/sample',
   asyncHandler(async (_req, res) => {
-    sendExcel(
+    sendCsv(
       res,
-      'Signature_Master_Sample.xlsx',
+      sampleCsvFilename('Signature_Master'),
       SIGNATURE_HEADERS,
-      SIGNATURE_SAMPLE_ROWS,
-      { sheetName: 'Signatures' }
+      SIGNATURE_SAMPLE_ROWS
     );
   })
 );
@@ -98,26 +106,22 @@ router.get(
 router.post(
   '/import',
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  importRateLimiter,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    assertSpreadsheetUpload(req.file);
-    const rows = parseSheetRows(req.file.buffer);
-    discardUploadBuffer(req.file);
-    const errors = [];
-    let created = 0;
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const rowNum = i + 2;
-      try {
+    const { job, summary } = await executeUploadedImport({
+      file: req.file,
+      userId: req.user?._id,
+      importType: 'SignatureMaster',
+      processRow: async ({ rowNum, record: row }) => {
         const name = cellValue(row, ['Person name', 'Name', 'name']);
-        if (!name) continue;
+        if (!name) return { skipped: true };
         const roleLabel = cellValue(row, ['Role / designation', 'Role', 'roleLabel']);
         if (!roleLabel) throw new AppError('Role / designation is required', 400, 'VALIDATION_ERROR');
         const signatureType =
           cellValue(row, ['Signature Type', 'signatureType']).toUpperCase() || 'TYPED';
         if (signatureType !== 'TYPED') {
-          throw new AppError('Excel import supports typed signatures only', 400, 'VALIDATION_ERROR');
+          throw new AppError('Import supports typed signatures only', 400, 'VALIDATION_ERROR');
         }
         const typed = cellValue(row, ['Typed signature', 'Typed Signature', 'signatureData']) || name;
         const payload = normalizeSignaturePayload({
@@ -137,19 +141,20 @@ router.post(
           createdBy: req.user._id,
           updatedBy: req.user._id,
         });
-        created += 1;
-      } catch (err) {
-        errors.push({ row: rowNum, field: 'import', message: err.message });
-      }
-    }
+        return { ok: true };
+      },
+    });
 
     res.json({
       data: {
-        totalRows: rows.length,
-        created,
+        jobId: job?._id,
+        status: job?.status,
+        percent: job?.percent ?? 100,
+        totalRows: summary.totalRows,
+        created: summary.created,
         updated: 0,
-        errorRows: errors.length,
-        errors: errors.slice(0, 200),
+        errorRows: summary.errorRows,
+        errors: summary.errors,
       },
     });
   })

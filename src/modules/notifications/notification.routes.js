@@ -59,6 +59,29 @@ router.get(
   })
 );
 
+/** Lightweight poll for Layout badge — no notification bodies or meta. */
+router.get(
+  '/unread-count',
+  asyncHandler(async (req, res) => {
+    await deliverDueForUser(req.user._id);
+    const nowMs = Date.now();
+    const pending = await Notification.find({
+      userId: req.user._id,
+      readAt: null,
+    })
+      .sort({ createdAt: -1 })
+      .limit(200);
+    let count = 0;
+    const ids = [];
+    for (const n of pending) {
+      if (!isActive(n) || !isDue(n, nowMs)) continue;
+      count += 1;
+      if (ids.length < 20) ids.push(String(n._id));
+    }
+    res.json({ data: { count, sampleIds: ids } });
+  })
+);
+
 router.get(
   '/:id/error-report',
   asyncHandler(async (req, res) => {

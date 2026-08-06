@@ -2,6 +2,7 @@ import { Router } from 'express';
 import XLSX from 'xlsx';
 import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
+import { importAppError } from '../../utils/importErrors.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { DeviceMaster } from './device.model.js';
 import { Asset } from '../assets/asset.model.js';
@@ -10,8 +11,6 @@ import { LogisticsProduct } from '../logistics/logistics.model.js';
 import { productMasterAssetName, productPurchaseCost } from '../logistics/productMasterLabel.js';
 import { createAsset } from '../assets/asset.service.js';
 import { writeAudit } from '../../utils/audit.js';
-import { sendExcel } from '../../utils/excelExport.js';
-import { notifyImportFailures } from '../imports/importErrorReport.js';
 import { assertValidPhoneOrEmail } from '../../utils/identityNormalize.js';
 import {
   OWNERSHIP_TYPE_OPTIONS,
@@ -30,7 +29,12 @@ import {
   discardUploadBuffer,
   excelUpload,
   parseSheetRows,
+  sampleCsvFilename,
 } from '../../utils/masterExcel.js';
+import { importRateLimiter } from '../../middleware/importRateLimit.js';
+import { loadCappedRowsFromUpload } from '../imports/streaming/loadCappedRows.js';
+import { sendExcel, sendCsv } from '../../utils/excelExport.js';
+import { notifyImportFailures } from '../imports/importErrorReport.js';
 
 const canWriteDevicesOrAssets = requirePermission(
   PERMISSIONS.DEVICES_WRITE,
@@ -385,70 +389,35 @@ router.get(
   '/import-template',
   canWriteDevicesOrAssets,
   asyncHandler(async (_req, res) => {
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([
+    sendCsv(
+      res,
+      sampleCsvFilename('Asset_Inventory'),
       ASSET_MASTER_HEADERS,
       [
-        'Medical Device',
-        'CarePlus — BP Monitor Pro',
-        'SN-1001',
-        '07/2026',
-        125000,
-        'Tylo Owned',
-        'Not Initiated',
-        'Tylo Office',
-        'Includes cuff kit',
-      ],
-      [
-        'Non-Medical Device',
-        'Dell — Latitude 5420',
-        'SN-1002',
-        '06/2026',
-        85000,
-        'Tylo Owned',
-        'Tylo Office',
-        'Tylo Office',
-        '',
-      ],
-    ]);
-    ws['!cols'] = [
-      { wch: 24 },
-      { wch: 28 },
-      { wch: 14 },
-      { wch: 20 },
-      { wch: 16 },
-      { wch: 16 },
-      { wch: 16 },
-      { wch: 20 },
-      { wch: 28 },
-    ];
-    const help = XLSX.utils.aoa_to_sheet([
-      ['Asset Type (Product Type) options'],
-      ['Medical Device'],
-      ['Non-Medical Device'],
-      [''],
-      ['Ownership Type options'],
-      ...OWNERSHIP_TYPE_OPTIONS.map((o) => [o]),
-      [''],
-      ['Asset Status options'],
-      ...AGREEMENT_STATUS_OPTIONS.map((o) => [o]),
-      [''],
-      ['Asset Custody options'],
-      ...DEVICE_CUSTODY_OPTIONS.map((o) => [o]),
-      [''],
-      ['Note'],
-      ['Display Name must match an active Product Master display name.'],
-      ['Purchase Month & Year use MM/YYYY (e.g. 07/2026).'],
-    ]);
-    XLSX.utils.book_append_sheet(wb, ws, 'Asset Registry');
-    XLSX.utils.book_append_sheet(wb, help, 'Options');
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        [
+          'Medical Device',
+          'CarePlus — BP Monitor Pro',
+          'SN-1001',
+          '07/2026',
+          125000,
+          'Tylo Owned',
+          'Not Initiated',
+          'Tylo Office',
+          'Includes cuff kit',
+        ],
+        [
+          'Non-Medical Device',
+          'Dell — Latitude 5420',
+          'SN-1002',
+          '06/2026',
+          85000,
+          'Tylo Owned',
+          'Tylo Office',
+          'Tylo Office',
+          '',
+        ],
+      ]
     );
-    res.setHeader('Content-Disposition', 'attachment; filename="Asset_Inventory_Sample.xlsx"');
-    res.send(buf);
   })
 );
 
@@ -485,13 +454,11 @@ router.post(
 router.post(
   '/import',
   canWriteDevicesOrAssets,
+  importRateLimiter,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    assertSpreadsheetUpload(req.file);
-
-    const rows = parseSheetRows(req.file.buffer);
-    discardUploadBuffer(req.file);
-    if (!rows.length) throw new AppError('No data rows found in Excel', 400, 'VALIDATION_ERROR');
+    const { rows, fileName } = await loadCappedRowsFromUpload(req.file);
+    if (!rows.length) throw importAppError('NO_DATA_ROWS');
 
     const errors = [];
     const created = [];
@@ -622,6 +589,7 @@ router.post(
       } catch (err) {
         errors.push({ row: rowNum, message: err.message || 'Import failed' });
       }
+      rows[i] = null;
     }
 
     await writeAudit({
@@ -630,8 +598,8 @@ router.post(
       action: 'ASSET_MASTER.IMPORT',
       entityType: 'DeviceMaster',
       after: {
-        fileName: req.file.originalname,
-        totalRows: rows.length,
+        fileName,
+        totalRows: created.length + errors.length,
         created: created.length,
         inventoryCreated: created.length,
         errorRows: errors.length,
@@ -644,8 +612,8 @@ router.post(
       errorReport = await notifyImportFailures({
         userId: req.user._id,
         importType: 'ASSET_MASTER',
-        sourceFileName: req.file.originalname,
-        totalRows: rows.length,
+        sourceFileName: fileName,
+        totalRows: created.length + errors.length,
         successRows: created.length,
         errors,
         entityType: 'DeviceMaster',
@@ -654,7 +622,7 @@ router.post(
 
     res.json({
       data: {
-        totalRows: rows.length,
+        totalRows: created.length + errors.length,
         created: created.length,
         inventoryCreated: created.length,
         errorRows: errors.length,

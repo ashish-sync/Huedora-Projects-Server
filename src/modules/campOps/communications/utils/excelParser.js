@@ -1,17 +1,23 @@
 import XLSX from 'xlsx';
 import { MAX_IMPORT_ROWS } from '../../../../utils/spreadsheetLimits.js';
+import { importAppError } from '../../../../utils/importErrors.js';
 
 export function parseExcelBuffer(buffer, { maxRows = MAX_IMPORT_ROWS } = {}) {
-  const workbook = XLSX.read(buffer, {
-    type: 'buffer',
-    cellDates: true,
-    raw: false,
-    sheetRows: maxRows + 1,
-  });
+  let workbook;
+  try {
+    workbook = XLSX.read(buffer, {
+      type: 'buffer',
+      cellDates: true,
+      raw: false,
+      sheetRows: maxRows + 1,
+    });
+  } catch {
+    throw importAppError('PARSE_FAILED');
+  }
   const sheetName = workbook.SheetNames[0];
 
   if (!sheetName) {
-    throw new Error('Excel file has no sheets');
+    throw importAppError('EMPTY_FILE');
   }
 
   const sheet = workbook.Sheets[sheetName];
@@ -25,7 +31,7 @@ export function parseExcelBuffer(buffer, { maxRows = MAX_IMPORT_ROWS } = {}) {
   workbook.SheetNames = [];
 
   if (!matrix.length) {
-    throw new Error('Excel sheet is empty');
+    throw importAppError('EMPTY_FILE');
   }
 
   const headers = matrix[0].map((header, index) => {
@@ -38,9 +44,7 @@ export function parseExcelBuffer(buffer, { maxRows = MAX_IMPORT_ROWS } = {}) {
   matrix.length = 0;
 
   if (dataMatrix.length > maxRows) {
-    throw new Error(
-      `Import limited to ${maxRows} data rows (file has ${dataMatrix.length}+). Split the file and retry.`
-    );
+    throw importAppError('TOO_MANY_ROWS');
   }
 
   const rows = dataMatrix
@@ -52,6 +56,10 @@ export function parseExcelBuffer(buffer, { maxRows = MAX_IMPORT_ROWS } = {}) {
       });
       return record;
     });
+
+  if (!rows.length) {
+    throw importAppError('NO_DATA_ROWS');
+  }
 
   return {
     sheetName,

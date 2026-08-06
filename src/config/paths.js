@@ -25,6 +25,7 @@ const UPLOAD_SUBDIRS = [
   'camp-ops',
   'finance',
   'import-errors',
+  'import-temp',
   'logistics',
   'logistics/products',
   'previews',

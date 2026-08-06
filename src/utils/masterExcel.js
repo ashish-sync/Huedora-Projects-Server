@@ -1,103 +1,87 @@
-import multer from 'multer';
 import path from 'path';
 import XLSX from 'xlsx';
 import { asyncHandler, AppError } from './helpers.js';
-import { sendExcel } from './excelExport.js';
+import { sendCsv, sendExcel } from './excelExport.js';
 import { logMemory, withMemoryLog } from './memory.js';
 import {
   MAX_SPREADSHEET_UPLOAD_BYTES,
   MAX_IMPORT_ROWS,
   MAX_EXPORT_ROWS,
+  IMPORT_ACCEPT_EXTENSIONS,
+  IMPORT_BATCH_SIZE,
 } from './spreadsheetLimits.js';
+import { importRateLimiter } from '../middleware/importRateLimit.js';
+import {
+  tabularImportUpload,
+  validateUploadedImportFile,
+  safeUnlink,
+  assertImportExtension,
+} from '../modules/imports/streaming/tempUpload.js';
+import { executeUploadedImport } from '../modules/imports/streaming/runStreamingImport.js';
+import { importAppError } from './importErrors.js';
 
 /**
- * Ephemeral spreadsheet import policy
- * -----------------------------------
- * User uploads .xlsx / .xls / .csv → validate → read workbook in memory →
- * validate rows → import into DB → return import report → discard buffer.
- * Do NOT write the upload, a CSV conversion, or a gzip artifact to disk.
- *
- * Memory: keep uploads small, cap row counts, discard buffers immediately,
- * and never retain the parsed workbook after import.
+ * Scalable tabular import policy
+ * ------------------------------
+ * Upload .csv (primary) or .xlsb → validate → save temp → stream read →
+ * validate rows → batch insert (500) → clear batch memory → summary → delete temp.
+ * Never load an entire oversized workbook into heap. Samples are CSV-only.
+ * Bulk exports may still use Excel.
  */
 
-export { MAX_SPREADSHEET_UPLOAD_BYTES, MAX_IMPORT_ROWS, MAX_EXPORT_ROWS };
+export {
+  MAX_SPREADSHEET_UPLOAD_BYTES,
+  MAX_IMPORT_ROWS,
+  MAX_EXPORT_ROWS,
+  IMPORT_ACCEPT_EXTENSIONS,
+  IMPORT_BATCH_SIZE,
+};
 
-const SPREADSHEET_EXT = new Set(['.xlsx', '.xls', '.csv']);
-const SPREADSHEET_MIME = new Set([
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-excel',
-  'application/excel',
-  'text/csv',
-  'application/csv',
-  'text/plain',
-  'application/octet-stream',
-]);
+export function sampleCsvFilename(name) {
+  const base = String(name || 'master')
+    .replace(/\.xlsx$/i, '')
+    .replace(/\.xlsb$/i, '')
+    .replace(/\.csv$/i, '')
+    .replace(/_Sample$/i, '');
+  return `${base}_Sample.csv`;
+}
 
+/** @deprecated Prefer validateUploadedImportFile — kept for callers checking memory uploads. */
 export function assertSpreadsheetUpload(file) {
-  if (!file) throw new AppError('Excel or CSV file required', 400, 'VALIDATION_ERROR');
-  const ext = path.extname(String(file.originalname || '')).toLowerCase();
-  if (!SPREADSHEET_EXT.has(ext)) {
-    throw new AppError('Only .xlsx, .xls, or .csv files are accepted', 400, 'VALIDATION_ERROR');
-  }
-  const mime = String(file.mimetype || '').toLowerCase();
-  if (mime && !SPREADSHEET_MIME.has(mime) && !mime.includes('sheet') && !mime.includes('csv')) {
-    throw new AppError('Invalid spreadsheet file type', 400, 'VALIDATION_ERROR');
-  }
-  if (!file.buffer || !Buffer.isBuffer(file.buffer)) {
-    throw new AppError('Upload must be processed in memory (no disk storage)', 400, 'VALIDATION_ERROR');
-  }
-  if (file.buffer.length > MAX_SPREADSHEET_UPLOAD_BYTES) {
-    throw new AppError(
-      `Spreadsheet exceeds ${Math.round(MAX_SPREADSHEET_UPLOAD_BYTES / (1024 * 1024))}MB limit`,
-      400,
-      'VALIDATION_ERROR'
-    );
+  if (file?.path) return validateUploadedImportFile(file);
+  if (!file) throw importAppError('FILE_REQUIRED');
+  assertImportExtension(file.originalname || '');
+  if (file.buffer && file.buffer.length > MAX_SPREADSHEET_UPLOAD_BYTES) {
+    throw importAppError('TOO_LARGE');
   }
   return file;
 }
 
-/** Release upload buffer after parse — do not persist original file. */
+/** @deprecated No-op for disk uploads; unlinks path if present. */
 export function discardUploadBuffer(file) {
-  if (file && file.buffer) {
-    file.buffer = Buffer.alloc(0);
-  }
+  if (file?.buffer) file.buffer = Buffer.alloc(0);
+  if (file?.path) safeUnlink(file.path);
 }
 
-export const excelUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_SPREADSHEET_UPLOAD_BYTES },
-  fileFilter: (_req, file, cb) => {
-    const ext = path.extname(String(file.originalname || '')).toLowerCase();
-    if (!SPREADSHEET_EXT.has(ext)) {
-      return cb(new AppError('Only .xlsx, .xls, or .csv files are accepted', 400, 'VALIDATION_ERROR'));
-    }
-    return cb(null, true);
-  },
-});
+/** Disk-based upload middleware (CSV / XLSB → import-temp). */
+export const excelUpload = tabularImportUpload;
 
 /**
- * Parse first sheet to row objects. Caps rows to protect heap.
- * Uses sheet_rows bound so XLSX does not materialize unbounded sheets.
+ * Legacy in-memory parse (prefer streaming). Still capped at MAX_IMPORT_ROWS.
  */
 export function parseSheetRows(buffer, { maxRows = MAX_IMPORT_ROWS } = {}) {
   const wb = XLSX.read(buffer, {
     type: 'buffer',
     raw: false,
     cellDates: true,
-    sheetRows: maxRows + 1, // header + data
+    sheetRows: maxRows + 2,
   });
   const sheet = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-  // Drop workbook refs promptly
   wb.Sheets = {};
   wb.SheetNames = [];
   if (rows.length > maxRows) {
-    throw new AppError(
-      `Import limited to ${maxRows} data rows (file has ${rows.length}+). Split the file and retry.`,
-      400,
-      'VALIDATION_ERROR'
-    );
+    throw importAppError('TOO_MANY_ROWS');
   }
   return rows;
 }
@@ -145,7 +129,8 @@ function rowToBody(row, importColumns) {
 }
 
 /**
- * Attach GET /export, GET /sample, POST /import to a master CRUD path.
+ * Attach GET /export, GET /sample, POST /import.
+ * Import: rate-limited streaming CSV/XLSB with batch inserts + temp cleanup.
  */
 export function attachMasterExcelRoutes(router, opts) {
   const {
@@ -199,8 +184,7 @@ export function attachMasterExcelRoutes(router, opts) {
     `/${routePath}/sample`,
     canRead,
     asyncHandler(async (_req, res) => {
-      const sampleName = String(filename || 'master.xlsx').replace(/\.xlsx$/i, '_Sample.xlsx');
-      sendExcel(res, sampleName, sampleColumnHeaders, sampleRows, { sheetName });
+      sendCsv(res, sampleCsvFilename(filename), sampleColumnHeaders, sampleRows);
     })
   );
 
@@ -209,40 +193,22 @@ export function attachMasterExcelRoutes(router, opts) {
   router.post(
     `/${routePath}/import`,
     canImport,
+    importRateLimiter,
     excelUpload.single('file'),
     asyncHandler(async (req, res) => {
-      assertSpreadsheetUpload(req.file);
-      logMemory(`import:${routePath}:start`, { bytes: req.file.buffer?.length || 0 });
-      const rows = parseSheetRows(req.file.buffer);
-      discardUploadBuffer(req.file);
-
-      const errors = [];
-      let created = 0;
-      let updated = 0;
-      const BATCH = 100;
-
-      for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        const rowNum = i + 2;
-        const hasData = Object.values(row).some((v) => String(v ?? '').trim() !== '');
-        if (!hasData) continue;
-        try {
-          const body = rowToBody(row, importColumns);
+      const { job, summary } = await executeUploadedImport({
+        file: req.file,
+        userId: req.user?._id,
+        importType: entityType || routePath,
+        processRow: async ({ rowNum, record }) => {
+          const hasData = Object.values(record).some((v) => String(v ?? '').trim() !== '');
+          if (!hasData) return { skipped: true };
+          const body = rowToBody(record, importColumns);
           const result = await createFromImport(body, req);
-          if (result?.updated) updated += 1;
-          else created += 1;
-        } catch (err) {
-          errors.push({
-            row: rowNum,
-            field: 'import',
-            message: err.message || 'Import failed',
-          });
-        }
-        // Allow GC between batches on large imports
-        if (i > 0 && i % BATCH === 0) {
-          rows[i] = null;
-        }
-      }
+          if (result?.updated) return { updated: true };
+          return { ok: true };
+        },
+      });
 
       if (writeAudit && entityType) {
         await writeAudit({
@@ -250,29 +216,45 @@ export function attachMasterExcelRoutes(router, opts) {
           actorEmail: req.user.email,
           action: `${entityType}.IMPORT`,
           entityType,
-          after: { created, updated, errors: errors.length, fileName: req.file.originalname },
+          after: {
+            created: summary.created,
+            updated: summary.updated,
+            errors: summary.errorRows,
+            fileName: summary.fileName,
+            jobId: job?._id,
+          },
           requestId: req.requestId,
         });
       }
 
-      logMemory(`import:${routePath}:done`, { created, updated, errorRows: errors.length });
+      logMemory(`import:${routePath}:response`, {
+        created: summary.created,
+        updated: summary.updated,
+        errorRows: summary.errorRows,
+      });
+
       res.json({
         data: {
-          totalRows: rows.length,
-          created,
-          updated,
-          errorRows: errors.length,
-          errors: errors.slice(0, 200),
+          jobId: job?._id,
+          status: job?.status || 'SUCCEEDED',
+          percent: job?.percent ?? 100,
+          totalRows: summary.totalRows,
+          created: summary.created,
+          updated: summary.updated,
+          skipped: summary.skipped,
+          errorRows: summary.errorRows,
+          errors: summary.errors,
         },
       });
     })
   );
 }
 
-export function importResultResponse(res, { rows, created, updated, errors, fileName, entityType }) {
+export function importResultResponse(res, { rows, created, updated, errors, fileName, entityType, jobId }) {
   res.json({
     data: {
-      totalRows: rows.length,
+      jobId: jobId || null,
+      totalRows: Array.isArray(rows) ? rows.length : Number(rows) || 0,
       created,
       updated,
       errorRows: errors.length,

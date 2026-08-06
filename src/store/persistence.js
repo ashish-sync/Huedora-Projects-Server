@@ -59,6 +59,17 @@ export function configurePersistence({ backend = 'file', dataDirectory, db } = {
 }
 
 /**
+ * Persistence model (production assumptions)
+ * ------------------------------------------
+ * - Mongo mode: each collection is lazy-loaded into a process-local Map cache and kept
+ *   resident. Safe topology is a single API replica + Atlas (+ shared/persistent disk
+ *   for uploads). Multi-instance without cache invalidation or shared file storage will
+ *   serve stale reads and missing files. Native Mongo filter/limit pushdown is the
+ *   long-term escape hatch for horizontal scale.
+ * - File mode: local JSON under data/ — development only.
+ */
+
+/**
  * Mongo: lazy-load collections on first access (do NOT hydrate entire DB into RAM at boot).
  * File: keep existing JSON index for CLI/dev sync.
  */
@@ -116,6 +127,7 @@ export async function upsertDocument(name, doc) {
       plain,
       { upsert: true }
     );
+    // Size change invalidates id indexes in filedb (reference stays same when updating in place).
     return plain;
   }
   await saveCollection(name, rows);

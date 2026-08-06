@@ -79,6 +79,13 @@ async function main() {
     import('./utils/memory.js')
       .then(({ startMemoryWatch }) => startMemoryWatch({ intervalMs: 180_000, rssWarnMb: 400 }))
       .catch(() => {});
+    import('./modules/imports/streaming/tempUpload.js')
+      .then(({ cleanupStaleImportTemps }) => {
+        cleanupStaleImportTemps();
+        const t = setInterval(() => cleanupStaleImportTemps(), 30 * 60 * 1000);
+        if (typeof t.unref === 'function') t.unref();
+      })
+      .catch(() => {});
   });
 }
 

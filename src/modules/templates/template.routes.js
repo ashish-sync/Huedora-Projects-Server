@@ -21,8 +21,10 @@ import {
   ensureDir,
 } from './docxPlaceholders.js';
 import { previewStore } from './previewStore.js';
-import { sendExcel } from '../../utils/excelExport.js';
-import { cellValue, excelUpload, parseSheetRows, assertSpreadsheetUpload, discardUploadBuffer } from '../../utils/masterExcel.js';
+import { sendExcel, sendCsv } from '../../utils/excelExport.js';
+import { cellValue, excelUpload, sampleCsvFilename } from '../../utils/masterExcel.js';
+import { importRateLimiter } from '../../middleware/importRateLimit.js';
+import { executeUploadedImport } from '../imports/streaming/runStreamingImport.js';
 import { uploadDir } from '../../config/paths.js';
 
 const templateRoot = uploadDir('templates');
@@ -106,12 +108,11 @@ import { TEMPLATE_HEADERS, TEMPLATE_SAMPLE_ROWS } from './template.excel.js';
 router.get(
   '/sample',
   asyncHandler(async (_req, res) => {
-    sendExcel(
+    sendCsv(
       res,
-      'Document_Master_Sample.xlsx',
+      sampleCsvFilename('Document_Master'),
       TEMPLATE_HEADERS,
-      TEMPLATE_SAMPLE_ROWS,
-      { sheetName: 'Document Master' }
+      TEMPLATE_SAMPLE_ROWS
     );
   })
 );
@@ -119,20 +120,16 @@ router.get(
 router.post(
   '/import',
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  importRateLimiter,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    assertSpreadsheetUpload(req.file);
-    const rows = parseSheetRows(req.file.buffer);
-    discardUploadBuffer(req.file);
-    const errors = [];
-    let created = 0;
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const rowNum = i + 2;
-      try {
+    const { job, summary } = await executeUploadedImport({
+      file: req.file,
+      userId: req.user?._id,
+      importType: 'DocumentTemplate',
+      processRow: async ({ record: row }) => {
         const name = cellValue(row, ['Name of the template', 'Name', 'name']);
-        if (!name) continue;
+        if (!name) return { skipped: true };
         const documentType = cellValue(row, ['Document type', 'Document Type', 'documentType']) || 'LEASE';
         const signingRaw = cellValue(row, ['Signing', 'Signing Mode', 'signingType']).toUpperCase();
         const signingType = signingRaw.includes('NON') ? 'NON_SIGNING' : 'SIGNING';
@@ -152,19 +149,20 @@ router.post(
           ),
           createdBy: req.user._id,
         });
-        created += 1;
-      } catch (err) {
-        errors.push({ row: rowNum, field: 'import', message: err.message });
-      }
-    }
+        return { ok: true };
+      },
+    });
 
     res.json({
       data: {
-        totalRows: rows.length,
-        created,
+        jobId: job?._id,
+        status: job?.status,
+        percent: job?.percent ?? 100,
+        totalRows: summary.totalRows,
+        created: summary.created,
         updated: 0,
-        errorRows: errors.length,
-        errors: errors.slice(0, 200),
+        errorRows: summary.errorRows,
+        errors: summary.errors,
       },
     });
   })

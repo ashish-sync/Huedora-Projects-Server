@@ -1,5 +1,6 @@
 import { AppError } from '../../utils/helpers.js';
-import { parseExcelBuffer } from './communications/utils/excelParser.js';
+import { importAppError } from '../../utils/importErrors.js';
+import { parseTabularFile, safeUnlinkImport } from './communications/utils/tabularFileParse.js';
 import { mapRows } from './communications/utils/importMapper.js';
 import {
   CAMP_PASTE_TABULAR_FIELD_KEYS,
@@ -20,6 +21,7 @@ import {
 import { CampOpsCamp, CampOpsClient } from './campOps.model.js';
 import { MAX_PREVIEW_BODY_ROWS } from '../../utils/spreadsheetLimits.js';
 import { logMemory } from '../../utils/memory.js';
+import { parseExcelBuffer } from './communications/utils/excelParser.js';
 
 async function resolveClientForRow(row, { allowCreate = false } = {}) {
   const name = trimStr(row.clientName);
@@ -172,13 +174,28 @@ function buildColumnResults(headers, mapping, fields) {
   });
 }
 
-export async function parsePasteImportFile(buffer, { fieldKeys = null } = {}) {
-  if (!buffer?.length) {
-    throw new AppError('Excel or CSV file is required', 400, 'VALIDATION_ERROR');
+export async function parsePasteImportFile(input, { fieldKeys = null } = {}) {
+  let parsed;
+  if (input && typeof input === 'object' && input.path) {
+    logMemory('camp:parsePasteImportFile:start', { path: input.path });
+    try {
+      parsed = await parseTabularFile(input.path, {
+        originalName: input.originalname || input.path,
+      });
+    } finally {
+      safeUnlinkImport(input.path);
+    }
+  } else if (Buffer.isBuffer(input) || input?.length) {
+    const buffer = Buffer.isBuffer(input) ? input : input;
+    if (!buffer?.length) {
+      throw importAppError('FILE_REQUIRED');
+    }
+    logMemory('camp:parsePasteImportFile:start', { bytes: buffer.length });
+    parsed = parseExcelBuffer(buffer);
+  } else {
+    throw importAppError('FILE_REQUIRED');
   }
 
-  logMemory('camp:parsePasteImportFile:start', { bytes: buffer.length });
-  const parsed = parseExcelBuffer(buffer);
   const keys = fieldKeys ?? getImportFieldDefinitions().map((field) => field.key);
   const columnMatch = matchImportColumns(parsed.headers, keys);
   const fields = getImportFieldDefinitions(keys);
@@ -198,6 +215,7 @@ export async function parsePasteImportFile(buffer, { fieldKeys = null } = {}) {
 
 export async function extractPasteImportPreview({
   buffer,
+  file,
   fileName = 'upload',
   defaults = {},
   mapping = {},
@@ -208,7 +226,7 @@ export async function extractPasteImportPreview({
     throw new AppError(defaultErrors.join('. '), 400, 'VALIDATION_ERROR');
   }
 
-  const parsed = await parsePasteImportFile(buffer, { fieldKeys });
+  const parsed = await parsePasteImportFile(file || buffer, { fieldKeys });
   const finalMapping = mergeMapping(parsed.mapping, mapping);
   const mappedRows = mapRows(parsed.rows, finalMapping, defaults.clientName);
   const bodyPreview = await buildBodyPreviewFromMappedRows(mappedRows, defaults);
@@ -261,7 +279,9 @@ export async function extractPasteImportPreviewFromRows({
     throw new AppError(defaultErrors.join('. '), 400, 'VALIDATION_ERROR');
   }
   if (!rows.length) {
-    throw new AppError('Import rows are required', 400, 'VALIDATION_ERROR');
+    throw importAppError(
+      'No camp rows were provided to import. Upload a .csv/.xlsb file or paste rows, then try again.'
+    );
   }
 
   const fields = getImportFieldDefinitions(fieldKeys);

@@ -56,7 +56,9 @@ export function createApp() {
     })
   );
   app.use(morgan(env.nodeEnv === 'production' ? 'combined' : 'dev'));
-  app.use(express.json({ limit: '8mb' }));
+  app.use(express.json({ limit: '2mb' }));
+  // Larger JSON bodies only needed for camp paste/mapping — those routes accept
+  // multipart file uploads for bulk data; keep default JSON small for heap safety.
   app.use(express.urlencoded({ extended: true }));
   app.use(cookieParser());
   app.use(correlationId);
@@ -116,6 +118,29 @@ export function createApp() {
         status: 'ok',
         live: true,
         service: 'tylo-one-api',
+        ts: new Date().toISOString(),
+      },
+    });
+  });
+
+  /** Readiness: process is up and persistence mode is configured (Mongo required in prod). */
+  app.get('/api/v1/ready', (_req, res) => {
+    const db = getDbInfo();
+    if (env.isProd && db.mode !== 'mongo') {
+      return res.status(503).json({
+        data: {
+          status: 'not_ready',
+          ready: false,
+          reason: 'MongoDB persistence required in production',
+          ts: new Date().toISOString(),
+        },
+      });
+    }
+    res.status(200).json({
+      data: {
+        status: 'ok',
+        ready: true,
+        persistence: db.mode,
         ts: new Date().toISOString(),
       },
     });

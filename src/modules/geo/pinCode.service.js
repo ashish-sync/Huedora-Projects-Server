@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto';
 import { AppError } from '../../utils/helpers.js';
+import { MAX_IMPORT_ROWS } from '../../utils/spreadsheetLimits.js';
 import { bulkUpsertDocuments } from '../../store/persistence.js';
+import { scanCollection } from '../../store/filedb.js';
 import { resolveZoneNameForState } from './geo.zones.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState } from './geo.model.js';
 import {
@@ -272,13 +274,16 @@ export function formatPinPreview({ count, preview, more }) {
 }
 
 export async function countPinsGrouped(groupField) {
-  const allPins = await GeoPinCode.find({ isDeleted: false, isActive: true });
   const counts = new Map();
-  for (const pin of allPins) {
-    const key = String(pin[groupField] || '');
-    if (!key) continue;
-    counts.set(key, (counts.get(key) || 0) + 1);
-  }
+  // Scan without cloning every PIN doc (India master can be 100k+).
+  await scanCollection('geo_pin_codes', {
+    filter: { isDeleted: false, isActive: true },
+    forEach: (pin) => {
+      const key = String(pin[groupField] || '');
+      if (!key) return;
+      counts.set(key, (counts.get(key) || 0) + 1);
+    },
+  });
   return counts;
 }
 
@@ -342,31 +347,34 @@ export function pinToExcelRow(row) {
 
 /**
  * Bulk-import PIN rows (State + District + PIN Code; City optional).
- * Loads geo masters once; upserts only touched PIN docs (no full-collection rewrite).
+ * Loads geo masters once; loads only PIN docs present in this batch (not the full collection).
  */
 export async function bulkImportPinRows(inputRows = [], { updatedBy = null } = {}) {
-  const MAX_PIN_IMPORT_ROWS = 20_000;
-  if (inputRows.length > MAX_PIN_IMPORT_ROWS) {
+  if (inputRows.length > MAX_IMPORT_ROWS) {
     throw new AppError(
-      `PIN import limited to ${MAX_PIN_IMPORT_ROWS} rows per upload (got ${inputRows.length})`,
+      `Import limited to ${MAX_IMPORT_ROWS} data rows. This file has more than ${MAX_IMPORT_ROWS} rows — split the file and retry.`,
       400,
       'VALIDATION_ERROR'
     );
   }
 
-  const [states, districts, cities, allPinRecords] = await Promise.all([
+  const [states, districts, cities] = await Promise.all([
     GeoState.find({ isDeleted: false }),
     GeoDistrict.find({ isDeleted: false }),
     GeoCity.find({ isDeleted: false }),
-    GeoPinCode._all(),
   ]);
+
+  const pinCodes = [
+    ...new Set(inputRows.map((r) => String(r.pinCode || '').replace(/\D+/g, '')).filter(Boolean)),
+  ];
+  const existingPins = pinCodes.length
+    ? await GeoPinCode.find({ isDeleted: false, pinCode: { $in: pinCodes } })
+    : [];
 
   const indexes = buildGeoIndexes(states, districts, cities);
   const activeByPin = new Map();
-  for (const record of allPinRecords) {
-    if (!record.isDeleted && record.pinCode) {
-      activeByPin.set(record.pinCode, record);
-    }
+  for (const record of existingPins) {
+    if (record.pinCode) activeByPin.set(record.pinCode, record);
   }
 
   let created = 0;

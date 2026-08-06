@@ -233,6 +233,9 @@ function attachmentsFromUpload(req, existing = null) {
 const router = Router();
 router.use(authenticate);
 
+const LOGISTICS_META_TTL_MS = 60_000;
+let logisticsMetaCache = { at: 0, data: null };
+
 const canRead = requirePermission(PERMISSIONS.LOGISTICS_READ, PERMISSIONS.LOGISTICS_WRITE);
 const canWrite = requirePermission(PERMISSIONS.LOGISTICS_WRITE, PERMISSIONS.LOGISTICS_MASTER);
 const canMaster = requirePermission(PERMISSIONS.LOGISTICS_MASTER, PERMISSIONS.LOGISTICS_WRITE);
@@ -1298,20 +1301,24 @@ router.get(
   '/meta',
   canRead,
   asyncHandler(async (_req, res) => {
+    const now = Date.now();
+    if (logisticsMetaCache.data && now - logisticsMetaCache.at < LOGISTICS_META_TTL_MS) {
+      return res.json(logisticsMetaCache.data);
+    }
     const [warehouses, categories, uoms, statuses, movementTypes, reasonCodes, expenseCategories, expenseTypes, expenseSubCategories, products, parties, transporters] =
       await Promise.all([
-        LogisticsWarehouse.find({ isDeleted: false, isActive: true }).sort('name'),
-        LogisticsCategory.find({ isDeleted: false, isActive: true }).sort('name'),
-        LogisticsUom.find({ isDeleted: false, isActive: true }).sort('name'),
-        LogisticsStockStatus.find({ isDeleted: false, isActive: true }).sort('name'),
-        LogisticsMovementType.find({ isDeleted: false, isActive: true }).sort('name'),
-        LogisticsReasonCode.find({ isDeleted: false, isActive: true }).sort('name'),
-        LogisticsExpenseCategory.find({ isDeleted: false, isActive: true }).sort('name'),
-        LogisticsExpenseType.find({ isDeleted: false, isActive: true }).sort('name'),
-        LogisticsExpenseSubCategory.find({ isDeleted: false, isActive: true }).sort('name'),
-        LogisticsProduct.find({ isDeleted: false, isActive: true }).sort('name'),
-        LogisticsSupplier.find({ isDeleted: false, isActive: true }).sort('name'),
-        LogisticsTransporter.find({ isDeleted: false, isActive: true }).sort('name'),
+        LogisticsWarehouse.find({ isDeleted: false, isActive: true }).sort('name').limit(500),
+        LogisticsCategory.find({ isDeleted: false, isActive: true }).sort('name').limit(500),
+        LogisticsUom.find({ isDeleted: false, isActive: true }).sort('name').limit(200),
+        LogisticsStockStatus.find({ isDeleted: false, isActive: true }).sort('name').limit(100),
+        LogisticsMovementType.find({ isDeleted: false, isActive: true }).sort('name').limit(100),
+        LogisticsReasonCode.find({ isDeleted: false, isActive: true }).sort('name').limit(200),
+        LogisticsExpenseCategory.find({ isDeleted: false, isActive: true }).sort('name').limit(200),
+        LogisticsExpenseType.find({ isDeleted: false, isActive: true }).sort('name').limit(200),
+        LogisticsExpenseSubCategory.find({ isDeleted: false, isActive: true }).sort('name').limit(1000),
+        LogisticsProduct.find({ isDeleted: false, isActive: true }).sort('name').limit(500),
+        LogisticsSupplier.find({ isDeleted: false, isActive: true }).sort('name').limit(500),
+        LogisticsTransporter.find({ isDeleted: false, isActive: true }).sort('name').limit(200),
       ]);
     const suppliers = parties.filter((p) => p.partyType !== 'Vendor');
     const vendors = parties.filter((p) => p.partyType === 'Vendor');
@@ -1331,7 +1338,16 @@ router.get(
       if (ai !== bi) return ai - bi;
       return String(a.name || '').localeCompare(String(b.name || ''));
     });
-    res.json({
+    const slimProducts = products.map((p) => ({
+      _id: p._id,
+      name: p.name,
+      sku: p.sku,
+      productType: p.productType,
+      categoryId: p.categoryId,
+      uomId: p.uomId,
+      isActive: p.isActive,
+    }));
+    const payload = {
       data: {
         locationLevels: LOCATION_LEVELS,
         warehouses,
@@ -1343,7 +1359,7 @@ router.get(
         expenseCategories,
         expenseTypes,
         expenseSubCategories,
-        products,
+        products: slimProducts,
         suppliers,
         vendors,
         transporters,
@@ -1377,7 +1393,9 @@ router.get(
           goodsIssueKinds: ['Fresh Dispatch', 'Inter Transfer', 'Recall / Pickup'],
         },
       },
-    });
+    };
+    logisticsMetaCache = { at: now, data: payload };
+    res.json(payload);
   })
 );
 
@@ -2780,8 +2798,16 @@ router.get(
       LogisticsStockItem.find(filter).sort(sort || '-updatedAt').skip(skip).limit(limit),
       LogisticsStockItem.countDocuments(filter),
     ]);
-    // KPI pass over cache without a second full find()+clone of every match.
-    const summary = computeKpis(await LogisticsStockItem.find(filter).limit(50_000));
+    // KPI over cache refs — no second find()+clone of up to 50k rows.
+    const { scanCollection } = await import('../../store/filedb.js');
+    const kpiItems = [];
+    await scanCollection('logistics_stock_items', {
+      filter,
+      forEach: (item) => {
+        if (kpiItems.length < 50_000) kpiItems.push(item);
+      },
+    });
+    const summary = computeKpis(kpiItems);
     res.json({
       ...paginated(data, total, page, limit),
       summary,

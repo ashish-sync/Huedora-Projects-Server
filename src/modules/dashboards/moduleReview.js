@@ -184,7 +184,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
 
   switch (moduleId) {
     case 'assets': {
-      const all = activeOnly(await Asset.find({ isDeleted: false }).limit(20000));
+      const all = activeOnly(await Asset.find({ isDeleted: false }).limit(2000));
       const filtered = all.filter((r) =>
         inRange(getDateValue(r, ['createdAt', 'purchaseDate', 'addedMonth']), fromDate, toDate)
       );
@@ -216,7 +216,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
       };
     }
     case 'agreements': {
-      const all = activeOnly(await Agreement.find({ isDeleted: false }).limit(20000));
+      const all = activeOnly(await Agreement.find({ isDeleted: false }).limit(2000));
       const filtered = all.filter((r) => inRange(getDateValue(r, ['createdAt', 'sentAt']), fromDate, toDate));
       return {
         dateFieldLabel: 'Created / sent',
@@ -240,7 +240,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
       };
     }
     case 'contacts': {
-      const all = activeOnly(await Contact.find({ isDeleted: false }).limit(20000));
+      const all = activeOnly(await Contact.find({ isDeleted: false }).limit(2000));
       const filtered = all.filter((r) => inRange(r.createdAt, fromDate, toDate));
       return {
         dateFieldLabel: 'Created',
@@ -269,7 +269,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
       };
     }
     case 'verifications': {
-      const all = activeOnly(await VerificationRecord.find({ isDeleted: false }).limit(20000));
+      const all = activeOnly(await VerificationRecord.find({ isDeleted: false }).limit(2000));
       const filtered = all.filter((r) =>
         inRange(getDateValue(r, ['updatedAt', 'createdAt']), fromDate, toDate)
       );
@@ -295,7 +295,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
       };
     }
     case 'camps': {
-      const all = activeOnly(await CampOpsCamp.find({ isDeleted: false }).limit(20000));
+      const all = activeOnly(await CampOpsCamp.find({ isDeleted: false }).limit(2000));
       const filtered = all.filter((r) =>
         inRange(getDateValue(r, ['submittedAt', 'campDate', 'createdAt']), fromDate, toDate)
       );
@@ -325,7 +325,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
       };
     }
     case 'asset-requests': {
-      const all = activeOnly(await AssetRequest.find({ isDeleted: false }).limit(20000));
+      const all = activeOnly(await AssetRequest.find({ isDeleted: false }).limit(2000));
       const filtered = all.filter((r) => inRange(r.createdAt, fromDate, toDate));
       const byType = {};
       for (const r of filtered) {
@@ -360,7 +360,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
       };
     }
     case 'logistics': {
-      const all = activeOnly(await LogisticsInOutEntry.find({ isDeleted: false }).limit(20000));
+      const all = activeOnly(await LogisticsInOutEntry.find({ isDeleted: false }).limit(2000));
       const filtered = all.filter((r) =>
         inRange(
           getDateValue(r, ['transactionDateTime', 'transactionDate', 'createdAt']),
@@ -397,8 +397,8 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
     }
     case 'finance': {
       const [expenses, invoices] = await Promise.all([
-        activeOnly(await FinanceExpense.find({ isDeleted: false }).limit(20000)),
-        activeOnly(await FinanceInvoice.find({ isDeleted: false }).limit(20000)),
+        activeOnly(await FinanceExpense.find({ isDeleted: false }).limit(2000)),
+        activeOnly(await FinanceInvoice.find({ isDeleted: false }).limit(2000)),
       ]);
       const expenseFiltered = expenses.filter((r) =>
         inRange(getDateValue(r, ['expenseDate', 'createdAt']), fromDate, toDate)
@@ -447,7 +447,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
       };
     }
     case 'movements': {
-      const all = activeOnly(await Movement.find({ isDeleted: false }).limit(20000));
+      const all = activeOnly(await Movement.find({ isDeleted: false }).limit(2000));
       const filtered = all.filter((r) => inRange(r.createdAt, fromDate, toDate));
       return {
         dateFieldLabel: 'Created',
@@ -469,7 +469,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
       };
     }
     case 'imports': {
-      const all = await ImportJob.find({}).limit(5000);
+      const all = await ImportJob.find({}).limit(1000);
       const filtered = all.filter((r) =>
         inRange(getDateValue(r, ['startedAt', 'createdAt']), fromDate, toDate)
       );
@@ -501,7 +501,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
       if (!hasPermission(req, PERMISSIONS.ALL) && !hasPermission(req, PERMISSIONS.AUDIT_READ)) {
         filter.userId = req.user._id;
       }
-      const all = await Notification.find(filter).limit(5000);
+      const all = await Notification.find(filter).limit(1000);
       const filtered = all.filter((r) => inRange(r.createdAt, fromDate, toDate));
       const unread = filtered.filter((r) => !r.readAt).length;
       return {
@@ -529,7 +529,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
       };
     }
     case 'audit': {
-      const all = await AuditLog.find({}).limit(20000);
+      const all = await AuditLog.find({}).limit(2000);
       const filtered = all.filter((r) => inRange(getDateValue(r, ['at', 'createdAt']), fromDate, toDate));
       return {
         dateFieldLabel: 'At',
@@ -557,7 +557,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
       };
     }
     case 'users': {
-      const all = activeOnly(await User.find({ isDeleted: false }).limit(5000));
+      const all = activeOnly(await User.find({ isDeleted: false }).limit(1000));
       const filtered = all.filter((r) => inRange(r.createdAt, fromDate, toDate));
       return {
         dateFieldLabel: 'Created',

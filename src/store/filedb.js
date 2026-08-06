@@ -217,9 +217,11 @@ class Query {
   }
 
   async exec() {
-    let rows = (await this.model._all()).filter((d) => match(d, this.filter)).map(clone);
+    // Match/sort on cache refs — clone only after skip/limit (avoids OOM on paginated finds).
+    let rows = (await this.model._all()).filter((d) => match(d, this.filter));
     if (this._sort) {
       const fields = String(this._sort).split(/\s+/).filter(Boolean);
+      rows = rows.slice();
       rows.sort((a, b) => {
         for (const f of fields) {
           const dir = f.startsWith('-') ? -1 : 1;
@@ -234,13 +236,51 @@ class Query {
     }
     if (this._skip) rows = rows.slice(this._skip);
     if (this._limit != null) rows = rows.slice(0, this._limit);
+    rows = rows.map(clone);
     for (const p of this._populate) {
-      for (const row of rows) await this.model._populateOne(row, p.field, p.select);
+      await this.model._populateMany(rows, p.field, p.select);
     }
     if (this._select) rows = rows.map((row) => project(row, this._select));
-    return rows.map((r) => this.model._wrap(r));
+    return rows.map((r) => this.model._wrap(r, { alreadyCloned: true }));
   }
 }
+
+/** Build _id → doc Map for a collection (rebuilt when the live array reference changes). */
+const idIndexByCollection = new Map();
+
+async function idIndexFor(name) {
+  const rows = await loadCollection(name);
+  let entry = idIndexByCollection.get(name);
+  if (!entry || entry.rows !== rows || entry.size !== rows.length) {
+    const map = new Map();
+    for (const row of rows) map.set(String(row._id), row);
+    entry = { rows, map, size: rows.length };
+    idIndexByCollection.set(name, entry);
+  }
+  return entry.map;
+}
+
+export function invalidateIdIndex(name) {
+  if (name) idIndexByCollection.delete(name);
+  else idIndexByCollection.clear();
+}
+
+/**
+ * Scan a collection without cloning. Callback receives live cache refs — do not mutate.
+ * @returns {Promise<number>} number of matching docs visited
+ */
+export async function scanCollection(name, { filter = {}, forEach } = {}) {
+  const all = await loadCollection(name);
+  let n = 0;
+  for (const d of all) {
+    if (!match(d, filter)) continue;
+    n += 1;
+    if (forEach) forEach(d);
+  }
+  return n;
+}
+
+export { match as matchDocument };
 
 export function defineCollection(name, defaults = {}) {
   registerCollection(name);
@@ -252,9 +292,15 @@ export function defineCollection(name, defaults = {}) {
     async _write(rows) {
       await saveCollection(name, rows);
     },
-    _wrap(doc) {
-      const o = clone(doc);
-      o.toObject = () => clone(o);
+    _wrap(doc, { alreadyCloned = false } = {}) {
+      const o = alreadyCloned ? doc : clone(doc);
+      o.toObject = () => {
+        const plain = { ...o };
+        delete plain.toObject;
+        delete plain.save;
+        delete plain.populate;
+        return clone(plain);
+      };
       o.save = async () => {
         const plain = { ...o };
         delete plain.toObject;
@@ -263,42 +309,50 @@ export function defineCollection(name, defaults = {}) {
         plain.updatedAt = new Date().toISOString();
         // Single-doc upsert in mongo mode — avoids rewriting entire collections (OOM risk).
         await upsertDocument(name, plain);
+        invalidateIdIndex(name);
         Object.assign(o, plain);
         return o;
       };
       o.populate = async (field, select) => {
-        await model._populateOne(o, field, select);
+        await model._populateMany([o], field, select);
         return o;
       };
       return o;
     },
-    async _populateOne(row, field, select) {
-      if (field === 'roleIds' && Array.isArray(row.roleIds)) {
-        const all = await loadCollection('roles');
-        row.roleIds = row.roleIds.map((id) => {
-          const found = all.find((x) => String(x._id) === String(id?._id || id));
-          return found ? project(found, select, { sanitize: true }) : id;
-        });
+    async _populateMany(rows, field, select) {
+      if (!rows?.length) return;
+      if (field === 'roleIds') {
+        const byId = await idIndexFor('roles');
+        for (const row of rows) {
+          if (!Array.isArray(row.roleIds)) continue;
+          row.roleIds = row.roleIds.map((id) => {
+            const found = byId.get(String(id?._id || id));
+            return found ? project(found, select, { sanitize: true }) : id;
+          });
+        }
         return;
       }
       if (field === 'assets' || field === 'assets.assetId') {
-        if (!Array.isArray(row.assets)) return;
-        const assets = await loadCollection('assets');
-        row.assets = row.assets.map((a) => ({
-          ...a,
-          assetId: (() => {
-            const found = assets.find((x) => String(x._id) === String(a.assetId?._id || a.assetId));
-            return found ? project(found, select, { sanitize: true }) : a.assetId;
-          })(),
-        }));
+        const byId = await idIndexFor('assets');
+        for (const row of rows) {
+          if (!Array.isArray(row.assets)) continue;
+          row.assets = row.assets.map((a) => ({
+            ...a,
+            assetId: (() => {
+              const found = byId.get(String(a.assetId?._id || a.assetId));
+              return found ? project(found, select, { sanitize: true }) : a.assetId;
+            })(),
+          }));
+        }
         return;
       }
       if (field === 'to.hcwId') {
-        if (!row.to) return;
-        const all = await loadCollection('hcws');
-        const id = row.to.hcwId?._id || row.to.hcwId;
-        const found = all.find((x) => String(x._id) === String(id));
-        if (found) row.to = { ...row.to, hcwId: project(found, select, { sanitize: true }) };
+        const byId = await idIndexFor('hcws');
+        for (const row of rows) {
+          if (!row.to) continue;
+          const found = byId.get(String(row.to.hcwId?._id || row.to.hcwId));
+          if (found) row.to = { ...row.to, hcwId: project(found, select, { sanitize: true }) };
+        }
         return;
       }
       const map = {
@@ -323,11 +377,16 @@ export function defineCollection(name, defaults = {}) {
       };
       const col = map[field];
       if (!col) return;
-      const val = row[field];
-      if (val == null) return;
-      const all = await loadCollection(col);
-      const found = all.find((x) => String(x._id) === String(val?._id || val));
-      if (found) row[field] = project(found, select, { sanitize: true });
+      const byId = await idIndexFor(col);
+      for (const row of rows) {
+        const val = row[field];
+        if (val == null) continue;
+        const found = byId.get(String(val?._id || val));
+        if (found) row[field] = project(found, select, { sanitize: true });
+      }
+    },
+    async _populateOne(row, field, select) {
+      await model._populateMany([row], field, select);
     },
     find(filter = {}) {
       return new Query(model, filter);
@@ -357,6 +416,7 @@ export function defineCollection(name, defaults = {}) {
       }
       rows[idx] = applyUpdate(rows[idx], update);
       await upsertDocument(name, rows[idx]);
+      invalidateIdIndex(name);
       return model._wrap(rows[idx]);
     },
     async findByIdAndUpdate(id, update, opts = {}) {
@@ -373,6 +433,7 @@ export function defineCollection(name, defaults = {}) {
         updatedAt: now,
       };
       await upsertDocument(name, row);
+      invalidateIdIndex(name);
       return model._wrap(row);
     },
     async insertMany(docs) {
@@ -387,10 +448,11 @@ export function defineCollection(name, defaults = {}) {
         updatedAt: now,
       }));
       await bulkUpsertDocuments(name, rows);
+      invalidateIdIndex(name);
       return rows.map((row) => model._wrap(row));
     },
     async countDocuments(filter = {}) {
-      return (await model._all()).filter((d) => match(d, filter)).length;
+      return scanCollection(name, { filter });
     },
     async updateOne(filter, update) {
       const rows = await model._all();
@@ -398,6 +460,7 @@ export function defineCollection(name, defaults = {}) {
       if (idx < 0) return { matchedCount: 0, modifiedCount: 0 };
       rows[idx] = applyUpdate(rows[idx], update);
       await upsertDocument(name, rows[idx]);
+      invalidateIdIndex(name);
       return { matchedCount: 1, modifiedCount: 1 };
     },
     async updateMany(filter, update) {
@@ -412,14 +475,17 @@ export function defineCollection(name, defaults = {}) {
       if (changed.length) {
         if (getPersistenceMode() === 'mongo') await bulkUpsertDocuments(name, changed);
         else await model._write(rows);
+        invalidateIdIndex(name);
       }
       return { matchedCount: changed.length, modifiedCount: changed.length };
     },
     async deleteMany() {
       await model._write([]);
+      invalidateIdIndex(name);
     },
     async aggregate(pipeline = []) {
-      let rows = (await model._all()).map(clone);
+      // Aggregate over refs until $group; only clone grouped result docs.
+      let rows = await model._all();
       for (const stage of pipeline) {
         if (stage.$match) rows = rows.filter((d) => match(d, stage.$match));
         if (stage.$group) {
@@ -436,7 +502,7 @@ export function defineCollection(name, defaults = {}) {
           rows = [...map.values()];
         }
       }
-      return rows;
+      return rows.map(clone);
     },
   };
   return model;

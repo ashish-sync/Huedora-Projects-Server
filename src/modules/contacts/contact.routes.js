@@ -15,7 +15,7 @@ import {
   isServiceProviderContact,
 } from './contact.constants.js';
 import { writeAudit } from '../../utils/audit.js';
-import { sendExcel } from '../../utils/excelExport.js';
+import { sendExcel, sendCsv } from '../../utils/excelExport.js';
 import { notifyImportFailures } from '../imports/importErrorReport.js';
 import {
   assertContactIdentityAvailable,
@@ -30,7 +30,10 @@ import {
   discardUploadBuffer,
   excelUpload,
   parseSheetRows,
+  sampleCsvFilename,
 } from '../../utils/masterExcel.js';
+import { importRateLimiter } from '../../middleware/importRateLimit.js';
+import { loadCappedRowsFromUpload } from '../imports/streaming/loadCappedRows.js';
 
 const contactUploadRoot = uploadDir('contacts');
 
@@ -238,12 +241,11 @@ router.get(
 router.get(
   '/sample',
   asyncHandler(async (_req, res) => {
-    sendExcel(
+    sendCsv(
       res,
-      'Contact_Directory_Sample.xlsx',
+      sampleCsvFilename('Contact_Directory'),
       CONTACT_HEADERS,
-      CONTACT_SAMPLE_ROWS,
-      { sheetName: 'Contacts' }
+      CONTACT_SAMPLE_ROWS
     );
   })
 );
@@ -413,12 +415,11 @@ router.post(
 router.post(
   '/import',
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  importRateLimiter,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    assertSpreadsheetUpload(req.file);
     const mode = req.body.mode === 'DRY_RUN' ? 'DRY_RUN' : 'COMMIT';
-    const rows = sheetRows(req.file.buffer);
-    discardUploadBuffer(req.file);
+    const { rows, fileName } = await loadCappedRowsFromUpload(req.file);
     const errors = [];
     let created = 0;
     let updated = 0;
@@ -548,6 +549,7 @@ router.post(
       } catch (err) {
         errors.push({ row: rowNum, field: 'import', message: err.message });
       }
+      rows[i] = null;
     }
 
     if (mode === 'COMMIT') {
@@ -556,7 +558,7 @@ router.post(
         actorEmail: req.user.email,
         action: 'CONTACT.IMPORT',
         entityType: 'Contact',
-        after: { created, updated, errors: errors.length, fileName: req.file.originalname },
+        after: { created, updated, errors: errors.length, fileName },
         requestId: req.requestId,
       });
     }
@@ -566,7 +568,7 @@ router.post(
       errorReport = await notifyImportFailures({
         userId: req.user._id,
         importType: `CONTACT_${mode}`,
-        sourceFileName: req.file.originalname,
+        sourceFileName: fileName,
         totalRows: rows.length,
         successRows: mode === 'DRY_RUN' ? rows.length - errors.length : created + updated,
         errors,

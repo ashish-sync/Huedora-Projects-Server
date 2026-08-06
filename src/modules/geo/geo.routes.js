@@ -3,16 +3,18 @@ import { authenticate, requirePermission, requireAdmin } from '../../middleware/
 import { asyncHandler, AppError, parsePagination, paginated } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
-import { sendExcel, sendCsvStream } from '../../utils/excelExport.js';
+import { sendExcel, sendCsv, sendCsvStream } from '../../utils/excelExport.js';
+import { importRateLimiter } from '../../middleware/importRateLimit.js';
+import { validateUploadedImportFile } from '../imports/streaming/tempUpload.js';
+import { runStreamingImport } from '../imports/streaming/runStreamingImport.js';
+import { ImportJob } from '../imports/importJob.model.js';
 import {
   cellValue,
   excelUpload,
-  parseSheetRows,
-  assertSpreadsheetUpload,
-  discardUploadBuffer,
   MAX_EXPORT_ROWS,
-  MAX_IMPORT_ROWS,
+  sampleCsvFilename,
 } from '../../utils/masterExcel.js';
+import { IMPORT_BATCH_SIZE } from '../../utils/spreadsheetLimits.js';
 import { withMemoryLog, logMemory } from '../../utils/memory.js';
 import { forceReseedGeoMasters } from './geo.seed.js';
 import { resolveZoneForStateRecord, resolveZoneNameForState } from './geo.zones.js';
@@ -308,12 +310,11 @@ router.get(
 router.get(
   '/pin-codes/sample',
   asyncHandler(async (_req, res) => {
-    sendExcel(
+    sendCsv(
       res,
-      'Pin_Code_Master_Sample.xlsx',
+      sampleCsvFilename('Pin_Code_Master'),
       PIN_CODE_IMPORT_HEADERS,
-      PIN_CODE_SAMPLE_ROWS,
-      { sheetName: 'PIN Codes' }
+      PIN_CODE_SAMPLE_ROWS
     );
   })
 );
@@ -321,40 +322,87 @@ router.get(
 router.post(
   '/pin-codes/import',
   canWritePinGeography,
+  importRateLimiter,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    assertSpreadsheetUpload(req.file);
-    logMemory('import:pin-codes:start', { bytes: req.file.buffer?.length || 0 });
-    const rows = parseSheetRows(req.file.buffer, { maxRows: MAX_IMPORT_ROWS });
-    discardUploadBuffer(req.file);
-    const parsedRows = [];
+    const validated = validateUploadedImportFile(req.file);
+    const job = await ImportJob.create({
+      type: 'GeoPinCode',
+      mode: 'COMMIT',
+      status: 'QUEUED',
+      phase: 'queued',
+      fileName: validated.originalname || '',
+      tempPath: validated.path,
+      startedBy: req.user._id,
+      startedAt: new Date().toISOString(),
+    });
 
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const pinCode = String(cellValue(row, ['PIN Code', 'PIN', 'pinCode'])).replace(/\D+/g, '');
-      if (!pinCode) continue;
-      const activeRaw = cellValue(row, ['Active', 'Status', 'isActive']);
-      parsedRows.push({
-        rowNum: i + 2,
-        pinCode,
-        stateName: cellValue(row, ['State', 'stateName']),
-        districtName: cellValue(row, ['District', 'District Name', 'districtName']),
-        cityName: cellValue(row, ['City', 'cityName']),
-        locality: cellValue(row, ['Locality', 'locality']),
-        notes: cellValue(row, ['Notes', 'notes']),
-        isActive: !['no', 'false', '0', 'inactive'].includes(String(activeRaw).toLowerCase()),
+    const pending = [];
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+    const errors = [];
+
+    const flush = async () => {
+      if (!pending.length) return;
+      const chunk = pending.splice(0, pending.length);
+      const result = await bulkImportPinRows(chunk, { updatedBy: req.user._id });
+      created += result.created;
+      updated += result.updated;
+      skipped += result.skipped;
+      errors.push(...(result.errors || []));
+      chunk.length = 0;
+    };
+
+    try {
+      await runStreamingImport({
+        filePath: validated.path,
+        ext: validated.ext,
+        originalName: validated.originalname,
+        jobId: job._id,
+        processRow: async ({ rowNum, record: row }) => {
+          const pinCode = String(cellValue(row, ['PIN Code', 'PIN', 'pinCode'])).replace(/\D+/g, '');
+          if (!pinCode) {
+            skipped += 1;
+            return { skipped: true };
+          }
+          const activeRaw = cellValue(row, ['Active', 'Status', 'isActive']);
+          pending.push({
+            rowNum,
+            pinCode,
+            stateName: cellValue(row, ['State', 'stateName']),
+            districtName: cellValue(row, ['District', 'District Name', 'districtName']),
+            cityName: cellValue(row, ['City', 'cityName']),
+            locality: cellValue(row, ['Locality', 'locality']),
+            notes: cellValue(row, ['Notes', 'notes']),
+            isActive: !['no', 'false', '0', 'inactive'].includes(String(activeRaw).toLowerCase()),
+          });
+          if (pending.length >= IMPORT_BATCH_SIZE) await flush();
+          return { skipped: true }; // counts handled in flush
+        },
       });
-      rows[i] = null;
+      await flush();
+    } catch (err) {
+      logMemory('import:pin-codes:error', { message: err.message });
+      throw err;
     }
 
-    const { created, updated, skipped, errors, totalRows } = await bulkImportPinRows(parsedRows, {
-      updatedBy: req.user._id,
-    });
-    logMemory('import:pin-codes:done', { created, updated, errorRows: errors.length });
+    const fresh = await ImportJob.findById(job._id);
+    if (fresh) {
+      fresh.summary = { created, updated, skipped };
+      fresh.successRows = created + updated;
+      fresh.errorRows = errors.length;
+      fresh.rowErrors = errors.slice(0, 500);
+      await fresh.save();
+    }
 
+    logMemory('import:pin-codes:done', { created, updated, errorRows: errors.length });
     res.json({
       data: {
-        totalRows,
+        jobId: job._id,
+        status: fresh?.status || 'SUCCEEDED',
+        percent: 100,
+        totalRows: fresh?.totalRows || created + updated + skipped + errors.length,
         created,
         updated,
         skipped,

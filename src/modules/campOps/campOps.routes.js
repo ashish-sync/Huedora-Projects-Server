@@ -1,12 +1,15 @@
 import { Router } from 'express';
 import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
+import { importAppError } from '../../utils/importErrors.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { assertValidEmail, assertValidPhone, normalizeEmail } from '../../utils/identityNormalize.js';
 import { sendExcel, sendCsv } from '../../utils/excelExport.js';
 import { formatDate } from '../../utils/dateFormat.js';
-import { cellValue, excelUpload, parseSheetRows, assertSpreadsheetUpload, discardUploadBuffer } from '../../utils/masterExcel.js';
+import { cellValue, excelUpload, parseSheetRows, assertSpreadsheetUpload, discardUploadBuffer, sampleCsvFilename } from '../../utils/masterExcel.js';
+import { importRateLimiter } from '../../middleware/importRateLimit.js';
+import { executeUploadedImport } from '../imports/streaming/runStreamingImport.js';
 import { User } from '../users/user.model.js';
 import {
   CAMP_OPS_STATUSES,
@@ -222,6 +225,37 @@ function enrichCamp(camp) {
   obj.canApprove = pendingReview && approvalBlockers.length === 0;
   obj.canRequestInformation = pendingReview;
   return withSignedCampFiles(obj);
+}
+
+/** Sort + page camps without filedb cloning the full match set. */
+async function paginateCampsInMemory(filter, { page, limit, skip }, predicate = null) {
+  const { loadCollection, matchDocument } = await import('../../store/filedb.js');
+  const all = await loadCollection('camp_ops_camps');
+  const matched = [];
+  for (const camp of all) {
+    if (!matchDocument(camp, filter)) continue;
+    matched.push(camp);
+  }
+  matched.sort((a, b) => {
+    const ad = String(a.campDate || '');
+    const bd = String(b.campDate || '');
+    if (ad !== bd) return bd.localeCompare(ad);
+    return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+  });
+
+  if (!predicate) {
+    const total = matched.length;
+    const data = matched.slice(skip, skip + limit).map((c) => enrichCamp({ ...c }));
+    return paginated(data, total, page, limit);
+  }
+
+  const filtered = [];
+  for (const camp of matched) {
+    const enriched = enrichCamp({ ...camp });
+    if (predicate(enriched)) filtered.push(enriched);
+  }
+  const total = filtered.length;
+  return paginated(filtered.slice(skip, skip + limit), total, page, limit);
 }
 
 async function loadCampForUser(req, campId) {
@@ -529,22 +563,58 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const filter = await scopeCampFilter(req, buildCampFilter(req.query));
-    const camps = await CampOpsCamp.find(filter);
-    const byStatus = Object.fromEntries(CAMP_OPS_STATUSES.map((s) => [s, 0]));
-    for (const camp of camps) {
-      byStatus[camp.status] = (byStatus[camp.status] || 0) + 1;
-    }
-    const overdueNotExecuted = camps.filter((c) => c.status === 'approved' && isCampOverdue(c))
-      .length;
+    const { scanCollection } = await import('../../store/filedb.js');
 
-    const clients = await CampOpsClient.find({ isDeleted: false }).sort('name');
-    const campaigns = await CampOpsCampaign.find({ isDeleted: false }).sort('name');
+    const byStatus = Object.fromEntries(CAMP_OPS_STATUSES.map((s) => [s, 0]));
+    let overdueNotExecuted = 0;
+    let offHoursPending = 0;
+    let weekendAttentionPending = 0;
+    let total = 0;
+    const brandCounts = new Map();
+    const campaignCounts = new Map();
+    const campaignNameCounts = new Map();
+    const clientNameCounts = new Map();
+    const stateCounts = new Map();
+    const campaignTypeCounts = new Map();
+    const monthlyMap = new Map();
+
+    const bump = (map, key) => {
+      if (key == null || key === '') return;
+      const k = String(key);
+      map.set(k, (map.get(k) || 0) + 1);
+    };
+
+    await scanCollection('camp_ops_camps', {
+      filter,
+      forEach: (camp) => {
+        total += 1;
+        byStatus[camp.status] = (byStatus[camp.status] || 0) + 1;
+        if (camp.status === 'approved' && isCampOverdue(camp)) overdueNotExecuted += 1;
+        if (camp.status === 'pending_review' && camp.submittedOffHours) offHoursPending += 1;
+        if (camp.status === 'pending_review' && camp.submittedWeekendAttention) {
+          weekendAttentionPending += 1;
+        }
+        bump(brandCounts, camp.clientId);
+        bump(campaignCounts, camp.campaignId);
+        bump(campaignNameCounts, camp.campaignName);
+        bump(clientNameCounts, camp.clientName);
+        if (trimStr(camp.state)) bump(stateCounts, camp.state);
+        bump(campaignTypeCounts, camp.campaignType);
+        const d = parseLocalDateInput(camp.campDate) || String(camp.campDate || '').slice(0, 10);
+        if (d && d.length >= 7) bump(monthlyMap, d.slice(0, 7));
+      },
+    });
+
+    const [clients, campaigns] = await Promise.all([
+      CampOpsClient.find({ isDeleted: false }).sort('name').limit(500),
+      CampOpsCampaign.find({ isDeleted: false }).sort('name').limit(500),
+    ]);
 
     const brandBreakdown = clients
       .map((brand) => ({
         id: brand._id,
         label: brand.name,
-        value: camps.filter((c) => String(c.clientId) === String(brand._id)).length,
+        value: brandCounts.get(String(brand._id)) || 0,
       }))
       .filter((item) => item.value > 0);
 
@@ -553,20 +623,17 @@ router.get(
         id: item._id,
         label: `${item.clientName || 'Brand'} — ${item.division || item.name}`,
         division: item.division || item.name,
-        value: camps.filter(
-          (c) =>
-            String(c.campaignId) === String(item._id) || c.campaignName === item.name
-        ).length,
+        value:
+          (campaignCounts.get(String(item._id)) || 0) +
+          (campaignNameCounts.get(String(item.name)) || 0),
       }))
       .filter((entry) => entry.value > 0);
 
-    const monthlyMap = new Map();
-    for (const camp of camps) {
-      const d = parseLocalDateInput(camp.campDate) || String(camp.campDate || '').slice(0, 10);
-      if (!d || d.length < 7) continue;
-      const key = d.slice(0, 7);
-      monthlyMap.set(key, (monthlyMap.get(key) || 0) + 1);
-    }
+    const topFromMap = (map, n = 10) =>
+      [...map.entries()]
+        .map(([label, value]) => ({ label, value }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, n);
 
     res.json({
       dateRange: {
@@ -578,28 +645,21 @@ router.get(
         campaigns: { total: campaigns.length, items: campaignBreakdown },
       },
       camps: {
-        total: camps.length,
+        total,
         byStatus: {
           ...byStatus,
           overdue_not_executed: overdueNotExecuted,
         },
         alerts: {
           reaction_required: 0,
-          off_hours_pending: camps.filter(
-            (c) => c.status === 'pending_review' && c.submittedOffHours
-          ).length,
-          weekend_attention_pending: camps.filter(
-            (c) => c.status === 'pending_review' && c.submittedWeekendAttention
-          ).length,
+          off_hours_pending: offHoursPending,
+          weekend_attention_pending: weekendAttentionPending,
         },
       },
       charts: {
-        byClient: groupCount(camps, (c) => c.clientName).slice(0, 10),
-        byState: groupCount(
-          camps.filter((c) => trimStr(c.state)),
-          (c) => c.state
-        ).slice(0, 10),
-        byCampaignType: groupCount(camps, (c) => c.campaignType),
+        byClient: topFromMap(clientNameCounts, 10),
+        byState: topFromMap(stateCounts, 10),
+        byCampaignType: topFromMap(campaignTypeCounts, 50),
         monthlyTrends: [...monthlyMap.entries()]
           .sort(([a], [b]) => a.localeCompare(b))
           .map(([label, value]) => ({ label, value })),
@@ -639,42 +699,36 @@ router.get(
     const filter = await scopeCampFilter(req, buildCampFilter(req.query));
 
     if (reactionRequired) {
-      const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
-      const filtered = rows.filter(
-        (row) => enrichCamp(row).requestReviewStatus === 'information_requested',
+      return res.json(
+        await paginateCampsInMemory(filter, { page, limit, skip }, (row) =>
+          row.requestReviewStatus === 'information_requested'
+        )
       );
-      const total = filtered.length;
-      const data = filtered.slice(skip, skip + limit).map(enrichCamp);
-      return res.json(paginated(data, total, page, limit));
     }
 
     if (requestReviewStatus) {
-      const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
-      const filtered = rows.filter(
-        (row) => enrichCamp(row).requestReviewStatus === requestReviewStatus,
+      return res.json(
+        await paginateCampsInMemory(
+          filter,
+          { page, limit, skip },
+          (row) => row.requestReviewStatus === requestReviewStatus
+        )
       );
-      const total = filtered.length;
-      const data = filtered.slice(skip, skip + limit).map(enrichCamp);
-      return res.json(paginated(data, total, page, limit));
     }
 
     if (executionFilter) {
-      const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
-      const filtered = rows
-        .map(enrichCamp)
-        .filter((row) => matchesExecutionFilter(row, executionFilter));
-      const total = filtered.length;
-      const data = filtered.slice(skip, skip + limit);
-      return res.json(paginated(data, total, page, limit));
+      return res.json(
+        await paginateCampsInMemory(filter, { page, limit, skip }, (row) =>
+          matchesExecutionFilter(row, executionFilter)
+        )
+      );
     }
 
     if (overdueOnly) {
       filter.status = 'approved';
-      const approved = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
-      const overdue = approved.filter(isCampOverdue).map(enrichCamp);
-      const total = overdue.length;
-      const data = overdue.slice(skip, skip + limit);
-      return res.json(paginated(data, total, page, limit));
+      return res.json(
+        await paginateCampsInMemory(filter, { page, limit, skip }, (row) => isCampOverdue(row))
+      );
     }
 
     const [rows, total] = await Promise.all([
@@ -700,7 +754,7 @@ router.get(
     const columns = resolveExportColumns(parseExportColumnKeys(req.query.columns));
     const headers = campFullExportHeaders(columns);
     const rows = [campFullExportSampleRow(columns)];
-    sendExcel(res, 'Camp_Download_Sample.xlsx', headers, rows, { sheetName: 'Camps' });
+    sendCsv(res, 'Camp_Download_Sample.csv', headers, rows);
   }),
 );
 
@@ -1713,12 +1767,11 @@ router.get(
   '/client-masters/sample',
   canRead,
   asyncHandler(async (_req, res) => {
-    sendExcel(
+    sendCsv(
       res,
-      'Client_Master_Sample.xlsx',
+      sampleCsvFilename('Client_Master'),
       CLIENT_MASTER_HEADERS,
-      [CLIENT_MASTER_SAMPLE_ROW],
-      { sheetName: 'Client Master' }
+      [CLIENT_MASTER_SAMPLE_ROW]
     );
   })
 );
@@ -1726,22 +1779,17 @@ router.get(
 router.post(
   '/client-masters/import',
   canRequest,
+  importRateLimiter,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    assertSpreadsheetUpload(req.file);
-    const rows = parseSheetRows(req.file.buffer);
-    discardUploadBuffer(req.file);
-    const errors = [];
-    let created = 0;
-    let updated = 0;
     const a = actor(req);
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const rowNum = i + 2;
-      try {
+    const { job, summary } = await executeUploadedImport({
+      file: req.file,
+      userId: req.user?._id,
+      importType: 'CampOpsClientMaster',
+      processRow: async ({ record: row }) => {
         const parsed = parseClientMasterImportRow(row);
-        if (!parsed) continue;
+        if (!parsed) return { skipped: true };
         const client = await resolveClientFromBody({ clientName: parsed.clientName }, { allowCreate: true });
         if (!client) throw new AppError('Client is required', 400, 'VALIDATION_ERROR');
         const payload = buildMasterPayload(parsed, client);
@@ -1755,27 +1803,27 @@ router.post(
         if (existing) {
           Object.assign(existing, payload, { updatedById: a.id });
           await existing.save();
-          updated += 1;
-        } else {
-          await CampOpsClientMaster.create({
-            ...payload,
-            createdById: a.id,
-            updatedById: a.id,
-          });
-          created += 1;
+          return { updated: true };
         }
-      } catch (err) {
-        errors.push({ row: rowNum, field: 'import', message: err.message });
-      }
-    }
+        await CampOpsClientMaster.create({
+          ...payload,
+          createdById: a.id,
+          updatedById: a.id,
+        });
+        return { ok: true };
+      },
+    });
 
     res.json({
       data: {
-        totalRows: rows.length,
-        created,
-        updated,
-        errorRows: errors.length,
-        errors: errors.slice(0, 200),
+        jobId: job?._id,
+        status: job?.status,
+        percent: job?.percent ?? 100,
+        totalRows: summary.totalRows,
+        created: summary.created,
+        updated: summary.updated,
+        errorRows: summary.errorRows,
+        errors: summary.errors,
       },
     });
   })
@@ -2064,20 +2112,20 @@ router.get(
         '9888888888',
       ],
     ];
-    sendExcel(res, 'camp-import-sample.xlsx', headers, rows, { sheetName: 'Camps' });
+    sendCsv(res, 'camp-import-sample.csv', headers, rows);
   })
 );
 
 router.post(
   '/import/parse',
   canRequest,
+  importRateLimiter,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
-    if (req.file?.buffer) {
+    if (req.file) {
       assertSpreadsheetUpload(req.file);
-      const parsed = await parsePasteImportFile(req.file.buffer);
+      const parsed = await parsePasteImportFile(req.file);
       const fileName = req.file.originalname || 'upload';
-      discardUploadBuffer(req.file);
       res.json({
         fileName,
         sheetName: parsed.sheetName,
@@ -2134,7 +2182,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const { rows, mapping, defaultClientName = '' } = req.body || {};
     if (!Array.isArray(rows) || !mapping) {
-      throw new AppError('Rows and mapping are required', 400, 'VALIDATION_ERROR');
+      throw importAppError('ROWS_MAPPING_REQUIRED');
     }
     const mappedRows = mapImportRows(rows, mapping, defaultClientName);
     const enrichedRows = await enrichMappedImportRowsFromPin(mappedRows);
@@ -2158,13 +2206,13 @@ router.post(
   asyncHandler(async (req, res) => {
     const { rows, mapping, defaultClientName = '' } = req.body || {};
     if (!Array.isArray(rows) || !mapping) {
-      throw new AppError('Rows and mapping are required', 400, 'VALIDATION_ERROR');
+      throw importAppError('ROWS_MAPPING_REQUIRED');
     }
     const mappedRows = mapImportRows(rows, mapping, defaultClientName);
     const enrichedRows = await enrichMappedImportRowsFromPin(mappedRows);
     const { validRows, invalidRows } = validateMappedImportRows(enrichedRows);
     if (!validRows.length) {
-      throw new AppError('No valid rows to import', 400, 'VALIDATION_ERROR', { invalidRows });
+      throw importAppError('NO_VALID_ROWS', 400, 'VALIDATION_ERROR', { invalidRows });
     }
 
     const clients = await CampOpsClient.find({ isDeleted: false });
@@ -2300,14 +2348,14 @@ router.post(
 router.post(
   '/communications/paste/parse-file',
   canRequest,
+  importRateLimiter,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
     assertSpreadsheetUpload(req.file);
-    const parsed = await parsePasteImportFile(req.file.buffer, {
+    const parsed = await parsePasteImportFile(req.file, {
       fieldKeys: CAMP_PASTE_TABULAR_FIELD_KEYS,
     });
     const fileName = req.file.originalname || 'upload';
-    discardUploadBuffer(req.file);
     res.json({
       data: {
         ...parsed,
@@ -2320,6 +2368,7 @@ router.post(
 router.post(
   '/communications/paste/extract-file',
   canRequest,
+  importRateLimiter,
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
     assertSpreadsheetUpload(req.file);
@@ -2339,12 +2388,11 @@ router.post(
       }
     }
     const data = await extractPasteImportPreview({
-      buffer: req.file.buffer,
+      file: req.file,
       fileName: req.file.originalname || 'upload',
       defaults,
       mapping,
     });
-    discardUploadBuffer(req.file);
     res.json({ data });
   })
 );
