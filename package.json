@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "npm run build:parsers && node --watch src/index.js",
-    "start": "node src/index.js",
+    "start": "node --max-old-space-size=384 src/index.js",
     "postinstall": "npm run build:parsers",
     "prestart": "npm run build:parsers",
     "seed": "node src/seed.js",

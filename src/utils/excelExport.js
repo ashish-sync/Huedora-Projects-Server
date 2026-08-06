@@ -1,15 +1,21 @@
 import XLSX from 'xlsx';
+import { MAX_EXPORT_ROWS } from './spreadsheetLimits.js';
 
 /**
  * Build an .xlsx buffer from header + row arrays.
+ * Caps rows to protect Render heap (XLSX materializes the full workbook).
  * @param {string[]} headers
  * @param {Array<Array<string|number|null|undefined>>} rows
  * @param {{ sheetName?: string, colWidths?: number[] }} [opts]
  */
 export function workbookBuffer(headers, rows, opts = {}) {
+  const capped = (rows || []).slice(0, MAX_EXPORT_ROWS);
   const wb = XLSX.utils.book_new();
-  appendSheet(wb, headers, rows, opts);
-  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  appendSheet(wb, headers, capped, opts);
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  wb.Sheets = {};
+  wb.SheetNames = [];
+  return buf;
 }
 
 /**
@@ -18,12 +24,15 @@ export function workbookBuffer(headers, rows, opts = {}) {
 export function multiSheetBuffer(sheets) {
   const wb = XLSX.utils.book_new();
   for (const sheet of sheets) {
-    appendSheet(wb, sheet.headers, sheet.rows, {
+    appendSheet(wb, sheet.headers, (sheet.rows || []).slice(0, MAX_EXPORT_ROWS), {
       sheetName: sheet.name,
       colWidths: sheet.colWidths,
     });
   }
-  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  wb.Sheets = {};
+  wb.SheetNames = [];
+  return buf;
 }
 
 function appendSheet(wb, headers, rows, opts = {}) {
@@ -59,11 +68,37 @@ export function csvBuffer(headers, rows) {
     if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
     return text;
   };
+  const capped = (rows || []).slice(0, MAX_EXPORT_ROWS);
   const lines = [
     headers.map(escapeCell).join(','),
-    ...(rows || []).map((row) => headers.map((_, index) => escapeCell(row[index])).join(',')),
+    ...capped.map((row) => headers.map((_, index) => escapeCell(row[index])).join(',')),
   ];
   return Buffer.from(lines.join('\r\n'), 'utf8');
+}
+
+/**
+ * Stream CSV without holding the full output string for large exports.
+ * `rowIterator` yields row arrays (same shape as sendCsv rows).
+ */
+export function sendCsvStream(res, filename, headers, rowIterator) {
+  const safe = String(filename || 'export.csv').replace(/[^\w.\- ]+/g, '_');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${safe}"`);
+
+  const escapeCell = (value) => {
+    const text = value == null ? '' : String(value);
+    if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+    return text;
+  };
+
+  res.write(`${headers.map(escapeCell).join(',')}\r\n`);
+  let count = 0;
+  for (const row of rowIterator) {
+    if (count >= MAX_EXPORT_ROWS) break;
+    res.write(`${headers.map((_, index) => escapeCell(row[index])).join(',')}\r\n`);
+    count += 1;
+  }
+  res.end();
 }
 
 export function sendCsv(res, filename, headers, rows) {

@@ -3,8 +3,17 @@ import { authenticate, requirePermission, requireAdmin } from '../../middleware/
 import { asyncHandler, AppError, parsePagination, paginated } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
-import { sendExcel } from '../../utils/excelExport.js';
-import { cellValue, excelUpload, parseSheetRows, assertSpreadsheetUpload, discardUploadBuffer } from '../../utils/masterExcel.js';
+import { sendExcel, sendCsvStream } from '../../utils/excelExport.js';
+import {
+  cellValue,
+  excelUpload,
+  parseSheetRows,
+  assertSpreadsheetUpload,
+  discardUploadBuffer,
+  MAX_EXPORT_ROWS,
+  MAX_IMPORT_ROWS,
+} from '../../utils/masterExcel.js';
+import { withMemoryLog, logMemory } from '../../utils/memory.js';
 import { forceReseedGeoMasters } from './geo.seed.js';
 import { resolveZoneForStateRecord, resolveZoneNameForState } from './geo.zones.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState, GeoZone } from './geo.model.js';
@@ -266,16 +275,33 @@ router.get(
 
 router.get(
   '/pin-codes/export',
-  asyncHandler(async (_req, res) => {
-    const rows = await GeoPinCode.find({ isDeleted: false }).sort('pinCode');
-    const enriched = await enrichPinRecords(rows);
-    sendExcel(
-      res,
-      'Pin_Code_Master.xlsx',
-      PIN_CODE_HEADERS,
-      enriched.map(pinToExcelRow),
-      { sheetName: 'PIN Codes' }
-    );
+  asyncHandler(async (req, res) => {
+    await withMemoryLog('export:pin-codes', async () => {
+      const format = String(req.query.format || 'csv').toLowerCase() === 'xlsx' ? 'xlsx' : 'csv';
+      const rows = await GeoPinCode.find({ isDeleted: false })
+        .sort('pinCode')
+        .limit(MAX_EXPORT_ROWS);
+      const enriched = await enrichPinRecords(rows);
+
+      if (format === 'xlsx') {
+        sendExcel(
+          res,
+          'Pin_Code_Master.xlsx',
+          PIN_CODE_HEADERS,
+          enriched.map(pinToExcelRow),
+          { sheetName: 'PIN Codes' }
+        );
+        return;
+      }
+
+      // Default CSV stream — lower peak RAM than XLSX for large PIN masters.
+      sendCsvStream(
+        res,
+        'Pin_Code_Master.csv',
+        PIN_CODE_HEADERS,
+        enriched.map(pinToExcelRow)
+      );
+    });
   })
 );
 
@@ -298,7 +324,8 @@ router.post(
   excelUpload.single('file'),
   asyncHandler(async (req, res) => {
     assertSpreadsheetUpload(req.file);
-    const rows = parseSheetRows(req.file.buffer);
+    logMemory('import:pin-codes:start', { bytes: req.file.buffer?.length || 0 });
+    const rows = parseSheetRows(req.file.buffer, { maxRows: MAX_IMPORT_ROWS });
     discardUploadBuffer(req.file);
     const parsedRows = [];
 
@@ -317,11 +344,13 @@ router.post(
         notes: cellValue(row, ['Notes', 'notes']),
         isActive: !['no', 'false', '0', 'inactive'].includes(String(activeRaw).toLowerCase()),
       });
+      rows[i] = null;
     }
 
     const { created, updated, skipped, errors, totalRows } = await bulkImportPinRows(parsedRows, {
       updatedBy: req.user._id,
     });
+    logMemory('import:pin-codes:done', { created, updated, errorRows: errors.length });
 
     res.json({
       data: {

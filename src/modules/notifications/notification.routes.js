@@ -46,7 +46,14 @@ router.get(
     const data = all
       .filter((n) => isActive(n) && isDue(n, nowMs))
       .slice(0, 100)
-      .map((n) => (typeof n.toObject === 'function' ? n.toObject() : n));
+      .map((n) => {
+        const row = typeof n.toObject === 'function' ? n.toObject() : { ...n };
+        // Strip bulky import error arrays from list payloads (kept for download only).
+        if (row.meta?.errors) {
+          row.meta = { ...row.meta, errors: undefined, errorsOmitted: true };
+        }
+        return row;
+      });
 
     res.json({ data });
   })

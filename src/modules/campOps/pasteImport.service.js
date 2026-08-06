@@ -18,6 +18,8 @@ import {
   validateMappedImportRows,
 } from './campOps.helpers.js';
 import { CampOpsCamp, CampOpsClient } from './campOps.model.js';
+import { MAX_PREVIEW_BODY_ROWS } from '../../utils/spreadsheetLimits.js';
+import { logMemory } from '../../utils/memory.js';
 
 async function resolveClientForRow(row, { allowCreate = false } = {}) {
   const name = trimStr(row.clientName);
@@ -81,59 +83,68 @@ async function findExistingDuplicateCamp({ client, row }) {
 }
 
 async function buildBodyPreviewFromMappedRows(mappedRows, defaults = {}) {
-  return Promise.all(
-    mappedRows.map(async (row, index) => {
-      const withDefaults = applyPasteDefaults(row, defaults);
-      const enriched = await enrichPasteLocationFromPin(withDefaults);
-      const rowForValidation = { ...enriched.row };
-      const { validRows, partialRows, invalidRows } = validateMappedImportRows(
-        [rowForValidation],
-        { source: 'excel', allowPartial: true },
-      );
-      const validRow = validRows[0];
-      const partialRow = partialRows[0];
-      const invalidRow = invalidRows[0];
-      const creatableRow = validRow || partialRow;
+  const capped = mappedRows.slice(0, MAX_PREVIEW_BODY_ROWS);
+  const out = [];
+  const BATCH = 50;
+  for (let start = 0; start < capped.length; start += BATCH) {
+    const chunk = capped.slice(start, start + BATCH);
+    const entries = await Promise.all(
+      chunk.map(async (row, offset) => {
+        const index = start + offset;
+        const withDefaults = applyPasteDefaults(row, defaults);
+        const enriched = await enrichPasteLocationFromPin(withDefaults);
+        const rowForValidation = { ...enriched.row };
+        const { validRows, partialRows, invalidRows } = validateMappedImportRows(
+          [rowForValidation],
+          { source: 'excel', allowPartial: true },
+        );
+        const validRow = validRows[0];
+        const partialRow = partialRows[0];
+        const invalidRow = invalidRows[0];
+        const creatableRow = validRow || partialRow;
 
-      const entry = {
-        rowNumber: index + 1,
-        valid: Boolean(validRow),
-        partial: Boolean(partialRow),
-        partialFields: partialRow?.partialFields || [],
-        completionPercent: partialRow?.completionPercent ?? (validRow ? 100 : 0),
-        errors: invalidRow?.errors || partialRow?.errors || [],
-        row: creatableRow
-          ? { ...creatableRow, remarks: trimStr(creatableRow.remarks) }
-          : invalidRow
-            ? { ...invalidRow, remarks: trimStr(invalidRow.remarks) }
-            : null,
-        pasteDisplay: enriched.display || null,
-        pasteFormatted: '',
-        block: '',
-        duplicateOf: null,
-      };
-
-      if (!creatableRow || !entry.row) return entry;
-
-      const client = await resolveClientForRow(entry.row, { allowCreate: false });
-      if (client?._id) entry.row.clientName = client.name;
-
-      const duplicate = await findExistingDuplicateCamp({ client, row: entry.row });
-      if (duplicate) {
-        entry.duplicateOf = {
-          campId: duplicate.campId,
-          id: duplicate._id,
-          status: duplicate.status,
+        const entry = {
+          rowNumber: index + 1,
+          valid: Boolean(validRow),
+          partial: Boolean(partialRow),
+          partialFields: partialRow?.partialFields || [],
+          completionPercent: partialRow?.completionPercent ?? (validRow ? 100 : 0),
+          errors: invalidRow?.errors || partialRow?.errors || [],
+          row: creatableRow
+            ? { ...creatableRow, remarks: trimStr(creatableRow.remarks) }
+            : invalidRow
+              ? { ...invalidRow, remarks: trimStr(invalidRow.remarks) }
+              : null,
+          pasteDisplay: enriched.display || null,
+          pasteFormatted: '',
+          block: '',
+          duplicateOf: null,
         };
-        entry.errors = [
-          ...(entry.errors || []),
-          `Duplicate of existing camp ${duplicate.campId} for same client, division, date, and doctor`,
-        ];
-      }
 
-      return entry;
-    }),
-  );
+        if (!creatableRow || !entry.row) return entry;
+
+        const client = await resolveClientForRow(entry.row, { allowCreate: false });
+        if (client?._id) entry.row.clientName = client.name;
+
+        const duplicate = await findExistingDuplicateCamp({ client, row: entry.row });
+        if (duplicate) {
+          entry.duplicateOf = {
+            campId: duplicate.campId,
+            id: duplicate._id,
+            status: duplicate.status,
+          };
+          entry.errors = [
+            ...(entry.errors || []),
+            `Duplicate of existing camp ${duplicate.campId} for same client, division, date, and doctor`,
+          ];
+        }
+
+        return entry;
+      }),
+    );
+    out.push(...entries);
+  }
+  return out;
 }
 
 function mergeMapping(autoMapping = {}, manualMapping = {}) {
@@ -166,10 +177,12 @@ export async function parsePasteImportFile(buffer, { fieldKeys = null } = {}) {
     throw new AppError('Excel or CSV file is required', 400, 'VALIDATION_ERROR');
   }
 
+  logMemory('camp:parsePasteImportFile:start', { bytes: buffer.length });
   const parsed = parseExcelBuffer(buffer);
   const keys = fieldKeys ?? getImportFieldDefinitions().map((field) => field.key);
   const columnMatch = matchImportColumns(parsed.headers, keys);
   const fields = getImportFieldDefinitions(keys);
+  logMemory('camp:parsePasteImportFile:done', { rows: parsed.rows.length });
 
   return {
     sheetName: parsed.sheetName,

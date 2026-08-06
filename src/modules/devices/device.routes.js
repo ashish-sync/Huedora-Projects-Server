@@ -29,6 +29,7 @@ import {
   assertSpreadsheetUpload,
   discardUploadBuffer,
   excelUpload,
+  parseSheetRows,
 } from '../../utils/masterExcel.js';
 
 const canWriteDevicesOrAssets = requirePermission(
@@ -488,11 +489,8 @@ router.post(
   asyncHandler(async (req, res) => {
     assertSpreadsheetUpload(req.file);
 
-    const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+    const rows = parseSheetRows(req.file.buffer);
     discardUploadBuffer(req.file);
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    if (!sheet) throw new AppError('Excel sheet is empty', 400, 'VALIDATION_ERROR');
-    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
     if (!rows.length) throw new AppError('No data rows found in Excel', 400, 'VALIDATION_ERROR');
 
     const errors = [];

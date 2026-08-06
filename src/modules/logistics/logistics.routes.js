@@ -2716,7 +2716,7 @@ router.get(
   '/inventory/summary',
   canRead,
   asyncHandler(async (_req, res) => {
-    const items = await LogisticsStockItem.find({ isDeleted: false });
+    const items = await LogisticsStockItem.find({ isDeleted: false }).limit(50_000);
     res.json({ data: computeKpis(items) });
   })
 );
@@ -2776,14 +2776,15 @@ router.get(
         { batchNumber: re },
       ];
     }
-    const [data, total, filteredAll] = await Promise.all([
+    const [data, total] = await Promise.all([
       LogisticsStockItem.find(filter).sort(sort || '-updatedAt').skip(skip).limit(limit),
       LogisticsStockItem.countDocuments(filter),
-      LogisticsStockItem.find(filter),
     ]);
+    // KPI pass over cache without a second full find()+clone of every match.
+    const summary = computeKpis(await LogisticsStockItem.find(filter).limit(50_000));
     res.json({
       ...paginated(data, total, page, limit),
-      summary: computeKpis(filteredAll),
+      summary,
     });
   })
 );

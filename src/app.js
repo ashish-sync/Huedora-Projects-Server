@@ -74,16 +74,23 @@ export function createApp() {
 
   app.get('/api/v1/health', (_req, res) => {
     if (env.isProd) {
-      return res.json({
-        data: {
-          status: 'ok',
-          live: true,
-          ts: new Date().toISOString(),
-        },
-      });
+      const payload = {
+        status: 'ok',
+        live: true,
+        ts: new Date().toISOString(),
+      };
+      if (String(process.env.MEMORY_LOG || '').toLowerCase() === 'true') {
+        const m = process.memoryUsage();
+        payload.memory = {
+          rssMb: +(m.rss / 1024 / 1024).toFixed(1),
+          heapUsedMb: +(m.heapUsed / 1024 / 1024).toFixed(1),
+        };
+      }
+      return res.json({ data: payload });
     }
     const db = getDbInfo();
     const collections = getRegisteredCollections();
+    const m = process.memoryUsage();
     res.json({
       data: {
         status: 'ok',
@@ -92,6 +99,11 @@ export function createApp() {
         persistence: db.mode,
         mongoConfigured: db.mongoConfigured,
         collections: collections.length,
+        memory: {
+          rssMb: +(m.rss / 1024 / 1024).toFixed(1),
+          heapUsedMb: +(m.heapUsed / 1024 / 1024).toFixed(1),
+          heapTotalMb: +(m.heapTotal / 1024 / 1024).toFixed(1),
+        },
         ts: new Date().toISOString(),
       },
     });

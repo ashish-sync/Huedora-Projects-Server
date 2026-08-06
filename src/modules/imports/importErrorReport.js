@@ -8,7 +8,8 @@ import { uploadDir } from '../../config/paths.js';
 /** Legacy disk location — new reports are not written here. */
 export const importErrorReportRoot = uploadDir('import-errors');
 
-const MAX_STORED_ERRORS = 2000;
+/** Cap stored row errors — fat notification meta was a heap risk on list endpoints. */
+const MAX_STORED_ERRORS = 200;
 
 function stamp() {
   const d = new Date();

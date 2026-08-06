@@ -72,6 +72,13 @@ async function main() {
   const app = createApp();
   app.listen(env.port, () => {
     console.log(`[api] TYLO One listening on http://localhost:${env.port}`);
+    const m = process.memoryUsage();
+    console.warn(
+      `[memory] boot rss=${(m.rss / 1024 / 1024).toFixed(1)}MB heap=${(m.heapUsed / 1024 / 1024).toFixed(1)}MB`
+    );
+    import('./utils/memory.js')
+      .then(({ startMemoryWatch }) => startMemoryWatch({ intervalMs: 180_000, rssWarnMb: 400 }))
+      .catch(() => {});
   });
 }
 

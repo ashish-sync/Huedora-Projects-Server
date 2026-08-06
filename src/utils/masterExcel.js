@@ -3,6 +3,12 @@ import path from 'path';
 import XLSX from 'xlsx';
 import { asyncHandler, AppError } from './helpers.js';
 import { sendExcel } from './excelExport.js';
+import { logMemory, withMemoryLog } from './memory.js';
+import {
+  MAX_SPREADSHEET_UPLOAD_BYTES,
+  MAX_IMPORT_ROWS,
+  MAX_EXPORT_ROWS,
+} from './spreadsheetLimits.js';
 
 /**
  * Ephemeral spreadsheet import policy
@@ -10,7 +16,12 @@ import { sendExcel } from './excelExport.js';
  * User uploads .xlsx / .xls / .csv → validate → read workbook in memory →
  * validate rows → import into DB → return import report → discard buffer.
  * Do NOT write the upload, a CSV conversion, or a gzip artifact to disk.
+ *
+ * Memory: keep uploads small, cap row counts, discard buffers immediately,
+ * and never retain the parsed workbook after import.
  */
+
+export { MAX_SPREADSHEET_UPLOAD_BYTES, MAX_IMPORT_ROWS, MAX_EXPORT_ROWS };
 
 const SPREADSHEET_EXT = new Set(['.xlsx', '.xls', '.csv']);
 const SPREADSHEET_MIME = new Set([
@@ -36,6 +47,13 @@ export function assertSpreadsheetUpload(file) {
   if (!file.buffer || !Buffer.isBuffer(file.buffer)) {
     throw new AppError('Upload must be processed in memory (no disk storage)', 400, 'VALIDATION_ERROR');
   }
+  if (file.buffer.length > MAX_SPREADSHEET_UPLOAD_BYTES) {
+    throw new AppError(
+      `Spreadsheet exceeds ${Math.round(MAX_SPREADSHEET_UPLOAD_BYTES / (1024 * 1024))}MB limit`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
   return file;
 }
 
@@ -48,7 +66,7 @@ export function discardUploadBuffer(file) {
 
 export const excelUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: MAX_SPREADSHEET_UPLOAD_BYTES },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(String(file.originalname || '')).toLowerCase();
     if (!SPREADSHEET_EXT.has(ext)) {
@@ -58,10 +76,30 @@ export const excelUpload = multer({
   },
 });
 
-export function parseSheetRows(buffer) {
-  const wb = XLSX.read(buffer, { type: 'buffer' });
+/**
+ * Parse first sheet to row objects. Caps rows to protect heap.
+ * Uses sheet_rows bound so XLSX does not materialize unbounded sheets.
+ */
+export function parseSheetRows(buffer, { maxRows = MAX_IMPORT_ROWS } = {}) {
+  const wb = XLSX.read(buffer, {
+    type: 'buffer',
+    raw: false,
+    cellDates: true,
+    sheetRows: maxRows + 1, // header + data
+  });
   const sheet = wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  // Drop workbook refs promptly
+  wb.Sheets = {};
+  wb.SheetNames = [];
+  if (rows.length > maxRows) {
+    throw new AppError(
+      `Import limited to ${maxRows} data rows (file has ${rows.length}+). Split the file and retry.`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+  return rows;
 }
 
 export function cellValue(row, names) {
@@ -141,14 +179,19 @@ export function attachMasterExcelRoutes(router, opts) {
     `/${routePath}/export`,
     canRead,
     asyncHandler(async (_req, res) => {
-      let docs = (
-        await Model.find({ isDeleted: false, ...(listFilter || {}) }).sort(sort)
-      ).map((doc) => (doc.toObject ? doc.toObject() : doc));
-      if (typeof prepareExportDocs === 'function') {
-        docs = await prepareExportDocs(docs);
-      }
-      const dataRows = docs.map((doc) => rowFromDoc(doc));
-      sendExcel(res, filename, headers, dataRows, { sheetName });
+      await withMemoryLog(`export:${routePath}`, async () => {
+        let docs = (
+          await Model.find({ isDeleted: false, ...(listFilter || {}) })
+            .sort(sort)
+            .limit(MAX_EXPORT_ROWS)
+        ).map((doc) => (doc.toObject ? doc.toObject() : doc));
+        if (typeof prepareExportDocs === 'function') {
+          docs = await prepareExportDocs(docs);
+        }
+        const dataRows = docs.map((doc) => rowFromDoc(doc));
+        docs = null;
+        sendExcel(res, filename, headers, dataRows, { sheetName });
+      });
     })
   );
 
@@ -169,12 +212,14 @@ export function attachMasterExcelRoutes(router, opts) {
     excelUpload.single('file'),
     asyncHandler(async (req, res) => {
       assertSpreadsheetUpload(req.file);
+      logMemory(`import:${routePath}:start`, { bytes: req.file.buffer?.length || 0 });
       const rows = parseSheetRows(req.file.buffer);
       discardUploadBuffer(req.file);
 
       const errors = [];
       let created = 0;
       let updated = 0;
+      const BATCH = 100;
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
@@ -193,6 +238,10 @@ export function attachMasterExcelRoutes(router, opts) {
             message: err.message || 'Import failed',
           });
         }
+        // Allow GC between batches on large imports
+        if (i > 0 && i % BATCH === 0) {
+          rows[i] = null;
+        }
       }
 
       if (writeAudit && entityType) {
@@ -206,6 +255,7 @@ export function attachMasterExcelRoutes(router, opts) {
         });
       }
 
+      logMemory(`import:${routePath}:done`, { created, updated, errorRows: errors.length });
       res.json({
         data: {
           totalRows: rows.length,

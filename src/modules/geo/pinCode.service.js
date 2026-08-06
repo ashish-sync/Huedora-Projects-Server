@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { AppError } from '../../utils/helpers.js';
+import { bulkUpsertDocuments } from '../../store/persistence.js';
 import { resolveZoneNameForState } from './geo.zones.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState } from './geo.model.js';
 import {
@@ -341,9 +342,18 @@ export function pinToExcelRow(row) {
 
 /**
  * Bulk-import PIN rows (State + District + PIN Code; City optional).
- * Loads geo masters once, resolves in memory, and persists with a single write.
+ * Loads geo masters once; upserts only touched PIN docs (no full-collection rewrite).
  */
 export async function bulkImportPinRows(inputRows = [], { updatedBy = null } = {}) {
+  const MAX_PIN_IMPORT_ROWS = 20_000;
+  if (inputRows.length > MAX_PIN_IMPORT_ROWS) {
+    throw new AppError(
+      `PIN import limited to ${MAX_PIN_IMPORT_ROWS} rows per upload (got ${inputRows.length})`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+
   const [states, districts, cities, allPinRecords] = await Promise.all([
     GeoState.find({ isDeleted: false }),
     GeoDistrict.find({ isDeleted: false }),
@@ -355,7 +365,7 @@ export async function bulkImportPinRows(inputRows = [], { updatedBy = null } = {
   const activeByPin = new Map();
   for (const record of allPinRecords) {
     if (!record.isDeleted && record.pinCode) {
-      activeByPin.set(record.pinCode, { ...record });
+      activeByPin.set(record.pinCode, record);
     }
   }
 
@@ -363,6 +373,7 @@ export async function bulkImportPinRows(inputRows = [], { updatedBy = null } = {
   let updated = 0;
   let skipped = 0;
   const errors = [];
+  const touched = [];
   const now = new Date().toISOString();
 
   for (const input of inputRows) {
@@ -406,9 +417,10 @@ export async function bulkImportPinRows(inputRows = [], { updatedBy = null } = {
       const existing = activeByPin.get(normalized.pinCode);
       if (existing) {
         Object.assign(existing, normalized, { updatedBy, updatedAt: now });
+        touched.push(existing);
         updated += 1;
       } else {
-        activeByPin.set(normalized.pinCode, {
+        const row = {
           pinCode: '',
           cityId: null,
           districtId: null,
@@ -423,7 +435,9 @@ export async function bulkImportPinRows(inputRows = [], { updatedBy = null } = {
           updatedBy,
           createdAt: now,
           updatedAt: now,
-        });
+        };
+        activeByPin.set(normalized.pinCode, row);
+        touched.push(row);
         created += 1;
       }
     } catch (err) {
@@ -431,8 +445,7 @@ export async function bulkImportPinRows(inputRows = [], { updatedBy = null } = {
     }
   }
 
-  const deletedPins = allPinRecords.filter((record) => record.isDeleted);
-  await GeoPinCode._write([...deletedPins, ...activeByPin.values()]);
+  await bulkUpsertDocuments('geo_pin_codes', touched);
 
   return {
     created,

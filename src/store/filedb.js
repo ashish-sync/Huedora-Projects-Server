@@ -2,6 +2,9 @@ import { randomBytes } from 'crypto';
 import {
   loadCollection,
   saveCollection,
+  upsertDocument,
+  bulkUpsertDocuments,
+  getPersistenceMode,
   resetAllCollections,
   registerCollection,
   getRegisteredCollections,
@@ -253,16 +256,13 @@ export function defineCollection(name, defaults = {}) {
       const o = clone(doc);
       o.toObject = () => clone(o);
       o.save = async () => {
-        const rows = await model._all();
-        const idx = rows.findIndex((r) => String(r._id) === String(o._id));
         const plain = { ...o };
         delete plain.toObject;
         delete plain.save;
         delete plain.populate;
         plain.updatedAt = new Date().toISOString();
-        if (idx >= 0) rows[idx] = plain;
-        else rows.push(plain);
-        await model._write(rows);
+        // Single-doc upsert in mongo mode — avoids rewriting entire collections (OOM risk).
+        await upsertDocument(name, plain);
         Object.assign(o, plain);
         return o;
       };
@@ -356,14 +356,13 @@ export function defineCollection(name, defaults = {}) {
         return null;
       }
       rows[idx] = applyUpdate(rows[idx], update);
-      await model._write(rows);
+      await upsertDocument(name, rows[idx]);
       return model._wrap(rows[idx]);
     },
     async findByIdAndUpdate(id, update, opts = {}) {
       return model.findOneAndUpdate({ _id: String(id) }, update, opts);
     },
     async create(doc) {
-      const rows = await model._all();
       const now = new Date().toISOString();
       const base = typeof defaults === 'function' ? defaults() : clone(defaults);
       const row = {
@@ -373,14 +372,22 @@ export function defineCollection(name, defaults = {}) {
         createdAt: doc.createdAt || now,
         updatedAt: now,
       };
-      rows.push(row);
-      await model._write(rows);
+      await upsertDocument(name, row);
       return model._wrap(row);
     },
     async insertMany(docs) {
-      const out = [];
-      for (const d of docs) out.push(await model.create(d));
-      return out;
+      if (!docs?.length) return [];
+      const now = new Date().toISOString();
+      const base = typeof defaults === 'function' ? defaults() : clone(defaults);
+      const rows = docs.map((doc) => ({
+        ...base,
+        ...clone(doc),
+        _id: doc._id || oid(),
+        createdAt: doc.createdAt || now,
+        updatedAt: now,
+      }));
+      await bulkUpsertDocuments(name, rows);
+      return rows.map((row) => model._wrap(row));
     },
     async countDocuments(filter = {}) {
       return (await model._all()).filter((d) => match(d, filter)).length;
@@ -390,20 +397,23 @@ export function defineCollection(name, defaults = {}) {
       const idx = rows.findIndex((d) => match(d, filter));
       if (idx < 0) return { matchedCount: 0, modifiedCount: 0 };
       rows[idx] = applyUpdate(rows[idx], update);
-      await model._write(rows);
+      await upsertDocument(name, rows[idx]);
       return { matchedCount: 1, modifiedCount: 1 };
     },
     async updateMany(filter, update) {
       const rows = await model._all();
-      let n = 0;
+      const changed = [];
       for (let i = 0; i < rows.length; i++) {
         if (match(rows[i], filter)) {
           rows[i] = applyUpdate(rows[i], update);
-          n += 1;
+          changed.push(rows[i]);
         }
       }
-      await model._write(rows);
-      return { matchedCount: n, modifiedCount: n };
+      if (changed.length) {
+        if (getPersistenceMode() === 'mongo') await bulkUpsertDocuments(name, changed);
+        else await model._write(rows);
+      }
+      return { matchedCount: changed.length, modifiedCount: changed.length };
     },
     async deleteMany() {
       await model._write([]);

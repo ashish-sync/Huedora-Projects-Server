@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import multer from 'multer';
-import XLSX from 'xlsx';
 import { authenticate, requirePermission } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
@@ -30,6 +29,7 @@ import {
   assertSpreadsheetUpload,
   discardUploadBuffer,
   excelUpload,
+  parseSheetRows,
 } from '../../utils/masterExcel.js';
 
 const contactUploadRoot = uploadDir('contacts');
@@ -115,9 +115,7 @@ const KYC_DOC_TYPES = {
 };
 
 function sheetRows(buffer) {
-  const wb = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  return parseSheetRows(buffer);
 }
 
 function cell(row, names) {

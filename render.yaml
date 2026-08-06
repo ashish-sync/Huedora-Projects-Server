@@ -7,11 +7,13 @@ services:
     plan: free
     rootDir: .
     buildCommand: npm install && npm run build:parsers
-    startCommand: npm start
+    startCommand: node --max-old-space-size=384 src/index.js
     healthCheckPath: /api/v1/health
     envVars:
       - key: NODE_ENV
         value: production
+      - key: MEMORY_LOG
+        value: "true"
       - key: CLIENT_ORIGIN
         value: https://huedora-projects.onrender.com
       - key: USE_MONGOOSE

@@ -3,6 +3,7 @@ import { buildCampFilter, isCampOverdue, trimStr, withCampSchedule } from './cam
 import { withCampLifecycle } from './campOps.lifecycle.js';
 import { withRequestReview } from './campOps.requestReview.js';
 import { matchesExecutionFilter } from './campStageFilters.js';
+import { MAX_CAMP_EXPORT_ROWS } from '../../utils/spreadsheetLimits.js';
 
 function enrichCampForExportFilter(camp = {}) {
   const base = camp?.toObject ? camp.toObject() : camp;
@@ -17,6 +18,7 @@ export function normalizeExportQuery(query = {}) {
 }
 
 export async function fetchCampsForExport(req, query = {}, { scopeCampFilter }) {
+  const MAX_CAMP_EXPORT = MAX_CAMP_EXPORT_ROWS;
   const normalized = normalizeExportQuery(query);
   const overdueOnly = normalized.overdue === '1' || normalized.overdue === 'true';
   const requestReviewStatus = trimStr(normalized.requestReviewStatus);
@@ -24,26 +26,31 @@ export async function fetchCampsForExport(req, query = {}, { scopeCampFilter }) 
   const filter = await scopeCampFilter(req, buildCampFilter(normalized));
 
   if (requestReviewStatus) {
-    const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
+    const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt').limit(MAX_CAMP_EXPORT * 2);
     return rows
       .filter((row) => enrichCampForExportFilter(row).requestReviewStatus === requestReviewStatus)
-      .map((row) => row.toObject ? row.toObject() : row);
+      .slice(0, MAX_CAMP_EXPORT)
+      .map((row) => (row.toObject ? row.toObject() : row));
   }
 
   if (executionFilter) {
-    const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
+    const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt').limit(MAX_CAMP_EXPORT * 2);
     return rows
       .map((row) => enrichCampForExportFilter(row))
-      .filter((row) => matchesExecutionFilter(row, executionFilter));
+      .filter((row) => matchesExecutionFilter(row, executionFilter))
+      .slice(0, MAX_CAMP_EXPORT);
   }
 
   if (overdueOnly) {
     filter.status = 'approved';
-    const approved = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
-    return approved.filter(isCampOverdue).map((row) => (row.toObject ? row.toObject() : row));
+    const approved = await CampOpsCamp.find(filter).sort('-campDate -createdAt').limit(MAX_CAMP_EXPORT * 2);
+    return approved
+      .filter(isCampOverdue)
+      .slice(0, MAX_CAMP_EXPORT)
+      .map((row) => (row.toObject ? row.toObject() : row));
   }
 
-  const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt');
+  const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt').limit(MAX_CAMP_EXPORT);
   return rows.map((row) => (row.toObject ? row.toObject() : row));
 }
 
