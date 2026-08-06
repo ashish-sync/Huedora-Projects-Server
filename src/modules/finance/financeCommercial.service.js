@@ -121,6 +121,30 @@ export function usesIgst(recipientStateCode, orgStateCode) {
   return r !== o;
 }
 
+export function resolveTaxMode(recipientStateCode, orgStateCode) {
+  return usesIgst(recipientStateCode, orgStateCode) ? 'igst' : 'cgst_sgst';
+}
+
+/** Derive IGST or split CGST/SGST from whichever rate fields are populated. */
+export function resolveLineGstRates(raw = {}, taxMode = 'igst') {
+  const igstRaw = toAmount(raw.igstRate);
+  const cgstRaw = toAmount(raw.cgstRate);
+  const sgstRaw = toAmount(raw.sgstRate);
+  const gstRaw = toAmount(raw.gstRate);
+  const hasIgst = igstRaw > 0;
+  const hasSplit = cgstRaw > 0 || sgstRaw > 0;
+  const combined = hasIgst ? igstRaw : hasSplit ? cgstRaw + sgstRaw : gstRaw > 0 ? gstRaw : 0;
+
+  if (taxMode === 'igst') {
+    return { igstRate: combined, cgstRate: 0, sgstRate: 0 };
+  }
+  if (hasSplit) {
+    return { igstRate: 0, cgstRate: cgstRaw, sgstRate: sgstRaw };
+  }
+  const half = Math.round((combined / 2) * 100) / 100;
+  return { igstRate: 0, cgstRate: half, sgstRate: half };
+}
+
 export function normalizeLineItem(raw = {}, index = 0, taxMode = 'igst') {
   const qty = toAmount(raw.qty) || 0;
   const rate = toAmount(raw.rate) || 0;
@@ -128,9 +152,7 @@ export function normalizeLineItem(raw = {}, index = 0, taxMode = 'igst') {
   let amount = raw.amount != null && raw.amount !== '' ? toAmount(raw.amount) : qty * rate - discount;
   if (amount < 0) amount = 0;
   const taxableAmount = toAmount(raw.taxableAmount) || amount;
-  const igstRate = toAmount(raw.igstRate) || 0;
-  const cgstRate = toAmount(raw.cgstRate) || 0;
-  const sgstRate = toAmount(raw.sgstRate) || 0;
+  const { igstRate, cgstRate, sgstRate } = resolveLineGstRates(raw, taxMode);
 
   let igstAmount = 0;
   let cgstAmount = 0;
@@ -297,9 +319,7 @@ export function normalizePoLineItem(raw = {}, index = 0, taxMode = 'igst') {
   let amount = raw.amount != null && raw.amount !== '' ? toAmount(raw.amount) : qty * rate - discount;
   if (amount < 0) amount = 0;
   const taxableAmount = toAmount(raw.taxableAmount) || amount;
-  const igstRate = toAmount(raw.igstRate) || 0;
-  const cgstRate = toAmount(raw.cgstRate) || 0;
-  const sgstRate = toAmount(raw.sgstRate) || 0;
+  const { igstRate, cgstRate, sgstRate } = resolveLineGstRates(raw, taxMode);
 
   let igstAmount = 0;
   let cgstAmount = 0;
@@ -359,7 +379,7 @@ export function normalizePurchaseOrderPayload(body = {}, orgProfile = DEFAULT_OR
   const documentDate = trimStr(body.documentDate) || todayIso();
   const period = documentNumberPeriod(documentDate);
   const vendorStateCode = trimStr(body.vendorStateCode || body.recipientStateCode);
-  const taxMode = usesIgst(vendorStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst';
+  const taxMode = resolveTaxMode(vendorStateCode, orgProfile.stateCode);
   const rawLines = Array.isArray(body.lineItems) ? body.lineItems : [];
   const lineItems = rawLines
     .filter((row) => trimStr(row.description) || Number(row.qty) || Number(row.rate))
@@ -453,7 +473,7 @@ export function normalizeProformaPayload(body = {}, orgProfile = DEFAULT_ORG_PRO
   const documentDate = trimStr(body.documentDate) || todayIso();
   const period = documentNumberPeriod(documentDate);
   const recipientStateCode = trimStr(body.recipientStateCode);
-  const taxMode = usesIgst(recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst';
+  const taxMode = resolveTaxMode(recipientStateCode, orgProfile.stateCode);
   const rawLines = Array.isArray(body.lineItems) ? body.lineItems : [];
   const lineItems = rawLines
     .filter((row) => trimStr(row.description) || trimStr(row.sectionTitle))
