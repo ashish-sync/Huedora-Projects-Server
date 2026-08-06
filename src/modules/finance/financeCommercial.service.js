@@ -215,6 +215,8 @@ export function mergeOrgProfile(body = {}) {
     'phone',
     'email',
     'website',
+    'udyam',
+    'udyamLabel',
     'bankName',
     'accountHolder',
     'accountNumber',
@@ -268,6 +270,14 @@ export async function nextDebitNoteNumber(documentDate) {
   return nextCommercialDocumentNumber('debit_note', documentDate);
 }
 
+export async function nextDeliveryChallanNumber(documentDate) {
+  return nextCommercialDocumentNumber('delivery_challan', documentDate);
+}
+
+export async function nextBillOfSupplyNumber(documentDate) {
+  return nextCommercialDocumentNumber('bill_of_supply', documentDate);
+}
+
 /** Assign official document number on approval (PREFIX/FY/MM/SEQ). */
 export async function assignCommercialDocumentNumber(row, { force = false } = {}) {
   if (!force && trimStr(row.documentNumber)) return row.documentNumber;
@@ -279,34 +289,66 @@ export async function assignCommercialDocumentNumber(row, { force = false } = {}
   return number;
 }
 
-export function normalizePoLineItem(raw = {}, index = 0) {
+export function normalizePoLineItem(raw = {}, index = 0, taxMode = 'igst') {
   const isFoc = Boolean(raw.isFoc);
   const qty = toAmount(raw.qty) || 0;
   const rate = isFoc ? 0 : toAmount(raw.rate) || 0;
-  const amount =
-    raw.amount != null && raw.amount !== ''
-      ? toAmount(raw.amount)
-      : Math.round(qty * rate * 100) / 100;
+  const discount = isFoc ? 0 : toAmount(raw.discount) || 0;
+  let amount = raw.amount != null && raw.amount !== '' ? toAmount(raw.amount) : qty * rate - discount;
+  if (amount < 0) amount = 0;
+  const taxableAmount = toAmount(raw.taxableAmount) || amount;
+  const igstRate = toAmount(raw.igstRate) || 0;
+  const cgstRate = toAmount(raw.cgstRate) || 0;
+  const sgstRate = toAmount(raw.sgstRate) || 0;
+
+  let igstAmount = 0;
+  let cgstAmount = 0;
+  let sgstAmount = 0;
+  if (taxMode === 'igst') {
+    igstAmount = Math.round(((taxableAmount * igstRate) / 100) * 100) / 100;
+  } else {
+    cgstAmount = Math.round(((taxableAmount * cgstRate) / 100) * 100) / 100;
+    sgstAmount = Math.round(((taxableAmount * sgstRate) / 100) * 100) / 100;
+  }
+
+  const totalAmount =
+    raw.totalAmount != null && raw.totalAmount !== ''
+      ? toAmount(raw.totalAmount)
+      : Math.round((taxableAmount + igstAmount + cgstAmount + sgstAmount) * 100) / 100;
+
   return {
     description: trimStr(raw.description),
+    make: trimStr(raw.make),
+    model: trimStr(raw.model),
+    unit: trimStr(raw.unit || raw.uom) || 'Nos',
     qty,
     rate,
     amount,
+    discount,
+    taxableAmount,
+    igstRate,
+    igstAmount,
+    cgstRate,
+    cgstAmount,
+    sgstRate,
+    sgstAmount,
+    totalAmount,
     isFoc,
     sortOrder: Number(raw.sortOrder) || index + 1,
   };
 }
 
-export function computePurchaseOrderTotals(lineItems = [], purchaseTaxRate = 5, roundOff = 0) {
-  const subtotal = lineItems.reduce((s, row) => s + (Number(row.amount) || 0), 0);
-  const rate = toAmount(purchaseTaxRate);
-  const taxAmount = Math.round((subtotal * rate) / 100 * 100) / 100;
+export function computePurchaseOrderTotals(lineItems = [], roundOff = 0) {
+  const subtotal = lineItems.reduce((s, row) => s + (Number(row.taxableAmount ?? row.amount) || 0), 0);
+  const taxAmount = lineItems.reduce(
+    (s, row) => s + (Number(row.igstAmount) || 0) + (Number(row.cgstAmount) || 0) + (Number(row.sgstAmount) || 0),
+    0
+  );
   const rawTotal = subtotal + taxAmount + toAmount(roundOff);
   const grandTotal = Math.round(rawTotal * 100) / 100;
   return {
     subtotal: Math.round(subtotal * 100) / 100,
-    taxAmount,
-    purchaseTaxRate: rate,
+    taxAmount: Math.round(taxAmount * 100) / 100,
     roundOff: toAmount(roundOff),
     grandTotal,
     amountInWords: amountInWordsIndian(grandTotal),
@@ -316,17 +358,14 @@ export function computePurchaseOrderTotals(lineItems = [], purchaseTaxRate = 5, 
 export function normalizePurchaseOrderPayload(body = {}, orgProfile = DEFAULT_ORG_PROFILE) {
   const documentDate = trimStr(body.documentDate) || todayIso();
   const period = documentNumberPeriod(documentDate);
+  const vendorStateCode = trimStr(body.vendorStateCode || body.recipientStateCode);
+  const taxMode = usesIgst(vendorStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst';
   const rawLines = Array.isArray(body.lineItems) ? body.lineItems : [];
   const lineItems = rawLines
-    .filter((row) => trimStr(row.description))
-    .map((row, index) => normalizePoLineItem(row, index));
+    .filter((row) => trimStr(row.description) || Number(row.qty) || Number(row.rate))
+    .map((row, index) => normalizePoLineItem(row, index, taxMode));
 
-  const purchaseTaxRate =
-    body.purchaseTaxRate != null && body.purchaseTaxRate !== ''
-      ? toAmount(body.purchaseTaxRate)
-      : Number(orgProfile.defaultPurchaseTaxRate) || 5;
-
-  const totals = computePurchaseOrderTotals(lineItems, purchaseTaxRate, body.roundOff);
+  const totals = computePurchaseOrderTotals(lineItems, body.roundOff);
 
   const terms = Array.isArray(body.terms)
     ? body.terms.map((t) => String(t).trim()).filter(Boolean)
@@ -337,22 +376,60 @@ export function normalizePurchaseOrderPayload(body = {}, orgProfile = DEFAULT_OR
           .filter(Boolean)
       : [...(orgProfile.defaultPoTerms || DEFAULT_ORG_PROFILE.defaultPoTerms || [])];
 
+  const legal = orgProfile.legalName || 'Tylo Care Private Limited';
+  const office = orgProfile.registeredOffice || '';
+
   return {
     documentType: 'purchase_order',
     documentDate,
-    dueDate: trimStr(body.dueDate),
+    dueDate: trimStr(body.expectedDeliveryDate || body.dueDate),
     fiscalYear: fiscalYearLabel(documentDate),
     documentPeriod: period.periodKey,
     contactId: body.contactId || null,
     recipientName: trimStr(body.vendorName || body.recipientName),
     placeOfSupply: trimStr(body.vendorAddress || body.placeOfSupply),
+    deliveryAddress: trimStr(body.deliveryAddress),
     contactPerson: trimStr(body.contactPerson),
     contactEmail: trimStr(body.contactEmail),
     recipientGstin: trimStr(body.vendorGstin || body.recipientGstin),
-    projectName: trimStr(body.reference || body.projectName),
+    recipientStateCode: vendorStateCode,
+    projectName: trimStr(body.projectCostCentre || body.projectName || body.reference),
+    reference: trimStr(body.vendorQuoteRef || body.reference),
+    referenceDate: trimStr(body.vendorQuoteDate || body.referenceDate),
     lineItems,
     terms,
     customNotes: trimStr(body.notes || body.customNotes),
+    taxMode,
+    // Snapshot logistics fields
+    revisionNo: body.revisionNo != null && body.revisionNo !== '' ? Number(body.revisionNo) : 0,
+    vendorQuoteRef: trimStr(body.vendorQuoteRef || body.reference),
+    vendorQuoteDate: trimStr(body.vendorQuoteDate || body.referenceDate),
+    projectCostCentre: trimStr(body.projectCostCentre || body.projectName),
+    buyerCompanyName: trimStr(body.buyerCompanyName || legal),
+    buyerAddress: trimStr(body.buyerAddress || office),
+    buyerGstin: trimStr(body.buyerGstin || orgProfile.gstin),
+    buyerContactPerson: trimStr(body.buyerContactPerson),
+    buyerMobile: trimStr(body.buyerMobile || orgProfile.phone),
+    buyerEmail: trimStr(body.buyerEmail || orgProfile.email),
+    vendorCode: trimStr(body.vendorCode),
+    vendorMobile: trimStr(body.vendorMobile),
+    vendorAddress: trimStr(body.vendorAddress || body.placeOfSupply),
+    vendorGstin: trimStr(body.vendorGstin || body.recipientGstin),
+    deliveryContact: trimStr(body.deliveryContact),
+    deliveryMobile: trimStr(body.deliveryMobile),
+    expectedDeliveryDate: trimStr(body.expectedDeliveryDate || body.dueDate),
+    deliveryInstructions: trimStr(body.deliveryInstructions || body.shippingInstructions),
+    billingAddress: trimStr(body.billingAddress) || [legal, office].filter(Boolean).join(', '),
+    billingGstin: trimStr(body.billingGstin || orgProfile.gstin),
+    billingState: trimStr(body.billingState || orgProfile.state),
+    billingStateCode: trimStr(body.billingStateCode || orgProfile.stateCode),
+    billingPlaceOfSupply: trimStr(body.billingPlaceOfSupply),
+    paymentTerms: trimStr(body.paymentTerms),
+    freight: trimStr(body.freight),
+    insurance: trimStr(body.insurance),
+    deliveryTerms: trimStr(body.deliveryTerms),
+    warranty: trimStr(body.warranty),
+    validity: trimStr(body.validity),
     ...totals,
   };
 }
@@ -418,15 +495,18 @@ export function normalizeProformaPayload(body = {}, orgProfile = DEFAULT_ORG_PRO
     clientId: body.clientId || null,
     clientMasterId: body.clientMasterId || null,
     recipientName: trimStr(body.recipientName),
-    projectName: trimStr(body.projectName),
+    projectName: trimStr(body.servicePeriod || body.projectName),
     placeOfSupply: trimStr(body.placeOfSupply),
-    deliveryAddress: trimStr(body.deliveryAddress),
+    deliveryAddress: trimStr(body.deliveryAddress || body.shipToAddress),
     contactPerson: trimStr(body.contactPerson),
     contactEmail: trimStr(body.contactEmail),
     recipientGstin: trimStr(body.recipientGstin),
     recipientPan: trimStr(body.recipientPan),
     recipientStateCode,
+    recipientStateName: trimStr(body.recipientStateName),
     reference: trimStr(body.reference),
+    referenceDate: trimStr(body.referenceDate),
+    servicePeriod: trimStr(body.servicePeriod || body.projectName),
     cnReference: trimStr(body.cnReference),
     dnReference: trimStr(body.dnReference),
     receiptVoucher: trimStr(body.receiptVoucher),
@@ -435,6 +515,13 @@ export function normalizeProformaPayload(body = {}, orgProfile = DEFAULT_ORG_PRO
     lineItems,
     terms,
     customNotes: trimStr(body.customNotes),
+    declaration: trimStr(body.declaration),
+    shipToName: trimStr(body.shipToName),
+    shipToContactPerson: trimStr(body.shipToContactPerson),
+    shipToAddress: trimStr(body.shipToAddress || body.deliveryAddress),
+    shipToGstin: trimStr(body.shipToGstin),
+    shipToStateCode: trimStr(body.shipToStateCode),
+    shipToStateName: trimStr(body.shipToStateName),
     taxMode,
     ...totals,
   };
@@ -446,12 +533,302 @@ export function normalizeClientInvoicePayload(body = {}, orgProfile = DEFAULT_OR
 }
 
 export function normalizeCreditNotePayload(body = {}, orgProfile = DEFAULT_ORG_PROFILE) {
-  const payload = normalizeProformaPayload(body, orgProfile);
-  return { ...payload, documentType: 'credit_note' };
+  const base = normalizeProformaPayload(
+    {
+      ...body,
+      paymentTermsDays:
+        body.paymentTermsDays != null && body.paymentTermsDays !== ''
+          ? body.paymentTermsDays
+          : 30,
+    },
+    orgProfile
+  );
+  return {
+    ...base,
+    documentType: 'credit_note',
+    referenceDate: trimStr(body.referenceDate),
+    servicePeriod: trimStr(body.servicePeriod || body.projectName),
+    projectName: trimStr(body.servicePeriod || body.projectName),
+    cnReference: trimStr(body.cnReference),
+    originalInvoiceDate: trimStr(body.originalInvoiceDate),
+    creditReason:
+      trimStr(body.creditReason) || 'Rate Revision / Cancellation / Service Adjustment',
+    shipToName: trimStr(body.shipToName),
+    shipToContactPerson: trimStr(body.shipToContactPerson),
+    shipToAddress: trimStr(body.shipToAddress),
+    shipToGstin: trimStr(body.shipToGstin),
+    shipToStateCode: trimStr(body.shipToStateCode),
+    shipToStateName: trimStr(body.shipToStateName),
+    recipientStateName: trimStr(body.recipientStateName),
+    terms: Array.isArray(body.terms) && body.terms.length
+      ? body.terms.map((t) => String(t).trim()).filter(Boolean)
+      : ['Payment is due within 30 days from the date of invoice.'],
+  };
+}
+
+export function normalizeDebitNotePayload(body = {}, orgProfile = DEFAULT_ORG_PROFILE) {
+  const base = normalizeProformaPayload(
+    {
+      ...body,
+      paymentTermsDays:
+        body.paymentTermsDays != null && body.paymentTermsDays !== ''
+          ? body.paymentTermsDays
+          : 30,
+    },
+    orgProfile
+  );
+  return {
+    ...base,
+    documentType: 'debit_note',
+    referenceDate: trimStr(body.referenceDate),
+    servicePeriod: trimStr(body.servicePeriod || body.projectName),
+    projectName: trimStr(body.servicePeriod || body.projectName),
+    dnReference: trimStr(body.dnReference),
+    originalInvoiceDate: trimStr(body.originalInvoiceDate),
+    debitReason:
+      trimStr(body.debitReason) || 'Additional Service / Underbilling / Rate Revision / Tax Adjustment',
+    shipToName: trimStr(body.shipToName),
+    shipToContactPerson: trimStr(body.shipToContactPerson),
+    shipToAddress: trimStr(body.shipToAddress),
+    shipToGstin: trimStr(body.shipToGstin),
+    shipToStateCode: trimStr(body.shipToStateCode),
+    shipToStateName: trimStr(body.shipToStateName),
+    recipientStateName: trimStr(body.recipientStateName),
+    terms: Array.isArray(body.terms) && body.terms.length
+      ? body.terms.map((t) => String(t).trim()).filter(Boolean)
+      : ['Payment is due within 30 days from the date of invoice.'],
+  };
+}
+
+export function normalizeDeliveryChallanPayload(body = {}, orgProfile = DEFAULT_ORG_PROFILE) {
+  const documentDate = trimStr(body.documentDate) || todayIso();
+  const period = documentNumberPeriod(documentDate);
+  const rawLines = Array.isArray(body.lineItems) ? body.lineItems : [];
+  const lineItems = rawLines
+    .filter(
+      (row) =>
+        trimStr(row.description) ||
+        trimStr(row.assetId) ||
+        trimStr(row.manufacturerSerialNo) ||
+        trimStr(row.serialNo) ||
+        Number(row.qty)
+    )
+    .map((row, index) => ({
+      assetId: trimStr(row.assetId),
+      description: trimStr(row.description),
+      make: trimStr(row.make),
+      model: trimStr(row.model),
+      manufacturerSerialNo: trimStr(row.manufacturerSerialNo || row.serialNo),
+      qty: row.qty != null && row.qty !== '' ? Number(row.qty) : '',
+      accessories: trimStr(row.accessories),
+      condition: trimStr(row.condition),
+      remarks: trimStr(row.remarks),
+      sacCode: '',
+      rate: 0,
+      amount: 0,
+      discount: 0,
+      taxableAmount: 0,
+      igstRate: 0,
+      cgstRate: 0,
+      sgstRate: 0,
+      igstAmount: 0,
+      cgstAmount: 0,
+      sgstAmount: 0,
+      totalAmount: 0,
+      sortOrder: Number(row.sortOrder) || index + 1,
+    }));
+
+  return {
+    documentType: 'delivery_challan',
+    documentDate,
+    dueDate: trimStr(body.expectedDeliveryDate || body.dueDate),
+    fiscalYear: fiscalYearLabel(documentDate),
+    documentPeriod: period.periodKey,
+    clientId: body.clientId || null,
+    clientMasterId: body.clientMasterId || null,
+    recipientName: trimStr(body.recipientName),
+    projectName: trimStr(body.purposeOfMovement || body.projectName),
+    placeOfSupply: trimStr(body.fromAddress || body.placeOfSupply || orgProfile.registeredOffice),
+    deliveryAddress: trimStr(body.deliveryAddress || body.shipToAddress),
+    contactPerson: trimStr(body.contactPerson),
+    contactEmail: trimStr(body.contactEmail || body.deliverToEmail),
+    recipientGstin: trimStr(body.recipientGstin),
+    recipientPan: '',
+    recipientStateCode: trimStr(body.recipientStateCode),
+    reference: trimStr(body.awbNo || body.reference),
+    referenceDate: '',
+    servicePeriod: '',
+    cnReference: '',
+    dnReference: '',
+    receiptVoucher: '',
+    paymentTermsDays: 0,
+    reverseCharge: 'N',
+    lineItems,
+    terms: [],
+    customNotes: trimStr(body.customNotes || body.declaration),
+    taxMode: 'igst',
+    subtotal: 0,
+    taxAmount: 0,
+    cnAmount: 0,
+    dnAmount: 0,
+    advanceReceived: 0,
+    roundOff: 0,
+    grandTotal: 0,
+    amountInWords: '',
+    shipToName: trimStr(body.shipToName || body.recipientName),
+    shipToContactPerson: trimStr(body.shipToContactPerson || body.contactPerson),
+    shipToAddress: trimStr(body.shipToAddress || body.deliveryAddress),
+    transporterName: trimStr(body.courierName || body.transporterName),
+    vehicleNo: trimStr(body.vehicleNo),
+    // DC-specific fields persisted on the row
+    dispatchDate: trimStr(body.dispatchDate),
+    expectedDeliveryDate: trimStr(body.expectedDeliveryDate || body.dueDate),
+    fromCompanyName: trimStr(body.fromCompanyName || orgProfile.legalName),
+    fromAddress: trimStr(body.fromAddress || orgProfile.registeredOffice),
+    fromGstin: trimStr(body.fromGstin || orgProfile.gstin),
+    fromContactPerson: trimStr(body.fromContactPerson),
+    fromMobile: trimStr(body.fromMobile || orgProfile.phone),
+    fromEmail: trimStr(body.fromEmail || orgProfile.email),
+    recipientType: trimStr(body.recipientType),
+    deliverToCompany: trimStr(body.deliverToCompany),
+    deliverToMobile: trimStr(body.deliverToMobile),
+    courierName: trimStr(body.courierName || body.transporterName),
+    awbNo: trimStr(body.awbNo),
+    courierMode: trimStr(body.courierMode),
+    packageCount: body.packageCount != null && body.packageCount !== '' ? Number(body.packageCount) : '',
+    originCity: trimStr(body.originCity),
+    destinationCity: trimStr(body.destinationCity),
+    purposeOfMovement: trimStr(body.purposeOfMovement || body.projectName),
+    packedBy: trimStr(body.packedBy),
+    checkedBy: trimStr(body.checkedBy),
+    dispatchedBy: trimStr(body.dispatchedBy),
+    receivedBy: trimStr(body.receivedBy),
+    receivedMobile: trimStr(body.receivedMobile),
+    conditionOnReceipt: trimStr(body.conditionOnReceipt),
+    receivedDate: trimStr(body.receivedDate),
+    declaration:
+      trimStr(body.declaration) ||
+      'The goods covered under this Delivery Challan are being transported for reasons other than sale and do not constitute a taxable supply under the applicable provisions of the CGST Act, 2017. This Delivery Challan is issued solely for the movement, tracking and acknowledgement of goods.',
+  };
+}
+
+export function validateDeliveryChallanPayload(payload, { requireLines = true } = {}) {
+  if (requireLines && !payload.recipientName) {
+    throw new AppError('Deliver-to name is required', 400, 'VALIDATION_ERROR');
+  }
+  if (requireLines && (!payload.lineItems || !payload.lineItems.length)) {
+    throw new AppError('At least one item line is required', 400, 'VALIDATION_ERROR');
+  }
+  if (
+    requireLines &&
+    !payload.lineItems.some(
+      (line) => trimStr(line.description) || trimStr(line.assetId) || trimStr(line.manufacturerSerialNo)
+    )
+  ) {
+    throw new AppError('At least one item with Asset ID, description, or serial number is required', 400, 'VALIDATION_ERROR');
+  }
+}
+
+export function normalizeBillOfSupplyPayload(body = {}, orgProfile = DEFAULT_ORG_PROFILE) {
+  const base = normalizeProformaPayload(
+    {
+      ...body,
+      paymentTermsDays:
+        body.paymentTermsDays != null && body.paymentTermsDays !== ''
+          ? body.paymentTermsDays
+          : 30,
+    },
+    orgProfile
+  );
+
+  // Bill of Supply: GST NIL / EXEMPT — charge no tax even if rates appear on the form.
+  const lineItems = (base.lineItems || []).map((line) => {
+    const taxableAmount = toAmount(line.taxableAmount);
+    return {
+      ...line,
+      igstRate: 0,
+      cgstRate: 0,
+      sgstRate: 0,
+      igstAmount: 0,
+      cgstAmount: 0,
+      sgstAmount: 0,
+      totalAmount: taxableAmount,
+    };
+  });
+  const totals = computeDocumentTotals(lineItems, {
+    cnAmount: 0,
+    dnAmount: 0,
+    advanceReceived: toAmount(body.advanceReceived),
+  });
+
+  return {
+    ...base,
+    ...totals,
+    documentType: 'bill_of_supply',
+    lineItems,
+    taxAmount: 0,
+    referenceDate: trimStr(body.referenceDate),
+    servicePeriod: trimStr(body.servicePeriod || body.projectName),
+    projectName: trimStr(body.servicePeriod || body.projectName),
+    shipToName: trimStr(body.shipToName),
+    shipToContactPerson: trimStr(body.shipToContactPerson),
+    shipToAddress: trimStr(body.shipToAddress),
+    shipToGstin: trimStr(body.shipToGstin),
+    shipToStateCode: trimStr(body.shipToStateCode),
+    shipToStateName: trimStr(body.shipToStateName),
+    recipientStateName: trimStr(body.recipientStateName),
+    terms: Array.isArray(body.terms) && body.terms.length
+      ? body.terms.map((t) => String(t).trim()).filter(Boolean)
+      : [
+          'Payment is due within 30 days from the date of the Bill of Supply unless otherwise agreed.',
+        ],
+  };
+}
+
+export function normalizeQuotationPayload(body = {}, orgProfile = DEFAULT_ORG_PROFILE) {
+  const base = normalizeProformaPayload(
+    {
+      ...body,
+      paymentTermsDays:
+        body.paymentTermsDays != null && body.paymentTermsDays !== ''
+          ? body.paymentTermsDays
+          : 30,
+    },
+    orgProfile
+  );
+  return {
+    ...base,
+    documentType: 'quotation',
+    referenceDate: trimStr(body.referenceDate),
+    servicePeriod: trimStr(body.servicePeriod || body.projectName),
+    projectName: trimStr(body.servicePeriod || body.projectName),
+    shipToName: trimStr(body.shipToName),
+    shipToContactPerson: trimStr(body.shipToContactPerson),
+    shipToAddress: trimStr(body.shipToAddress),
+    shipToGstin: trimStr(body.shipToGstin),
+    shipToStateCode: trimStr(body.shipToStateCode),
+    shipToStateName: trimStr(body.shipToStateName),
+    recipientStateName: trimStr(body.recipientStateName),
+    declaration:
+      trimStr(body.declaration) ||
+      'This quotation is issued for budgetary/commercial evaluation only. It is neither a Proforma Invoice nor a Tax Invoice. Prices are based on the proposed scope, subject to applicable GST, commercial discussions and issuance of a Purchase Order/Work Order. A Proforma Invoice or Tax Invoice will be issued, as applicable.',
+    terms: Array.isArray(body.terms) && body.terms.length
+      ? body.terms.map((t) => String(t).trim()).filter(Boolean)
+      : [
+          'Payment terms: 30 days from the date of the Tax Invoice unless otherwise agreed in writing.',
+        ],
+  };
+}
+
+export async function nextQuotationNumber(documentDate) {
+  return nextCommercialDocumentNumber('quotation', documentDate);
 }
 
 export const validateClientInvoicePayload = validateProformaPayload;
 export const validateCreditNotePayload = validateProformaPayload;
+export const validateDebitNotePayload = validateProformaPayload;
+export const validateBillOfSupplyPayload = validateProformaPayload;
+export const validateQuotationPayload = validateProformaPayload;
 
 export function validateProformaPayload(payload, { requireLines = true } = {}) {
   if (requireLines && !payload.recipientName) {
@@ -598,8 +975,76 @@ export function extractBuilderExtras(body = {}) {
     out.shipToContactPerson = trimStr(body.shipToContactPerson);
   }
   if (body.shipToAddress !== undefined) out.shipToAddress = trimStr(body.shipToAddress);
+  if (body.shipToGstin !== undefined) out.shipToGstin = trimStr(body.shipToGstin);
+  if (body.shipToStateCode !== undefined) out.shipToStateCode = trimStr(body.shipToStateCode);
+  if (body.shipToStateName !== undefined) out.shipToStateName = trimStr(body.shipToStateName);
+  if (body.recipientStateName !== undefined) out.recipientStateName = trimStr(body.recipientStateName);
+  if (body.referenceDate !== undefined) out.referenceDate = trimStr(body.referenceDate);
+  if (body.servicePeriod !== undefined) out.servicePeriod = trimStr(body.servicePeriod);
+  if (body.originalInvoiceDate !== undefined) out.originalInvoiceDate = trimStr(body.originalInvoiceDate);
+  if (body.creditReason !== undefined) out.creditReason = trimStr(body.creditReason);
+  if (body.debitReason !== undefined) out.debitReason = trimStr(body.debitReason);
   if (body.vehicleNo !== undefined) out.vehicleNo = trimStr(body.vehicleNo);
   if (body.transporterName !== undefined) out.transporterName = trimStr(body.transporterName);
+  // Delivery challan + purchase order logistics fields
+  const extraKeys = [
+    'dispatchDate',
+    'expectedDeliveryDate',
+    'fromCompanyName',
+    'fromAddress',
+    'fromGstin',
+    'fromContactPerson',
+    'fromMobile',
+    'fromEmail',
+    'recipientType',
+    'deliverToCompany',
+    'deliverToMobile',
+    'courierName',
+    'awbNo',
+    'courierMode',
+    'packageCount',
+    'originCity',
+    'destinationCity',
+    'purposeOfMovement',
+    'packedBy',
+    'checkedBy',
+    'dispatchedBy',
+    'receivedBy',
+    'receivedMobile',
+    'conditionOnReceipt',
+    'receivedDate',
+    'revisionNo',
+    'vendorQuoteRef',
+    'vendorQuoteDate',
+    'projectCostCentre',
+    'buyerCompanyName',
+    'buyerAddress',
+    'buyerGstin',
+    'buyerContactPerson',
+    'buyerMobile',
+    'buyerEmail',
+    'vendorCode',
+    'vendorMobile',
+    'vendorAddress',
+    'vendorGstin',
+    'deliveryContact',
+    'deliveryMobile',
+    'deliveryInstructions',
+    'billingAddress',
+    'billingGstin',
+    'billingState',
+    'billingStateCode',
+    'billingPlaceOfSupply',
+    'paymentTerms',
+    'freight',
+    'insurance',
+    'deliveryTerms',
+    'warranty',
+    'validity',
+  ];
+  for (const key of extraKeys) {
+    if (body[key] !== undefined) out[key] = body[key];
+  }
   return out;
 }
 

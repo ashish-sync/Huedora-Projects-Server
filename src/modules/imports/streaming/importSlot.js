@@ -1,4 +1,4 @@
-import { AppError } from '../utils/helpers.js';
+import { AppError } from '../../../utils/helpers.js';
 
 /**
  * Limit concurrent heavy imports on a single API process (Render 512MB).

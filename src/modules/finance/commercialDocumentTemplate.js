@@ -1,6 +1,7 @@
 /**
  * Unified A4 Landscape commercial document PDF template.
- * Supports: Purchase Order, Proforma Invoice, Tax Invoice, Credit Note.
+ * Supports: Tax Invoice, Quotation, Proforma, Bill of Supply, Credit Note, Debit Note.
+ * (Purchase Order and Delivery Challan use dedicated landscape templates.)
  */
 import PDFDocument from 'pdfkit';
 import {
@@ -59,6 +60,18 @@ export const DOC_PDF_CONFIG = {
     leftPartyTitle: 'Recipient Details',
     rightPartyTitle: 'Supplier Details',
   },
+  quotation: {
+    typeLabel: 'QUOTATION',
+    showPaymentDetails: true,
+    leftPartyTitle: 'Recipient Details',
+    rightPartyTitle: 'Supplier Details',
+  },
+  debit_note: {
+    typeLabel: 'DEBIT NOTE',
+    showPaymentDetails: false,
+    leftPartyTitle: 'Recipient Details',
+    rightPartyTitle: 'Supplier Details',
+  },
   client_invoice: {
     typeLabel: 'TAX INVOICE',
     showPaymentDetails: true,
@@ -68,6 +81,18 @@ export const DOC_PDF_CONFIG = {
   credit_note: {
     typeLabel: 'CREDIT NOTE',
     showPaymentDetails: false,
+    leftPartyTitle: 'Recipient Details',
+    rightPartyTitle: 'Supplier Details',
+  },
+  delivery_challan: {
+    typeLabel: 'DELIVERY CHALLAN',
+    showPaymentDetails: false,
+    leftPartyTitle: 'Recipient Details',
+    rightPartyTitle: 'Supplier Details',
+  },
+  bill_of_supply: {
+    typeLabel: 'BILL OF SUPPLY',
+    showPaymentDetails: true,
     leftPartyTitle: 'Recipient Details',
     rightPartyTitle: 'Supplier Details',
   },
@@ -86,9 +111,6 @@ function resolveDocType(docRow) {
 }
 
 function resolveTypeLabel(docRow, cfg) {
-  if (docRow.documentType === 'client_invoice' && docRow.reverseCharge === 'Y') {
-    return 'BILL OF SUPPLY';
-  }
   return cfg.typeLabel;
 }
 

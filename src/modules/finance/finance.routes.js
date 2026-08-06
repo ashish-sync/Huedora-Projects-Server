@@ -80,7 +80,7 @@ router.get(
   '/summary',
   canRead,
   asyncHandler(async (_req, res) => {
-    const [expenses, invoices, proformas, purchaseOrders, clientInvoices, creditNotes] =
+    const [expenses, invoices, proformas, purchaseOrders, clientInvoices, creditNotes, deliveryChallans, billsOfSupply] =
       await Promise.all([
         FinanceExpense.find({ isDeleted: false }),
         FinanceInvoice.find({ isDeleted: false }),
@@ -88,6 +88,8 @@ router.get(
         FinanceCommercialDocument.find({ isDeleted: false, documentType: 'purchase_order' }),
         FinanceCommercialDocument.find({ isDeleted: false, documentType: 'client_invoice' }),
         FinanceCommercialDocument.find({ isDeleted: false, documentType: 'credit_note' }),
+        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'delivery_challan' }),
+        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'bill_of_supply' }),
       ]);
 
     const expenseTotal = expenses.reduce((s, r) => s + (Number(r.amount) || 0), 0);
@@ -111,9 +113,18 @@ router.get(
     const clientInvoiceTotal = clientInvoices.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
     const creditNoteCount = creditNotes.length;
     const creditNoteTotal = creditNotes.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
-    const commercialSubmitted = [...proformas, ...purchaseOrders, ...clientInvoices, ...creditNotes].filter(
-      (r) => r.status === 'Submitted'
-    ).length;
+    const deliveryChallanCount = deliveryChallans.length;
+    const deliveryChallanTotal = deliveryChallans.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
+    const billOfSupplyCount = billsOfSupply.length;
+    const billOfSupplyTotal = billsOfSupply.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
+    const commercialSubmitted = [
+      ...proformas,
+      ...purchaseOrders,
+      ...clientInvoices,
+      ...creditNotes,
+      ...deliveryChallans,
+      ...billsOfSupply,
+    ].filter((r) => r.status === 'Submitted').length;
 
     res.json({
       data: {
@@ -137,6 +148,10 @@ router.get(
         clientInvoiceIssued,
         creditNoteCount,
         creditNoteTotal,
+        deliveryChallanCount,
+        deliveryChallanTotal,
+        billOfSupplyCount,
+        billOfSupplyTotal,
         commercialSubmitted,
       },
     });

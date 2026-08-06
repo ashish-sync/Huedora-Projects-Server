@@ -32,15 +32,27 @@ import {
   nextPurchaseOrderNumber,
   normalizeClientInvoicePayload,
   normalizeCreditNotePayload,
+  normalizeDebitNotePayload,
+  normalizeDeliveryChallanPayload,
+  normalizeBillOfSupplyPayload,
+  normalizeQuotationPayload,
   normalizeProformaPayload,
   normalizePurchaseOrderPayload,
   nextClientInvoiceNumber,
   nextCreditNoteNumber,
+  nextDebitNoteNumber,
+  nextDeliveryChallanNumber,
+  nextBillOfSupplyNumber,
+  nextQuotationNumber,
   toAmount,
   todayIso,
   trimStr,
   validateClientInvoicePayload,
   validateCreditNotePayload,
+  validateDebitNotePayload,
+  validateDeliveryChallanPayload,
+  validateBillOfSupplyPayload,
+  validateQuotationPayload,
   validateProformaPayload,
   validatePurchaseOrderPayload,
   usesIgst,
@@ -49,6 +61,10 @@ import { buildProformaPdfBuffer } from './proformaPdf.js';
 import { buildPurchaseOrderPdfBuffer } from './purchaseOrderPdf.js';
 import { buildClientInvoicePdfBuffer } from './clientInvoicePdf.js';
 import { buildCreditNotePdfBuffer } from './creditNotePdf.js';
+import { buildDebitNotePdfBuffer } from './debitNotePdf.js';
+import { buildDeliveryChallanPdfBuffer } from './deliveryChallanPdf.js';
+import { buildBillOfSupplyPdfBuffer } from './billOfSupplyPdf.js';
+import { buildQuotationPdfBuffer } from './quotationPdf.js';
 import { uploadDir } from '../../config/paths.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 
@@ -92,7 +108,16 @@ router.use(authenticate);
 const canRead = requirePermission(PERMISSIONS.FINANCE_READ, PERMISSIONS.FINANCE_WRITE);
 const canWrite = requirePermission(PERMISSIONS.FINANCE_WRITE);
 
-const COMMERCIAL_DOC_TYPES = ['client_invoice', 'purchase_order', 'proforma', 'credit_note'];
+const COMMERCIAL_DOC_TYPES = [
+  'client_invoice',
+  'purchase_order',
+  'proforma',
+  'quotation',
+  'credit_note',
+  'debit_note',
+  'delivery_challan',
+  'bill_of_supply',
+];
 
 function commercialListFilter(req) {
   const filter = { isDeleted: false };
@@ -183,6 +208,10 @@ router.post(
       client_invoice: [normalizeClientInvoicePayload, validateClientInvoicePayload],
       purchase_order: [normalizePurchaseOrderPayload, validatePurchaseOrderPayload],
       credit_note: [normalizeCreditNotePayload, validateCreditNotePayload],
+      debit_note: [normalizeDebitNotePayload, validateDebitNotePayload],
+      delivery_challan: [normalizeDeliveryChallanPayload, validateDeliveryChallanPayload],
+      bill_of_supply: [normalizeBillOfSupplyPayload, validateBillOfSupplyPayload],
+      quotation: [normalizeQuotationPayload, validateQuotationPayload],
     };
     const pair = normalizers[row.documentType];
     if (!pair) throw new AppError('Unsupported document type', 400);
@@ -1275,6 +1304,278 @@ router.get(
     res.send(pdfBuffer);
   })
 );
+
+/**
+ * Shared CRUD / issue / PDF routes for invoice-like commercial document types.
+ */
+function registerInvoiceLikeDocRoutes({
+  basePath,
+  documentType,
+  notFoundLabel,
+  docKeyPrefix,
+  auditVerb,
+  normalize,
+  validate,
+  nextNumber,
+  buildPdf,
+  fileSlug,
+}) {
+  router.get(
+    `/${basePath}`,
+    canRead,
+    asyncHandler(async (req, res) => {
+      const { page, limit, skip, sort } = parsePagination(req.query);
+      const filter = { isDeleted: false, documentType };
+      if (req.query.status) filter.status = String(req.query.status);
+      if (req.query.q) {
+        const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
+        filter.$or = [
+          { docKey: re },
+          { documentNumber: re },
+          { recipientName: re },
+          { projectName: re },
+        ];
+      }
+      const [data, total] = await Promise.all([
+        FinanceCommercialDocument.find(filter)
+          .sort(sort || '-documentDate')
+          .skip(skip)
+          .limit(limit),
+        FinanceCommercialDocument.countDocuments(filter),
+      ]);
+      res.json(paginated(data, total, page, limit));
+    })
+  );
+
+  router.post(
+    `/${basePath}/preview`,
+    canRead,
+    asyncHandler(async (req, res) => {
+      const orgProfile = await getOrCreateOrgProfile();
+      const payload = normalize(req.body, orgProfile);
+      if (!payload.recipientName) payload.recipientName = 'Preview Client';
+      const docObj = {
+        ...payload,
+        documentType,
+        documentNumber: trimStr(req.body.documentNumber) || 'PREVIEW',
+        status: 'Draft',
+        taxMode: usesIgst(payload.recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst',
+      };
+      sendPreviewPdf(res, await buildPdf(docObj, orgProfile.toObject()), `${fileSlug}-preview.pdf`);
+    })
+  );
+
+  router.get(
+    `/${basePath}/:id`,
+    canRead,
+    asyncHandler(async (req, res) => {
+      const row = await FinanceCommercialDocument.findOne({
+        _id: req.params.id,
+        isDeleted: false,
+        documentType,
+      });
+      if (!row) throw new AppError(`${notFoundLabel} not found`, 404);
+      res.json({ data: row });
+    })
+  );
+
+  router.post(
+    `/${basePath}`,
+    canWrite,
+    asyncHandler(async (req, res) => {
+      const orgProfile = await getOrCreateOrgProfile();
+      const payload = normalize(req.body, orgProfile);
+      validate(payload, { requireLines: false });
+
+      const row = await FinanceCommercialDocument.create({
+        docKey: await nextSequence('financeCommercialDoc', docKeyPrefix),
+        documentType,
+        documentNumber: '',
+        status: 'Draft',
+        source: 'generated',
+        createdById: req.user._id,
+        createdByEmail: req.user.email,
+        ...payload,
+        ...extractBuilderExtras(req.body),
+      });
+
+      await writeAudit({
+        actorId: req.user._id,
+        actorEmail: req.user.email,
+        action: `FINANCE.${auditVerb}.CREATE`,
+        entityType: 'FinanceCommercialDocument',
+        entityId: row._id,
+        after: row.toObject ? row.toObject() : row,
+        requestId: req.requestId,
+      });
+
+      res.status(201).json({ data: row });
+    })
+  );
+
+  router.patch(
+    `/${basePath}/:id`,
+    canWrite,
+    asyncHandler(async (req, res) => {
+      const row = await FinanceCommercialDocument.findOne({
+        _id: req.params.id,
+        isDeleted: false,
+        documentType,
+      });
+      if (!row) throw new AppError(`${notFoundLabel} not found`, 404);
+      assertEditableStatus(row.status);
+
+      const orgProfile = await getOrCreateOrgProfile();
+      const merged = {
+        ...row.toObject(),
+        ...req.body,
+        documentDate: req.body.documentDate != null ? req.body.documentDate : row.documentDate,
+        lineItems: req.body.lineItems != null ? req.body.lineItems : row.lineItems,
+      };
+      const payload = normalize(merged, orgProfile);
+      validate(payload, { requireLines: false });
+
+      const before = row.toObject ? row.toObject() : { ...row };
+      Object.assign(row, payload, extractBuilderExtras(req.body));
+      row.documentNumber = '';
+      stampUpdater(row, req.user);
+      await row.save();
+      await auditCommercial(req, `FINANCE.${auditVerb}.UPDATE`, row, before);
+      res.json({ data: row });
+    })
+  );
+
+  router.post(
+    `/${basePath}/:id/issue`,
+    canWrite,
+    asyncHandler(async (req, res) => {
+      const row = await FinanceCommercialDocument.findOne({
+        _id: req.params.id,
+        isDeleted: false,
+        documentType,
+      });
+      if (!row) throw new AppError(`${notFoundLabel} not found`, 404);
+      assertIssuable(row.status);
+
+      const orgProfile = await getOrCreateOrgProfile();
+      const payload = normalize(row.toObject(), orgProfile);
+      validate(payload);
+      Object.assign(row, payload);
+
+      if (!trimStr(row.documentNumber)) {
+        row.documentNumber = await nextNumber(row.documentDate);
+      }
+      row.documentPeriod = documentNumberPeriod(row.documentDate).periodKey;
+      row.status = 'Issued';
+      row.issuedAt = new Date().toISOString();
+      row.source = row.source || 'generated';
+      await row.save();
+
+      await writeAudit({
+        actorId: req.user._id,
+        actorEmail: req.user.email,
+        action: `FINANCE.${auditVerb}.ISSUE`,
+        entityType: 'FinanceCommercialDocument',
+        entityId: row._id,
+        after: row.toObject ? row.toObject() : row,
+        requestId: req.requestId,
+      });
+
+      res.json({ data: row });
+    })
+  );
+
+  router.get(
+    `/${basePath}/:id/pdf`,
+    canRead,
+    asyncHandler(async (req, res) => {
+      const row = await FinanceCommercialDocument.findOne({
+        _id: req.params.id,
+        isDeleted: false,
+        documentType,
+      });
+      if (!row) throw new AppError(`${notFoundLabel} not found`, 404);
+
+      if (row.source === 'uploaded' && row.storageKey) {
+        const filePath = path.join(uploadRoot, row.storageKey);
+        if (!fs.existsSync(filePath)) throw new AppError('Uploaded file missing', 404);
+        const asDownload = String(req.query.download || '') === '1';
+        res.setHeader('Content-Type', row.uploadedMimeType || 'application/pdf');
+        res.setHeader(
+          'Content-Disposition',
+          `${asDownload ? 'attachment' : 'inline'}; filename="${(row.uploadedFileName || row.documentNumber || fileSlug).replace(/[^\w.-]+/g, '_')}.pdf"`
+        );
+        fs.createReadStream(filePath).pipe(res);
+        return;
+      }
+
+      const orgProfile = await getOrCreateOrgProfile();
+      const docObj = row.toObject ? row.toObject() : { ...row };
+      docObj.taxMode = usesIgst(docObj.recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst';
+      const pdfBuffer = await buildPdf(docObj, orgProfile.toObject());
+      const asDownload = String(req.query.download || '') === '1';
+      const safeName = (row.documentNumber || row.docKey || fileSlug).replace(/[^\w./-]+/g, '_');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `${asDownload ? 'attachment' : 'inline'}; filename="${safeName}.pdf"`
+      );
+      res.send(pdfBuffer);
+    })
+  );
+}
+
+registerInvoiceLikeDocRoutes({
+  basePath: 'delivery-challans',
+  documentType: 'delivery_challan',
+  notFoundLabel: 'Delivery challan',
+  docKeyPrefix: 'DC',
+  auditVerb: 'DELIVERY_CHALLAN',
+  normalize: normalizeDeliveryChallanPayload,
+  validate: validateDeliveryChallanPayload,
+  nextNumber: nextDeliveryChallanNumber,
+  buildPdf: buildDeliveryChallanPdfBuffer,
+  fileSlug: 'delivery-challan',
+});
+
+registerInvoiceLikeDocRoutes({
+  basePath: 'bill-of-supplies',
+  documentType: 'bill_of_supply',
+  notFoundLabel: 'Bill of supply',
+  docKeyPrefix: 'BS',
+  auditVerb: 'BILL_OF_SUPPLY',
+  normalize: normalizeBillOfSupplyPayload,
+  validate: validateBillOfSupplyPayload,
+  nextNumber: nextBillOfSupplyNumber,
+  buildPdf: buildBillOfSupplyPdfBuffer,
+  fileSlug: 'bill-of-supply',
+});
+
+registerInvoiceLikeDocRoutes({
+  basePath: 'debit-notes',
+  documentType: 'debit_note',
+  notFoundLabel: 'Debit note',
+  docKeyPrefix: 'DN',
+  auditVerb: 'DEBIT_NOTE',
+  normalize: normalizeDebitNotePayload,
+  validate: validateDebitNotePayload,
+  nextNumber: nextDebitNoteNumber,
+  buildPdf: buildDebitNotePdfBuffer,
+  fileSlug: 'debit-note',
+});
+
+registerInvoiceLikeDocRoutes({
+  basePath: 'quotations',
+  documentType: 'quotation',
+  notFoundLabel: 'Quotation',
+  docKeyPrefix: 'QT',
+  auditVerb: 'QUOTATION',
+  normalize: normalizeQuotationPayload,
+  validate: validateQuotationPayload,
+  nextNumber: nextQuotationNumber,
+  buildPdf: buildQuotationPdfBuffer,
+  fileSlug: 'quotation',
+});
 
 router.get(
   '/commercial-meta',

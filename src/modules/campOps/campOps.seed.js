@@ -169,12 +169,12 @@ async function ensureDemoClients() {
   const clients = {};
   for (const entry of CAMP_ONE_DEMO_CLIENTS) {
     let client = await CampOpsClient.findOne({ isDeleted: false, name: entry.name });
-    if (!client) {
-      client = await CampOpsClient.create({
+  if (!client) {
+    client = await CampOpsClient.create({
         name: entry.name,
         code: entry.code,
-        isActive: true,
-      });
+      isActive: true,
+    });
     } else if (!client.code) {
       client.code = entry.code;
       await client.save();

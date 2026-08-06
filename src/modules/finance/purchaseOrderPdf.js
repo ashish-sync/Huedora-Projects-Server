@@ -1,5 +1,5 @@
-import { buildCommercialDocumentPdf } from './commercialDocumentTemplate.js';
+import { buildPurchaseOrderTemplatePdf } from './purchaseOrderTemplate.js';
 
 export function buildPurchaseOrderPdfBuffer(docRow, orgProfile) {
-  return buildCommercialDocumentPdf(docRow, orgProfile, 'purchase_order');
+  return buildPurchaseOrderTemplatePdf(docRow, orgProfile);
 }
