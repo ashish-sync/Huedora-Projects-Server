@@ -95,6 +95,8 @@ export const FinanceOrgProfile = defineCollection('finance_org_profile', {
   upiId: '',
   logoDataUrl: '',
   paymentQrDataUrl: '',
+  signatureDataUrl: '',
+  signatoryName: '',
   defaultPaymentTermsDays: 45,
   defaultTerms: [],
   proformaNotes: [],

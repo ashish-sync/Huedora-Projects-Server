@@ -1,4 +1,4 @@
-email,fullName,designation,accessProfile,reportingToEmail
+﻿email,fullName,designation,accessProfile,reportingToEmail
 member01@yourcompany.com,Team Member 01,,camp_coordinator,manager@yourcompany.com
 member02@yourcompany.com,Team Member 02,,camp_coordinator,manager@yourcompany.com
 member03@yourcompany.com,Team Member 03,,camp_coordinator,manager@yourcompany.com

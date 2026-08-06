@@ -8,6 +8,7 @@ import {
   toAmount,
 } from './financeCommercial.service.js';
 import { BRAND, moneyPlain, resolveLogoPath } from './pdfBrand.js';
+import { formatCompanyLetterhead, drawCompanyLetterheadLine1 } from './companyLetterhead.js';
 
 const PAGE = { width: 595.28, height: 841.89, margin: 22 };
 const GRAY = '#E5E7EB';
@@ -66,7 +67,7 @@ function drawHeader(pdf, org, x, y, w) {
         .font('Helvetica')
         .fontSize(6)
         .fillColor(MUTED)
-        .text(org.brandLine || 'Bringing Healthcare Closer', x, y + 18, { width: logoW });
+        .text(org.brandLine || '', x, y + 18, { width: logoW });
     }
   } else {
     pdf.font('Helvetica-Bold').fontSize(14).fillColor(INK).text('TYLO', x, y + 2);
@@ -74,27 +75,19 @@ function drawHeader(pdf, org, x, y, w) {
       .font('Helvetica')
       .fontSize(6)
       .fillColor(MUTED)
-      .text(org.brandLine || 'Bringing Healthcare Closer', x, y + 18, { width: logoW });
+      .text(org.brandLine || '', x, y + 18, { width: logoW });
   }
 
-  const lines = [
-    `Registered Office: ${org.registeredOffice || ''}`,
-    [
-      org.gstin ? `GSTIN: ${org.gstin}` : null,
-      org.cin ? `CIN: ${org.cin}` : null,
-      org.udyam ? `Udyam: ${org.udyam}${org.udyamLabel ? ` (${org.udyamLabel})` : ''}` : null,
-    ]
-      .filter(Boolean)
-      .join('  |  '),
-    [org.email ? `Email: ${org.email}` : null, org.website ? `Website: ${org.website}` : null]
-      .filter(Boolean)
-      .join('  |  '),
-  ].filter(Boolean);
-
-  let ty = y;
-  pdf.font('Helvetica').fontSize(6.2).fillColor(INK);
-  for (const line of lines) {
-    pdf.text(line, midX, ty, { width: midW, align: 'center' });
+  const letterhead = formatCompanyLetterhead(org);
+  let ty = drawCompanyLetterheadLine1(pdf, letterhead, midX, y, midW, {
+    size: 8.5,
+    align: 'center',
+    ink: INK,
+    muted: MUTED,
+  });
+  if (letterhead.line2) {
+    pdf.font('Helvetica').fontSize(6.5).fillColor(MUTED);
+    pdf.text(letterhead.line2, midX, ty, { width: midW, align: 'center' });
     ty = pdf.y + 1;
   }
 
@@ -144,12 +137,12 @@ function drawBuyerVendor(pdf, doc, org, x, y, w) {
   sectionHead(pdf, 'VENDOR DETAILS', x + half, y, half, headH);
 
   const buyer = [
-    ['Company Name', doc.buyerCompanyName || org.legalName || 'Tylo Care Private Limited'],
-    ['Registered Office', doc.buyerAddress || org.registeredOffice || ''],
-    ['GSTIN', doc.buyerGstin || org.gstin || ''],
+    ['Company Name', org.legalName || ''],
+    ['Registered Office', org.registeredOffice || ''],
+    ['GSTIN', org.gstin || ''],
     ['Contact Person', doc.buyerContactPerson || ''],
-    ['Mobile', doc.buyerMobile || ''],
-    ['Email', doc.buyerEmail || org.email || ''],
+    ['Mobile', org.phone || ''],
+    ['Email', org.email || ''],
     ['', ''],
   ];
   const vendor = [
@@ -193,23 +186,14 @@ function drawDeliveryBilling(pdf, doc, org, x, y, w) {
   const billing = [
     [
       'Billing Address',
-      doc.billingAddress ||
-        [org.legalName || 'Tylo Care Private Limited', org.registeredOffice || ''].filter(Boolean).join(', '),
+      [org.legalName || '', org.registeredOffice || ''].filter(Boolean).join(', '),
     ],
-    ['GSTIN', doc.billingGstin || org.gstin || ''],
-    ['State', doc.billingState || org.state || ''],
-    ['State Code', doc.billingStateCode || org.stateCode || ''],
+    ['GSTIN', org.gstin || ''],
+    ['State', org.state || ''],
+    ['State Code', org.stateCode || ''],
     [
       'Place of Supply',
-      doc.billingPlaceOfSupply ||
-        [
-          doc.billingState || org.state,
-          doc.billingStateCode || org.stateCode
-            ? `(${doc.billingStateCode || org.stateCode})`
-            : null,
-        ]
-          .filter(Boolean)
-          .join(' '),
+      [org.state, org.stateCode ? `(${org.stateCode})` : null].filter(Boolean).join(' '),
     ],
   ];
 
@@ -266,16 +250,15 @@ function drawItems(pdf, doc, x, y, w) {
   const cols = [
     { key: 'sr', label: 'Sr', width: 18 },
     { key: 'desc', label: 'Item Description', width: 0 },
-    { key: 'make', label: 'Make', width: 36 },
-    { key: 'model', label: 'Model', width: 36 },
-    { key: 'qty', label: 'Qty', width: 26 },
-    { key: 'unit', label: 'Unit', width: 28 },
-    { key: 'rate', label: 'Unit Rate (₹)', width: 48 },
-    { key: 'disc', label: 'Discount (₹)', width: 44 },
-    { key: 'taxable', label: 'Taxable Value (₹)', width: 52 },
-    { key: 'gstPct', label: 'GST %', width: 28 },
-    { key: 'gstAmt', label: 'GST Amount (₹)', width: 48 },
-    { key: 'total', label: 'Total Amount (₹)', width: 52 },
+    { key: 'make', label: 'Make', width: 40 },
+    { key: 'model', label: 'Model', width: 40 },
+    { key: 'qty', label: 'Qty', width: 28 },
+    { key: 'unit', label: 'Unit', width: 30 },
+    { key: 'rate', label: 'Unit Rate (₹)', width: 52 },
+    { key: 'taxable', label: 'Taxable Value (₹)', width: 56 },
+    { key: 'gstPct', label: 'GST Rate %', width: 36 },
+    { key: 'gstAmt', label: 'GST Amount (₹)', width: 52 },
+    { key: 'total', label: 'Total Amount (₹)', width: 56 },
   ];
   const fixed = cols.reduce((s, c) => s + c.width, 0);
   cols.find((c) => c.key === 'desc').width = w - fixed;
@@ -306,7 +289,6 @@ function drawItems(pdf, doc, x, y, w) {
       qty: line.qty != null && line.qty !== '' ? String(line.qty) : '',
       unit: line.unit || line.uom || '',
       rate: line.rate != null && line.rate !== '' ? moneyPlain(line.rate) : '',
-      disc: line.discount != null && line.discount !== '' ? moneyPlain(line.discount) : '',
       taxable: line.description ? moneyPlain(taxable) : '',
       gstPct: line.description ? String(gstPct) : '',
       gstAmt: line.description ? moneyPlain(gstAmt) : '',
@@ -317,7 +299,7 @@ function drawItems(pdf, doc, x, y, w) {
       box(pdf, cx, y, col.width, rowH);
       const align = ['sr', 'qty', 'unit', 'gstPct'].includes(col.key)
         ? 'center'
-        : ['rate', 'disc', 'taxable', 'gstAmt', 'total'].includes(col.key)
+        : ['rate', 'taxable', 'gstAmt', 'total'].includes(col.key)
           ? 'right'
           : 'left';
       cell(pdf, values[col.key], cx, y, col.width, rowH, { size: 5.8, align, padY: 2 });
@@ -337,7 +319,7 @@ function drawTotals(pdf, doc, x, y, w) {
     ['Taxable Value', moneyPlain(doc.subtotal)],
     ['Total GST', moneyPlain(doc.taxAmount)],
     ['Round Off', moneyPlain(doc.roundOff || 0)],
-    ['GRAND TOTAL', moneyPlain(doc.grandTotal), true],
+    ['Grand Total', moneyPlain(doc.grandTotal), true],
   ];
   for (const [label, value, strong] of rows) {
     box(pdf, totalX, y, labelW, rowH, strong ? GRAY : null);
@@ -369,7 +351,7 @@ function drawAmountWords(pdf, doc, x, y, w) {
 function drawSignatory(pdf, org, x, y, w) {
   const boxW = 170;
   const sx = x + w - boxW;
-  pdf.font('Helvetica').fontSize(7).fillColor(INK).text(`For ${org.legalName || 'Tylo Care Private Limited'}`, sx, y, {
+  pdf.font('Helvetica').fontSize(7).fillColor(INK).text(`For ${org.legalName || ''}`, sx, y, {
     width: boxW,
     align: 'center',
   });

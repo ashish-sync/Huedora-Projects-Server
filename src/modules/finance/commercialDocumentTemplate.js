@@ -12,6 +12,7 @@ import {
   usesIgst,
 } from './financeCommercial.service.js';
 import { BRAND, moneyInr, moneyPlain, resolveLogoPath } from './pdfBrand.js';
+import { formatCompanyLetterhead, drawCompanyLetterheadLine1 } from './companyLetterhead.js';
 
 export const PAGE = {
   width: 841.89,
@@ -259,16 +260,15 @@ function aggregateTax(lines, taxMode) {
 }
 
 function itemColumns(contentWidth) {
-  const fixed = 28 + 44 + 38 + 40 + 58 + 52 + 64 + 58 + 66;
+  const fixed = 28 + 44 + 48 + 40 + 58 + 64 + 58 + 66;
   const productW = Math.max(120, contentWidth - fixed);
   return [
     { key: 'sr', label: 'Sl. No.', w: 28, align: 'center' },
     { key: 'product', label: 'Product Name', w: productW, align: 'left' },
     { key: 'hsn', label: 'HSN/SAC', w: 44, align: 'center' },
-    { key: 'gst', label: 'GST %', w: 38, align: 'right' },
+    { key: 'gst', label: 'GST Rate %', w: 48, align: 'right' },
     { key: 'qty', label: 'Qty', w: 40, align: 'right' },
     { key: 'rate', label: 'Unit Rate', w: 58, align: 'right' },
-    { key: 'disc', label: 'Discount', w: 52, align: 'right' },
     { key: 'taxable', label: 'Taxable', w: 64, align: 'right' },
     { key: 'gstAmt', label: 'GST', w: 58, align: 'right' },
     { key: 'total', label: 'Total', w: 66, align: 'right' },
@@ -324,23 +324,17 @@ function drawFullHeader(pdf, org, margin, contentWidth, meta) {
 
   const textX = margin + (logoPath ? 86 : 0);
   const textW = leftW - (logoPath ? 86 : 0);
-  pdf
-    .font('Helvetica-Bold')
-    .fontSize(FONT.companyName)
-    .fillColor(BRAND.ink)
-    .text(org.legalName || org.brandLine || 'TYLO', textX, y, { width: textW });
-  y = Math.max(y + 4, pdf.y + 2);
+  const letterhead = formatCompanyLetterhead(org);
+  y = drawCompanyLetterheadLine1(pdf, letterhead, textX, y, textW, {
+    size: FONT.headerBody + 2.5,
+    align: 'left',
+    ink: BRAND.ink,
+    muted: BRAND.muted,
+  });
 
-  const leftLines = [
-    org.registeredOffice,
-    org.gstin ? `GSTIN: ${org.gstin}` : '',
-    [org.phone ? `Phone: ${org.phone}` : '', org.email || ''].filter(Boolean).join('  ·  '),
-    org.website || '',
-  ].filter(Boolean);
-
-  pdf.font('Helvetica').fontSize(FONT.headerBody).fillColor(BRAND.muted);
-  for (const line of leftLines) {
-    pdf.text(line, textX, y, { width: textW, lineGap: 1 });
+  if (letterhead.line2) {
+    pdf.font('Helvetica').fontSize(FONT.headerBody - 0.5).fillColor(BRAND.muted);
+    pdf.text(letterhead.line2, textX, y, { width: textW, lineGap: 1.5 });
     y = pdf.y + 2;
   }
 
@@ -466,7 +460,6 @@ function drawItemsTable(pdf, ctx, startY, lines) {
       gst: `${Number(item.gstRate || 0).toFixed(2)}%`,
       qty: item.qty ? String(item.qty) : '—',
       rate: moneyPlain(item.rate),
-      disc: item.discount ? moneyPlain(item.discount) : '—',
       taxable: moneyPlain(item.taxableAmount),
       gstAmt: moneyPlain(item.gstAmount),
       total: moneyPlain(item.totalAmount),
@@ -583,11 +576,6 @@ function drawFinancialSummary(pdf, margin, y, contentWidth, docRow, showPayment)
   const panelX = margin + contentWidth - panelW;
   const startY = y;
 
-  const totalDiscount = (docRow.lineItems || []).reduce(
-    (s, r) => s + (Number(r.discount) || 0),
-    0
-  );
-
   pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(BRAND.royal).text('Amount in Words', margin, y);
   y = pdf.y + 4;
   pdf
@@ -631,7 +619,6 @@ function drawFinancialSummary(pdf, margin, y, contentWidth, docRow, showPayment)
 
   const finRows = [
     ['Subtotal', moneyPlain(docRow.subtotal)],
-    ['Discount', totalDiscount ? moneyPlain(totalDiscount) : '—'],
     ['Taxable Value', moneyPlain(docRow.subtotal)],
     ['GST', moneyPlain(docRow.taxAmount)],
   ];

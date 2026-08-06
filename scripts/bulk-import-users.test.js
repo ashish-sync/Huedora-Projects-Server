@@ -20,7 +20,8 @@ test('bulk-import-users --generate-template writes 25 data rows', () => {
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.ok(fs.existsSync(templatePath));
 
-  const lines = fs.readFileSync(templatePath, 'utf8').trim().split('\n');
+  const lines = fs.readFileSync(templatePath, 'utf8').replace(/^\uFEFF/, '').trim().split('\n');
   assert.equal(lines.length, 26, 'header + 25 rows');
   assert.ok(lines[0].startsWith('email,fullName,designation'));
+  assert.ok(fs.readFileSync(templatePath).subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])));
 });

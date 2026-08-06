@@ -207,6 +207,24 @@ router.get(
   asyncHandler(async (req, res) => {
     const tpl = await DocumentTemplate.findOne({ _id: req.params.id, isDeleted: false });
     if (!tpl) throw new AppError('Template not found', 404);
+
+    if (tpl.sourceType === 'DOCX' && tpl.storageKey) {
+      const full = path.join(templateRoot, tpl.storageKey);
+      if (fs.existsSync(full)) {
+        try {
+          const analysis = await analyzeDocx(fs.readFileSync(full));
+          tpl.repeatableTables = analysis.repeatableTables || [];
+          if (Array.isArray(analysis.placeholders)) {
+            tpl.placeholders = analysis.placeholders;
+          }
+          tpl.bodyHtml = analysis.plain || tpl.bodyHtml;
+          await tpl.save();
+        } catch {
+          /* keep stored metadata */
+        }
+      }
+    }
+
     res.json({ data: tpl });
   })
 );
@@ -266,6 +284,7 @@ router.post(
       data: {
         plain: analysis.plain,
         placeholders: analysis.placeholders,
+        repeatableTables: analysis.repeatableTables || [],
         originalFileName: req.file.originalname,
         sizeBytes: req.file.size,
       },
@@ -339,6 +358,7 @@ router.post(
       storageKey,
       contentType: req.file.mimetype,
       placeholders: analysis.placeholders,
+      repeatableTables: analysis.repeatableTables || [],
       isActive: true,
       createdBy: req.user._id,
     });
@@ -355,12 +375,27 @@ router.post(
     if (!tpl) throw new AppError('Template not found', 404);
 
     const values = req.body.values || {};
+    const lineRows = req.body.lineRows && typeof req.body.lineRows === 'object' ? req.body.lineRows : {};
     let placeholders = tpl.placeholders || [];
-    if (!placeholders.length && tpl.bodyHtml) {
+    let repeatableTables = Array.isArray(tpl.repeatableTables) ? tpl.repeatableTables : [];
+
+    if (tpl.sourceType === 'DOCX' && tpl.storageKey) {
+      const fullPath = path.join(templateRoot, tpl.storageKey);
+      if (fs.existsSync(fullPath)) {
+        const analysis = await analyzeDocx(fs.readFileSync(fullPath));
+        placeholders = analysis.placeholders || [];
+        repeatableTables = analysis.repeatableTables || [];
+        tpl.placeholders = placeholders;
+        tpl.repeatableTables = repeatableTables;
+        if (analysis.plain) tpl.bodyHtml = analysis.plain;
+        await tpl.save();
+      }
+    } else if (!placeholders.length && tpl.bodyHtml) {
       placeholders = extractPlaceholdersFromText(tpl.bodyHtml);
       tpl.placeholders = placeholders;
       await tpl.save();
     }
+
     const missing = placeholders.filter((p) => {
       const v = values[p.key] ?? values[p.label];
       return v == null || String(v).trim() === '';
@@ -380,6 +415,50 @@ router.post(
       const err = validatePlaceholderValue(p.type, v);
       if (err) invalid.push({ ...p, message: err });
     }
+
+    for (const table of repeatableTables) {
+      const rows = Array.isArray(lineRows[table.id]) ? lineRows[table.id] : [];
+      const minRows = Number(table.minRows) > 0 ? Number(table.minRows) : 1;
+      const maxRows = Number(table.maxRows) > 0 ? Number(table.maxRows) : 20;
+      if (rows.length < minRows) {
+        throw new AppError(
+          `Add at least ${minRows} line item${minRows === 1 ? '' : 's'} for the item table`,
+          400,
+          'LINE_ROWS_REQUIRED'
+        );
+      }
+      if (rows.length > maxRows) {
+        throw new AppError(
+          `At most ${maxRows} line items are allowed`,
+          400,
+          'LINE_ROWS_LIMIT'
+        );
+      }
+      rows.forEach((row, rowIndex) => {
+        for (const col of table.columns || []) {
+          const v = row?.[col.key] ?? row?.[col.label];
+          if (v == null || String(v).trim() === '') {
+            invalid.push({
+              ...col,
+              key: `${table.id}.${rowIndex}.${col.key}`,
+              label: `Row ${rowIndex + 1} · ${col.label}`,
+              message: 'This field is required',
+            });
+            continue;
+          }
+          const err = validatePlaceholderValue(col.type, v);
+          if (err) {
+            invalid.push({
+              ...col,
+              key: `${table.id}.${rowIndex}.${col.key}`,
+              label: `Row ${rowIndex + 1} · ${col.label}`,
+              message: err,
+            });
+          }
+        }
+      });
+    }
+
     if (invalid.length) {
       throw new AppError(
         invalid.map((i) => `${i.label}: ${i.message}`).join('; '),
@@ -397,7 +476,11 @@ router.post(
       const full = path.join(templateRoot, tpl.storageKey);
       if (!fs.existsSync(full)) throw new AppError('Template Word file missing', 404);
       const buffer = fs.readFileSync(full);
-      const filled = await fillDocxBuffer(buffer, values);
+      const filled = await fillDocxBuffer(buffer, values, {
+        repeatableTables,
+        lineRows,
+        documentPlaceholders: placeholders,
+      });
       filledText = filled.filledText;
       blocks = filled.blocks;
       filledDocxKey = `${uuid()}-filled.docx`;
@@ -424,6 +507,7 @@ router.post(
       pdfPath,
       filledText,
       values,
+      lineRows,
       templateId: tpl._id,
       filledDocxKey,
       title,
@@ -437,7 +521,9 @@ router.post(
         previewUrl: `/api/v1/templates/preview/${token}.pdf`,
         filledText,
         placeholders,
+        repeatableTables,
         values,
+        lineRows,
         signingType,
       },
     });

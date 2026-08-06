@@ -9,6 +9,7 @@ import {
   toAmount,
 } from './financeCommercial.service.js';
 import { BRAND, moneyPlain, resolveLogoPath } from './pdfBrand.js';
+import { formatCompanyLetterhead, drawCompanyLetterheadLine1 } from './companyLetterhead.js';
 
 const PAGE = {
   width: 595.28,
@@ -24,7 +25,7 @@ const LINE = '#111827';
 export const PORTRAIT_DOC_PRESETS = {
   bill_of_supply: {
     title: 'BILL OF SUPPLY',
-    totalLabel: 'TOTAL BILL VALUE',
+    totalLabel: 'Total Bill Value',
     gstMode: 'nil',
     paymentTermsTitle: 'PAYMENT TERMS & IMPORTANT INFORMATION',
     bankNote:
@@ -47,7 +48,7 @@ export const PORTRAIT_DOC_PRESETS = {
   },
   credit_note: {
     title: 'CREDIT NOTE',
-    totalLabel: 'TOTAL CREDIT NOTE VALUE',
+    totalLabel: 'Total Credit Note Value',
     gstMode: 'taxable',
     paymentTermsTitle: 'PAYMENT TERMS',
     bankNote:
@@ -74,7 +75,7 @@ export const PORTRAIT_DOC_PRESETS = {
   },
   debit_note: {
     title: 'DEBIT NOTE',
-    totalLabel: 'TOTAL DEBIT NOTE VALUE',
+    totalLabel: 'Total Debit Note Value',
     gstMode: 'taxable',
     paymentTermsTitle: 'PAYMENT TERMS',
     bankNote:
@@ -106,7 +107,7 @@ export const PORTRAIT_DOC_PRESETS = {
   },
   proforma: {
     title: 'PROFORMA INVOICE',
-    totalLabel: 'TOTAL ESTIMATED VALUE',
+    totalLabel: 'Total Estimated Value',
     gstMode: 'taxable',
     paymentTermsTitle: 'PAYMENT TERMS & DECLARATION',
     bankNote:
@@ -131,7 +132,7 @@ export const PORTRAIT_DOC_PRESETS = {
   },
   quotation: {
     title: 'QUOTATION',
-    totalLabel: 'TOTAL QUOTATION VALUE',
+    totalLabel: 'Total Quotation Value',
     gstMode: 'taxable',
     paymentTermsTitle: 'PAYMENT TERMS & MSME DECLARATION',
     bankNote:
@@ -156,7 +157,7 @@ export const PORTRAIT_DOC_PRESETS = {
   },
   client_invoice: {
     title: 'TAX INVOICE',
-    totalLabel: 'TOTAL INVOICE VALUE',
+    totalLabel: 'Total Invoice Value',
     gstMode: 'taxable',
     paymentTermsTitle: 'PAYMENT TERMS & MSME DECLARATION',
     bankNote:
@@ -164,9 +165,11 @@ export const PORTRAIT_DOC_PRESETS = {
     defaultTerms: 'Payment is due within 30 days from the date of invoice.',
     showGstExemptNote: false,
     declarationNote: (org) => {
-      const legal = org.legalName || 'Tylo Care Private Limited';
-      const udyam = org.udyam || 'UDYAM-MH-19-0446179';
-      return `${legal} is registered as a Micro Enterprise under the MSMED Act, 2006, bearing Udyam Registration No. ${udyam}. Delayed payments shall be governed by applicable provisions of the MSMED Act, 2006.`;
+      const legal = org.legalName || 'the Company';
+      if (org.udyam) {
+        return `${legal} is registered as a Micro Enterprise under the MSMED Act, 2006, bearing Udyam Registration No. ${org.udyam}. Delayed payments shall be governed by applicable provisions of the MSMED Act, 2006.`;
+      }
+      return `${legal} is registered under the MSMED Act, 2006. Delayed payments shall be governed by applicable provisions of the MSMED Act, 2006.`;
     },
     metaRows: (doc) => [
       [
@@ -247,22 +250,16 @@ function drawHeader(pdf, org, cfg, x, y, w) {
     });
   }
 
-  const lines = [
-    `Registered Office: ${org.registeredOffice || ''}`,
-    [org.gstin ? `GSTIN: ${org.gstin}` : '', org.cin ? `CIN: ${org.cin}` : ''].filter(Boolean).join('  |  '),
-    [
-      org.udyam ? `Udyam: ${org.udyam}${org.udyamLabel ? ` (${org.udyamLabel})` : ''}` : '',
-      org.email ? `Email: ${org.email}` : '',
-      org.website ? `Website: ${org.website}` : '',
-    ]
-      .filter(Boolean)
-      .join('  |  '),
-  ].filter(Boolean);
-
-  pdf.font('Helvetica').fontSize(7.5).fillColor(INK);
-  let ty = y + 2;
-  for (const line of lines) {
-    pdf.text(line, midX, ty, { width: midW, align: 'center', lineGap: 1 });
+  const letterhead = formatCompanyLetterhead(org);
+  let ty = drawCompanyLetterheadLine1(pdf, letterhead, midX, y + 2, midW, {
+    size: 9.5,
+    align: 'center',
+    ink: INK,
+    muted: MUTED,
+  });
+  if (letterhead.line2) {
+    pdf.font('Helvetica').fontSize(7).fillColor(MUTED);
+    pdf.text(letterhead.line2, midX, ty, { width: midW, align: 'center', lineGap: 1 });
     ty = pdf.y + 1;
   }
 
@@ -490,9 +487,11 @@ function drawFooter(pdf, org, doc, cfg, x, y, w) {
     width: half - 12,
   });
   if (cfg.showGstExemptNote) {
-    const udyam = org.udyam || 'UDYAM-MH-19-0446179';
-    const legal = org.legalName || 'Tylo Care Private Limited';
-    const important = `GST Rate: NIL / EXEMPT. No GST has been charged on this supply as per the applicable provisions of the CGST Act, 2017. ${legal} is registered as a Micro Enterprise under the MSMED Act, 2006, bearing Udyam Registration No. ${udyam}.`;
+    const legal = org.legalName || 'the Company';
+    const udyamBit = org.udyam
+      ? ` ${legal} is registered as a Micro Enterprise under the MSMED Act, 2006, bearing Udyam Registration No. ${org.udyam}.`
+      : ` ${legal} is registered under the MSMED Act, 2006.`;
+    const important = `GST Rate: NIL / EXEMPT. No GST has been charged on this supply as per the applicable provisions of the CGST Act, 2017.${udyamBit}`;
     ty = pdf.y + 5;
     pdf.font('Helvetica').fontSize(6.8).fillColor(INK).text(important, x + half + 6, ty, {
       width: half - 12,
@@ -517,7 +516,7 @@ function trimStrSafe(v) {
 function drawSignatory(pdf, org, x, y, w) {
   const boxW = 180;
   const sx = x + w - boxW;
-  pdf.font('Helvetica').fontSize(8).fillColor(INK).text(`For ${org.legalName || 'Tylo Care Private Limited'}`, sx, y, {
+  pdf.font('Helvetica').fontSize(8).fillColor(INK).text(`For ${org.legalName || ''}`, sx, y, {
     width: boxW,
     align: 'center',
   });

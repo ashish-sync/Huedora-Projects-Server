@@ -12,7 +12,7 @@ const EXT_LIST = IMPORT_ACCEPT_EXTENSIONS.join(', ');
 /** Canonical one-line messages for tabular import / upload failures. */
 export const IMPORT_ERROR = {
   FILE_REQUIRED: `Please choose a file to import (.csv preferred, or .xlsb). Maximum ${MAX_IMPORT_ROWS.toLocaleString()} rows and ${MB} MB.`,
-  BAD_EXTENSION: `This file type is not supported for import. Use a .csv file (preferred) or .xlsb — Excel workbooks (.xlsx/.xls) are not accepted. In Excel: File → Save As → CSV.`,
+  BAD_EXTENSION: `This file type is not supported for import. Use a .csv UTF-8 file (preferred) or .xlsb — Excel workbooks (.xlsx/.xls) are not accepted. In Excel: File → Save As → CSV UTF-8 (Comma delimited).`,
   EMPTY_FILE: `This file has no data rows to import. Download the sample CSV, add up to ${MAX_IMPORT_ROWS.toLocaleString()} rows under the header, and try again.`,
   TOO_LARGE: `This file is larger than ${MB} MB. Reduce the file (max ${MAX_IMPORT_ROWS.toLocaleString()} rows) and upload again.`,
   TOO_MANY_ROWS: `Import is limited to ${MAX_IMPORT_ROWS.toLocaleString()} data rows. This file has more than that — split it into smaller CSV files and import each one separately.`,
@@ -20,7 +20,7 @@ export const IMPORT_ERROR = {
   NO_DATA_ROWS: `No usable data rows were found after the header. Check that your CSV matches the sample column headers and contains at least one filled row.`,
   NO_VALID_ROWS: `None of the rows could be imported. Fix the issues shown for each row (or download the error report), then upload the file again.`,
   RATE_LIMIT: `Too many imports were started in a short time. Wait a few minutes, then try again with a .csv or .xlsb file.`,
-  PARSE_FAILED: `The file could not be read as CSV or XLSB. Re-save it as CSV (UTF-8) from Excel and try again.`,
+  PARSE_FAILED: `The file could not be read as CSV or XLSB. Re-save it as CSV UTF-8 from Excel (File → Save As → CSV UTF-8) and try again. Avoid ANSI/CSV that replaces Unicode characters with ?.`,
   ROWS_MAPPING_REQUIRED: `Import needs both the parsed rows and a column mapping. Upload the file again and map every required column before continuing.`,
   GENERIC: `Import failed. Use a .csv (preferred) or .xlsb file with at most ${MAX_IMPORT_ROWS.toLocaleString()} rows and ${MB} MB, matching the sample headers.`,
 };

@@ -12,6 +12,7 @@ import {
   normalizeEmail,
   throwIfIdentityClash,
 } from '../src/utils/identityNormalize.js';
+import { readCsvTextSync, withUtf8Bom } from '../src/utils/csvEncoding.js';
 import { inferAccessProfile, TEAM_ACCESS_PROFILES } from './teamAccessProfiles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -242,7 +243,7 @@ export async function runTeamUsersImport({
   }
 
   const defaultRole = String(process.env.BULK_USERS_DEFAULT_ROLE || 'Viewer').trim();
-  const table = parseCsv(fs.readFileSync(resolvedCsv, 'utf8'));
+  const table = parseCsv(readCsvTextSync(resolvedCsv));
   const records = rowsToObjects(table).filter((row) => row.email);
 
   if (!records.length) {
@@ -437,7 +438,7 @@ export async function runTeamUsersImport({
           .join(','),
       ),
     ];
-    fs.writeFileSync(outPath, `${lines.join('\n')}\n`, 'utf8');
+    fs.writeFileSync(outPath, withUtf8Bom(`${lines.join('\n')}\n`), 'utf8');
     console.log(`[bulk-users] Credentials report: ${outPath}`);
   }
 

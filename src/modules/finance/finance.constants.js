@@ -76,7 +76,7 @@ export const DEFAULT_ORG_PROFILE = {
   state: 'Maharashtra',
   stateCode: '27',
   registeredOffice:
-    'C-1207, Sahara Tower, CHS Ltd, C Wing, Sahar Road, International Airport, Mumbai - 400099',
+    'C-1207, Sahara Tower CHS Ltd., C Wing, Sahar Road, International Airport, Mumbai – 400099',
   phone: '',
   email: 'growth@tylocare.com',
   website: 'tylocare.com',
@@ -90,6 +90,8 @@ export const DEFAULT_ORG_PROFILE = {
   upiId: '',
   logoDataUrl: '',
   paymentQrDataUrl: '',
+  signatureDataUrl: '',
+  signatoryName: '',
   defaultPaymentTermsDays: 30,
   defaultTerms: [
     'Payment is due within 30 days from the date of the Bill of Supply unless otherwise agreed.',

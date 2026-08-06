@@ -46,6 +46,7 @@ import {
   nextQuotationNumber,
   toAmount,
   todayIso,
+  addDaysIso,
   trimStr,
   validateClientInvoicePayload,
   validateCreditNotePayload,
@@ -241,6 +242,26 @@ router.post(
     const row = await loadCommercialById(req.params.id);
     assertApprovable(row.status);
     const before = row.toObject ? row.toObject() : { ...row };
+
+    // Bill of Supply: document date = approval date; due date = approval + 30 days
+    if (row.documentType === 'bill_of_supply') {
+      const approvalDate = todayIso();
+      const dueDate = addDaysIso(approvalDate, 30);
+      row.documentDate = approvalDate;
+      row.dueDate = dueDate;
+      if (row.builderForm && typeof row.builderForm === 'object') {
+        const bf = { ...row.builderForm };
+        if (bf.invoice && typeof bf.invoice === 'object') {
+          bf.invoice = {
+            ...bf.invoice,
+            issueDate: approvalDate,
+            dueDate,
+          };
+        }
+        row.builderForm = bf;
+        if (typeof row.markModified === 'function') row.markModified('builderForm');
+      }
+    }
 
     await assignCommercialDocumentNumber(row, { force: true });
     row.status = 'Issued';

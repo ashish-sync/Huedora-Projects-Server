@@ -1,8 +1,8 @@
 import fs from 'fs';
-import path from 'path';
 import { createInterface } from 'readline';
 import { MAX_IMPORT_ROWS } from '../../../utils/spreadsheetLimits.js';
 import { importAppError } from '../../../utils/importErrors.js';
+import { detectCsvStreamEncoding, stripUtf8Bom } from '../../../utils/csvEncoding.js';
 
 /** Parse one CSV line with quoted-field support (single-line fields). */
 export function parseCsvLine(line) {
@@ -52,8 +52,10 @@ export async function* streamCsvFile(filePath, { maxRows = MAX_IMPORT_ROWS } = {
     throw importAppError('TEMP_MISSING');
   }
 
+  // Prefer UTF-8 (with/without BOM). Excel "Unicode Text" may be UTF-16 LE.
+  const encoding = detectCsvStreamEncoding(filePath);
   const rl = createInterface({
-    input: fs.createReadStream(filePath, { encoding: 'utf8' }),
+    input: fs.createReadStream(filePath, { encoding }),
     crlfDelay: Infinity,
   });
 
@@ -62,7 +64,7 @@ export async function* streamCsvFile(filePath, { maxRows = MAX_IMPORT_ROWS } = {
 
   try {
     for await (const raw of rl) {
-      const line = String(raw || '').replace(/^\uFEFF/, '');
+      const line = stripUtf8Bom(String(raw || ''));
       if (!line.trim()) continue;
 
       const cells = parseCsvLine(line).map((c) => String(c ?? '').trim());

@@ -15,6 +15,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import XLSX from 'xlsx';
 import geoSeed from '../src/modules/geo/seed/india-geo.json' with { type: 'json' };
+import { withUtf8Bom } from '../src/utils/csvEncoding.js';
 import {
   buildGeoResolverIndexes,
   normalizePinGeoRow,
@@ -60,7 +61,7 @@ function toCsv(rows) {
       return value.includes(',') ? `"${value.replace(/"/g, '""')}"` : value;
     }).join(','));
   }
-  return `${lines.join('\n')}\n`;
+  return withUtf8Bom(`${lines.join('\n')}\n`);
 }
 
 function main() {

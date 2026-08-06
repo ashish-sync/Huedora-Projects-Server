@@ -177,17 +177,165 @@ export async function parseDocxBufferBlocks(buffer) {
 }
 
 export async function analyzeDocx(buffer) {
-  const { plain } = await readDocxBuffer(buffer);
-  const placeholders = extractPlaceholdersFromText(plain);
-  return { plain, placeholders };
+  const { xml, plain } = await readDocxBuffer(buffer);
+  const repeatableTables = detectRepeatableTables(xml);
+  const rowTokens = new Set();
+  for (const table of repeatableTables) {
+    for (const col of table.columns || []) {
+      if (col.token) rowTokens.add(String(col.token).toLowerCase());
+    }
+  }
+  const all = extractPlaceholdersFromText(plain);
+  const placeholders = all.filter((p) => !rowTokens.has(String(p.token || '').toLowerCase()));
+  return { plain, placeholders, repeatableTables };
 }
 
-export async function fillDocxBuffer(buffer, values = {}) {
-  const { zip, xml, plain } = await readDocxBuffer(buffer);
-  const placeholders = extractPlaceholdersFromText(plain);
-  let nextXml = xml;
+/**
+ * Find DOCX tables whose single sample body row is a cloneable line-item prototype.
+ *
+ * Skip fixed schedules that put placeholders on multiple different body rows
+ * (e.g. compensation matrices). Only tables with exactly one placeholder body row
+ * after the header are treated as repeatable (e.g. Asset Issued).
+ */
+export function detectRepeatableTables(xml = '') {
+  const tables = [];
+  const tblRe = /<w:tbl\b[\s\S]*?<\/w:tbl>/gi;
+  let tblMatch;
+  let tableIndex = -1;
 
-  for (const ph of placeholders) {
+  while ((tblMatch = tblRe.exec(String(xml))) !== null) {
+    tableIndex += 1;
+    const tblXml = tblMatch[0];
+    const rows = [...tblXml.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/gi)].map((m) => m[0]);
+    if (!rows.length) continue;
+
+    let headerIdx = -1;
+    if (/<w:tblHeader\b/i.test(rows[0])) {
+      headerIdx = 0;
+    } else {
+      const firstCells = [];
+      const tcRe = /<w:tc\b[\s\S]*?<\/w:tc>/gi;
+      let tc;
+      while ((tc = tcRe.exec(rows[0])) !== null) {
+        firstCells.push(cellRich(tc[0]));
+      }
+      if (firstCells.some((c) => c.bold)) headerIdx = 0;
+    }
+
+    const bodyStart = headerIdx >= 0 ? headerIdx + 1 : 0;
+    const placeholderBodyIndexes = [];
+    for (let i = bodyStart; i < rows.length; i += 1) {
+      const rowPlain = xmlFragmentToPlain(rows[i]);
+      if (/\[[^\]]+\]/.test(rowPlain)) placeholderBodyIndexes.push(i);
+    }
+
+    // Fixed multi-row schedules keep placeholders as document-level fields.
+    if (placeholderBodyIndexes.length !== 1) continue;
+
+    const prototypeRowIndex = placeholderBodyIndexes[0];
+    const protoPlain = xmlFragmentToPlain(rows[prototypeRowIndex]);
+    const columns = extractPlaceholdersFromText(protoPlain);
+    if (!columns.length) continue;
+
+    // Prefer rows that are mostly merge fields (not prose with one embedded token).
+    const cellTexts = [];
+    const tcRe2 = /<w:tc\b[\s\S]*?<\/w:tc>/gi;
+    let tc2;
+    while ((tc2 = tcRe2.exec(rows[prototypeRowIndex])) !== null) {
+      const text = cellPlain(tc2[0]);
+      if (text) cellTexts.push(text);
+    }
+    const placeholderDominant = cellTexts.filter((text) => {
+      const stripped = String(text)
+        .replace(/\[[^\]]+\]/g, '')
+        .replace(/[₹$€£\s.,_\-–—:/\\()]/g, '');
+      return stripped.length === 0 && /\[[^\]]+\]/.test(text);
+    }).length;
+    if (cellTexts.length >= 2 && placeholderDominant < Math.ceil(cellTexts.length * 0.6)) {
+      continue;
+    }
+
+    tables.push({
+      id: `table_${tableIndex + 1}`,
+      tableIndex,
+      prototypeRowIndex,
+      columns,
+      minRows: 1,
+      maxRows: 20,
+    });
+  }
+
+  return tables;
+}
+
+function fillTokensInXmlFragment(fragmentXml, columns = [], rowValues = {}) {
+  let next = fragmentXml;
+  for (const col of columns) {
+    const value =
+      rowValues[col.key] ??
+      rowValues[col.token] ??
+      rowValues[col.inner] ??
+      rowValues[col.label] ??
+      '';
+    if (value === '' || value == null) continue;
+    const pattern = new RegExp(xmlSoftPattern(col.token));
+    next = next.replace(pattern, escapeXml(String(value)));
+  }
+  return next;
+}
+
+/**
+ * Clone each prototype body row N times and fill per-row values inside each clone.
+ */
+export function expandRepeatableTables(xml = '', repeatableTables = [], lineRows = {}) {
+  if (!Array.isArray(repeatableTables) || !repeatableTables.length) return String(xml);
+
+  let tableIndex = -1;
+  return String(xml).replace(/<w:tbl\b[\s\S]*?<\/w:tbl>/gi, (tblXml) => {
+    tableIndex += 1;
+    const meta = repeatableTables.find((t) => Number(t.tableIndex) === tableIndex);
+    if (!meta) return tblXml;
+
+    const dataRows = Array.isArray(lineRows?.[meta.id]) ? lineRows[meta.id] : [];
+    if (!dataRows.length) return tblXml;
+
+    let trIndex = -1;
+    let expanded = false;
+    return tblXml.replace(/<w:tr\b[\s\S]*?<\/w:tr>/gi, (trXml) => {
+      trIndex += 1;
+      if (trIndex !== Number(meta.prototypeRowIndex)) return trXml;
+      if (expanded) return '';
+      expanded = true;
+      return dataRows
+        .map((rowVals) => fillTokensInXmlFragment(trXml, meta.columns || [], rowVals || {}))
+        .join('');
+    });
+  });
+}
+
+export async function fillDocxBuffer(buffer, values = {}, options = {}) {
+  const repeatableTables = Array.isArray(options.repeatableTables) ? options.repeatableTables : [];
+  const lineRows = options.lineRows && typeof options.lineRows === 'object' ? options.lineRows : {};
+  const { zip, xml, plain } = await readDocxBuffer(buffer);
+
+  let nextXml = expandRepeatableTables(xml, repeatableTables, lineRows);
+
+  const documentPlaceholders =
+    Array.isArray(options.documentPlaceholders) && options.documentPlaceholders.length
+      ? options.documentPlaceholders
+      : (() => {
+          const rowTokens = new Set();
+          for (const table of repeatableTables) {
+            for (const col of table.columns || []) {
+              if (col.token) rowTokens.add(String(col.token).toLowerCase());
+            }
+          }
+          return extractPlaceholdersFromText(plain).filter(
+            (p) => !rowTokens.has(String(p.token || '').toLowerCase())
+          );
+        })();
+
+  for (const ph of documentPlaceholders) {
     const value =
       values[ph.key] ??
       values[ph.token] ??
@@ -201,12 +349,17 @@ export async function fillDocxBuffer(buffer, values = {}) {
 
   zip.file('word/document.xml', nextXml);
   const filledBuffer = await zip.generateAsync({ type: 'nodebuffer' });
-  const filledText = fillTextPlaceholders(plain, values, placeholders);
+  const filledText = fillTextPlaceholders(
+    xmlFragmentToPlain(nextXml),
+    values,
+    documentPlaceholders
+  );
   const blocks = parseDocxBlocks(nextXml);
   return {
     filledBuffer,
     filledText,
-    placeholders,
+    placeholders: documentPlaceholders,
+    repeatableTables,
     blocks: blocks.length ? blocks : [{ type: 'p', text: filledText }],
   };
 }

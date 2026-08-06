@@ -1,5 +1,6 @@
 import XLSX from 'xlsx';
 import { MAX_EXPORT_ROWS } from './spreadsheetLimits.js';
+import { withUtf8Bom, withUtf8BomBuffer } from './csvEncoding.js';
 
 /**
  * Build an .xlsx buffer from header + row arrays.
@@ -73,7 +74,8 @@ export function csvBuffer(headers, rows) {
     headers.map(escapeCell).join(','),
     ...capped.map((row) => headers.map((_, index) => escapeCell(row[index])).join(',')),
   ];
-  return Buffer.from(lines.join('\r\n'), 'utf8');
+  // UTF-8 with BOM so Excel preserves Unicode (names, PIN geography, etc.)
+  return withUtf8BomBuffer(Buffer.from(lines.join('\r\n'), 'utf8'));
 }
 
 /**
@@ -91,7 +93,8 @@ export function sendCsvStream(res, filename, headers, rowIterator) {
     return text;
   };
 
-  res.write(`${headers.map(escapeCell).join(',')}\r\n`);
+  // BOM first so Excel treats the stream as UTF-8
+  res.write(withUtf8Bom(`${headers.map(escapeCell).join(',')}\r\n`));
   let count = 0;
   for (const row of rowIterator) {
     if (count >= MAX_EXPORT_ROWS) break;

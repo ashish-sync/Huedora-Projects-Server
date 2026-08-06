@@ -19,5 +19,10 @@ export const DocumentTemplate = defineCollection('document_templates', {
   storageKey: null,
   contentType: 'text/plain',
   placeholders: [], // [{ key, label, type, token, occurrence, inner }]
+  /**
+   * DOCX tables whose body row is a cloneable line-item prototype.
+   * [{ id, tableIndex, prototypeRowIndex, columns, minRows, maxRows }]
+   */
+  repeatableTables: [],
   isActive: true,
 });

@@ -24,6 +24,19 @@ export function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Add calendar days to a YYYY-MM-DD date (local). */
+export function addDaysIso(dateText, days = 30) {
+  const text = String(dateText || '').trim();
+  const base =
+    text && /^\d{4}-\d{2}-\d{2}$/.test(text) ? new Date(`${text}T00:00:00`) : new Date();
+  if (Number.isNaN(base.getTime())) return '';
+  base.setDate(base.getDate() + (Number(days) || 0));
+  const yyyy = base.getFullYear();
+  const mm = String(base.getMonth() + 1).padStart(2, '0');
+  const dd = String(base.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export { fiscalYearLabel };
 
 export function formatDisplayDate(iso) {
@@ -200,8 +213,14 @@ export function computeDocumentTotals(lineItems = [], adjustments = {}) {
   const dnAmount = toAmount(adjustments.dnAmount);
   const advanceReceived = toAmount(adjustments.advanceReceived);
   const rawTotal = subtotal + taxAmount + dnAmount - cnAmount - advanceReceived;
-  const rounded = Math.round(rawTotal);
-  const roundOff = Math.round((rounded - rawTotal) * 100) / 100;
+  const autoRoundOff = Math.round((Math.round(rawTotal) - rawTotal) * 100) / 100;
+  const hasManualRoundOff =
+    adjustments.roundOff !== undefined &&
+    adjustments.roundOff !== null &&
+    String(adjustments.roundOff).trim() !== '';
+  const roundOff = hasManualRoundOff
+    ? Math.round((Number(adjustments.roundOff) || 0) * 100) / 100
+    : autoRoundOff;
   const grandTotal = Math.round((rawTotal + roundOff) * 100) / 100;
 
   return {
@@ -247,6 +266,8 @@ export function mergeOrgProfile(body = {}) {
     'upiId',
     'logoDataUrl',
     'paymentQrDataUrl',
+    'signatureDataUrl',
+    'signatoryName',
     'defaultPaymentTermsDays',
     'defaultTerms',
     'proformaNotes',
@@ -396,8 +417,11 @@ export function normalizePurchaseOrderPayload(body = {}, orgProfile = DEFAULT_OR
           .filter(Boolean)
       : [...(orgProfile.defaultPoTerms || DEFAULT_ORG_PROFILE.defaultPoTerms || [])];
 
-  const legal = orgProfile.legalName || 'Tylo Care Private Limited';
+  const legal = orgProfile.legalName || '';
   const office = orgProfile.registeredOffice || '';
+  const billingPlace =
+    [orgProfile.state, orgProfile.stateCode ? `(${orgProfile.stateCode})` : null].filter(Boolean).join(' ') ||
+    trimStr(body.billingPlaceOfSupply);
 
   return {
     documentType: 'purchase_order',
@@ -425,12 +449,13 @@ export function normalizePurchaseOrderPayload(body = {}, orgProfile = DEFAULT_OR
     vendorQuoteRef: trimStr(body.vendorQuoteRef || body.reference),
     vendorQuoteDate: trimStr(body.vendorQuoteDate || body.referenceDate),
     projectCostCentre: trimStr(body.projectCostCentre || body.projectName),
-    buyerCompanyName: trimStr(body.buyerCompanyName || legal),
-    buyerAddress: trimStr(body.buyerAddress || office),
-    buyerGstin: trimStr(body.buyerGstin || orgProfile.gstin),
+    // Buyer identity / tax / contacts always from Organisation master
+    buyerCompanyName: trimStr(legal),
+    buyerAddress: trimStr(office),
+    buyerGstin: trimStr(orgProfile.gstin),
     buyerContactPerson: trimStr(body.buyerContactPerson),
-    buyerMobile: trimStr(body.buyerMobile || orgProfile.phone),
-    buyerEmail: trimStr(body.buyerEmail || orgProfile.email),
+    buyerMobile: trimStr(orgProfile.phone),
+    buyerEmail: trimStr(orgProfile.email),
     vendorCode: trimStr(body.vendorCode),
     vendorMobile: trimStr(body.vendorMobile),
     vendorAddress: trimStr(body.vendorAddress || body.placeOfSupply),
@@ -439,11 +464,11 @@ export function normalizePurchaseOrderPayload(body = {}, orgProfile = DEFAULT_OR
     deliveryMobile: trimStr(body.deliveryMobile),
     expectedDeliveryDate: trimStr(body.expectedDeliveryDate || body.dueDate),
     deliveryInstructions: trimStr(body.deliveryInstructions || body.shippingInstructions),
-    billingAddress: trimStr(body.billingAddress) || [legal, office].filter(Boolean).join(', '),
-    billingGstin: trimStr(body.billingGstin || orgProfile.gstin),
-    billingState: trimStr(body.billingState || orgProfile.state),
-    billingStateCode: trimStr(body.billingStateCode || orgProfile.stateCode),
-    billingPlaceOfSupply: trimStr(body.billingPlaceOfSupply),
+    billingAddress: [legal, office].filter(Boolean).join(', '),
+    billingGstin: trimStr(orgProfile.gstin),
+    billingState: trimStr(orgProfile.state),
+    billingStateCode: trimStr(orgProfile.stateCode),
+    billingPlaceOfSupply: billingPlace,
     paymentTerms: trimStr(body.paymentTerms),
     freight: trimStr(body.freight),
     insurance: trimStr(body.insurance),
@@ -483,6 +508,7 @@ export function normalizeProformaPayload(body = {}, orgProfile = DEFAULT_ORG_PRO
     cnAmount: body.cnAmount,
     dnAmount: body.dnAmount,
     advanceReceived: body.advanceReceived,
+    roundOff: body.roundOff,
   });
 
   const paymentTermsDays =
@@ -668,7 +694,7 @@ export function normalizeDeliveryChallanPayload(body = {}, orgProfile = DEFAULT_
     clientMasterId: body.clientMasterId || null,
     recipientName: trimStr(body.recipientName),
     projectName: trimStr(body.purposeOfMovement || body.projectName),
-    placeOfSupply: trimStr(body.fromAddress || body.placeOfSupply || orgProfile.registeredOffice),
+    placeOfSupply: trimStr(body.placeOfSupply || orgProfile.registeredOffice),
     deliveryAddress: trimStr(body.deliveryAddress || body.shipToAddress),
     contactPerson: trimStr(body.contactPerson),
     contactEmail: trimStr(body.contactEmail || body.deliverToEmail),
@@ -703,12 +729,13 @@ export function normalizeDeliveryChallanPayload(body = {}, orgProfile = DEFAULT_
     // DC-specific fields persisted on the row
     dispatchDate: trimStr(body.dispatchDate),
     expectedDeliveryDate: trimStr(body.expectedDeliveryDate || body.dueDate),
-    fromCompanyName: trimStr(body.fromCompanyName || orgProfile.legalName),
-    fromAddress: trimStr(body.fromAddress || orgProfile.registeredOffice),
-    fromGstin: trimStr(body.fromGstin || orgProfile.gstin),
+    // FROM identity / tax / contacts always from Organisation master
+    fromCompanyName: trimStr(orgProfile.legalName),
+    fromAddress: trimStr(orgProfile.registeredOffice),
+    fromGstin: trimStr(orgProfile.gstin),
     fromContactPerson: trimStr(body.fromContactPerson),
-    fromMobile: trimStr(body.fromMobile || orgProfile.phone),
-    fromEmail: trimStr(body.fromEmail || orgProfile.email),
+    fromMobile: trimStr(orgProfile.phone),
+    fromEmail: trimStr(orgProfile.email),
     recipientType: trimStr(body.recipientType),
     deliverToCompany: trimStr(body.deliverToCompany),
     deliverToMobile: trimStr(body.deliverToMobile),
@@ -779,6 +806,7 @@ export function normalizeBillOfSupplyPayload(body = {}, orgProfile = DEFAULT_ORG
     cnAmount: 0,
     dnAmount: 0,
     advanceReceived: toAmount(body.advanceReceived),
+    roundOff: body.roundOff,
   });
 
   return {

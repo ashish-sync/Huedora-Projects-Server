@@ -30,6 +30,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { runTeamUsersImport } from './teamUsersImport.js';
+import { withUtf8Bom } from '../src/utils/csvEncoding.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, 'data');
@@ -53,9 +54,9 @@ function writeTemplate() {
     );
   }
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(TEMPLATE_PATH, `${lines.join('\n')}\n`, 'utf8');
+  fs.writeFileSync(TEMPLATE_PATH, withUtf8Bom(`${lines.join('\n')}\n`), 'utf8');
   console.log(`[bulk-users] Template written: ${TEMPLATE_PATH}`);
-  console.log('[bulk-users] Edit emails and profiles, save as team-users.csv, then run import.');
+  console.log('[bulk-users] Edit emails and profiles, save as UTF-8 CSV, then run import.');
 }
 
 async function main() {

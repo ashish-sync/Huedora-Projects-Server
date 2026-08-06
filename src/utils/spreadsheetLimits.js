@@ -13,4 +13,4 @@ export const MAX_PREVIEW_BODY_ROWS = 1_000;
 export const IMPORT_ACCEPT_EXTENSIONS = ['.csv', '.xlsb'];
 export const IMPORT_ACCEPT_ATTR = '.csv,.xlsb,text/csv,application/vnd.ms-excel.sheet.binary.macroEnabled.12';
 export const IMPORT_ACCEPT_HINT =
-  'Supported: .csv (preferred) or .xlsb · max 1,000 rows · max 3 MB. Save Excel as CSV before upload.';
+  'Supported: .csv UTF-8 (preferred) or .xlsb · max 1,000 rows · max 3 MB. In Excel: File → Save As → CSV UTF-8 (Comma delimited).';

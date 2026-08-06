@@ -4,6 +4,7 @@
 import PDFDocument from 'pdfkit';
 import { formatDisplayDateErp } from './financeCommercial.service.js';
 import { BRAND, resolveLogoPath } from './pdfBrand.js';
+import { formatCompanyLetterhead, drawCompanyLetterheadLine1 } from './companyLetterhead.js';
 
 const PAGE = { width: 841.89, height: 595.28, margin: 22 };
 const GRAY = '#E5E7EB';
@@ -57,26 +58,44 @@ function labeledRows(pdf, rows, x, y, w, rowH = 14) {
 function drawHeader(pdf, org, x, y, w) {
   const logoPath = resolveLogoPath();
   const logoW = 70;
+  const titleW = 140;
+  const midX = x + logoW + 8;
+  const midW = Math.max(80, w - logoW - titleW - 16);
+
   if (logoPath) {
     try {
       pdf.image(logoPath, x, y, { fit: [logoW, 34], align: 'left', valign: 'center' });
     } catch {
       pdf.font('Helvetica-Bold').fontSize(15).fillColor(INK).text('TYLO', x, y + 2);
-      pdf.font('Helvetica').fontSize(6.5).fillColor(MUTED).text(org.brandLine || 'Bringing Healthcare Closer', x, y + 20, {
+      pdf.font('Helvetica').fontSize(6.5).fillColor(MUTED).text(org.brandLine || '', x, y + 20, {
         width: logoW,
       });
     }
   } else {
     pdf.font('Helvetica-Bold').fontSize(15).fillColor(INK).text('TYLO', x, y + 2);
-    pdf.font('Helvetica').fontSize(6.5).fillColor(MUTED).text(org.brandLine || 'Bringing Healthcare Closer', x, y + 20, {
+    pdf.font('Helvetica').fontSize(6.5).fillColor(MUTED).text(org.brandLine || '', x, y + 20, {
       width: logoW,
     });
   }
-  pdf.font('Helvetica-Bold').fontSize(13).fillColor(INK).text('DELIVERY CHALLAN', x + w - 140, y + 8, {
-    width: 140,
+
+  const letterhead = formatCompanyLetterhead(org);
+  let ty = drawCompanyLetterheadLine1(pdf, letterhead, midX, y, midW, {
+    size: 8.5,
+    align: 'center',
+    ink: INK,
+    muted: MUTED,
+  });
+  if (letterhead.line2) {
+    pdf.font('Helvetica').fontSize(6.5).fillColor(MUTED);
+    pdf.text(letterhead.line2, midX, ty, { width: midW, align: 'center' });
+    ty = pdf.y + 1;
+  }
+
+  pdf.font('Helvetica-Bold').fontSize(13).fillColor(INK).text('DELIVERY CHALLAN', x + w - titleW, y + 8, {
+    width: titleW,
     align: 'right',
   });
-  return y + 32;
+  return y + 34;
 }
 
 function drawMeta(pdf, doc, x, y, w) {
@@ -112,12 +131,12 @@ function drawParties(pdf, doc, org, x, y, w) {
   sectionHead(pdf, 'DELIVER TO', x + half, y, half, headH);
 
   const fromRows = [
-    ['Company Name', doc.fromCompanyName || org.legalName || 'Tylo Care Private Limited'],
-    ['Registered Office', doc.fromAddress || org.registeredOffice || ''],
-    ['GSTIN', doc.fromGstin || org.gstin || ''],
+    ['Company Name', org.legalName || ''],
+    ['Registered Office', org.registeredOffice || ''],
+    ['GSTIN', org.gstin || ''],
     ['Contact Person', doc.fromContactPerson || ''],
-    ['Mobile', doc.fromMobile || org.phone || ''],
-    ['Email', doc.fromEmail || org.email || ''],
+    ['Mobile', org.phone || ''],
+    ['Email', org.email || ''],
   ];
   const toRows = [
     ['Recipient Type', doc.recipientType || ''],
