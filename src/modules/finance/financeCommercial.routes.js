@@ -68,6 +68,10 @@ import { buildBillOfSupplyPdfBuffer } from './billOfSupplyPdf.js';
 import { buildQuotationPdfBuffer } from './quotationPdf.js';
 import { uploadDir } from '../../config/paths.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import {
+  assertCommercialDocWithinPoBalance,
+  computeClientMasterPoUtilization,
+} from './poUtilization.service.js';
 
 const uploadRoot = uploadDir('finance');
 
@@ -108,6 +112,19 @@ router.use(authenticate);
 
 const canRead = requirePermission(PERMISSIONS.FINANCE_READ, PERMISSIONS.FINANCE_WRITE);
 const canWrite = requirePermission(PERMISSIONS.FINANCE_WRITE);
+
+router.get(
+  '/po-utilization',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const data = await computeClientMasterPoUtilization({
+      clientMasterId: req.query.clientMasterId,
+      poId: req.query.poId || null,
+      excludeDocId: req.query.excludeDocId || null,
+    });
+    res.json({ data });
+  })
+);
 
 const COMMERCIAL_DOC_TYPES = [
   'client_invoice',
@@ -219,6 +236,7 @@ router.post(
     const [normalize, validate] = pair;
     const payload = normalize(row.toObject(), orgProfile);
     validate(payload);
+    await assertCommercialDocWithinPoBalance(payload, { excludeDocId: row._id });
     Object.assign(row, payload);
     const before = row.toObject ? row.toObject() : { ...row };
     row.status = 'Submitted';
@@ -242,6 +260,13 @@ router.post(
     const row = await loadCommercialById(req.params.id);
     assertApprovable(row.status);
     const before = row.toObject ? row.toObject() : { ...row };
+    await assertCommercialDocWithinPoBalance(
+      {
+        ...(row.toObject ? row.toObject() : row),
+        documentType: row.documentType,
+      },
+      { excludeDocId: row._id }
+    );
 
     // Bill of Supply: document date = approval date; due date = approval + 30 days
     if (row.documentType === 'bill_of_supply') {

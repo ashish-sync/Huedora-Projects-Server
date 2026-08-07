@@ -540,6 +540,7 @@ export function normalizeProformaPayload(body = {}, orgProfile = DEFAULT_ORG_PRO
     documentPeriod: period.periodKey,
     clientId: body.clientId || null,
     clientMasterId: body.clientMasterId || null,
+    clientPurchaseOrderId: trimStr(body.clientPurchaseOrderId) || null,
     recipientName: trimStr(body.recipientName),
     projectName: trimStr(body.servicePeriod || body.projectName),
     placeOfSupply: trimStr(body.placeOfSupply),
@@ -1016,6 +1017,9 @@ export function extractBuilderExtras(body = {}) {
   const out = {};
   if (body.builderForm !== undefined) {
     out.builderForm = body.builderForm && typeof body.builderForm === 'object' ? body.builderForm : null;
+  }
+  if (body.clientPurchaseOrderId !== undefined) {
+    out.clientPurchaseOrderId = trimStr(body.clientPurchaseOrderId) || null;
   }
   if (body.declaration !== undefined) out.declaration = trimStr(body.declaration);
   if (body.shipToName !== undefined) out.shipToName = trimStr(body.shipToName);

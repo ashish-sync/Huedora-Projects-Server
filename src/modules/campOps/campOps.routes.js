@@ -4,7 +4,7 @@ import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/
 import { importAppError } from '../../utils/importErrors.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
-import { assertValidEmail, assertValidPhone, normalizeEmail } from '../../utils/identityNormalize.js';
+import { assertValidEmail, assertValidPhone } from '../../utils/identityNormalize.js';
 import { sendExcel, sendCsv } from '../../utils/excelExport.js';
 import { formatDate } from '../../utils/dateFormat.js';
 import { cellValue, excelUpload, parseSheetRows, assertSpreadsheetUpload, discardUploadBuffer, sampleCsvFilename } from '../../utils/masterExcel.js';
@@ -1644,9 +1644,14 @@ const MASTER_STRING_FIELDS = [
   'spocNumber',
   'spocEmail',
   'requestTimeline',
+  'campTerms',
+  'poNumber',
+  'poExpiryDate',
+  'agreementStartDate',
+  'agreementEffectiveDate',
+  'agreementEndDate',
 ];
 const MASTER_NUMERIC_FIELDS = [
-  'poAmount',
   'executedCampUnit',
   'cancelledCampUnit',
   'otUnit',
@@ -1656,7 +1661,542 @@ const MASTER_NUMERIC_FIELDS = [
   'kmsUnit',
 ];
 
-function buildMasterPayload(body, client) {
+const CAMP_TERMS_VALUES = new Set(['none', 'po_based', 'agreement_based', 'approval_based']);
+
+function normalizeCampTermsValue(value) {
+  const raw = String(value || '').trim().toLowerCase().replace(/\s+/g, '_');
+  if (raw === 'po' || raw === 'po_based' || raw === 'pobased') return 'po_based';
+  if (raw === 'agreement' || raw === 'agreement_based' || raw === 'agreementbased') {
+    return 'agreement_based';
+  }
+  if (raw === 'approval' || raw === 'approval_based' || raw === 'approvalbased') {
+    return 'approval_based';
+  }
+  if (CAMP_TERMS_VALUES.has(raw)) return raw;
+  return 'none';
+}
+
+function roundMoney(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function computePoTaxFields(enteredAmount, applyGst18) {
+  const entered = roundMoney(enteredAmount);
+  // When GST is on, entered amount is GST-inclusive (gross).
+  // Example: 5500 → Net 4661.02, GST 838.98.
+  if (!applyGst18) {
+    return { poNetValue: entered, poApplyGst18: false, poGstAmount: 0, poGrossValue: entered };
+  }
+  const gross = entered;
+  const net = roundMoney(gross / 1.18);
+  const gst = roundMoney(gross - net);
+  return {
+    poNetValue: net,
+    poApplyGst18: true,
+    poGstAmount: gst,
+    poGrossValue: gross,
+  };
+}
+
+function newPoId() {
+  return `po-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function newCampTermsFileId() {
+  return `ctf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeCampTermsFile(doc, fallbackId) {
+  if (!doc?.storedName && !doc?.fileName) return null;
+  return {
+    id: trimStr(doc.id || doc._id) || fallbackId || newCampTermsFileId(),
+    fileName: doc.fileName || doc.originalFileName || 'Attachment',
+    storedName: doc.storedName || '',
+    mimeType: doc.mimeType || 'application/octet-stream',
+    fileSize: doc.fileSize || 0,
+    url: doc.url || (doc.storedName ? `/uploads/camp-ops/${doc.storedName}` : ''),
+    uploadedAt: doc.uploadedAt || null,
+  };
+}
+
+function collectCampTermsFiles(rowLike, bodyFiles) {
+  if (Array.isArray(bodyFiles)) {
+    return bodyFiles.map((doc, i) => normalizeCampTermsFile(doc, `ctf-${i + 1}`)).filter(Boolean);
+  }
+  const plain = rowLike?.toObject ? rowLike.toObject() : { ...rowLike };
+  if (Array.isArray(plain.campTermsFiles) && plain.campTermsFiles.length) {
+    return plain.campTermsFiles.map((doc, i) => normalizeCampTermsFile(doc, `ctf-${i + 1}`)).filter(Boolean);
+  }
+  const fromOrders = [];
+  if (Array.isArray(plain.purchaseOrders)) {
+    for (const po of plain.purchaseOrders) {
+      if (Array.isArray(po?.files) && po.files.length) {
+        for (const file of po.files) {
+          const normalized = normalizeCampTermsFile(file);
+          if (normalized) fromOrders.push(normalized);
+        }
+      } else {
+        const file = normalizeCampTermsFile(po?.poFile);
+        if (file) fromOrders.push(file);
+      }
+    }
+  }
+  if (fromOrders.length) return fromOrders;
+  const legacy = normalizeCampTermsFile(plain.poFile);
+  return legacy ? [legacy] : [];
+}
+
+function inferCampTerms(plain) {
+  if (plain.campTerms) return normalizeCampTermsValue(plain.campTerms);
+  if (
+    Array.isArray(plain.purchaseOrders) && plain.purchaseOrders.length
+    || plain.poNumber
+    || plain.poNetValue
+    || plain.poFile?.storedName
+    || plain.poApplyGst18
+    || plain.poExpiryDate
+  ) {
+    return 'po_based';
+  }
+  if (plain.agreementStartDate || plain.agreementEffectiveDate || plain.agreementEndDate) {
+    return 'agreement_based';
+  }
+  if (Array.isArray(plain.campTermsFiles) && plain.campTermsFiles.length) {
+    return 'approval_based';
+  }
+  return 'none';
+}
+
+function normalizePurchaseOrderRow(row, index, existingById = new Map()) {
+  const id = trimStr(row?.id || row?._id) || newPoId();
+  const existing = existingById.get(id);
+  const apply =
+    row?.poApplyGst18 === true
+    || row?.poApplyGst18 === 'true'
+    || row?.poApplyGst18 === 1
+    || (row?.poApplyGst18 === undefined && Boolean(existing?.poApplyGst18));
+
+  let entered = 0;
+  if (apply) {
+    const gross = Number(row?.poGrossValue);
+    const net = Number(row?.poNetValue);
+    const gst = Number(row?.poGstAmount);
+    if (Number.isFinite(gross) && gross > 0) {
+      if (Number.isFinite(net) && Number.isFinite(gst) && Math.abs(gross - roundMoney(net + gst)) <= 0.02) {
+        entered = gross;
+      } else if (Number.isFinite(net) && Math.abs(gross - net) <= 0.02 && Number.isFinite(gst) && gst > 0) {
+        entered = roundMoney(net + gst);
+      } else {
+        entered = gross;
+      }
+    } else if (Number.isFinite(net) && Number.isFinite(gst) && gst > 0) {
+      entered = roundMoney(net + gst);
+    } else if (Number.isFinite(net)) {
+      entered = net;
+    } else if (existing) {
+      const eg = Number(existing.poGrossValue);
+      entered = Number.isFinite(eg) && eg > 0 ? eg : Number(existing.poNetValue) || 0;
+    }
+  } else {
+    const net = Number(row?.poNetValue);
+    entered = Number.isFinite(net) ? net : Number(existing?.poNetValue) || 0;
+  }
+
+  const tax = computePoTaxFields(entered, apply);
+
+  let files = [];
+  if (Array.isArray(row?.files)) {
+    files = row.files.map((doc, i) => normalizeCampTermsFile(doc, `${id}-f-${i + 1}`)).filter(Boolean);
+  } else if (row?.poFile?.storedName) {
+    const single = normalizeCampTermsFile(row.poFile, `${id}-f-1`);
+    if (single) files = [single];
+  } else if (Array.isArray(existing?.files) && existing.files.length) {
+    files = existing.files.map((doc, i) => normalizeCampTermsFile(doc, `${id}-f-${i + 1}`)).filter(Boolean);
+  } else if (existing?.poFile?.storedName) {
+    const single = normalizeCampTermsFile(existing.poFile, `${id}-f-1`);
+    if (single) files = [single];
+  }
+
+  const poExpiryDate =
+    row?.poExpiryDate !== undefined
+      ? trimStr(row.poExpiryDate).slice(0, 10)
+      : trimStr(existing?.poExpiryDate).slice(0, 10);
+
+  return {
+    id,
+    poNumber: trimStr(row?.poNumber).slice(0, 80),
+    ...tax,
+    poExpiryDate,
+    files,
+    poFile: files[0] || null,
+    _index: index,
+  };
+}
+
+function combinePurchaseOrders(orders = []) {
+  let net = 0;
+  let gst = 0;
+  let gross = 0;
+  for (const row of orders) {
+    net += Number(row.poNetValue) || 0;
+    gst += Number(row.poGstAmount) || 0;
+    gross += Number(row.poGrossValue) || 0;
+  }
+  return {
+    poCombinedNet: roundMoney(net),
+    poCombinedGst: roundMoney(gst),
+    poCombinedGross: roundMoney(gross),
+  };
+}
+
+/** Normalize camp terms + legacy PO mirrors for API responses. */
+function ensurePurchaseOrders(rowLike) {
+  const plain = rowLike?.toObject ? rowLike.toObject() : { ...rowLike };
+  const campTerms = inferCampTerms(plain);
+  const campTermsFiles = collectCampTermsFiles(plain);
+  let orders = Array.isArray(plain.purchaseOrders) ? plain.purchaseOrders.filter(Boolean) : [];
+  if (!orders.length && (plain.poNumber || plain.poNetValue || plain.poFile?.storedName || plain.poApplyGst18)) {
+    const tax = computePoTaxFields(Number(plain.poNetValue) || 0, Boolean(plain.poApplyGst18));
+    const files = campTermsFiles.length
+      ? campTermsFiles
+      : (plain.poFile ? [normalizeCampTermsFile(plain.poFile)].filter(Boolean) : []);
+    orders = [
+      {
+        id: 'po-legacy-0',
+        poNumber: trimStr(plain.poNumber),
+        ...tax,
+        poExpiryDate: trimStr(plain.poExpiryDate).slice(0, 10),
+        files,
+        poFile: files[0] || plain.poFile || null,
+      },
+    ];
+  }
+  const combined = combinePurchaseOrders(orders);
+  const first = orders[0] || null;
+  return {
+    ...plain,
+    campTerms,
+    campTermsFiles: campTerms === 'po_based'
+      ? (Array.isArray(plain.campTermsFiles) && plain.campTermsFiles.length ? campTermsFiles : collectCampTermsFiles({ purchaseOrders: orders }))
+      : campTermsFiles,
+    purchaseOrders: orders.map((po, index) => {
+      const files = Array.isArray(po.files) && po.files.length
+        ? po.files.map((doc, i) => normalizeCampTermsFile(doc, `${po.id || index}-f-${i + 1}`)).filter(Boolean)
+        : (po.poFile ? [normalizeCampTermsFile(po.poFile)].filter(Boolean) : []);
+      return {
+        ...po,
+        poExpiryDate: trimStr(po.poExpiryDate || (index === 0 ? plain.poExpiryDate : '')).slice(0, 10),
+        files,
+        poFile: files[0] || po.poFile || null,
+      };
+    }),
+    ...combined,
+    poNumber: plain.poNumber || first?.poNumber || '',
+    poNetValue: plain.poNetValue ?? first?.poNetValue ?? 0,
+    poApplyGst18: plain.poApplyGst18 ?? Boolean(first?.poApplyGst18),
+    poGstAmount: plain.poGstAmount ?? first?.poGstAmount ?? 0,
+    poGrossValue: plain.poGrossValue ?? first?.poGrossValue ?? 0,
+    poExpiryDate: plain.poExpiryDate || first?.poExpiryDate || '',
+    poFile: plain.poFile || first?.poFile || campTermsFiles[0] || null,
+    agreementStartDate: plain.agreementStartDate || '',
+    agreementEffectiveDate: plain.agreementEffectiveDate || '',
+    agreementEndDate: plain.agreementEndDate || '',
+  };
+}
+
+function withSignedPoFile(row) {
+  const plain = ensurePurchaseOrders(row);
+  if (Array.isArray(plain.campTermsFiles)) {
+    plain.campTermsFiles = plain.campTermsFiles.map((file) => {
+      if (!file?.url) return file;
+      return { ...file, url: signStoredUploadUrl(file.url) };
+    });
+  }
+  if (Array.isArray(plain.purchaseOrders)) {
+    plain.purchaseOrders = plain.purchaseOrders.map((po) => {
+      const files = (Array.isArray(po.files) ? po.files : [])
+        .map((file) => {
+          if (!file?.url) return file;
+          return { ...file, url: signStoredUploadUrl(file.url) };
+        })
+        .filter(Boolean);
+      const poFile = files[0] || po.poFile;
+      return {
+        ...po,
+        files,
+        poFile: poFile?.url
+          ? { ...poFile, url: signStoredUploadUrl(poFile.url) }
+          : poFile || null,
+      };
+    });
+  }
+  if (plain.poFile?.url) {
+    plain.poFile = {
+      ...plain.poFile,
+      url: signStoredUploadUrl(plain.poFile.url),
+    };
+  }
+  return plain;
+}
+
+function applyCampTermsToPayload(payload, body, existingRow = null) {
+  const existing = ensurePurchaseOrders(existingRow || {});
+  const campTerms =
+    body.campTerms !== undefined
+      ? normalizeCampTermsValue(body.campTerms)
+      : existing.campTerms || 'none';
+
+  const existingFiles = collectCampTermsFiles(existing);
+  const files =
+    body.campTermsFiles !== undefined
+      ? collectCampTermsFiles(existing, body.campTermsFiles)
+      : existingFiles;
+
+  payload.campTerms = campTerms;
+  payload.campTermsFiles = campTerms === 'none' ? [] : files;
+
+  if (campTerms === 'po_based') {
+    const existingById = new Map(
+      (existing.purchaseOrders || []).map((po) => [String(po.id), po])
+    );
+
+    let orders;
+    if (Array.isArray(body.purchaseOrders)) {
+      orders = body.purchaseOrders
+        .map((row, index) => normalizePurchaseOrderRow(row, index, existingById))
+        .filter(
+          (row) =>
+            row.poNumber
+            || row.poNetValue > 0
+            || row.poFile?.storedName
+            || (Array.isArray(row.files) && row.files.length)
+            || row.poExpiryDate
+        )
+        .map(({ _index, ...rest }) => rest);
+    } else {
+      const apply =
+        body.poApplyGst18 !== undefined
+          ? body.poApplyGst18 === true || body.poApplyGst18 === 'true' || body.poApplyGst18 === 1
+          : Boolean(existing.poApplyGst18);
+      const grossFromBody = body.poGrossValue !== undefined ? Number(body.poGrossValue) : NaN;
+      const netFromBody = body.poNetValue !== undefined ? Number(body.poNetValue) : NaN;
+      const gstFromBody = body.poGstAmount !== undefined ? Number(body.poGstAmount) : NaN;
+      let entered = 0;
+      if (apply) {
+        if (Number.isFinite(grossFromBody) && grossFromBody > 0) entered = grossFromBody;
+        else if (Number.isFinite(netFromBody) && Number.isFinite(gstFromBody) && gstFromBody > 0) {
+          entered = roundMoney(netFromBody + gstFromBody);
+        } else if (Number.isFinite(netFromBody)) entered = netFromBody;
+        else {
+          const eg = Number(existing.poGrossValue);
+          entered = Number.isFinite(eg) && eg > 0 ? eg : Number(existing.poNetValue) || 0;
+        }
+      } else if (Number.isFinite(netFromBody)) {
+        entered = netFromBody;
+      } else {
+        entered = Number(existing.poNetValue) || 0;
+      }
+      const tax = computePoTaxFields(entered, apply);
+      const poNumber =
+        body.poNumber !== undefined ? trimStr(body.poNumber).slice(0, 80) : trimStr(existing.poNumber);
+      const poExpiryDate =
+        body.poExpiryDate !== undefined
+          ? trimStr(body.poExpiryDate).slice(0, 10)
+          : trimStr(existing.poExpiryDate).slice(0, 10);
+      const primaryFiles = files.length
+        ? files
+        : (existing.purchaseOrders?.[0]?.files || []).map((doc) => normalizeCampTermsFile(doc)).filter(Boolean);
+      orders = [
+        {
+          id: existing.purchaseOrders?.[0]?.id || 'po-primary',
+          poNumber,
+          ...tax,
+          poExpiryDate,
+          files: primaryFiles,
+          poFile: primaryFiles[0] || null,
+        },
+      ];
+    }
+
+    if (!orders.length) {
+      orders = [
+        normalizePurchaseOrderRow(
+          {
+            id: 'po-primary',
+            poNumber: '',
+            poNetValue: 0,
+            poApplyGst18: false,
+            poExpiryDate: '',
+            files: [],
+          },
+          0,
+          existingById
+        ),
+      ].map(({ _index, ...rest }) => rest);
+    }
+
+    const combined = combinePurchaseOrders(orders);
+    const primary = orders[0];
+    const flatFiles = orders.flatMap((row) =>
+      (Array.isArray(row.files) && row.files.length
+        ? row.files
+        : row.poFile
+          ? [row.poFile]
+          : []
+      ).map((doc) => normalizeCampTermsFile(doc)).filter(Boolean)
+    );
+
+    Object.assign(payload, {
+      poNumber: primary.poNumber || '',
+      poNetValue: primary.poNetValue ?? 0,
+      poApplyGst18: Boolean(primary.poApplyGst18),
+      poGstAmount: primary.poGstAmount ?? 0,
+      poGrossValue: primary.poGrossValue ?? 0,
+      poExpiryDate: primary.poExpiryDate || '',
+      ...combined,
+      poFile: primary.poFile || flatFiles[0] || null,
+      purchaseOrders: orders,
+      campTermsFiles: flatFiles,
+      agreementStartDate: '',
+      agreementEffectiveDate: '',
+      agreementEndDate: '',
+    });
+    return;
+  }
+
+  if (campTerms === 'agreement_based') {
+    Object.assign(payload, {
+      agreementStartDate:
+        body.agreementStartDate !== undefined
+          ? trimStr(body.agreementStartDate).slice(0, 10)
+          : trimStr(existing.agreementStartDate).slice(0, 10),
+      agreementEffectiveDate:
+        body.agreementEffectiveDate !== undefined
+          ? trimStr(body.agreementEffectiveDate).slice(0, 10)
+          : trimStr(existing.agreementEffectiveDate).slice(0, 10),
+      agreementEndDate:
+        body.agreementEndDate !== undefined
+          ? trimStr(body.agreementEndDate).slice(0, 10)
+          : trimStr(existing.agreementEndDate).slice(0, 10),
+      poNumber: '',
+      poNetValue: 0,
+      poApplyGst18: false,
+      poGstAmount: 0,
+      poGrossValue: 0,
+      poExpiryDate: '',
+      poCombinedNet: 0,
+      poCombinedGst: 0,
+      poCombinedGross: 0,
+      poFile: null,
+      purchaseOrders: [],
+    });
+    return;
+  }
+
+  if (campTerms === 'approval_based') {
+    Object.assign(payload, {
+      agreementStartDate: '',
+      agreementEffectiveDate: '',
+      agreementEndDate: '',
+      poNumber: '',
+      poNetValue: 0,
+      poApplyGst18: false,
+      poGstAmount: 0,
+      poGrossValue: 0,
+      poExpiryDate: '',
+      poCombinedNet: 0,
+      poCombinedGst: 0,
+      poCombinedGross: 0,
+      poFile: null,
+      purchaseOrders: [],
+    });
+    return;
+  }
+
+  // none
+  Object.assign(payload, {
+    agreementStartDate: '',
+    agreementEffectiveDate: '',
+    agreementEndDate: '',
+    poNumber: '',
+    poNetValue: 0,
+    poApplyGst18: false,
+    poGstAmount: 0,
+    poGrossValue: 0,
+    poExpiryDate: '',
+    poCombinedNet: 0,
+    poCombinedGst: 0,
+    poCombinedGross: 0,
+    poFile: null,
+    purchaseOrders: [],
+    campTermsFiles: [],
+  });
+}
+
+function applyPurchaseOrdersToPayload(payload, body, existingRow = null) {
+  // Prefer campTerms when provided by the new Client Master form.
+  if (body.campTerms !== undefined || body.campTermsFiles !== undefined) {
+    applyCampTermsToPayload(payload, body, existingRow);
+    return;
+  }
+
+  if (body.purchaseOrders === undefined) {
+    if (body.poApplyGst18 !== undefined || body.poNetValue !== undefined || body.poNumber !== undefined) {
+      applyCampTermsToPayload(
+        payload,
+        {
+          campTerms: 'po_based',
+          poNumber: body.poNumber,
+          poNetValue: body.poNetValue,
+          poApplyGst18: body.poApplyGst18,
+          poExpiryDate: body.poExpiryDate,
+          campTermsFiles: body.campTermsFiles,
+        },
+        existingRow
+      );
+    }
+    return;
+  }
+
+  const existing = ensurePurchaseOrders(existingRow || {});
+  const existingById = new Map(
+    (existing.purchaseOrders || []).map((po) => [String(po.id), po])
+  );
+  const orders = (Array.isArray(body.purchaseOrders) ? body.purchaseOrders : [])
+    .map((row, index) => normalizePurchaseOrderRow(row, index, existingById))
+    .filter(
+      (row) =>
+        row.poNumber
+        || row.poNetValue > 0
+        || row.poFile?.storedName
+        || (Array.isArray(row.files) && row.files.length)
+        || row.poExpiryDate
+    )
+    .map(({ _index, ...rest }) => rest);
+
+  const combined = combinePurchaseOrders(orders);
+  const first = orders[0] || null;
+  const files = orders.flatMap((o) =>
+    (Array.isArray(o.files) && o.files.length ? o.files : o.poFile ? [o.poFile] : [])
+      .map((doc) => normalizeCampTermsFile(doc))
+      .filter(Boolean)
+  );
+  Object.assign(payload, {
+    campTerms: orders.length ? 'po_based' : existing.campTerms || 'none',
+    campTermsFiles: files,
+    purchaseOrders: orders,
+    ...combined,
+    poNumber: first?.poNumber || '',
+    poNetValue: first?.poNetValue ?? 0,
+    poApplyGst18: Boolean(first?.poApplyGst18),
+    poGstAmount: first?.poGstAmount ?? 0,
+    poGrossValue: first?.poGrossValue ?? 0,
+    poExpiryDate: first?.poExpiryDate || '',
+    poFile: first?.poFile || null,
+  });
+}
+
+function buildMasterPayload(body, client, existingRow = null) {
   const payload = {
     clientId: client._id,
     clientName: client.name,
@@ -1672,7 +2212,9 @@ function buildMasterPayload(body, client) {
       } else if (field === 'campDuration') {
         payload[field] = normalizeClientMasterDuration(body[field]);
       } else if (field === 'spocEmail') {
-        payload[field] = normalizeEmail(body[field]);
+        payload[field] = parseAssignedUserEmails(body[field]).join(', ');
+      } else if (field === 'campTerms') {
+        payload[field] = normalizeCampTermsValue(body[field]);
       } else {
         payload[field] = trimStr(body[field]);
       }
@@ -1687,6 +2229,7 @@ function buildMasterPayload(body, client) {
       payload[field] = Number.isNaN(n) ? 0 : n;
     }
   }
+  applyPurchaseOrdersToPayload(payload, body, existingRow);
   if (body.mappedConsumables !== undefined) {
     payload.mappedConsumables = normalizeMappedConsumables(body.mappedConsumables);
   }
@@ -1706,11 +2249,32 @@ function assertClientMasterPayload(payload) {
   }
   const spocNumber = trimStr(payload.spocNumber);
   if (spocNumber) assertValidPhone(spocNumber, 'SPOC mobile number');
-  const spocEmail = trimStr(payload.spocEmail);
-  if (spocEmail) assertValidEmail(spocEmail, 'SPOC email address');
+  const spocEmails = parseAssignedUserEmails(payload.spocEmail);
+  for (const email of spocEmails) {
+    assertValidEmail(email, 'SPOC email address');
+  }
   const assignedEmails = parseAssignedUserEmails(payload.assignedUserEmails);
   for (const email of assignedEmails) {
     assertValidEmail(email, 'Assigned user email');
+  }
+  const orders = Array.isArray(payload.purchaseOrders) ? payload.purchaseOrders : [];
+  for (const po of orders) {
+    const net = Number(po.poNetValue);
+    if (!Number.isFinite(net) || net < 0) {
+      throw new AppError('PO Net Value must be zero or greater', 400, 'VALIDATION_ERROR');
+    }
+    if (trimStr(po.poNumber) && trimStr(po.poNumber).length > 80) {
+      throw new AppError('PO Number must be 80 characters or less', 400, 'VALIDATION_ERROR');
+    }
+  }
+  if (payload.poNetValue != null && payload.poNetValue !== '') {
+    const net = Number(payload.poNetValue);
+    if (!Number.isFinite(net) || net < 0) {
+      throw new AppError('PO Net Value must be zero or greater', 400, 'VALIDATION_ERROR');
+    }
+  }
+  if (trimStr(payload.poNumber) && trimStr(payload.poNumber).length > 80) {
+    throw new AppError('PO Number must be 80 characters or less', 400, 'VALIDATION_ERROR');
   }
 }
 
@@ -1736,7 +2300,7 @@ router.get(
       : [];
     const clientsById = new Map(clients.map((c) => [String(c._id), c]));
     const enriched = data.map((row) => {
-      const plain = row.toObject ? row.toObject() : { ...row };
+      const plain = withSignedPoFile(row);
       const client = clientsById.get(String(plain.clientId || ''));
       return {
         ...plain,
@@ -1886,7 +2450,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
-    const plain = row.toObject ? row.toObject() : { ...row };
+    const plain = withSignedPoFile(row);
     const client = plain.clientId
       ? await CampOpsClient.findOne({ _id: plain.clientId, isDeleted: false })
       : null;
@@ -1924,7 +2488,7 @@ router.post(
       updatedById: a.id,
     });
     await audit(req, 'camp_ops.client_master_create', 'camp_ops_client_master', row._id, null, row.toObject());
-    res.status(201).json({ data: row });
+    res.status(201).json({ data: withSignedPoFile(row) });
   })
 );
 
@@ -1945,12 +2509,12 @@ router.put(
         client = { _id: row.clientId, name: row.clientName };
       }
     }
-    Object.assign(row, buildMasterPayload({ ...row.toObject(), ...req.body }, client));
+    Object.assign(row, buildMasterPayload(req.body, client, row));
     assertClientMasterPayload(row);
     row.updatedById = actor(req).id;
     await row.save();
     await audit(req, 'camp_ops.client_master_update', 'camp_ops_client_master', row._id, before, row.toObject());
-    res.json({ data: row });
+    res.json({ data: withSignedPoFile(row) });
   })
 );
 
@@ -1970,41 +2534,427 @@ router.delete(
   })
 );
 
-router.get(
-  '/client-masters/:id/document',
-  canRead,
-  asyncHandler(async (_req, res) => {
-    throw new AppError('No program document uploaded', 404, 'NOT_FOUND');
-  })
-);
+const clientMasterPoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, campUploadRoot),
+    filename: (_req, file, cb) => {
+      const safe = String(file.originalname || 'po-file').replace(/[^\w.\-]+/g, '_');
+      cb(null, `po-${Date.now()}-${safe}`);
+    },
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const mime = String(file.mimetype || '').toLowerCase();
+    const name = String(file.originalname || '').toLowerCase();
+    const allowed =
+      mime === 'application/pdf'
+      || mime.startsWith('image/')
+      || mime.includes('word')
+      || mime.includes('sheet')
+      || mime.includes('excel')
+      || /\.(pdf|png|jpe?g|webp|docx?|xlsx?)$/i.test(name);
+    cb(allowed ? null : new Error('PO file type not allowed'), allowed);
+  },
+});
+
+function unlinkPoFile(storedName) {
+  if (!storedName) return;
+  const full = path.join(campUploadRoot, storedName);
+  try {
+    if (fs.existsSync(full)) fs.unlinkSync(full);
+  } catch {
+    /* ignore */
+  }
+}
+
+function getCampTermsFilesMutable(row) {
+  const ensured = ensurePurchaseOrders(row);
+  if (!Array.isArray(row.campTermsFiles)) {
+    row.campTermsFiles = ensured.campTermsFiles.map((file) => ({ ...file }));
+  }
+  return row.campTermsFiles;
+}
+
+function syncCampTermsFileMirror(row) {
+  const files = Array.isArray(row.campTermsFiles) ? row.campTermsFiles : [];
+  row.poFile = files[0] || null;
+  if (Array.isArray(row.purchaseOrders) && row.purchaseOrders[0]) {
+    row.purchaseOrders[0] = { ...row.purchaseOrders[0], poFile: files[0] || null };
+  }
+}
 
 router.post(
-  '/client-masters/:id/document',
+  '/client-masters/:id/camp-terms-files',
   canRequest,
+  clientMasterPoUpload.array('files', 10),
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
-    row.programDocument = {
-      fileName: req.body?.fileName || 'document.pdf',
-      storedName: '',
-      mimeType: 'application/pdf',
-      fileSize: 0,
-      uploadedAt: new Date().toISOString(),
-    };
+    const uploaded = Array.isArray(req.files) ? req.files : [];
+    if (!uploaded.length) throw new AppError('At least one file is required', 400, 'VALIDATION_ERROR');
+
+    const files = getCampTermsFilesMutable(row);
+    for (const file of uploaded) {
+      files.push({
+        id: newCampTermsFileId(),
+        fileName: file.originalname || file.filename,
+        storedName: file.filename,
+        mimeType: file.mimetype || 'application/octet-stream',
+        fileSize: file.size || 0,
+        url: `/uploads/camp-ops/${file.filename}`,
+        uploadedAt: new Date().toISOString(),
+      });
+    }
+    if (!row.campTerms || row.campTerms === 'none') {
+      row.campTerms = 'approval_based';
+    }
+    syncCampTermsFileMirror(row);
+    row.updatedById = actor(req).id;
     await row.save();
-    res.json({ data: row });
+    await audit(req, 'camp_ops.client_master_camp_terms_files', 'camp_ops_client_master', row._id, null, {
+      count: uploaded.length,
+    });
+    res.json({ data: withSignedPoFile(row) });
+  })
+);
+
+router.get(
+  '/client-masters/:id/camp-terms-files/:fileId',
+  canReadClientMaster,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    const files = collectCampTermsFiles(row);
+    const doc =
+      files.find((f) => String(f.id) === String(req.params.fileId) || String(f.storedName) === String(req.params.fileId));
+    if (!doc?.storedName) throw new AppError('File not found', 404, 'NOT_FOUND');
+    const full = path.join(campUploadRoot, doc.storedName);
+    if (!fs.existsSync(full)) throw new AppError('File missing on server', 404, 'NOT_FOUND');
+    res.setHeader('Content-Type', doc.mimeType || 'application/octet-stream');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${String(doc.fileName || doc.storedName).replace(/"/g, '')}"`
+    );
+    fs.createReadStream(full).pipe(res);
   })
 );
 
 router.delete(
-  '/client-masters/:id/document',
+  '/client-masters/:id/camp-terms-files/:fileId',
   requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
-    row.programDocument = null;
+    const files = getCampTermsFilesMutable(row);
+    const idx = files.findIndex(
+      (f) => String(f.id) === String(req.params.fileId) || String(f.storedName) === String(req.params.fileId)
+    );
+    if (idx < 0) throw new AppError('File not found', 404, 'NOT_FOUND');
+    const [removed] = files.splice(idx, 1);
+    syncCampTermsFileMirror(row);
+    row.updatedById = actor(req).id;
     await row.save();
-    res.json({ data: row });
+    unlinkPoFile(removed?.storedName);
+    await audit(req, 'camp_ops.client_master_camp_terms_file_delete', 'camp_ops_client_master', row._id, null, {
+      fileId: req.params.fileId,
+    });
+    res.json({ data: withSignedPoFile(row) });
+  })
+);
+
+function getPurchaseOrdersMutable(row) {
+  const ensured = ensurePurchaseOrders(row);
+  if (!Array.isArray(row.purchaseOrders) || !row.purchaseOrders.length) {
+    row.purchaseOrders = ensured.purchaseOrders.map((po) => ({ ...po }));
+  }
+  return row.purchaseOrders;
+}
+
+function syncLegacyPoMirror(row) {
+  const orders = Array.isArray(row.purchaseOrders) ? row.purchaseOrders : [];
+  const combined = combinePurchaseOrders(orders);
+  const first = orders[0] || null;
+  row.poCombinedNet = combined.poCombinedNet;
+  row.poCombinedGst = combined.poCombinedGst;
+  row.poCombinedGross = combined.poCombinedGross;
+  row.poNumber = first?.poNumber || '';
+  row.poNetValue = first?.poNetValue ?? 0;
+  row.poApplyGst18 = Boolean(first?.poApplyGst18);
+  row.poGstAmount = first?.poGstAmount ?? 0;
+  row.poGrossValue = first?.poGrossValue ?? 0;
+  row.poExpiryDate = first?.poExpiryDate || '';
+  row.poFile = first?.poFile || first?.files?.[0] || null;
+  row.campTerms = orders.length ? 'po_based' : row.campTerms || 'none';
+  row.campTermsFiles = orders.flatMap((o) =>
+    (Array.isArray(o.files) && o.files.length ? o.files : o.poFile ? [o.poFile] : [])
+      .map((doc) => normalizeCampTermsFile(doc))
+      .filter(Boolean)
+  );
+}
+
+function ensurePoFilesArray(entry) {
+  if (!entry) return [];
+  if (!Array.isArray(entry.files)) {
+    entry.files = entry.poFile?.storedName
+      ? [normalizeCampTermsFile(entry.poFile, `${entry.id}-f-1`)].filter(Boolean)
+      : [];
+  }
+  return entry.files;
+}
+
+function appendFilesToPoEntry(entry, uploaded = []) {
+  const files = ensurePoFilesArray(entry);
+  for (const file of uploaded) {
+    files.push({
+      id: newCampTermsFileId(),
+      fileName: file.originalname || file.filename,
+      storedName: file.filename,
+      mimeType: file.mimetype || 'application/octet-stream',
+      fileSize: file.size || 0,
+      url: `/uploads/camp-ops/${file.filename}`,
+      uploadedAt: new Date().toISOString(),
+    });
+  }
+  entry.files = files;
+  entry.poFile = files[0] || null;
+  return files;
+}
+
+function findPoFileOnEntry(entry, fileId) {
+  const files = ensurePoFilesArray(entry);
+  return files.find(
+    (f) => String(f.id) === String(fileId) || String(f.storedName) === String(fileId)
+  );
+}
+
+function findPoEntry(row, poId) {
+  const orders = getPurchaseOrdersMutable(row);
+  if (poId) {
+    const hit = orders.find((po) => String(po.id) === String(poId));
+    if (hit) {
+      ensurePoFilesArray(hit);
+      return { orders, entry: hit };
+    }
+    const entry = {
+      id: String(poId),
+      poNumber: '',
+      poNetValue: 0,
+      poApplyGst18: false,
+      poGstAmount: 0,
+      poGrossValue: 0,
+      poExpiryDate: '',
+      files: [],
+      poFile: null,
+    };
+    orders.push(entry);
+    return { orders, entry };
+  }
+  if (!orders.length) {
+    const entry = {
+      id: newPoId(),
+      poNumber: '',
+      poNetValue: 0,
+      poApplyGst18: false,
+      poGstAmount: 0,
+      poGrossValue: 0,
+      poExpiryDate: '',
+      files: [],
+      poFile: null,
+    };
+    orders.push(entry);
+    return { orders, entry };
+  }
+  ensurePoFilesArray(orders[0]);
+  return { orders, entry: orders[0] };
+}
+
+function sendPoFileResponse(res, doc) {
+  if (!doc?.storedName) throw new AppError('No PO file attached', 404, 'NOT_FOUND');
+  const full = path.join(campUploadRoot, doc.storedName);
+  if (!fs.existsSync(full)) throw new AppError('PO file missing on server', 404, 'NOT_FOUND');
+  res.setHeader('Content-Type', doc.mimeType || 'application/octet-stream');
+  res.setHeader(
+    'Content-Disposition',
+    `inline; filename="${String(doc.fileName || doc.storedName).replace(/"/g, '')}"`
+  );
+  fs.createReadStream(full).pipe(res);
+}
+
+router.get(
+  '/client-masters/:id/po-file/:poId',
+  canReadClientMaster,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    const { entry } = findPoEntry(row, req.params.poId);
+    const files = ensurePoFilesArray(entry);
+    sendPoFileResponse(res, files[0] || entry?.poFile);
+  })
+);
+
+router.get(
+  '/client-masters/:id/po-file/:poId/:fileId',
+  canReadClientMaster,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    const { entry } = findPoEntry(row, req.params.poId);
+    const doc = findPoFileOnEntry(entry, req.params.fileId);
+    sendPoFileResponse(res, doc);
+  })
+);
+
+router.get(
+  '/client-masters/:id/po-file',
+  canReadClientMaster,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    const ensured = ensurePurchaseOrders(row);
+    const doc = ensured.purchaseOrders[0]?.poFile || row.poFile;
+    sendPoFileResponse(res, doc);
+  })
+);
+
+router.post(
+  '/client-masters/:id/po-file/:poId',
+  canRequest,
+  clientMasterPoUpload.fields([
+    { name: 'files', maxCount: 10 },
+    { name: 'poFile', maxCount: 1 },
+  ]),
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    const uploaded = [
+      ...(Array.isArray(req.files?.files) ? req.files.files : []),
+      ...(Array.isArray(req.files?.poFile) ? req.files.poFile : []),
+    ];
+    if (!uploaded.length) throw new AppError('PO file is required', 400, 'VALIDATION_ERROR');
+
+    const { entry } = findPoEntry(row, req.params.poId);
+    appendFilesToPoEntry(entry, uploaded);
+    syncLegacyPoMirror(row);
+    row.updatedById = actor(req).id;
+    await row.save();
+    await audit(req, 'camp_ops.client_master_po_file', 'camp_ops_client_master', row._id, null, {
+      count: uploaded.length,
+      poId: entry.id,
+    });
+    res.json({ data: withSignedPoFile(row) });
+  })
+);
+
+router.post(
+  '/client-masters/:id/po-file',
+  canRequest,
+  clientMasterPoUpload.fields([
+    { name: 'files', maxCount: 10 },
+    { name: 'poFile', maxCount: 1 },
+  ]),
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    const uploaded = [
+      ...(Array.isArray(req.files?.files) ? req.files.files : []),
+      ...(Array.isArray(req.files?.poFile) ? req.files.poFile : []),
+    ];
+    if (!uploaded.length) throw new AppError('PO file is required', 400, 'VALIDATION_ERROR');
+
+    const { entry } = findPoEntry(row, null);
+    appendFilesToPoEntry(entry, uploaded);
+    syncLegacyPoMirror(row);
+    row.updatedById = actor(req).id;
+    await row.save();
+    await audit(req, 'camp_ops.client_master_po_file', 'camp_ops_client_master', row._id, null, {
+      count: uploaded.length,
+      poId: entry.id,
+    });
+    res.json({ data: withSignedPoFile(row) });
+  })
+);
+
+router.delete(
+  '/client-masters/:id/po-file/:poId/:fileId',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    const { entry } = findPoEntry(row, req.params.poId);
+    const files = ensurePoFilesArray(entry);
+    const idx = files.findIndex(
+      (f) =>
+        String(f.id) === String(req.params.fileId)
+        || String(f.storedName) === String(req.params.fileId)
+    );
+    if (idx < 0) throw new AppError('File not found', 404, 'NOT_FOUND');
+    const [removed] = files.splice(idx, 1);
+    entry.files = files;
+    entry.poFile = files[0] || null;
+    syncLegacyPoMirror(row);
+    row.updatedById = actor(req).id;
+    await row.save();
+    unlinkPoFile(removed?.storedName);
+    await audit(req, 'camp_ops.client_master_po_file_delete', 'camp_ops_client_master', row._id, null, {
+      ok: true,
+      poId: req.params.poId,
+      fileId: req.params.fileId,
+    });
+    res.json({ data: withSignedPoFile(row) });
+  })
+);
+
+router.delete(
+  '/client-masters/:id/po-file/:poId',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    const { entry } = findPoEntry(row, req.params.poId);
+    const files = ensurePoFilesArray(entry);
+    const removedNames = files.map((f) => f.storedName).filter(Boolean);
+    if (entry) {
+      entry.files = [];
+      entry.poFile = null;
+    }
+    syncLegacyPoMirror(row);
+    row.updatedById = actor(req).id;
+    await row.save();
+    removedNames.forEach(unlinkPoFile);
+    await audit(req, 'camp_ops.client_master_po_file_delete', 'camp_ops_client_master', row._id, null, {
+      ok: true,
+      poId: req.params.poId,
+    });
+    res.json({ data: withSignedPoFile(row) });
+  })
+);
+
+router.delete(
+  '/client-masters/:id/po-file',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    const { entry } = findPoEntry(row, null);
+    const files = ensurePoFilesArray(entry);
+    const removedNames = [
+      ...files.map((f) => f.storedName),
+      entry?.poFile?.storedName,
+      row.poFile?.storedName,
+    ].filter(Boolean);
+    if (entry) {
+      entry.files = [];
+      entry.poFile = null;
+    }
+    row.poFile = null;
+    syncLegacyPoMirror(row);
+    row.updatedById = actor(req).id;
+    await row.save();
+    [...new Set(removedNames)].forEach(unlinkPoFile);
+    await audit(req, 'camp_ops.client_master_po_file_delete', 'camp_ops_client_master', row._id, null, {
+      ok: true,
+    });
+    res.json({ data: withSignedPoFile(row) });
   })
 );
 

@@ -118,6 +118,8 @@ export const FinanceCommercialDocument = defineCollection('finance_commercial_do
   source: 'generated',
   clientId: null,
   clientMasterId: null,
+  /** Links Tax Invoice / Bill of Supply to a Client Master customer PO row */
+  clientPurchaseOrderId: null,
   recipientName: '',
   projectName: '',
   placeOfSupply: '',

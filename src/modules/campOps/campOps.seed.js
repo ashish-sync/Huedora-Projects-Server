@@ -207,7 +207,6 @@ async function ensureClientMaster(client) {
     campType: 'Camp',
     coordinatorName: 'Demo Coordinator',
     healthcareWorker: CAMP_ONE_DEMO.hcwName,
-    poAmount: 25000,
     campDuration: '3 Hours',
     spocName: 'SPOC Demo',
     spocNumber: '9998887776',
