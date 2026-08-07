@@ -214,6 +214,27 @@ export async function saveCollection(name, rows) {
   fs.writeFileSync(filePath(name), JSON.stringify(snapshot, null, 2));
 }
 
+/**
+ * Drop in-memory collection caches. When `keep` is set, those logical names stay cached.
+ * Required after raw Mongo deleteMany — otherwise the API keeps serving stale rows and
+ * may write them back on the next save/seed.
+ */
+export function clearPersistenceCache({ keep = [] } = {}) {
+  const retain = new Set(keep);
+  if (!retain.size) {
+    cache.clear();
+    return;
+  }
+  for (const name of [...cache.keys()]) {
+    if (!retain.has(name)) cache.delete(name);
+  }
+}
+
+/** Explicitly mark a collection as empty in cache (and optionally flush to Mongo/file). */
+export async function emptyCollection(name) {
+  await saveCollection(name, []);
+}
+
 export async function resetAllCollections() {
   cache.clear();
   if (mode === 'mongo') {

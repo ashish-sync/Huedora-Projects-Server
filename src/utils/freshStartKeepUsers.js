@@ -1,11 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import {
+  clearPersistenceCache,
   getPersistenceMode,
   getRegisteredCollections,
   loadCollection,
   saveCollection,
 } from '../store/persistence.js';
+import { invalidateIdIndex } from '../store/filedb.js';
 import { uploadsRoot } from '../config/paths.js';
 
 /** Collections preserved so existing logins and role assignments keep working. */
@@ -27,7 +29,6 @@ function clearDirectory(dir) {
     const full = path.join(dir, entry);
     if (fs.statSync(full).isDirectory()) {
       clearDirectory(full);
-      fs.rmdirSync(full);
     } else {
       fs.unlinkSync(full);
     }
@@ -37,6 +38,9 @@ function clearDirectory(dir) {
 /**
  * Wipe all application data except users, roles, and refresh tokens.
  * Re-seed system reference data (geo, roles repair, logistics picklists) afterward via ensureSeed.
+ *
+ * Always clears the process-local persistence cache for wiped collections so Mongo-mode
+ * APIs do not keep serving (or re-persisting) stale rows after deleteMany.
  */
 export async function freshStartKeepUsers({ clearUploads = true } = {}) {
   const mode = getPersistenceMode();
@@ -52,7 +56,8 @@ export async function freshStartKeepUsers({ clearUploads = true } = {}) {
       if (!name.startsWith('tylo_')) continue;
       const logical = name.slice('tylo_'.length);
       if (FRESH_START_KEEP_COLLECTIONS.has(logical)) continue;
-      await db.collection(name).deleteMany({});
+      // saveCollection([],) clears Mongo and replaces the in-memory cache entry.
+      await saveCollection(logical, []);
       cleared.push(logical);
     }
   } else {
@@ -66,6 +71,10 @@ export async function freshStartKeepUsers({ clearUploads = true } = {}) {
       cleared.push(name);
     }
   }
+
+  // Drop any other cached collections that were never listed (or loaded under aliases).
+  clearPersistenceCache({ keep: [...FRESH_START_KEEP_COLLECTIONS] });
+  invalidateIdIndex();
 
   // Ensure keep-collections stay loadable even if empty roles somehow missing.
   for (const name of FRESH_START_KEEP_COLLECTIONS) {

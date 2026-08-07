@@ -252,26 +252,34 @@ export async function ensureLogisticsSeed() {
     }
   }
 
-  const demoSupplier = await LogisticsSupplier.findOne({ code: 'DEMO-SUP', isDeleted: false });
-  if (!demoSupplier) {
-    await LogisticsSupplier.create({
-      code: 'DEMO-SUP',
-      name: 'Demo Supplier',
-      partyType: 'Supplier',
-      city: 'Mumbai',
-      state: 'Maharashtra',
-      isActive: true,
-    });
-  }
-  const demoVendor = await LogisticsSupplier.findOne({ code: 'DEMO-VEN', isDeleted: false });
-  if (!demoVendor) {
-    await LogisticsSupplier.create({
-      code: 'DEMO-VEN',
-      name: 'Demo Vendor',
-      partyType: 'Vendor',
-      city: 'Mumbai',
-      state: 'Maharashtra',
-      isActive: true,
-    });
+  // Demo parties are for local/dev only — never reintroduce them in production.
+  if (process.env.NODE_ENV !== 'production') {
+    const demoSupplier = await LogisticsSupplier.findOne({ code: 'DEMO-SUP', isDeleted: false });
+    if (!demoSupplier) {
+      await LogisticsSupplier.create({
+        code: 'DEMO-SUP',
+        name: 'Demo Supplier',
+        partyType: 'Supplier',
+        city: 'Mumbai',
+        state: 'Maharashtra',
+        isActive: true,
+      });
+    }
+    const demoVendor = await LogisticsSupplier.findOne({ code: 'DEMO-VEN', isDeleted: false });
+    if (!demoVendor) {
+      await LogisticsSupplier.create({
+        code: 'DEMO-VEN',
+        name: 'Demo Vendor',
+        partyType: 'Vendor',
+        city: 'Mumbai',
+        state: 'Maharashtra',
+        isActive: true,
+      });
+    }
+  } else {
+    await LogisticsSupplier.updateMany(
+      { code: { $in: ['DEMO-SUP', 'DEMO-VEN'] }, isDeleted: false },
+      { $set: { isDeleted: true, isActive: false } }
+    );
   }
 }
