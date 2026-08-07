@@ -441,181 +441,170 @@ function buildCampPayoutFilter(query = {}) {
   return filter;
 }
 
-router.get(
-  '/camp-payouts',
-  canRead,
-  asyncHandler(async (req, res) => {
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 200));
-    const skip = (page - 1) * limit;
-    const filter = buildCampPayoutFilter(req.query);
-    const rows = await CampOpsCamp.find(filter).sort('-submittedToFinanceAt');
-    const total = rows.length;
-    const data = await enrichCampPayoutsWithPayee(
-      rows.slice(skip, skip + limit).map(campPayoutSummary),
+const listCampPayouts = asyncHandler(async (req, res) => {
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 200));
+  const skip = (page - 1) * limit;
+  const filter = buildCampPayoutFilter(req.query);
+  const rows = await CampOpsCamp.find(filter).sort('-submittedToFinanceAt');
+  const total = rows.length;
+  const data = await enrichCampPayoutsWithPayee(
+    rows.slice(skip, skip + limit).map(campPayoutSummary),
+  );
+  res.json(paginated(data, total, page, limit));
+});
+
+const exportCampPayouts = asyncHandler(async (req, res) => {
+  const filter = buildCampPayoutFilter(req.query);
+  const camps = await CampOpsCamp.find(filter).sort('-submittedToFinanceAt');
+  sendExcel(
+    res,
+    campFinanceBulkExportFilename(),
+    campFinanceExportHeaders(),
+    campFinanceExportRows(camps),
+    { sheetName: 'Camp Payouts' },
+  );
+});
+
+const bulkUpdateCampPayouts = asyncHandler(async (req, res) => {
+  const ids = Array.isArray(req.body?.ids)
+    ? req.body.ids.map((id) => String(id || '').trim()).filter(Boolean)
+    : [];
+  if (!ids.length) {
+    throw new AppError('Select at least one camp payout', 400, 'VALIDATION_ERROR');
+  }
+
+  const status = normalizeFinancePaymentStatus(req.body?.financePaymentStatus);
+  if (!status || !FINANCE_PAYMENT_STATUSES.includes(status)) {
+    throw new AppError(
+      'financePaymentStatus must be paid, not_paid, or under_review',
+      400,
+      'VALIDATION_ERROR'
     );
-    res.json(paginated(data, total, page, limit));
-  })
-);
+  }
 
-router.get(
-  '/camp-payouts/export',
-  canRead,
-  asyncHandler(async (req, res) => {
-    const filter = buildCampPayoutFilter(req.query);
-    const camps = await CampOpsCamp.find(filter).sort('-submittedToFinanceAt');
-    sendExcel(
-      res,
-      campFinanceBulkExportFilename(),
-      campFinanceExportHeaders(),
-      campFinanceExportRows(camps),
-      { sheetName: 'Camp Payouts' },
-    );
-  })
-);
+  const transactionId = trimStr(req.body?.transactionId);
+  const paymentRemark = trimStr(req.body?.paymentRemark);
+  const sharedPaidAmount = req.body?.paidAmount !== undefined && req.body?.paidAmount !== ''
+    ? toAmount(req.body.paidAmount)
+    : null;
 
-router.post(
-  '/camp-payouts/bulk',
-  canWrite,
-  asyncHandler(async (req, res) => {
-    const ids = Array.isArray(req.body?.ids)
-      ? req.body.ids.map((id) => String(id || '').trim()).filter(Boolean)
-      : [];
-    if (!ids.length) {
-      throw new AppError('Select at least one camp payout', 400, 'VALIDATION_ERROR');
-    }
+  if (status === 'paid' && !transactionId) {
+    throw new AppError('Transaction ID / UTR is required when status is Paid', 400, 'VALIDATION_ERROR');
+  }
 
-    const status = normalizeFinancePaymentStatus(req.body?.financePaymentStatus);
-    if (!status || !FINANCE_PAYMENT_STATUSES.includes(status)) {
+  const camps = await CampOpsCamp.find({
+    _id: { $in: ids },
+    isDeleted: false,
+    submittedToFinanceAt: { $ne: null },
+  });
+  if (!camps.length) {
+    throw new AppError('No matching camp payouts found', 404);
+  }
+
+  const a = req.user;
+  const updated = [];
+  for (const camp of camps) {
+    const derived = computeLifecycleDerived(camp);
+    const paidAmount = status === 'paid'
+      ? (sharedPaidAmount != null && camps.length === 1
+        ? sharedPaidAmount
+        : derived.totalPayout || toAmount(camp.paidAmount) || 0)
+      : (sharedPaidAmount != null ? sharedPaidAmount : camp.paidAmount);
+
+    if (status === 'paid' && !paidAmount) {
       throw new AppError(
-        'financePaymentStatus must be paid, not_paid, or under_review',
+        `Paid Amount is required for ${camp.campId || camp._id}`,
         400,
-        'VALIDATION_ERROR'
+        'VALIDATION_ERROR',
       );
     }
 
-    const transactionId = trimStr(req.body?.transactionId);
-    const paymentRemark = trimStr(req.body?.paymentRemark);
-    const sharedPaidAmount = req.body?.paidAmount !== undefined && req.body?.paidAmount !== ''
-      ? toAmount(req.body.paidAmount)
-      : null;
-
-    if (status === 'paid' && !transactionId) {
-      throw new AppError('Transaction ID / UTR is required when status is Paid', 400, 'VALIDATION_ERROR');
-    }
-
-    const camps = await CampOpsCamp.find({
-      _id: { $in: ids },
-      isDeleted: false,
-      submittedToFinanceAt: { $ne: null },
-    });
-    if (!camps.length) {
-      throw new AppError('No matching camp payouts found', 404);
-    }
-
-    const a = req.user;
-    const updated = [];
-    for (const camp of camps) {
-      const derived = computeLifecycleDerived(camp);
-      const paidAmount = status === 'paid'
-        ? (sharedPaidAmount != null && camps.length === 1
-          ? sharedPaidAmount
-          : derived.totalPayout || toAmount(camp.paidAmount) || 0)
-        : (sharedPaidAmount != null ? sharedPaidAmount : camp.paidAmount);
-
-      if (status === 'paid' && !paidAmount) {
-        throw new AppError(
-          `Paid Amount is required for ${camp.campId || camp._id}`,
-          400,
-          'VALIDATION_ERROR',
-        );
-      }
-
-      applyCampPayoutFields(camp, {
-        financePaymentStatus: status,
-        paidAmount,
-        transactionId: status === 'paid' ? transactionId : (req.body?.transactionId ?? camp.transactionId),
-        paymentRemark: paymentRemark || camp.paymentRemark,
-      }, a);
-      await camp.save();
-      updated.push(await campPayoutSummaryWithPayeeBank(camp));
-    }
-
-    await writeAudit({
-      actorId: a?._id || null,
-      actorEmail: a?.email || null,
-      action: 'FINANCE.CAMP_PAYOUT_BULK_UPDATE',
-      entityType: 'camp_ops_camp',
-      entityId: null,
-      after: {
-        count: updated.length,
-        financePaymentStatus: status,
-        transactionId: status === 'paid' ? transactionId : undefined,
-        ids: updated.map((row) => row._id),
-      },
-      requestId: req.requestId,
-    });
-
-    res.json({
-      data: updated,
-      message: `Updated ${updated.length} camp payout${updated.length === 1 ? '' : 's'}`,
-    });
-  })
-);
-
-router.get(
-  '/camp-payouts/:campId/export',
-  canRead,
-  asyncHandler(async (req, res) => {
-    const camp = await CampOpsCamp.findOne({
-      _id: req.params.campId,
-      isDeleted: false,
-      submittedToFinanceAt: { $ne: null },
-    });
-    if (!camp) throw new AppError('Camp payout not found', 404);
-    assertCampSubmittedToFinance(camp);
-    sendExcel(
-      res,
-      campFinanceExportFilename(camp),
-      campFinanceExportHeaders(),
-      [buildCampFinanceExportRow(camp)],
-      { sheetName: 'Camp Payout' },
-    );
-  })
-);
-
-router.patch(
-  '/camp-payouts/:campId',
-  canWrite,
-  asyncHandler(async (req, res) => {
-    const camp = await CampOpsCamp.findOne({
-      _id: req.params.campId,
-      isDeleted: false,
-      submittedToFinanceAt: { $ne: null },
-    });
-    if (!camp) throw new AppError('Camp payout not found', 404);
-
-    const a = req.user;
-    applyCampPayoutFields(camp, req.body, a);
+    applyCampPayoutFields(camp, {
+      financePaymentStatus: status,
+      paidAmount,
+      transactionId: status === 'paid' ? transactionId : (req.body?.transactionId ?? camp.transactionId),
+      paymentRemark: paymentRemark || camp.paymentRemark,
+    }, a);
     await camp.save();
+    updated.push(await campPayoutSummaryWithPayeeBank(camp));
+  }
 
-    await writeAudit({
-      actorId: a?._id || null,
-      actorEmail: a?.email || null,
-      action: 'FINANCE.CAMP_PAYOUT_UPDATE',
-      entityType: 'camp_ops_camp',
-      entityId: camp._id,
-      after: {
-        financePaymentStatus: camp.financePaymentStatus,
-        paidAmount: camp.paidAmount,
-        transactionId: camp.transactionId,
-        balance: camp.balance,
-      },
-      requestId: req.requestId,
-    });
+  await writeAudit({
+    actorId: a?._id || null,
+    actorEmail: a?.email || null,
+    action: 'FINANCE.CAMP_PAYOUT_BULK_UPDATE',
+    entityType: 'camp_ops_camp',
+    entityId: null,
+    after: {
+      count: updated.length,
+      financePaymentStatus: status,
+      transactionId: status === 'paid' ? transactionId : undefined,
+      ids: updated.map((row) => row._id),
+    },
+    requestId: req.requestId,
+  });
 
-    res.json({ data: await campPayoutSummaryWithPayeeBank(camp) });
-  })
-);
+  res.json({
+    data: updated,
+    message: `Updated ${updated.length} camp payout${updated.length === 1 ? '' : 's'}`,
+  });
+});
+
+const exportCampPayoutById = asyncHandler(async (req, res) => {
+  const camp = await CampOpsCamp.findOne({
+    _id: req.params.campId,
+    isDeleted: false,
+    submittedToFinanceAt: { $ne: null },
+  });
+  if (!camp) throw new AppError('Camp payout not found', 404);
+  assertCampSubmittedToFinance(camp);
+  sendExcel(
+    res,
+    campFinanceExportFilename(camp),
+    campFinanceExportHeaders(),
+    [buildCampFinanceExportRow(camp)],
+    { sheetName: 'Camp Payout' },
+  );
+});
+
+const updateCampPayoutById = asyncHandler(async (req, res) => {
+  const camp = await CampOpsCamp.findOne({
+    _id: req.params.campId,
+    isDeleted: false,
+    submittedToFinanceAt: { $ne: null },
+  });
+  if (!camp) throw new AppError('Camp payout not found', 404);
+
+  const a = req.user;
+  applyCampPayoutFields(camp, req.body, a);
+  await camp.save();
+
+  await writeAudit({
+    actorId: a?._id || null,
+    actorEmail: a?.email || null,
+    action: 'FINANCE.CAMP_PAYOUT_UPDATE',
+    entityType: 'camp_ops_camp',
+    entityId: camp._id,
+    after: {
+      financePaymentStatus: camp.financePaymentStatus,
+      paidAmount: camp.paidAmount,
+      transactionId: camp.transactionId,
+      balance: camp.balance,
+    },
+    requestId: req.requestId,
+  });
+
+  res.json({ data: await campPayoutSummaryWithPayeeBank(camp) });
+});
+
+// Canonical paths + /payouts aliases (SPA historically called /finance/payouts).
+for (const base of ['/camp-payouts', '/payouts']) {
+  router.get(base, canRead, listCampPayouts);
+  router.get(`${base}/export`, canRead, exportCampPayouts);
+  router.post(`${base}/bulk`, canWrite, bulkUpdateCampPayouts);
+  router.get(`${base}/:campId/export`, canRead, exportCampPayoutById);
+  router.patch(`${base}/:campId`, canWrite, updateCampPayoutById);
+}
 
 export default router;
