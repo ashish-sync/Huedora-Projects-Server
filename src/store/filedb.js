@@ -281,6 +281,7 @@ export async function scanCollection(name, { filter = {}, forEach } = {}) {
 }
 
 export { match as matchDocument };
+export { loadCollection };
 
 export function defineCollection(name, defaults = {}) {
   registerCollection(name);

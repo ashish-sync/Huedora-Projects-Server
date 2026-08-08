@@ -4,9 +4,14 @@ import {
   resolveEffectiveExecutionStatus,
 } from './campOps.lifecycle.js';
 
-function isCancelledByTcpl(camp = {}) {
+const CANCELLED_BY_TYLO_REASONS = new Set([
+  'Cancelled by Tylo',
+  'Cancelled by TCPL',
+]);
+
+function isCancelledByTylo(camp = {}) {
   return camp.status === 'cancelled' && (
-    camp.assignmentRefusalReason === 'Cancelled by TCPL'
+    CANCELLED_BY_TYLO_REASONS.has(camp.assignmentRefusalReason)
     || camp.cancelledBy === 'khw'
   );
 }
@@ -22,7 +27,9 @@ export function matchesExecutionFilter(camp = {}, filter = '') {
   const value = String(filter || '').trim();
   if (!value) return true;
 
-  if (value === 'cancelled_by_tcpl') return isCancelledByTcpl(camp);
+  if (value === 'cancelled_by_tylo' || value === 'cancelled_by_tcpl') {
+    return isCancelledByTylo(camp);
+  }
   if (value === 'cancelled_by_client') return isCancelledByClient(camp);
   if (value === 'completed') {
     return normalizeExecutionStatus(camp.executionStatus) === EXECUTION_STATUS.CAMP_COMPLETED;
@@ -31,7 +38,9 @@ export function matchesExecutionFilter(camp = {}, filter = '') {
   if (['cancelled', 'rejected'].includes(camp.status)) return false;
 
   const effective = camp.effectiveExecutionStatus || resolveEffectiveExecutionStatus(camp);
-  if (value === 'yet_to_start') return effective === EXECUTION_STATUS.CAMP_SCHEDULED;
+  if (value === 'scheduled' || value === 'yet_to_start') {
+    return effective === EXECUTION_STATUS.CAMP_SCHEDULED;
+  }
   if (value === 'ongoing') return effective === EXECUTION_STATUS.CAMP_ONGOING;
   if (value === 'executed') return effective === EXECUTION_STATUS.MARKED_EXECUTED;
   return true;

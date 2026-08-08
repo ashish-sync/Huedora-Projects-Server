@@ -45,6 +45,10 @@ export const CampOpsCamp = defineCollection('camp_ops_camps', {
   assignmentRefusalReason: '',
   hcwContactId: null,
   assignmentStatus: 'Pending',
+  /** Set when a Hiring Request is submitted in Request One from this camp */
+  hiringRequestedAt: null,
+  hiringRequestId: null,
+  hiringRequestNumber: '',
   hcwCategory: '',
   hcwName: '',
   hcwContact: '',

@@ -28,7 +28,7 @@ import {
   LogisticsExpenseSubCategory,
   LogisticsProduct,
 } from '../logistics/logistics.model.js';
-import { CampOpsClient, CampOpsClientMaster } from '../campOps/campOps.model.js';
+import { CampOpsCamp, CampOpsClient, CampOpsClientMaster } from '../campOps/campOps.model.js';
 import {
   IN_OUT_PRODUCT_TYPES,
   IN_OUT_PRODUCT_TYPE_ALIASES,
@@ -473,6 +473,8 @@ function pickDetails(body = {}) {
     hiringCity: body.hiringCity?.trim() || '',
     hiringName: body.hiringName?.trim() || '',
     hiringPinCode: body.hiringPinCode?.trim() || '',
+    campRecordId: body.campRecordId || null,
+    campOpsCampId: body.campOpsCampId?.trim() || body.campId?.trim() || '',
     budgetMin: num(body.budgetMin),
     budgetMax: num(body.budgetMax),
     otherCategory: body.otherCategory?.trim() || '',
@@ -656,6 +658,28 @@ async function notifyApprovers({ request, actorId, reason }) {
 
 function isLogistics(type) {
   return type === 'LOGISTICS' || type === 'MOVEMENT';
+}
+
+/** Mark Camp One assignment status when a Hiring Request is submitted from a camp. */
+async function markCampHiringRequested(request) {
+  const campRecordId = String(request?.campRecordId || '').trim();
+  if (!campRecordId) return null;
+  const camp = await CampOpsCamp.findOne({ _id: campRecordId, isDeleted: false });
+  if (!camp) return null;
+
+  camp.hiringRequestedAt = new Date().toISOString();
+  camp.hiringRequestId = request._id;
+  camp.hiringRequestNumber = request.requestNumber || '';
+
+  // Only flip Assignment status for approved camps that are not already Assigned.
+  if (camp.status === 'approved' && camp.assignmentStatus !== 'Assigned') {
+    camp.assignmentStatus = 'Hiring Requested';
+    if (!camp.lifecycleStage || camp.lifecycleStage === 'request') {
+      camp.lifecycleStage = 'assignment';
+    }
+  }
+  await camp.save();
+  return camp;
 }
 
 async function revokePendingUploadInvites(requestId) {
@@ -1476,6 +1500,10 @@ router.post(
       ...vendor,
       ...logisticsEndpoints,
     });
+
+    if (requestType === 'HIRING') {
+      await markCampHiringRequested(row);
+    }
 
     await notifyApprovers({ request: row, actorId: req.user._id, reason });
 

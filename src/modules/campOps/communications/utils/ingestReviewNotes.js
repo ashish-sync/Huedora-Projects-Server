@@ -11,7 +11,7 @@ const GENERIC_DIVISION_NAMES = new Set([
 export function appendIngestReviewRemarks(row, client) {
   const notes = [];
   if (client?.code === PENDING_EMAIL_CLIENT_CODE) {
-    notes.push('Client not matched from request — assign a client in Client Master before approval.');
+    notes.push('Client not matched from request — assign a Client in Client Master before approval.');
   }
 
   const campDivision = String(row.campaignType || '').trim();

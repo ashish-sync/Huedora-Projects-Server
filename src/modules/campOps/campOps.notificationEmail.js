@@ -24,8 +24,8 @@ export function buildCampStakeholderEmail({
   const subject = `${subjectPrefix}${title}`;
   const greeting = recipientName ? `Hello ${recipientName},` : 'Hello,';
   const audienceNote = audience === 'manager'
-    ? 'You are receiving this email because you are the reporting manager for an assigned camp coordinator on this client.'
-    : 'You are receiving this email because you are assigned as a coordinator for this client in Client Master.';
+    ? 'You are receiving this email because you are the reporting manager for an assigned camp coordinator on this Client.'
+    : 'You are receiving this email because you are assigned as a coordinator for this Client in Client Master.';
 
   const lines = [
     greeting,

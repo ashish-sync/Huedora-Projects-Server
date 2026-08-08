@@ -44,7 +44,7 @@ import { LogisticsProduct, LogisticsUom, LogisticsExpenseSubCategory } from '../
 import { Contact } from '../contacts/contact.model.js';
 import { getHcwFinanceBlockers } from '../contacts/hcwFinanceReadiness.js';
 import { resolveCampPayoutPayeeContact } from '../contacts/campPayoutPayee.js';
-import { formatTextValue } from '../../utils/textFormat.js';
+import { formatTextValue, getDoctorNameFormatError } from '../../utils/textFormat.js';
 import {
   CAMP_FINANCE_EXPENSE_CATEGORY,
   CAMP_FINANCE_EXPENSE_SUB_CATEGORY,
@@ -413,6 +413,13 @@ function clientBillingView(client) {
   };
 }
 
+/** Reject Dr./Doctor prefixes before formatting strips them. */
+function assertRawDoctorName(body = {}) {
+  if (body.doctorName === undefined || body.doctorName === null) return;
+  const error = getDoctorNameFormatError(trimStr(body.doctorName));
+  if (error) throw new AppError(error, 400, 'VALIDATION_ERROR');
+}
+
 async function resolveClientFromBody(body, { allowCreate = false } = {}) {
   const clientId = body.clientId || body.client;
   if (clientId) {
@@ -588,7 +595,7 @@ router.get(
       filter,
       forEach: (camp) => {
         total += 1;
-        byStatus[camp.status] = (byStatus[camp.status] || 0) + 1;
+      byStatus[camp.status] = (byStatus[camp.status] || 0) + 1;
         if (camp.status === 'approved' && isCampOverdue(camp)) overdueNotExecuted += 1;
         if (camp.status === 'pending_review' && camp.submittedOffHours) offHoursPending += 1;
         if (camp.status === 'pending_review' && camp.submittedWeekendAttention) {
@@ -1037,12 +1044,12 @@ router.post(
         fileName: displayName,
         storedName,
         originalFileName: file.originalname,
-        docType,
-        ...(docNote ? { docNote } : {}),
-        mimeType: file.mimetype,
-        fileSize: file.size,
+      docType,
+      ...(docNote ? { docNote } : {}),
+      mimeType: file.mimetype,
+      fileSize: file.size,
         url: `/uploads/camp-ops/${storedName}`,
-        uploadedAt,
+      uploadedAt,
       });
     }
 
@@ -1076,6 +1083,7 @@ router.post(
     }
     if (!resolved) throw new AppError('Client not found', 404, 'NOT_FOUND');
 
+    assertRawDoctorName(req.body);
     const payload = campPayloadFromBody(req.body, null, resolved);
     try {
       assertRequestStageComplete({ ...payload, clientId: resolved._id, clientName: resolved.name });
@@ -1118,7 +1126,7 @@ router.put(
     camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
     const stage = normalizeLifecycleStage(
       trimStr(req.body.editingStage)
-        || trimStr(req.body.lifecycleStage)
+      || trimStr(req.body.lifecycleStage)
         || camp.lifecycleStage,
       'request',
     );
@@ -1135,6 +1143,9 @@ router.put(
       if (!client) throw new AppError('Client not found', 404, 'NOT_FOUND');
     }
 
+    if (!lifecycleOnly && stage === 'request') {
+      assertRawDoctorName(req.body);
+    }
     const payload = campPayloadFromBody(req.body, camp, client);
     const executionOnlyKeys = [
       'executionStatus', 'chargeableStatus', 'inTime', 'outTime', 'kmRoundTrip', 'punctuality',
@@ -2393,11 +2404,11 @@ router.post(
           await existing.save();
           return { updated: true };
         }
-        await CampOpsClientMaster.create({
-          ...payload,
-          createdById: a.id,
-          updatedById: a.id,
-        });
+          await CampOpsClientMaster.create({
+            ...payload,
+            createdById: a.id,
+            updatedById: a.id,
+          });
         return { ok: true };
       },
     });

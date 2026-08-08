@@ -535,7 +535,7 @@ export function withCampLifecycle(camp) {
   return obj;
 }
 
-export function applyAssignmentStageOutcome(camp, body = {}) {
+export function applyAssignmentStageOutcome(camp, body = {}, now = new Date()) {
   // Prefer editingStage — clients may send a target lifecycleStage for advancement.
   const stage = normalizeLifecycleStage(
     body.editingStage || body.lifecycleStage || camp.lifecycleStage,
@@ -559,8 +559,8 @@ export function applyAssignmentStageOutcome(camp, body = {}) {
     camp.assignmentStatus = 'Assigned';
     camp.assignmentRefusalReason = '';
     camp.lifecycleStage = 'assignment';
-    camp.executionStatus = syncExecutionStatusForSave(camp);
-    promoteAssignedCampToExecutionIfDue(camp);
+    camp.executionStatus = syncExecutionStatusForSave(camp, now);
+    promoteAssignedCampToExecutionIfDue(camp, now);
     return;
   }
 

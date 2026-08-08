@@ -76,7 +76,7 @@ function campPayload(overrides = {}) {
     requestDate: today,
     startTime: '10:00',
     endTime: '13:00',
-    doctorName: 'Dr. E2E Test',
+    doctorName: 'E2E Test Doctor',
     doctorCode: `E2E-${Date.now()}`,
     campAddress: '45 FC Road, Pune, Maharashtra 411004',
     city: 'Pune',
@@ -88,6 +88,9 @@ function campPayload(overrides = {}) {
     expectedPatients: 40,
     fieldPersonName: 'Test Contact',
     fieldPersonPhone: '9988776655',
+    contactPersons: [
+      { level: 'Territory Manager', name: 'Test Contact', phone: '9988776655' },
+    ],
     lifecycleStage: 'request',
     ...overrides,
   };
@@ -193,7 +196,7 @@ async function main() {
     hcwContactId = hcw._id;
   });
 
-  await runStep('Assign HCW — assignment stage', async () => {
+  await runStep('Assign HCW — assignment stage (far camp date stays Assignment)', async () => {
     await api(`/camp-ops/camps/${createdCampMongoId}`, {
       method: 'PUT',
       body: {
@@ -209,22 +212,53 @@ async function main() {
     });
     const res = await api(`/camp-ops/camps/${createdCampMongoId}`);
     if (res.data.assignmentDecision !== 'assign') throw new Error('Assignment not saved');
-    if (res.data.lifecycleStage !== 'execution') throw new Error('Should advance to execution');
+    // Camp date is +21 days — Execution opens only from D-1.
+    if (res.data.lifecycleStage !== 'assignment') {
+      throw new Error(`Expected assignment (far date), got ${res.data.lifecycleStage}`);
+    }
     if (String(res.data.hcwContactId) !== String(hcwContactId)) {
       throw new Error('HCW contact id not linked on camp');
     }
   });
 
+  await runStep('Promote to Execution when camp date is within D-1', async () => {
+    const dueDate = addDaysIso(isoToday(), 1);
+    await api(`/camp-ops/camps/${createdCampMongoId}`, {
+      method: 'PUT',
+      body: {
+        editingStage: 'assignment',
+        lifecycleStage: 'assignment',
+        lifecycleOnly: false,
+        campDate: dueDate,
+        assignmentDecision: 'assign',
+        hcwContactId,
+        hcwCategory: 'Technician',
+        hcwName: CAMP_ONE_DEMO.hcwName,
+        hcwContact: '9123456780',
+      },
+    });
+    // List endpoint also runs promoteDueAssignedCampsToExecution
+    await api('/camp-ops/camps?lifecycleStage=execution&limit=5');
+    const res = await api(`/camp-ops/camps/${createdCampMongoId}`);
+    if (res.data.lifecycleStage !== 'execution') {
+      throw new Error(`Expected execution after D-1 promote, got ${res.data.lifecycleStage}`);
+    }
+  });
+
   await runStep('Update execution stage fields', async () => {
+    // Use today's date + early start so the 30-minute mark-executed gate is open.
     await api(`/camp-ops/camps/${createdCampMongoId}`, {
       method: 'PUT',
       body: {
         editingStage: 'execution',
         lifecycleStage: 'execution',
-        lifecycleOnly: true,
+        lifecycleOnly: false,
+        campDate: isoToday(),
+        startTime: '06:00',
+        endTime: '12:00',
         executionStatus: 'Ongoing',
-        inTime: '09:55',
-        outTime: '13:10',
+        inTime: '06:05',
+        outTime: '11:50',
         patientsCount: 38,
         chargeableStatus: 'Chargeable',
         attire: 'No Issues',
@@ -350,17 +384,17 @@ async function main() {
     if (res.data.closureReasonCode !== 'duplicate_request') throw new Error('Closure sub-reason not saved');
   });
 
-  await runStep('Create camp for TCPL cancellation', async () => {
+  await runStep('Create camp for Tylo cancellation', async () => {
     const res = await api('/camp-ops/camps', {
       method: 'POST',
-      body: campPayload({ doctorCode: `TCPL-${Date.now()}`, campDate: '2026-09-12' }),
+      body: campPayload({ doctorCode: `TYLO-${Date.now()}`, campDate: '2026-09-12' }),
     });
     const id = res.data._id;
     await api(`/camp-ops/camps/${id}/approve`, { method: 'POST' });
     await api(`/camp-ops/camps/${id}/close`, {
       method: 'POST',
       body: {
-        closureType: 'Cancelled by TCPL',
+        closureType: 'Cancelled by Tylo',
         reasonCategory: 'Device & Inventory',
         subReason: 'device_failure',
       },

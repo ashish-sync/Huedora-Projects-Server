@@ -58,9 +58,9 @@ export const CAMP_ONE_DEMO_HCWS = [
 
 /** Demo camps use doctorCode DEMO-{key} and are upserted on every seed run. */
 export const DEMO_CAMP_KEYS = [
-  'REQ', 'INFO', 'REJ', 'CANR',
-  'ASGN', 'ASGD',
-  'EXEC', 'ONGO', 'EXMK',
+  'REQ', 'ROVD', 'INFO', 'REJ',
+  'ASGN', 'ASHR', 'ASGD', 'ACTY', 'ACCL',
+  'EXEC', 'ONGO', 'EXMK', 'ECTY', 'ECCL',
   'FIN', 'FINSB', 'FINCF', 'FINHD', 'FINPY',
   'PQ01', 'PQ02', 'PQ03', 'PQ04', 'PQ05', 'PQ06', 'PQ07', 'PQ08', 'PQ09', 'PQ10',
 ];
@@ -69,6 +69,24 @@ function addDays(isoDate, days) {
   const d = new Date(`${isoDate}T12:00:00`);
   d.setDate(d.getDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+/** Working-hours timestamp N calendar days ago (for review overdue demos). */
+function submittedDaysAgo(days, hour = 10) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  d.setHours(hour, 0, 0, 0);
+  return d.toISOString();
+}
+
+function demoContactPersons() {
+  return [
+    {
+      level: 'Territory Manager',
+      name: 'Amit Sharma',
+      phone: '9876543210',
+    },
+  ];
 }
 
 function baseCampFields({ client, campDate, label }) {
@@ -91,6 +109,7 @@ function baseCampFields({ client, campDate, label }) {
     doctorCode: '',
     campAddress: '12 MG Road, Pune, Maharashtra 411001',
     city,
+    district: 'Pune',
     state,
     pincode: '411001',
     hq: city,
@@ -98,6 +117,7 @@ function baseCampFields({ client, campDate, label }) {
     expectedPatients: 50,
     fieldPersonName: 'Amit Sharma',
     fieldPersonPhone: '9876543210',
+    contactPersons: demoContactPersons(),
     remarks: 'Demo camp for stage testing',
     lifecycleStage: 'request',
     assignmentStatus: 'Pending',
@@ -146,9 +166,9 @@ async function ensureDemoAdmin() {
   const adminRole = await Role.findOne({ name: 'Admin', isDeleted: false });
   if (!adminRole) return null;
 
+  const passwordHash = await bcrypt.hash(CAMP_ONE_DEMO.adminPassword, 12);
   let user = await User.findOne({ email: CAMP_ONE_DEMO.adminEmail });
   if (!user) {
-    const passwordHash = await bcrypt.hash(CAMP_ONE_DEMO.adminPassword, 12);
     user = await User.create({
       email: CAMP_ONE_DEMO.adminEmail,
       username: 'campadmin',
@@ -162,6 +182,14 @@ async function ensureDemoAdmin() {
     return { created: true, user };
   }
 
+  // Keep demo credentials usable across seed runs (reset lockouts / drift).
+  user.passwordHash = passwordHash;
+  user.roleIds = [adminRole._id];
+  user.isActive = true;
+  user.failedLoginAttempts = 0;
+  user.lockUntil = null;
+  user.isDeleted = false;
+  await user.save();
   return { created: false, user };
 }
 
@@ -444,6 +472,8 @@ async function ensureDemoCamp({ key, client, overrides = {} }) {
 
   const payload = {
     ...base,
+    // Tracking only fills submission fields when the demo row does not set them.
+    ...(existing ? {} : tracking),
     ...overrides,
     doctorCode,
     doctorName: label,
@@ -452,7 +482,6 @@ async function ensureDemoCamp({ key, client, overrides = {} }) {
     requestReviewStatus: overrides.requestReviewStatus ?? 'review_pending',
     isDeleted: false,
     deletedAt: null,
-    ...(existing ? {} : tracking),
   };
 
   if (existing) {
@@ -469,130 +498,233 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
   const hcwFields = hcwAssignmentFields(hcw);
   const execComplete = executionCompleteFields();
   const payout = financialPayoutFields();
+  const recentSubmittedAt = new Date().toISOString();
+  const overdueSubmittedAt = submittedDaysAgo(3, 10);
 
   return [
+    // —— Request Stage (one camp per status filter) ——
     {
       key: 'REQ',
-      label: 'Dr. Demo REQ (Review Pending)',
+      label: 'Demo Req Review Pending',
       overrides: {
         status: 'pending_review',
         lifecycleStage: 'request',
         requestReviewStatus: 'review_pending',
+        submittedAt: recentSubmittedAt,
+        submittedOffHours: false,
+        submittedWeekendAttention: false,
+        informationRequestNote: '',
+        requestIncomplete: false,
         campDate: addDays(today, 10),
+        remarks: 'Demo — Review Pending filter',
+      },
+    },
+    {
+      key: 'ROVD',
+      label: 'Demo Rovd Review Overdue',
+      overrides: {
+        status: 'pending_review',
+        lifecycleStage: 'request',
+        requestReviewStatus: 'review_overdue',
+        submittedAt: overdueSubmittedAt,
+        reviewOverdueAt: recentSubmittedAt,
+        submittedOffHours: false,
+        submittedWeekendAttention: false,
+        informationRequestNote: '',
+        requestIncomplete: false,
+        campDate: addDays(today, 11),
+        remarks: 'Demo — Review Overdue filter (>6 working hours)',
       },
     },
     {
       key: 'INFO',
-      label: 'Dr. Demo INFO (Info Requested)',
+      label: 'Demo Info Requested',
       overrides: {
         status: 'pending_review',
         lifecycleStage: 'request',
         requestReviewStatus: 'information_requested',
         informationRequestNote: 'Please confirm doctor contact number.',
+        informationRequestedAt: recentSubmittedAt,
+        submittedAt: overdueSubmittedAt,
+        requestIncomplete: false,
         campDate: addDays(today, 12),
+        remarks: 'Demo — Info Requested filter',
       },
     },
     {
       key: 'REJ',
-      label: 'Dr. Demo REJ (Rejected)',
+      label: 'Demo Rej Refused',
       overrides: {
         status: 'rejected',
         lifecycleStage: 'request',
-        requestReviewStatus: 'rejected',
-        rejectionReason: 'Demo rejection for testing',
+        requestReviewStatus: 'request_rejected',
+        rejectionReason: 'Demo refusal for filter testing',
         campDate: addDays(today, 8),
+        remarks: 'Demo — Refused filter',
       },
     },
-    {
-      key: 'CANR',
-      label: 'Dr. Demo CANR (Cancelled)',
-      overrides: {
-        status: 'cancelled',
-        lifecycleStage: 'request',
-        requestReviewStatus: 'cancelled',
-        cancelledBy: 'brand',
-        remarks: 'Cancelled by client for demo',
-        campDate: addDays(today, 7),
-      },
-    },
+    // —— Assignment Stage ——
     {
       key: 'ASGN',
-      label: 'Dr. Demo ASGN (Unassigned)',
+      label: 'Demo Asgn Unassigned',
       overrides: {
         status: 'approved',
         lifecycleStage: 'assignment',
-        requestReviewStatus: 'approved',
+        requestReviewStatus: 'request_approved',
         assignmentDecision: '',
         assignmentStatus: 'Pending',
         campDate: addDays(today, 15),
+        remarks: 'Demo — Unassigned filter',
+      },
+    },
+    {
+      key: 'ASHR',
+      label: 'Demo Ashr Hiring Requested',
+      overrides: {
+        status: 'approved',
+        lifecycleStage: 'assignment',
+        requestReviewStatus: 'request_approved',
+        assignmentDecision: '',
+        assignmentStatus: 'Hiring Requested',
+        hiringRequestedAt: new Date().toISOString(),
+        hiringRequestNumber: 'ARQ-DEMO-HIRING',
+        campDate: addDays(today, 15),
+        remarks: 'Demo — Hiring Requested filter (suitcase → Request One submit)',
       },
     },
     {
       key: 'ASGD',
-      label: 'Dr. Demo ASGD (Assigned)',
+      label: 'Demo Asgd Assigned',
       overrides: {
         status: 'approved',
         lifecycleStage: 'assignment',
-        requestReviewStatus: 'approved',
+        requestReviewStatus: 'request_approved',
         campDate: addDays(today, 16),
+        remarks: 'Demo — Assigned filter',
         ...hcwFields,
       },
     },
     {
+      key: 'ACTY',
+      label: 'Demo Acty Cancelled Tylo',
+      overrides: {
+        status: 'cancelled',
+        lifecycleStage: 'assignment',
+        requestReviewStatus: 'request_approved',
+        assignmentDecision: 'refuse',
+        assignmentStatus: 'Refused',
+        assignmentRefusalReason: 'Cancelled by Tylo',
+        cancelledBy: 'khw',
+        campDate: addDays(today, 14),
+        remarks: 'Demo — Cancelled by Tylo (Assignment)',
+      },
+    },
+    {
+      key: 'ACCL',
+      label: 'Demo Accl Cancelled Client',
+      overrides: {
+        status: 'cancelled',
+        lifecycleStage: 'assignment',
+        requestReviewStatus: 'request_approved',
+        assignmentDecision: 'refuse',
+        assignmentStatus: 'Refused',
+        assignmentRefusalReason: 'Cancelled by Client',
+        cancelledBy: 'brand',
+        campDate: addDays(today, 13),
+        remarks: 'Demo — Cancelled by Client (Assignment)',
+      },
+    },
+    // —— Execution Stage ——
+    {
       key: 'EXEC',
-      label: 'Dr. Demo EXEC (Scheduled)',
+      label: 'Demo Exec Scheduled',
       overrides: {
         status: 'approved',
         lifecycleStage: 'execution',
-        requestReviewStatus: 'approved',
+        requestReviewStatus: 'request_approved',
         executionStatus: 'Camp Scheduled',
         campDate: addDays(today, 18),
+        remarks: 'Demo — Scheduled filter',
         ...hcwFields,
       },
     },
     {
       key: 'ONGO',
-      label: 'Dr. Demo ONGO (Ongoing)',
+      label: 'Demo Ongo Ongoing',
       overrides: {
         status: 'approved',
         lifecycleStage: 'execution',
-        requestReviewStatus: 'approved',
+        requestReviewStatus: 'request_approved',
         executionStatus: 'Camp Ongoing',
         campDate: today,
         startTime: '08:00',
         endTime: '20:00',
         inTime: '08:05',
+        remarks: 'Demo — Ongoing filter',
         ...hcwFields,
       },
     },
     {
       key: 'EXMK',
-      label: 'Dr. Demo EXMK (Marked Executed)',
+      label: 'Demo Exmk Marked Executed',
       overrides: {
         status: 'approved',
         lifecycleStage: 'execution',
-        requestReviewStatus: 'approved',
+        requestReviewStatus: 'request_approved',
         executionStatus: 'Marked Executed',
         campDate: addDays(today, -1),
         startTime: '09:00',
         endTime: '11:00',
         inTime: '09:02',
         outTime: '11:05',
+        remarks: 'Demo — Marked executed filter',
         ...hcwFields,
       },
     },
     {
+      key: 'ECTY',
+      label: 'Demo Ecty Cancelled Tylo',
+      overrides: {
+        status: 'cancelled',
+        lifecycleStage: 'execution',
+        requestReviewStatus: 'request_approved',
+        assignmentRefusalReason: 'Cancelled by Tylo',
+        cancelledBy: 'khw',
+        executionStatus: 'Camp Scheduled',
+        campDate: addDays(today, -2),
+        remarks: 'Demo — Cancelled by Tylo (Execution)',
+        ...hcwFields,
+      },
+    },
+    {
+      key: 'ECCL',
+      label: 'Demo Eccl Cancelled Client',
+      overrides: {
+        status: 'cancelled',
+        lifecycleStage: 'execution',
+        requestReviewStatus: 'request_approved',
+        assignmentRefusalReason: 'Cancelled by Client',
+        cancelledBy: 'brand',
+        executionStatus: 'Camp Scheduled',
+        campDate: addDays(today, -3),
+        remarks: 'Demo — Cancelled by Client (Execution)',
+        ...hcwFields,
+      },
+    },
+    // —— Financial Stage ——
+    {
       key: 'FIN',
-      label: 'Dr. Demo FIN (Pending Submission)',
+      label: 'Demo Fin Pending Submission',
       overrides: {
         status: 'executed',
         lifecycleStage: 'financial',
-        requestReviewStatus: 'approved',
+        requestReviewStatus: 'request_approved',
         campDate: addDays(today, 5),
         executedAt: new Date().toISOString(),
         paymentSubmitStatus: '',
         financePaymentStatus: 'not_paid',
         submittedToFinanceAt: null,
+        remarks: 'Demo — Financial (not yet submitted)',
         ...hcwFields,
         ...execComplete,
         ...payout,
@@ -600,11 +732,11 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
     },
     {
       key: 'FINSB',
-      label: 'Dr. Demo FINSB (Submitted)',
+      label: 'Demo Finsb Validation Pending',
       overrides: {
         status: 'executed',
         lifecycleStage: 'financial',
-        requestReviewStatus: 'approved',
+        requestReviewStatus: 'request_approved',
         campDate: addDays(today, 4),
         executedAt: addDays(today, 3) + 'T10:00:00.000Z',
         paymentSubmitStatus: 'payment_not_checked',
@@ -612,6 +744,7 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
         ...campFinanceExpenseDefaults(),
         submittedToFinanceAt: new Date().toISOString(),
         submittedToFinanceByEmail: CAMP_ONE_DEMO.adminEmail,
+        remarks: 'Demo — Validation Pending filter',
         ...hcwFields,
         ...execComplete,
         ...payout,
@@ -619,11 +752,11 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
     },
     {
       key: 'FINCF',
-      label: 'Dr. Demo FINCF (Payment Verified)',
+      label: 'Demo Fincf Validation Completed',
       overrides: {
         status: 'executed',
         lifecycleStage: 'financial',
-        requestReviewStatus: 'approved',
+        requestReviewStatus: 'request_approved',
         campDate: addDays(today, 3),
         executedAt: addDays(today, 2) + 'T10:00:00.000Z',
         paymentSubmitStatus: 'payment_confirmed',
@@ -631,6 +764,7 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
         ...campFinanceExpenseDefaults(),
         submittedToFinanceAt: addDays(today, 1) + 'T12:00:00.000Z',
         submittedToFinanceByEmail: CAMP_ONE_DEMO.adminEmail,
+        remarks: 'Demo — Validation Completed filter',
         ...hcwFields,
         ...execComplete,
         ...payout,
@@ -638,11 +772,11 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
     },
     {
       key: 'FINHD',
-      label: 'Dr. Demo FINHD (Payment On Hold)',
+      label: 'Demo Finhd Payment On Hold',
       overrides: {
         status: 'executed',
         lifecycleStage: 'financial',
-        requestReviewStatus: 'approved',
+        requestReviewStatus: 'request_approved',
         campDate: addDays(today, 2),
         executedAt: addDays(today, 1) + 'T10:00:00.000Z',
         paymentSubmitStatus: 'payment_hold',
@@ -651,6 +785,7 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
         ...campFinanceExpenseDefaults(),
         submittedToFinanceAt: addDays(today, 1) + 'T14:00:00.000Z',
         submittedToFinanceByEmail: CAMP_ONE_DEMO.adminEmail,
+        remarks: 'Demo — Payment On Hold filter',
         ...hcwFields,
         ...execComplete,
         ...payout,
@@ -658,11 +793,11 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
     },
     {
       key: 'FINPY',
-      label: 'Dr. Demo FINPY (Paid)',
+      label: 'Demo Finpy Payment Completed',
       overrides: {
         status: 'executed',
         lifecycleStage: 'financial',
-        requestReviewStatus: 'approved',
+        requestReviewStatus: 'request_approved',
         campDate: addDays(today, 1),
         executedAt: today + 'T09:00:00.000Z',
         paymentSubmitStatus: 'payment_confirmed',
@@ -671,6 +806,7 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
         ...campFinanceExpenseDefaults(),
         submittedToFinanceAt: addDays(today, -1) + 'T11:00:00.000Z',
         submittedToFinanceByEmail: CAMP_ONE_DEMO.adminEmail,
+        remarks: 'Demo — Payment Completed filter',
         ...hcwFields,
         ...execComplete,
         ...payout,
@@ -688,6 +824,18 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
   }));
 }
 
+/** Soft-delete retired demo keys so old filter fixtures do not linger. */
+async function retireLegacyDemoCamps() {
+  const retired = ['CANR'];
+  for (const key of retired) {
+    const camp = await CampOpsCamp.findOne({ doctorCode: `DEMO-${key}`, isDeleted: false });
+    if (!camp) continue;
+    camp.isDeleted = true;
+    camp.deletedAt = new Date().toISOString();
+    await camp.save();
+  }
+}
+
 export async function ensureCampOpsSeed() {
   const admin = await ensureDemoAdmin();
   const clients = await ensureDemoClients();
@@ -695,6 +843,7 @@ export async function ensureCampOpsSeed() {
   await ensureClientMaster(client);
   const hcws = await ensureHcwContacts();
   const hcw = hcws.tech;
+  await retireLegacyDemoCamps();
 
   const expenseDefaults = campFinanceExpenseDefaults();
   const expenseSub = await LogisticsExpenseSubCategory.findOne({

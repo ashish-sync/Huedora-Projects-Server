@@ -42,6 +42,7 @@ const TEST_DOCTOR_CODE_PREFIXES = [
   'QA-',
   'REF-',
   'TCPL-',
+  'TYLO-',
   'DBG-',
   'DBG2-',
   'DBG3-',

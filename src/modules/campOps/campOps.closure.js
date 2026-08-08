@@ -3,7 +3,7 @@ import { applyRequestReviewTransition } from './campOps.requestReview.js';
 export const CAMP_CLOSURE_TYPES = [
   'Cancelled by Client',
   'Refused',
-  'Cancelled by TCPL',
+  'Cancelled by Tylo',
 ];
 
 export const CAMP_CLOSURE_TAXONOMY = {
@@ -22,7 +22,7 @@ export const CAMP_CLOSURE_TAXONOMY = {
       { value: 'non_serviceable_hq', label: 'Non Serviceable HQ' },
     ],
   },
-  'Cancelled by TCPL': {
+  'Cancelled by Tylo': {
     'Resource Issue': [
       { value: 'hcw_unavailability', label: 'HCW Unavailability' },
       { value: 'hcw_backout', label: 'HCW Backout' },
@@ -49,6 +49,7 @@ export const CAMP_CLOSURE_TAXONOMY = {
 
 const LEGACY_REFUSAL_ALIASES = {
   Rejected: 'Refused',
+  'Cancelled by TCPL': 'Cancelled by Tylo',
 };
 
 const LEGACY_REASON_CODES = {
@@ -78,20 +79,21 @@ export function getAvailableClosureTypes(camp = {}) {
   if (stage === 'financial') return [];
 
   if (stage === 'execution') {
-    return ['Cancelled by TCPL', 'Cancelled by Client'];
+    return ['Cancelled by Tylo', 'Cancelled by Client'];
   }
 
   if (stage === 'assignment') {
-    return ['Refused', 'Cancelled by TCPL', 'Cancelled by Client'];
+    return ['Refused', 'Cancelled by Tylo', 'Cancelled by Client'];
   }
 
   return ['Refused'];
 }
 
 export function getClosureReasonCategories(closureType, camp = {}) {
+  const normalizedType = normalizeClosureType(closureType);
   const allowedTypes = camp ? getAvailableClosureTypes(camp) : CAMP_CLOSURE_TYPES;
-  if (!allowedTypes.includes(closureType)) return [];
-  const tree = CAMP_CLOSURE_TAXONOMY[closureType];
+  if (!allowedTypes.includes(normalizedType)) return [];
+  const tree = CAMP_CLOSURE_TAXONOMY[normalizedType];
   return tree ? Object.keys(tree) : [];
 }
 
@@ -108,7 +110,7 @@ export function resolveClosureReasonCategory(closureType, reasonCategory = '', c
 }
 
 export function getClosureSubReasons(closureType, reasonCategory) {
-  const tree = CAMP_CLOSURE_TAXONOMY[closureType];
+  const tree = CAMP_CLOSURE_TAXONOMY[normalizeClosureType(closureType)];
   if (!tree || !reasonCategory) return [];
   return tree[reasonCategory] || [];
 }
@@ -144,10 +146,10 @@ export function resolveClosureSelection({
   if (!allowedTypes.includes(normalizedType)) {
     const stage = String(camp?.lifecycleStage || 'request').trim();
     if (stage === 'execution') {
-      throw new Error('At execution stage, only Cancelled by TCPL or Cancelled by Client is allowed');
+      throw new Error('At execution stage, only Cancelled by Tylo or Cancelled by Client is allowed');
     }
     if (stage === 'assignment') {
-      throw new Error('Choose Refused, Cancelled by TCPL, or Cancelled by Client');
+      throw new Error('Choose Refused, Cancelled by Tylo, or Cancelled by Client');
     }
     throw new Error('Only Refused is allowed at the request stage');
   }

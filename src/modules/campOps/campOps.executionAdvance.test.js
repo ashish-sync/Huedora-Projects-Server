@@ -44,7 +44,7 @@ assert.equal(isCampDateDueForExecution({ campDate: isoOffset(0, now) }, now), tr
     hcwCategory: 'Technician',
     hcwName: 'Ravi',
     hcwContact: '9999999999',
-  });
+  }, now);
   assert.equal(camp.assignmentStatus, 'Assigned');
   assert.equal(camp.lifecycleStage, 'assignment');
 }
@@ -57,7 +57,7 @@ assert.equal(isCampDateDueForExecution({ campDate: isoOffset(0, now) }, now), tr
     hcwCategory: 'Technician',
     hcwName: 'Ravi',
     hcwContact: '9999999999',
-  });
+  }, now);
   assert.equal(camp.lifecycleStage, 'execution');
 }
 

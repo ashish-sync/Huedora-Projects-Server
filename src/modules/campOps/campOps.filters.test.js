@@ -38,13 +38,36 @@ test('buildCampFilter does not restrict lifecycle for request rejected filter', 
   assert.equal(filter.lifecycleStage, undefined);
 });
 
+test('buildCampFilter scopes hiring requested to assignment stage', () => {
+  const filter = buildCampFilter({
+    lifecycleStage: 'assignment',
+    assignmentFilter: 'hiring_requested',
+  });
+  assert.equal(filter.status, 'approved');
+  assert.equal(filter.lifecycleStage, 'assignment');
+  assert.equal(filter.assignmentStatus, 'Hiring Requested');
+});
+
 test('buildCampFilter scopes assignment cancelled filters to assignment stage', () => {
-  const tcpl = buildCampFilter({
+  const tylo = buildCampFilter({
+    lifecycleStage: 'assignment',
+    assignmentFilter: 'cancelled_by_tylo',
+  });
+  assert.equal(tylo.status, 'cancelled');
+  assert.equal(tylo.lifecycleStage, 'assignment');
+  assert.ok(tylo.$and?.some((clause) => clause.$or?.some(
+    (part) => part.assignmentRefusalReason === 'Cancelled by Tylo',
+  )));
+  assert.ok(tylo.$and?.some((clause) => clause.$or?.some(
+    (part) => part.assignmentRefusalReason === 'Cancelled by TCPL',
+  )));
+
+  const legacy = buildCampFilter({
     lifecycleStage: 'assignment',
     assignmentFilter: 'cancelled_by_tcpl',
   });
-  assert.equal(tcpl.status, 'cancelled');
-  assert.equal(tcpl.lifecycleStage, 'assignment');
+  assert.equal(legacy.status, 'cancelled');
+  assert.equal(legacy.lifecycleStage, 'assignment');
 
   const client = buildCampFilter({
     lifecycleStage: 'assignment',
@@ -99,17 +122,24 @@ test('matchesExecutionFilter maps execution filter values to effective status', 
     lifecycleStage: 'execution',
     effectiveExecutionStatus: EXECUTION_STATUS.MARKED_EXECUTED,
   };
-  const cancelledTcpl = {
+  const cancelledTylo = {
+    status: 'cancelled',
+    assignmentRefusalReason: 'Cancelled by Tylo',
+  };
+  const cancelledLegacyTcpl = {
     status: 'cancelled',
     assignmentRefusalReason: 'Cancelled by TCPL',
   };
 
+  assert.equal(matchesExecutionFilter(scheduled, 'scheduled'), true);
   assert.equal(matchesExecutionFilter(scheduled, 'yet_to_start'), true);
   assert.equal(matchesExecutionFilter(ongoing, 'ongoing'), true);
   assert.equal(matchesExecutionFilter(completed, 'completed'), true);
   assert.equal(matchesExecutionFilter(executed, 'executed'), true);
-  assert.equal(matchesExecutionFilter(cancelledTcpl, 'cancelled_by_tcpl'), true);
-  assert.equal(matchesExecutionFilter(cancelledTcpl, 'ongoing'), false);
+  assert.equal(matchesExecutionFilter(cancelledTylo, 'cancelled_by_tylo'), true);
+  assert.equal(matchesExecutionFilter(cancelledLegacyTcpl, 'cancelled_by_tylo'), true);
+  assert.equal(matchesExecutionFilter(cancelledTylo, 'cancelled_by_tcpl'), true);
+  assert.equal(matchesExecutionFilter(cancelledTylo, 'ongoing'), false);
 });
 
 test('resolveExportColumns keeps requested order and ignores unknown keys', () => {

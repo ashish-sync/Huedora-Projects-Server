@@ -56,6 +56,7 @@ const AGREEMENT_STATUS_ALIASES = {
   na: 'Not Initiated',
   'n/a': 'Not Initiated',
   'with tcpl': 'Tylo Office',
+  'with tylo': 'Tylo Office',
   'tylo office': 'Tylo Office',
 };
 
@@ -131,6 +132,12 @@ export function normalizeDeviceCustody(raw) {
     'tcpl - head office': 'Tylo Office',
     'tpcl - warehouse': 'Tylo Office',
     'tcpl - warehouse': 'Tylo Office',
+    'tylo - mumbai warehouse': 'Tylo Office',
+    'tylo - hyderabad warehouse': 'Tylo Office',
+    'tylo - delhi warehouse': 'Tylo Office',
+    'tylo - ho': 'Tylo Office',
+    'tylo - head office': 'Tylo Office',
+    'tylo - warehouse': 'Tylo Office',
   };
   const alias = aliases[v.toLowerCase()];
   if (alias) return alias;

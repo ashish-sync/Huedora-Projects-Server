@@ -149,6 +149,9 @@ export const AssetRequest = defineCollection('asset_requests', {
   hiringCity: '',
   hiringName: '',
   hiringPinCode: '',
+  /** Camp One record this hiring request was raised from */
+  campRecordId: null,
+  campOpsCampId: '',
   budgetMin: null,
   budgetMax: null,
   fulfilledLineIds: [],

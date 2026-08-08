@@ -126,6 +126,29 @@ async function processLifecycle(label, campMongoId, { markPaid = true } = {}) {
     });
     const camp = await getCamp(campMongoId);
     if (camp.assignmentDecision !== 'assign') throw new Error('Assignment not saved');
+    // Far-future demo dates stay in Assignment until D-1.
+    assertStage(camp, 'assignment');
+  });
+
+  await runStep(`${label}: promote to Execution (D-1)`, async () => {
+    await api(`/camp-ops/camps/${campMongoId}`, {
+      method: 'PUT',
+      body: {
+        editingStage: 'assignment',
+        lifecycleStage: 'assignment',
+        lifecycleOnly: false,
+        campDate: isoToday(),
+        startTime: '06:00',
+        endTime: '12:00',
+        assignmentDecision: 'assign',
+        hcwContactId,
+        hcwCategory: 'Technician',
+        hcwName: CAMP_ONE_DEMO.hcwName,
+        hcwContact: '9123456780',
+      },
+    });
+    await api('/camp-ops/camps?lifecycleStage=execution&limit=5');
+    const camp = await getCamp(campMongoId);
     assertStage(camp, 'execution');
   });
 
@@ -135,10 +158,13 @@ async function processLifecycle(label, campMongoId, { markPaid = true } = {}) {
       body: {
         editingStage: 'execution',
         lifecycleStage: 'execution',
-        lifecycleOnly: true,
+        lifecycleOnly: false,
+        campDate: isoToday(),
+        startTime: '06:00',
+        endTime: '12:00',
         executionStatus: 'Ongoing',
-        inTime: '09:55',
-        outTime: '13:10',
+        inTime: '06:05',
+        outTime: '11:50',
         patientsCount: 36,
         chargeableStatus: 'Chargeable',
         attire: 'No Issues',
@@ -252,6 +278,9 @@ async function createViaDashboard(stamp) {
       expectedPatients: 40,
       fieldPersonName: 'Dashboard Contact',
       fieldPersonPhone: '9000000001',
+      contactPersons: [
+        { level: 'Territory Manager', name: 'Dashboard Contact', phone: '9000000001' },
+      ],
       lifecycleStage: 'request',
     },
   });
@@ -326,6 +355,9 @@ SE Mobile: 9000000002
         zone: camp.zone || 'West Zone',
         fieldPersonName: camp.fieldPersonName || 'Paste Contact',
         fieldPersonPhone: camp.fieldPersonPhone || '9000000002',
+        contactPersons: camp.contactPersons?.length
+          ? camp.contactPersons
+          : [{ level: 'Territory Manager', name: 'Paste Contact', phone: '9000000002' }],
         expectedPatients: camp.expectedPatients || 35,
         startTime: camp.startTime || '09:30',
         endTime: camp.endTime || '12:30',

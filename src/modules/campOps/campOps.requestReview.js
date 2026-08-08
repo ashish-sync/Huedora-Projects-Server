@@ -1,5 +1,7 @@
 /** Request Stage review statuses and 6 working-hour overdue rules (9 AM–7 PM, exclude Sundays). */
 
+import { getRequestStageBlockers } from './campOps.requestValidation.js';
+
 export const REQUEST_REVIEW_STATUSES = [
   'review_pending',
   'review_overdue',
@@ -11,9 +13,9 @@ export const REQUEST_REVIEW_STATUSES = [
 export const REQUEST_REVIEW_LABELS = {
   review_pending: 'Review Pending',
   review_overdue: 'Review Overdue',
-  information_requested: 'Information Requested',
+  information_requested: 'Info Requested',
   request_approved: 'Request Approved',
-  request_rejected: 'Request Refused',
+  request_rejected: 'Refused',
 };
 
 const WORK_START_HOUR = 9;
@@ -59,15 +61,26 @@ export function isReviewOverdue(submittedAt, now = new Date()) {
   return elapsedWorkingMs(submittedAt, now) >= SIX_WORKING_HOURS_MS;
 }
 
+/** True when required request-stage camp details are incomplete. */
+export function hasIncompleteRequestDetails(camp = {}) {
+  if (camp.requestIncomplete) return true;
+  if (camp.requestReviewStatus === 'information_requested') return true;
+  return getRequestStageBlockers(camp).length > 0;
+}
+
+/**
+ * Resolve display/filter status for Request Stage:
+ * - Info Requested: required camp details incomplete (or staff asked for info)
+ * - Review Overdue: complete, still pending, past 6 working hours
+ * - Review Pending: complete, still pending, within 6 working hours
+ */
 export function resolveRequestReviewStatus(camp = {}, now = new Date()) {
-  if (camp.requestReviewStatus === 'information_requested' && camp.status === 'pending_review') {
-    return 'information_requested';
-  }
   if (camp.status === 'approved') return 'request_approved';
   if (camp.status === 'rejected') return 'request_rejected';
   if (camp.status === 'pending_review') {
+    if (hasIncompleteRequestDetails(camp)) return 'information_requested';
     if (isReviewOverdue(camp.submittedAt, now)) return 'review_overdue';
-    return camp.requestReviewStatus === 'information_requested' ? 'information_requested' : 'review_pending';
+    return 'review_pending';
   }
   return camp.requestReviewStatus || '';
 }
@@ -111,7 +124,7 @@ export function applyRequestReviewTransition(camp, action, { actor = null, reaso
 
 export async function persistRequestReviewOverdue(camp, now = new Date()) {
   if (!camp || camp.status !== 'pending_review') return { becameOverdue: false };
-  if (camp.requestReviewStatus === 'information_requested') return { becameOverdue: false };
+  if (hasIncompleteRequestDetails(camp)) return { becameOverdue: false };
   if (!isReviewOverdue(camp.submittedAt, now)) return { becameOverdue: false };
   const alreadyOverdue = camp.requestReviewStatus === 'review_overdue' && camp.reviewOverdueAt;
   if (alreadyOverdue) return { becameOverdue: false };

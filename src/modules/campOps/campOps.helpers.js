@@ -218,10 +218,17 @@ export function buildCampFilter(query = {}) {
   if (requestReviewStatus) {
     if (requestReviewStatus === 'request_approved') filter.status = 'approved';
     else if (requestReviewStatus === 'request_rejected') filter.status = 'rejected';
-    else if (requestReviewStatus === 'information_requested') {
+    else if (
+      requestReviewStatus === 'information_requested' ||
+      requestReviewStatus === 'review_pending' ||
+      requestReviewStatus === 'review_overdue'
+    ) {
+      // Pending / overdue / info-requested are resolved at enrich time from
+      // completeness + 6 working-hour rules — keep DB scope on pending_review.
       filter.status = 'pending_review';
-      filter.requestReviewStatus = 'information_requested';
-    } else filter.status = 'pending_review';
+    } else {
+      filter.status = 'pending_review';
+    }
   } else if (status && !assignmentFilter) filter.status = status;
   if (client) filter.clientId = client;
   if (state) filter.state = state;
@@ -256,12 +263,17 @@ export function buildCampFilter(query = {}) {
         ],
       },
     ];
-  } else if (assignmentFilter === 'cancelled_by_tcpl') {
+  } else if (assignmentFilter === 'hiring_requested') {
+    filter.status = 'approved';
+    filter.lifecycleStage = 'assignment';
+    filter.assignmentStatus = 'Hiring Requested';
+  } else if (assignmentFilter === 'cancelled_by_tylo' || assignmentFilter === 'cancelled_by_tcpl') {
     filter.status = 'cancelled';
     filter.$and = [
       ...(filter.$and || []),
       {
         $or: [
+          { assignmentRefusalReason: 'Cancelled by Tylo' },
           { assignmentRefusalReason: 'Cancelled by TCPL' },
           { cancelledBy: 'khw' },
         ],
