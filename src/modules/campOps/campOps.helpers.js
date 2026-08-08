@@ -10,6 +10,7 @@ import { normalizeContactPersons } from './campContactPersons.js';
 import { cleanSpaces, formatTextValue } from '../../utils/textFormat.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
 import { normalizeImportSource } from './import/importRowEnrichment.js';
+import { applyArchiveListFilter } from '../retention/archivePolicy.js';
 
 export function trimStr(v) {
   return v == null ? '' : cleanSpaces(v);
@@ -182,6 +183,7 @@ export function isCampOverdue(camp) {
 
 export function buildCampFilter(query = {}) {
   const filter = { isDeleted: false };
+  applyArchiveListFilter(filter, query);
 
   const status = trimStr(query.status);
   const requestReviewStatus = trimStr(query.requestReviewStatus);

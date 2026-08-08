@@ -4,6 +4,8 @@ import { createHash, randomBytes } from 'crypto';
 import { authenticate, requirePermission } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
+import { writeAudit } from '../../utils/audit.js';
+import { applyArchiveListFilter } from '../retention/archivePolicy.js';
 import {
   AssetRequest,
   AssetRequestUploadInvite,
@@ -34,7 +36,6 @@ import {
   IN_OUT_PRODUCT_TYPE_ALIASES,
 } from '../logistics/logistics.constants.js';
 import { nextSequence } from '../../utils/counters.js';
-import { writeAudit } from '../../utils/audit.js';
 import { Notification } from '../notifications/notification.model.js';
 import { User } from '../users/user.model.js';
 import { Role } from '../users/role.model.js';
@@ -733,6 +734,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
+    applyArchiveListFilter(filter, req.query);
     if (req.query.status) filter.status = req.query.status;
     if (req.query.requestType) {
       const raw = String(req.query.requestType).trim().toUpperCase();

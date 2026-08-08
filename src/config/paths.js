@@ -21,9 +21,11 @@ export function uploadDir(...segments) {
 
 const UPLOAD_SUBDIRS = [
   'agreements',
+  'archive',
   'asset-requests',
   'camp-ops',
   'finance',
+  'finance-vendor-bills',
   'import-errors',
   'import-temp',
   'logistics',

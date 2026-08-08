@@ -38,6 +38,7 @@ import financeRoutes from './modules/finance/finance.routes.js';
 import geoRoutes from './modules/geo/geo.routes.js';
 import picklistRoutes from './modules/picklists/picklist.routes.js';
 import fileRoutes from './modules/files/file.routes.js';
+import retentionRoutes from './modules/retention/retention.routes.js';
 
 export function createApp() {
   const app = express();
@@ -184,6 +185,7 @@ export function createApp() {
   app.use('/api/v1/geo', geoRoutes);
   app.use('/api/v1/picklists', picklistRoutes);
   app.use('/api/v1/files', fileRoutes);
+  app.use('/api/v1/retention', retentionRoutes);
   // Scoped mounts only. never mount repairs as a /api/v1 catch-all (it hid missing routes).
   app.use('/api/v1/repairs', repairRoutes);
   app.use('/api/v1/maintenance', maintenanceRoutes);

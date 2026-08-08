@@ -4,10 +4,10 @@ import { MAX_IMPORT_ROWS } from '../../../utils/spreadsheetLimits.js';
 import { importAppError } from '../../../utils/importErrors.js';
 
 /**
- * Read XLSB from disk with a hard sheetRows bound so we never materialize
- * more than maxRows + header. Yields row objects like the CSV stream.
+ * Read Excel (.xlsx / .xls / .xlsb) from disk with a hard sheetRows bound so we
+ * never materialize more than maxRows + header. Yields row objects like the CSV stream.
  */
-export async function* streamXlsbFile(filePath, { maxRows = MAX_IMPORT_ROWS } = {}) {
+export async function* streamExcelFile(filePath, { maxRows = MAX_IMPORT_ROWS } = {}) {
   if (!fs.existsSync(filePath)) {
     throw importAppError('TEMP_MISSING');
   }
@@ -64,3 +64,6 @@ export async function* streamXlsbFile(filePath, { maxRows = MAX_IMPORT_ROWS } = 
     }
   }
 }
+
+/** @deprecated Prefer streamExcelFile — kept for existing callers. */
+export const streamXlsbFile = streamExcelFile;

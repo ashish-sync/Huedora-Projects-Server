@@ -5,6 +5,7 @@ import { asyncHandler, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { Notification } from './notification.model.js';
 import { resolveImportErrorReport } from '../imports/importErrorReport.js';
+import { isArchived } from '../retention/archivePolicy.js';
 
 const router = Router();
 router.use(authenticate);
@@ -41,10 +42,15 @@ router.get(
     const nowMs = Date.now();
     const filter = { userId: req.user._id };
     if (req.query.unread === 'true') filter.readAt = null;
+    const showArchived =
+      req.query.archive === '1' ||
+      req.query.archive === 'true' ||
+      req.query.archived === '1';
 
     const all = await Notification.find(filter).sort({ createdAt: -1 }).limit(300);
     const data = all
       .filter((n) => isActive(n) && isDue(n, nowMs))
+      .filter((n) => (showArchived ? isArchived(n) : !isArchived(n)))
       .slice(0, 100)
       .map((n) => {
         const row = typeof n.toObject === 'function' ? n.toObject() : { ...n };
@@ -74,7 +80,7 @@ router.get(
     let count = 0;
     const ids = [];
     for (const n of pending) {
-      if (!isActive(n) || !isDue(n, nowMs)) continue;
+      if (!isActive(n) || !isDue(n, nowMs) || isArchived(n)) continue;
       count += 1;
       if (ids.length < 20) ids.push(String(n._id));
     }

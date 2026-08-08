@@ -1,8 +1,9 @@
 import { defineCollection } from '../../store/filedb.js';
-import { softDelete } from '../common/counter.model.js';
+import { softDelete, archiveFields } from '../common/counter.model.js';
 
 export const CampOpsCamp = defineCollection('camp_ops_camps', {
   ...softDelete,
+  ...archiveFields,
   campId: '',
   clientId: null,
   clientName: '',

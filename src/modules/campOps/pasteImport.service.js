@@ -280,7 +280,7 @@ export async function extractPasteImportPreviewFromRows({
   }
   if (!rows.length) {
     throw importAppError(
-      'No camp rows were provided to import. Upload a .csv/.xlsb file or paste rows, then try again.'
+      'No camp rows were provided to import. Upload a .csv/.xlsx/.xls/.xlsb file or paste rows, then try again.'
     );
   }
 

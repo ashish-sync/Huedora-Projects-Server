@@ -12,6 +12,7 @@ import { writeAudit } from '../../utils/audit.js';
 import { nextSequence } from '../../utils/counters.js';
 import { FinanceCommercialDocument } from './finance.model.js';
 import { COMMERCIAL_DOC_STATUSES } from './finance.constants.js';
+import { applyArchiveListFilter } from '../retention/archivePolicy.js';
 import { DOCUMENT_NUMBER_STANDARDS, documentNumberPeriod, validateManualDocumentNumber } from './documentNumbering.js';
 import {
   assertApprovable,
@@ -139,6 +140,7 @@ const COMMERCIAL_DOC_TYPES = [
 
 function commercialListFilter(req) {
   const filter = { isDeleted: false };
+  applyArchiveListFilter(filter, req.query);
   const type = trimStr(req.query.documentType);
   if (type && COMMERCIAL_DOC_TYPES.includes(type)) {
     filter.documentType = type;
@@ -204,6 +206,9 @@ function auditCommercial(req, action, row, before = null) {
 function stampUpdater(row, user) {
   row.updatedById = user._id;
   row.updatedByEmail = user.email;
+  row.lastContentEditedAt = new Date().toISOString();
+  // Any edit resets the stale-draft warning clock for Billing Center auto-purge.
+  if (row.status === 'Draft') row.draftStaleWarnedAt = null;
 }
 
 router.get(

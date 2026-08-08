@@ -1,5 +1,5 @@
 import { defineCollection } from '../../store/filedb.js';
-import { softDelete } from '../common/counter.model.js';
+import { softDelete, archiveFields } from '../common/counter.model.js';
 
 /**
  * Asset Agreement = contract envelope + business agreement metadata.
@@ -7,6 +7,7 @@ import { softDelete } from '../common/counter.model.js';
  */
 export const Agreement = defineCollection('agreements', {
   ...softDelete,
+  ...archiveFields,
   status: 'DRAFT',
   type: 'LEASE',
   title: '',

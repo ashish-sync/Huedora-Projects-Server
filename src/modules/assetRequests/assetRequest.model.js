@@ -1,5 +1,5 @@
 import { defineCollection } from '../../store/filedb.js';
-import { softDelete } from '../common/counter.model.js';
+import { softDelete, archiveFields } from '../common/counter.model.js';
 
 /** Canonical request types for Request One */
 export const REQUEST_TYPES = [
@@ -125,6 +125,7 @@ export function typeLabel(raw) {
 
 export const AssetRequest = defineCollection('asset_requests', {
   ...softDelete,
+  ...archiveFields,
   status: 'REQUESTED',
   requestType: 'REPAIR',
   preferredVendorContactId: null,

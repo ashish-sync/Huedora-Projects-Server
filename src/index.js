@@ -86,6 +86,41 @@ async function main() {
         if (typeof t.unref === 'function') t.unref();
       })
       .catch(() => {});
+    import('./modules/finance/purgeStaleCommercialDrafts.js')
+      .then(({ purgeStaleCommercialDrafts }) => {
+        const run = () =>
+          purgeStaleCommercialDrafts()
+            .then((r) => {
+              if (r.warned || r.deleted) {
+                console.warn(
+                  `[finance] stale draft purge: scanned=${r.scanned} warned=${r.warned} deleted=${r.deleted}`,
+                );
+              }
+            })
+            .catch((err) => console.error('[finance] stale draft purge failed:', err.message));
+        run();
+        // Every 6 hours — drafts are purged after 30 days idle; warn ~2 days prior.
+        const t = setInterval(run, 6 * 60 * 60 * 1000);
+        if (typeof t.unref === 'function') t.unref();
+      })
+      .catch(() => {});
+    import('./modules/retention/ninetyDayArchive.js')
+      .then(({ runNinetyDayArchive }) => {
+        const run = () =>
+          runNinetyDayArchive()
+            .then((r) => {
+              if (r.warned || r.archived) {
+                console.warn(
+                  `[retention] 90-day archive: scanned=${r.scanned} warned=${r.warned} archived=${r.archived}`,
+                );
+              }
+            })
+            .catch((err) => console.error('[retention] 90-day archive failed:', err.message));
+        run();
+        const t = setInterval(run, 6 * 60 * 60 * 1000);
+        if (typeof t.unref === 'function') t.unref();
+      })
+      .catch(() => {});
   });
 }
 

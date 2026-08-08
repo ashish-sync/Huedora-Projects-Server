@@ -9,6 +9,18 @@ export const softDelete = {
   deletedBy: null,
 };
 
+/** Soft UI-archive (90-day retention). Records stay in DB; lists hide by default. */
+export const archiveFields = {
+  archivedAt: null,
+  archivedBy: null,
+  archiveReason: '',
+  archiveWarnedAt: null,
+  /** Relative path under uploads/ when non-legal attachments were moved/compressed. */
+  archiveBundleKey: '',
+  /** Snapshot of original attachment paths moved into the archive bundle (for restore). */
+  archivedAttachmentPaths: [],
+};
+
 /**
  * Allocate the next sequence for a named counter.
  * Single-doc upsert (avoids rewriting the whole counters collection).

@@ -8,13 +8,15 @@ import {
 import { importAppError } from '../../../utils/importErrors.js';
 import { ImportJob } from '../importJob.model.js';
 import { streamCsvFile } from './csvStream.js';
-import { streamXlsbFile } from './xlsbStream.js';
+import { streamExcelFile } from './xlsbStream.js';
 import { safeUnlink, validateUploadedImportFile } from './tempUpload.js';
 import { withImportSlot } from './importSlot.js';
 
+const EXCEL_EXTS = new Set(['.xlsx', '.xls', '.xlsb']);
+
 function rowStreamFor(filePath, ext, maxRows) {
   if (ext === '.csv') return streamCsvFile(filePath, { maxRows });
-  if (ext === '.xlsb') return streamXlsbFile(filePath, { maxRows });
+  if (EXCEL_EXTS.has(ext)) return streamExcelFile(filePath, { maxRows });
   throw importAppError('BAD_EXTENSION');
 }
 

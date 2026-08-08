@@ -1,8 +1,9 @@
 import { defineCollection } from '../../store/filedb.js';
-import { softDelete } from '../common/counter.model.js';
+import { softDelete, archiveFields } from '../common/counter.model.js';
 
 export const FinanceExpense = defineCollection('finance_expenses', {
   ...softDelete,
+  ...archiveFields,
   expenseKey: '',
   title: '',
   category: 'Other',
@@ -56,6 +57,11 @@ export const FinanceInvoice = defineCollection('finance_invoices', {
   paymentRemark: '',
   paidAt: null,
   archivedAt: null,
+  archivedBy: null,
+  archiveReason: '',
+  archiveWarnedAt: null,
+  archiveBundleKey: '',
+  archivedAttachmentPaths: [],
   submittedAt: null,
   submittedById: null,
   submittedByEmail: '',
@@ -109,6 +115,7 @@ export const FinanceOrgProfile = defineCollection('finance_org_profile', {
 /** Proforma, client invoice, purchase order */
 export const FinanceCommercialDocument = defineCollection('finance_commercial_documents', {
   ...softDelete,
+  ...archiveFields,
   docKey: '',
   documentType: 'proforma',
   documentNumber: '',
@@ -217,5 +224,12 @@ export const FinanceCommercialDocument = defineCollection('finance_commercial_do
   createdByEmail: '',
   updatedById: null,
   updatedByEmail: '',
+  /** Last user/content edit; used for Draft auto-purge idle clock (survives system saves). */
+  lastContentEditedAt: null,
+  /** Set when a 28-day idle warning was sent for a Draft (cleared on next edit). */
+  draftStaleWarnedAt: null,
+  /** Set when the system soft-deletes a Draft after 30 days idle. */
+  autoDeletedAt: null,
+  autoDeleteReason: '',
   isActive: true,
 });

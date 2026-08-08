@@ -23,9 +23,9 @@ import { importAppError } from './importErrors.js';
 /**
  * Scalable tabular import policy
  * ------------------------------
- * Upload .csv (primary) or .xlsb → validate → save temp → stream read →
- * validate rows → batch insert (500) → clear batch memory → summary → delete temp.
- * Never load an entire oversized workbook into heap. Samples are CSV-only.
+ * Upload .csv (preferred) or Excel (.xlsx / .xls / .xlsb) → validate → save temp →
+ * stream/read → validate rows → batch insert (500) → clear batch memory → summary → delete temp.
+ * Cap size and row count so we never load an oversized workbook into heap. Samples are CSV-only.
  * Bulk exports may still use Excel.
  */
 
@@ -41,6 +41,7 @@ export function sampleCsvFilename(name) {
   const base = String(name || 'master')
     .replace(/\.xlsx$/i, '')
     .replace(/\.xlsb$/i, '')
+    .replace(/\.xls$/i, '')
     .replace(/\.csv$/i, '')
     .replace(/_Sample$/i, '');
   return `${base}_Sample.csv`;
@@ -63,7 +64,7 @@ export function discardUploadBuffer(file) {
   if (file?.path) safeUnlink(file.path);
 }
 
-/** Disk-based upload middleware (CSV / XLSB → import-temp). */
+/** Disk-based upload middleware (CSV / Excel → import-temp). */
 export const excelUpload = tabularImportUpload;
 
 /**

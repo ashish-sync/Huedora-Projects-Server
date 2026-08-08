@@ -11,24 +11,23 @@ const EXT_LIST = IMPORT_ACCEPT_EXTENSIONS.join(', ');
 
 /** Canonical one-line messages for tabular import / upload failures. */
 export const IMPORT_ERROR = {
-  FILE_REQUIRED: `Please choose a file to import (.csv preferred, or .xlsb). Maximum ${MAX_IMPORT_ROWS.toLocaleString()} rows and ${MB} MB.`,
-  BAD_EXTENSION: `This file type is not supported for import. Use a .csv UTF-8 file (preferred) or .xlsb — Excel workbooks (.xlsx/.xls) are not accepted. In Excel: File → Save As → CSV UTF-8 (Comma delimited).`,
+  FILE_REQUIRED: `Please choose a file to import (.csv, .xlsx, .xls, or .xlsb). Maximum ${MAX_IMPORT_ROWS.toLocaleString()} rows and ${MB} MB.`,
+  BAD_EXTENSION: `This file type is not supported for import. Use a .csv UTF-8 file (preferred), or an Excel workbook (.xlsx / .xls / .xlsb).`,
   EMPTY_FILE: `This file has no data rows to import. Download the sample CSV, add up to ${MAX_IMPORT_ROWS.toLocaleString()} rows under the header, and try again.`,
   TOO_LARGE: `This file is larger than ${MB} MB. Reduce the file (max ${MAX_IMPORT_ROWS.toLocaleString()} rows) and upload again.`,
-  TOO_MANY_ROWS: `Import is limited to ${MAX_IMPORT_ROWS.toLocaleString()} data rows. This file has more than that — split it into smaller CSV files and import each one separately.`,
+  TOO_MANY_ROWS: `Import is limited to ${MAX_IMPORT_ROWS.toLocaleString()} data rows. This file has more than that — split it into smaller files and import each one separately.`,
   TEMP_MISSING: `The upload did not finish saving before processing started. Please choose the file again and retry the import.`,
-  NO_DATA_ROWS: `No usable data rows were found after the header. Check that your CSV matches the sample column headers and contains at least one filled row.`,
+  NO_DATA_ROWS: `No usable data rows were found after the header. Check that your file matches the sample column headers and contains at least one filled row.`,
   NO_VALID_ROWS: `None of the rows could be imported. Fix the issues shown for each row (or download the error report), then upload the file again.`,
-  RATE_LIMIT: `Too many imports were started in a short time. Wait a few minutes, then try again with a .csv or .xlsb file.`,
-  PARSE_FAILED: `The file could not be read as CSV or XLSB. Re-save it as CSV UTF-8 from Excel (File → Save As → CSV UTF-8) and try again. Avoid ANSI/CSV that replaces Unicode characters with ?.`,
+  RATE_LIMIT: `Too many imports were started in a short time. Wait a few minutes, then try again with a .csv or Excel file.`,
+  PARSE_FAILED: `The file could not be read. Re-save it as CSV UTF-8 or a standard Excel workbook (.xlsx) and try again.`,
   ROWS_MAPPING_REQUIRED: `Import needs both the parsed rows and a column mapping. Upload the file again and map every required column before continuing.`,
-  GENERIC: `Import failed. Use a .csv (preferred) or .xlsb file with at most ${MAX_IMPORT_ROWS.toLocaleString()} rows and ${MB} MB, matching the sample headers.`,
+  GENERIC: `Import failed. Use a .csv (preferred) or Excel (.xlsx / .xls / .xlsb) file with at most ${MAX_IMPORT_ROWS.toLocaleString()} rows and ${MB} MB, matching the sample headers.`,
 };
 
 const SHORT_TO_FRIENDLY = [
   [/only \.csv/i, IMPORT_ERROR.BAD_EXTENSION],
   [/not supported/i, IMPORT_ERROR.BAD_EXTENSION],
-  [/\.xlsx|\.xls\b/i, IMPORT_ERROR.BAD_EXTENSION],
   [/file required|csv or xlsb/i, IMPORT_ERROR.FILE_REQUIRED],
   [/file is empty|csv file is empty|empty file|no sheets|sheet is empty/i, IMPORT_ERROR.EMPTY_FILE],
   [/no data rows/i, IMPORT_ERROR.NO_DATA_ROWS],

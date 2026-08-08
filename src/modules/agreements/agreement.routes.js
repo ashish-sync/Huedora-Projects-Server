@@ -34,6 +34,7 @@ import { uploadDir } from '../../config/paths.js';
 import { redactAgreement, redactAgreementList } from '../../utils/redactAgreement.js';
 import { sanitizeHtml } from '../../utils/sanitizeHtml.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import { applyArchiveListFilter } from '../retention/archivePolicy.js';
 
 const uploadRoot = uploadDir('agreements');
 const previewRoot = uploadDir('previews');
@@ -185,6 +186,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
+    applyArchiveListFilter(filter, req.query);
     if (req.query.status) {
       const statuses = String(req.query.status)
         .split(',')
