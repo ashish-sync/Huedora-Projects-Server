@@ -3,6 +3,7 @@ import { connectDb, getDbInfo } from './config/db.js';
 import { env } from './config/env.js';
 import { ensureSeed } from './seed.js';
 import { forceReseedGeoMasters } from './modules/geo/geo.seed.js';
+import { healOrphanPinDistrictLinks } from './modules/geo/pinCodeHeal.js';
 import { resetApplicationData } from './utils/resetApplicationData.js';
 import { freshStartKeepUsers } from './utils/freshStartKeepUsers.js';
 import { hydrateEmailIngestState } from './modules/campOps/communications/services/emailIngestSince.js';
@@ -69,6 +70,14 @@ async function main() {
     console.error('[team-users] Boot import failed:', err.message);
   }
   await maybeReseedGeoOnBoot();
+  try {
+    const pinHeal = await healOrphanPinDistrictLinks();
+    if (pinHeal.healed) {
+      console.warn(`[geo] Healed ${pinHeal.healed} PIN row(s) with orphan district links`);
+    }
+  } catch (err) {
+    console.error('[geo] PIN orphan heal failed:', err.message);
+  }
   const app = createApp();
   app.listen(env.port, () => {
     console.log(`[api] TYLO One listening on http://localhost:${env.port}`);

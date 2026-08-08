@@ -28,6 +28,7 @@
     "geo:build-cities": "node scripts/buildTyloCitySeed.js",
     "geo:reseed": "node scripts/reseed-geo.js",
     "geo:clean-pins": "node scripts/cleanPinCodeMaster.js",
+    "geo:sync-pins": "node scripts/syncMissingPinCodes.js",
     "test:manual-paste": "node scripts/test-manual-paste-extract.js",
     "test:camp-import": "node scripts/test-camp-import-validation.js",
     "test:persistence": "node scripts/verify-persistence.js",
