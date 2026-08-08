@@ -277,19 +277,23 @@ export function mergeOrgProfile(body = {}) {
   ];
   const out = {};
   for (const key of fields) {
-    if (body[key] !== undefined) {
-      out[key] =
-        key === 'defaultTerms' || key === 'proformaNotes' || key === 'defaultPoTerms'
-          ? Array.isArray(body[key])
-            ? body[key].map((t) => String(t).trim()).filter(Boolean)
-            : String(body[key] || '')
-                .split('\n')
-                .map((t) => t.trim())
-                .filter(Boolean)
-          : key === 'defaultPaymentTermsDays' || key === 'defaultPurchaseTaxRate'
-            ? Number(body[key]) || 0
-            : trimStr(body[key]);
+    if (body[key] === undefined) continue;
+    let value;
+    if (key === 'defaultTerms' || key === 'proformaNotes' || key === 'defaultPoTerms') {
+      value = Array.isArray(body[key])
+        ? body[key].map((t) => String(t).trim()).filter(Boolean)
+        : String(body[key] || '')
+            .split('\n')
+            .map((t) => t.trim())
+            .filter(Boolean);
+    } else if (key === 'defaultPaymentTermsDays' || key === 'defaultPurchaseTaxRate') {
+      value = Number(body[key]) || 0;
+    } else {
+      value = trimStr(body[key]);
+      // Blank org master fields must not wipe GSTIN/PAN/bank on save.
+      if (!value) continue;
     }
+    out[key] = value;
   }
   return out;
 }

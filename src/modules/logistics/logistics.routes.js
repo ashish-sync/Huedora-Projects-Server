@@ -1,3 +1,4 @@
+import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import { Router } from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -423,7 +424,7 @@ function registerMasterCrud({
         row._id
       );
       await assertUniqueFields(body, row._id);
-      Object.assign(row, body);
+      assignPreservingExisting(row, body);
       row.updatedBy = req.user._id;
       await row.save();
       await writeAudit({
@@ -562,13 +563,13 @@ registerMasterCrud({
   Model: LogisticsWarehouse,
   entityType: 'LogisticsWarehouse',
   codePrefix: 'WH',
-  normalize: (b) => ({
-    code: trimStr(b.code).toUpperCase(),
-    name: trimStr(b.name),
-    city: trimStr(b.city),
-    state: trimStr(b.state),
-    address: trimStr(b.address),
-    isActive: b.isActive !== false,
+  normalize: (b, existing) => ({
+    code: trimStr(b.code ?? existing?.code).toUpperCase(),
+    name: trimStr(b.name ?? existing?.name),
+    city: trimStr(b.city ?? existing?.city ?? ''),
+    state: trimStr(b.state ?? existing?.state ?? ''),
+    address: trimStr(b.address ?? existing?.address ?? ''),
+    isActive: b.isActive !== undefined ? b.isActive !== false : existing?.isActive !== false,
   }),
 });
 
@@ -579,8 +580,8 @@ registerMasterCrud({
   searchFields: ['name', 'code', 'level'],
   required: ['name', 'warehouseId', 'level'],
   codePrefix: 'LOC',
-  normalize: (b) => {
-    const level = trimStr(b.level);
+  normalize: (b, existing) => {
+    const level = trimStr(b.level ?? existing?.level);
     if (level && !LOCATION_LEVELS.includes(level)) {
       throw new AppError(
         `level must be one of: ${LOCATION_LEVELS.join(', ')}`,
@@ -589,12 +590,13 @@ registerMasterCrud({
       );
     }
     return {
-      warehouseId: b.warehouseId || null,
-      parentId: b.parentId || null,
+      warehouseId:
+        b.warehouseId !== undefined ? b.warehouseId || null : existing?.warehouseId || null,
+      parentId: b.parentId !== undefined ? b.parentId || null : existing?.parentId || null,
       level,
-      code: trimStr(b.code).toUpperCase(),
-      name: trimStr(b.name),
-      isActive: b.isActive !== false,
+      code: trimStr(b.code ?? existing?.code).toUpperCase(),
+      name: trimStr(b.name ?? existing?.name),
+      isActive: b.isActive !== undefined ? b.isActive !== false : existing?.isActive !== false,
     };
   },
 });
@@ -2019,6 +2021,18 @@ async function applyQtyDeltaToStock(txn, warehouseId, quantityDelta, actor) {
 }
 
 async function applyInventoryUpdate(txn, actor) {
+  if (txn.inventoryAppliedAt) return null;
+
+  const priorLedger = await LogisticsLedgerEntry.findOne({
+    referenceType: 'IN_OUT',
+    referenceId: String(txn._id),
+  });
+  if (priorLedger) {
+    txn.inventoryAppliedAt = priorLedger.at || new Date().toISOString();
+    if (typeof txn.save === 'function') await txn.save();
+    return null;
+  }
+
   const ledger = entryTypeLedgerDefaults(txn.entryType, txn.qty, txn.adjustmentType);
   const itemName = displayItemName(txn);
 
@@ -2032,8 +2046,22 @@ async function applyInventoryUpdate(txn, actor) {
       throw new AppError('Transfer requires source and destination warehouses', 400, 'VALIDATION_ERROR');
     }
     const abs = Math.abs(Number(txn.qty) || 0);
-    await applyQtyDeltaToStock(txn, sourceId, -abs, actor);
-    stockItem = await applyQtyDeltaToStock(txn, destId, abs, actor);
+    let sourceDebited = false;
+    try {
+      await applyQtyDeltaToStock(txn, sourceId, -abs, actor);
+      sourceDebited = true;
+      stockItem = await applyQtyDeltaToStock(txn, destId, abs, actor);
+    } catch (err) {
+      // Compensate partial transfer so source stock is not left reduced alone.
+      if (sourceDebited) {
+        try {
+          await applyQtyDeltaToStock(txn, sourceId, abs, actor);
+        } catch (compensateErr) {
+          console.error('[inventory] transfer compensate failed', compensateErr?.message || compensateErr);
+        }
+      }
+      throw err;
+    }
     warehouseId = destId;
 
     await LogisticsLedgerEntry.create({
@@ -2068,6 +2096,8 @@ async function applyInventoryUpdate(txn, actor) {
       actorEmail: actor?.email || null,
       at: txn.transactionDateTime || txn.transactionDate || new Date().toISOString(),
     });
+    txn.inventoryAppliedAt = new Date().toISOString();
+    if (typeof txn.save === 'function') await txn.save();
     return stockItem;
   }
 
@@ -2090,7 +2120,66 @@ async function applyInventoryUpdate(txn, actor) {
     at: txn.transactionDateTime || txn.transactionDate || new Date().toISOString(),
   });
 
+  txn.inventoryAppliedAt = new Date().toISOString();
+  if (typeof txn.save === 'function') await txn.save();
   return stockItem;
+}
+
+/** Reverse a previously applied in-out stock movement (admin soft-delete). */
+async function reverseInventoryUpdate(txn, actor) {
+  const hasLedger = await LogisticsLedgerEntry.findOne({
+    referenceType: 'IN_OUT',
+    referenceId: String(txn._id),
+  });
+  if (!txn.inventoryAppliedAt && !hasLedger) return;
+  if (txn.inventoryReversedAt) return;
+
+  const ledger = entryTypeLedgerDefaults(txn.entryType, txn.qty, txn.adjustmentType);
+  const itemName = displayItemName(txn);
+  const at = new Date().toISOString();
+
+  if (txn.entryType === 'Transfer') {
+    const sourceId = txn.sourceWarehouseId || txn.warehouseId;
+    const destId = txn.destinationWarehouseId;
+    const abs = Math.abs(Number(txn.qty) || 0);
+    if (sourceId && destId) {
+      await applyQtyDeltaToStock(txn, destId, -abs, actor);
+      await applyQtyDeltaToStock(txn, sourceId, abs, actor);
+      await LogisticsLedgerEntry.create({
+        stockItemId: null,
+        movementTypeCode: 'TRF_REV',
+        direction: 'IN',
+        quantityDelta: abs,
+        warehouseId: sourceId,
+        fromWarehouseId: destId,
+        toWarehouseId: sourceId,
+        referenceType: 'IN_OUT_REVERSAL',
+        referenceId: txn._id,
+        remarks: `REVERSAL · Transfer · ${itemName}`,
+        actorId: actor?._id || null,
+        actorEmail: actor?.email || null,
+        at,
+      });
+    }
+  } else {
+    await applyQtyDeltaToStock(txn, txn.warehouseId, -ledger.quantityDelta, actor);
+    await LogisticsLedgerEntry.create({
+      stockItemId: null,
+      movementTypeCode: `${ledger.movementTypeCode}_REV`,
+      direction: ledger.direction === 'IN' ? 'OUT' : 'IN',
+      quantityDelta: -ledger.quantityDelta,
+      warehouseId: txn.warehouseId || null,
+      referenceType: 'IN_OUT_REVERSAL',
+      referenceId: txn._id,
+      remarks: `REVERSAL · ${txn.entryType} · ${itemName}`,
+      actorId: actor?._id || null,
+      actorEmail: actor?.email || null,
+      at,
+    });
+  }
+
+  txn.inventoryAppliedAt = '';
+  txn.inventoryReversedAt = at;
 }
 
 function requestLineId(line, index) {
@@ -2376,7 +2465,11 @@ router.post(
       isDeleted: false,
     });
     if (clash) {
-      throw new AppError(`Transaction ID “${body.uniqueKey}” already exists`, 400, 'DUPLICATE');
+      // Idempotent retry with the same Transaction ID — do not create a second stock movement.
+      return res.status(200).json({
+        data: clash,
+        meta: { idempotentReplay: true },
+      });
     }
 
     let reserved = false;
@@ -2401,6 +2494,11 @@ router.post(
     } catch (error) {
       if (reserved) await releaseRequestFulfillmentReservation(prepared.context);
       if (row?._id) {
+        try {
+          await reverseInventoryUpdate(row, req.user);
+        } catch {
+          /* best-effort stock reverse before dropping the txn */
+        }
         try {
           await LogisticsInOutEntry.deleteOne({ _id: row._id });
         } catch {
@@ -2448,7 +2546,12 @@ router.patch(
         throw new AppError(`Transaction ID “${body.uniqueKey}” already exists`, 400, 'DUPLICATE');
       }
     }
-    Object.assign(row, body);
+    // Preserve attachments/remarks — blank/empty payload fields must not wipe stock txn data.
+    const clearKeys = [];
+    if (Array.isArray(req.body.attachments) && req.body.attachments.length === 0) {
+      clearKeys.push('attachments');
+    }
+    assignPreservingExisting(row, body, { clearKeys });
     await row.save();
 
     await writeAudit({
@@ -2533,6 +2636,7 @@ router.delete(
   asyncHandler(async (req, res) => {
     const row = await LogisticsInOutEntry.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Transaction not found', 404);
+    await reverseInventoryUpdate(row, req.user);
     row.isDeleted = true;
     row.isActive = false;
     await row.save();

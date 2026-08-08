@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { AppError } from '../../utils/helpers.js';
 import { MAX_IMPORT_ROWS } from '../../utils/spreadsheetLimits.js';
 import { bulkUpsertDocuments } from '../../store/persistence.js';
+import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import { scanCollection } from '../../store/filedb.js';
 import { resolveZoneNameForState } from './geo.zones.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState } from './geo.model.js';
@@ -322,13 +323,15 @@ export async function upsertNormalizedPin({
   if (existingId) {
     const row = await GeoPinCode.findOne({ _id: existingId, isDeleted: false });
     if (!row) throw new AppError('PIN code mapping not found', 404);
-    Object.assign(row, normalized, { updatedBy });
+    assignPreservingExisting(row, normalized);
+    if (updatedBy != null) row.updatedBy = updatedBy;
     await row.save();
     return { row, created: false, updated: true };
   }
 
   if (existing) {
-    Object.assign(existing, normalized, { updatedBy });
+    assignPreservingExisting(existing, normalized);
+    if (updatedBy != null) existing.updatedBy = updatedBy;
     await existing.save();
     return { row: existing, created: false, updated: true };
   }
@@ -424,7 +427,9 @@ export async function bulkImportPinRows(inputRows = [], { updatedBy = null } = {
 
       const existing = activeByPin.get(normalized.pinCode);
       if (existing) {
-        Object.assign(existing, normalized, { updatedBy, updatedAt: now });
+        assignPreservingExisting(existing, normalized);
+        existing.updatedBy = updatedBy;
+        existing.updatedAt = now;
         touched.push(existing);
         updated += 1;
       } else {

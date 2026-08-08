@@ -7,6 +7,7 @@ import { Asset } from '../assets/asset.model.js';
 import { writeAudit } from '../../utils/audit.js';
 import { throwIfIdentityClash } from '../../utils/identityNormalize.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 
 const router = Router();
 router.use(authenticate);
@@ -118,7 +119,26 @@ router.patch(
     });
 
     const before = hcw.toObject();
-    Object.assign(hcw, req.body, { updatedBy: req.user._id });
+    const HCW_PATCH_KEYS = [
+      'hcwId',
+      'name',
+      'contact',
+      'email',
+      'city',
+      'state',
+      'status',
+      'role',
+      'notes',
+      'address',
+      'department',
+      'employeeCode',
+    ];
+    const patch = {};
+    for (const key of HCW_PATCH_KEYS) {
+      if (req.body[key] !== undefined) patch[key] = req.body[key];
+    }
+    assignPreservingExisting(hcw, patch);
+    hcw.updatedBy = req.user._id;
     await hcw.save();
     await writeAudit({
       actorId: req.user._id,

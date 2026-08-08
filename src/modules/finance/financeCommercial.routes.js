@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { v4 as uuid } from 'uuid';
 import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
+import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { env } from '../../config/env.js';
 import { writeAudit } from '../../utils/audit.js';
@@ -243,7 +244,7 @@ router.post(
     const payload = normalize(row.toObject(), orgProfile);
     validate(payload);
     await assertCommercialDocWithinPoBalance(payload, { excludeDocId: row._id });
-    Object.assign(row, payload);
+    assignPreservingExisting(row, payload);
     const before = row.toObject ? row.toObject() : { ...row };
     row.status = 'Submitted';
     row.documentNumber = '';
@@ -395,7 +396,7 @@ router.patch(
   asyncHandler(async (req, res) => {
     assertOrgMasterEditor(req.user, req.permissions);
     const profile = await getOrCreateOrgProfile();
-    Object.assign(profile, mergeOrgProfile(req.body));
+    assignPreservingExisting(profile, mergeOrgProfile(req.body));
     profile.updatedById = req.user._id;
     profile.updatedByEmail = req.user.email;
     await profile.save();
@@ -502,7 +503,7 @@ router.patch(
     validateProformaPayload(payload, { requireLines: false });
 
     const before = row.toObject ? row.toObject() : { ...row };
-    Object.assign(row, payload, extractBuilderExtras(req.body));
+    assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
     row.documentNumber = '';
     stampUpdater(row, req.user);
     await row.save();
@@ -526,7 +527,7 @@ router.post(
     const orgProfile = await getOrCreateOrgProfile();
     const payload = normalizeProformaPayload(row.toObject(), orgProfile);
     validateProformaPayload(payload);
-    Object.assign(row, payload);
+    assignPreservingExisting(row, payload);
 
     if (!trimStr(row.documentNumber)) {
       row.documentNumber = await nextProformaNumber(row.documentDate);
@@ -778,7 +779,7 @@ router.patch(
     validatePurchaseOrderPayload(payload, { requireLines: false });
 
     const before = row.toObject ? row.toObject() : { ...row };
-    Object.assign(row, payload, extractBuilderExtras(req.body));
+    assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
     row.documentNumber = '';
     stampUpdater(row, req.user);
     await row.save();
@@ -802,7 +803,7 @@ router.post(
     const orgProfile = await getOrCreateOrgProfile();
     const payload = normalizePurchaseOrderPayload(row.toObject(), orgProfile);
     validatePurchaseOrderPayload(payload);
-    Object.assign(row, payload);
+    assignPreservingExisting(row, payload);
 
     if (!trimStr(row.documentNumber)) {
       row.documentNumber = await nextPurchaseOrderNumber(row.documentDate);
@@ -1068,7 +1069,7 @@ router.patch(
     validateClientInvoicePayload(payload, { requireLines: false });
 
     const before = row.toObject ? row.toObject() : { ...row };
-    Object.assign(row, payload, extractBuilderExtras(req.body));
+    assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
     row.documentNumber = '';
     stampUpdater(row, req.user);
     await row.save();
@@ -1092,7 +1093,7 @@ router.post(
     const orgProfile = await getOrCreateOrgProfile();
     const payload = normalizeClientInvoicePayload(row.toObject(), orgProfile);
     validateClientInvoicePayload(payload);
-    Object.assign(row, payload);
+    assignPreservingExisting(row, payload);
 
     if (!trimStr(row.documentNumber)) {
       row.documentNumber = await nextClientInvoiceNumber(row.documentDate);
@@ -1273,7 +1274,7 @@ router.patch(
     validateCreditNotePayload(payload, { requireLines: false });
 
     const before = row.toObject ? row.toObject() : { ...row };
-    Object.assign(row, payload, extractBuilderExtras(req.body));
+    assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
     row.documentNumber = '';
     stampUpdater(row, req.user);
     await row.save();
@@ -1297,7 +1298,7 @@ router.post(
     const orgProfile = await getOrCreateOrgProfile();
     const payload = normalizeCreditNotePayload(row.toObject(), orgProfile);
     validateCreditNotePayload(payload);
-    Object.assign(row, payload);
+    assignPreservingExisting(row, payload);
 
     if (!trimStr(row.documentNumber)) {
       row.documentNumber = await nextCreditNoteNumber(row.documentDate);
@@ -1493,7 +1494,7 @@ function registerInvoiceLikeDocRoutes({
       validate(payload, { requireLines: false });
 
       const before = row.toObject ? row.toObject() : { ...row };
-      Object.assign(row, payload, extractBuilderExtras(req.body));
+      assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
       row.documentNumber = '';
       stampUpdater(row, req.user);
       await row.save();
@@ -1517,7 +1518,7 @@ function registerInvoiceLikeDocRoutes({
       const orgProfile = await getOrCreateOrgProfile();
       const payload = normalize(row.toObject(), orgProfile);
       validate(payload);
-      Object.assign(row, payload);
+      assignPreservingExisting(row, payload);
 
       if (!trimStr(row.documentNumber)) {
         row.documentNumber = await nextNumber(row.documentDate);

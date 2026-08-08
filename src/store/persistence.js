@@ -1,6 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { mergeDocumentFields } from './dataIntegrity.js';
+
+export { mergeDocumentFields, assignPreservingExisting, isBlankValue, pickDefinedPatch, assertNotStale } from './dataIntegrity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -20,16 +23,6 @@ const ALWAYS_COMPACT = new Set(['audit_logs', 'finance_commercial_documents', 'g
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
-}
-
-/** Merge incoming onto existing — omitted/undefined keys do not wipe persisted fields. */
-export function mergeDocumentFields(existing = {}, incoming = {}) {
-  const out = { ...(existing && typeof existing === 'object' ? existing : {}) };
-  for (const [key, value] of Object.entries(incoming || {})) {
-    if (value === undefined) continue;
-    out[key] = value;
-  }
-  return out;
 }
 
 function collectionKey(name) {
@@ -193,7 +186,7 @@ export async function upsertDocument(name, doc) {
   return plain;
 }
 
-/** Batch upsert — constant-ish Mongo writes vs full-collection rewrite. */
+/** Batch upsert — merge each doc with the latest cached/persisted row (no silent field wipe). */
 export async function bulkUpsertDocuments(name, docs = []) {
   if (!docs.length) return 0;
   const rows = await loadCollection(name);
@@ -202,8 +195,10 @@ export async function bulkUpsertDocuments(name, docs = []) {
 
   for (const doc of docs) {
     if (!doc?._id) continue;
-    const plain = clone(doc);
-    const key = String(plain._id);
+    const incoming = clone(doc);
+    const key = String(incoming._id);
+    const existing = byId.has(key) ? rows[byId.get(key)] : {};
+    const plain = mergeDocumentFields(existing || {}, incoming);
     if (byId.has(key)) rows[byId.get(key)] = plain;
     else {
       byId.set(key, rows.length);
@@ -235,13 +230,33 @@ export async function bulkUpsertDocuments(name, docs = []) {
   return docs.length;
 }
 
-export async function saveCollection(name, rows) {
+export async function saveCollection(name, rows, { allowDestructiveSync = false } = {}) {
   const live = Array.isArray(rows) ? rows : [];
 
   if (mode === 'mongo') {
     cache.set(name, live);
     if (!mongoDb) throw new Error('MongoDB persistence is not configured');
     const col = mongoDb.collection(collectionKey(name));
+    if (!allowDestructiveSync) {
+      // Upsert only — never deleteMany from a potentially stale in-memory snapshot.
+      // Intentional full clears must pass { allowDestructiveSync: true }.
+      const CHUNK = 500;
+      for (let i = 0; i < live.length; i += CHUNK) {
+        const slice = live.slice(i, i + CHUNK).filter((doc) => doc?._id);
+        if (!slice.length) continue;
+        await col.bulkWrite(
+          slice.map((doc) => ({
+            replaceOne: {
+              filter: { _id: doc._id },
+              replacement: doc,
+              upsert: true,
+            },
+          })),
+          { ordered: false }
+        );
+      }
+      return;
+    }
     const ids = live.map((doc) => doc._id);
     if (ids.length) {
       await col.deleteMany({ _id: { $nin: ids } });
@@ -312,9 +327,23 @@ export function clearPersistenceCache({ keep = [] } = {}) {
   }
 }
 
-/** Explicitly mark a collection as empty in cache (and optionally flush to Mongo/file). */
-export async function emptyCollection(name) {
-  await saveCollection(name, []);
+/** Hard-delete a single document by _id (mongo + file) without wiping sibling docs. */
+export async function deleteDocument(name, id) {
+  if (!id) return false;
+  const rows = await loadCollection(name);
+  const idx = rows.findIndex((r) => String(r._id) === String(id));
+  if (idx < 0) return false;
+  rows.splice(idx, 1);
+
+  if (mode === 'mongo') {
+    if (!mongoDb) throw new Error('MongoDB persistence is not configured');
+    await mongoDb.collection(collectionKey(name)).deleteOne({ _id: id });
+    cache.set(name, rows);
+    return true;
+  }
+
+  await saveCollection(name, rows);
+  return true;
 }
 
 export async function resetAllCollections() {

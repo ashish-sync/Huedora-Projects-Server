@@ -388,6 +388,10 @@ export const LogisticsInOutEntry = defineCollection('logistics_in_out_entries', 
   invoiceDoc: null,
   attachments: [],
 
+  /** Set after stock ledger apply — blocks double-apply on retry */
+  inventoryAppliedAt: '',
+  inventoryReversedAt: '',
+
   isActive: true,
 });
 

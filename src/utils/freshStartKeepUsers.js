@@ -57,7 +57,7 @@ export async function freshStartKeepUsers({ clearUploads = true } = {}) {
       const logical = name.slice('tylo_'.length);
       if (FRESH_START_KEEP_COLLECTIONS.has(logical)) continue;
       // saveCollection([],) clears Mongo and replaces the in-memory cache entry.
-      await saveCollection(logical, []);
+      await saveCollection(logical, [], { allowDestructiveSync: true });
       cleared.push(logical);
     }
   } else {
@@ -67,7 +67,7 @@ export async function freshStartKeepUsers({ clearUploads = true } = {}) {
     ]);
     for (const name of names) {
       if (FRESH_START_KEEP_COLLECTIONS.has(name)) continue;
-      await saveCollection(name, []);
+      await saveCollection(name, [], { allowDestructiveSync: true });
       cleared.push(name);
     }
   }

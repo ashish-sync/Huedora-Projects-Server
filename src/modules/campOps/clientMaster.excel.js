@@ -1,53 +1,80 @@
 import { normalizeCampName } from './campOps.constants.js';
 import { normalizeHealthcareWorkers, formatHealthcareWorkers } from './healthcareWorkers.js';
 import { parseAssignedUserEmails } from './campOps.clientAccess.js';
+import { normalizeMappedConsumables } from './clientMasterConsumables.js';
+import { LogisticsProduct, LogisticsUom } from '../logistics/logistics.model.js';
 
-/** Excel columns aligned with Client Master form labels. */
+/**
+ * Canonical Client Master columns — identical for Manual Form labels,
+ * Sample Download, Data Download (export), and Excel Upload (import).
+ * Order matches ClientMasterFormPage field order.
+ */
 export const CLIENT_MASTER_HEADERS = [
   'Client Name',
+  'Client Code',
+  'Status',
+  'Billing Address',
+  'State',
+  'State Code',
+  'GSTIN',
+  'PAN',
   'Division / Therapy',
   'Method',
   'Service Model',
-  'Coordinator Name',
   'Healthcare Worker',
   'Camp Duration',
   'SPOC Name',
   'SPOC Number',
   'SPOC Email Address',
   'Request Timeline',
+  'Assigned User Login Emails',
+  'Executed Camp Unit',
+  'Cancelled Camp Unit',
+  'OT Unit',
+  'Minimum Patient Covered',
+  'Minimum Kms Covered',
+  'Ext. Patient Unit',
+  'Kms Unit',
+  'Mapped Consumables',
   'Camp Terms',
   'PO Number',
   'PO Net Value',
   'PO Apply 18% GST',
   'PO Issue Date',
-  'PO Expiry',
-  'Agreement Start',
-  'Agreement Effective',
-  'Agreement End',
-  'Executed Camp Unit',
-  'Cancelled Camp Unit',
-  'OT Unit',
-  'Minimum Patient Covered',
-  'Minimum KMs Covered',
-  'Ext Patient Unit',
-  'KMs Unit',
-  'Assigned User Emails',
-  'Active',
+  'PO Expiry Date',
+  'Agreement Start Date',
+  'Agreement Effective Date',
+  'Agreement End Date',
 ];
 
-/** Sample row uses the same values as the New Client Master form defaults/options. */
+/** Sample row — same defaults/options as New Client Master form. */
 export const CLIENT_MASTER_SAMPLE_ROW = [
   'Acme Health',
+  'ACMEHEALTH',
+  'Active',
+  '12 Sample Road, Pune, Maharashtra 411001',
+  'Maharashtra',
+  '27',
+  '27AABCU9603R1ZM',
+  'AABCU9603R',
   'Oncology Screening',
   'BMD',
   'HCW + Device (Light Device)',
-  'Ravi Kumar',
   'Technician',
   '4:00',
   'Priya Shah',
   '9876543210',
   'priya.shah@client.com',
   '5 Days Before',
+  'user@client.com, ops@client.com',
+  10,
+  1,
+  2,
+  120,
+  500,
+  15,
+  25,
+  '',
   'PO Based',
   'PO/2026/001',
   100000,
@@ -57,47 +84,56 @@ export const CLIENT_MASTER_SAMPLE_ROW = [
   '',
   '',
   '',
-  10,
-  1,
-  2,
-  120,
-  500,
-  15,
-  25,
-  'user@client.com, ops@client.com',
-  'Yes',
 ];
 
 const IMPORT_ALIASES = {
   clientName: ['Client Name', 'Client', 'clientName'],
+  clientCode: ['Client Code', 'Code', 'clientCode'],
+  isActive: ['Status', 'Active', 'isActive'],
+  billingAddress: ['Billing Address', 'Billing address', 'address', 'billingAddress'],
+  billingStateName: ['State', 'Billing State', 'billingStateName', 'stateName'],
+  billingStateCode: ['State Code', 'State code', 'billingStateCode', 'stateCode'],
+  billingGstin: ['GSTIN', 'billingGstin', 'gstin'],
+  billingPan: ['PAN', 'billingPan', 'pan', 'panNumber'],
   programName: ['Division / Therapy', 'Program Name', 'Division', 'programName'],
   campName: ['Method', 'Camp Name', 'campName'],
   campType: ['Service Model', 'Camp Type', 'campType'],
-  coordinatorName: ['Coordinator Name', 'Coordinator', 'coordinatorName'],
   healthcareWorker: ['Healthcare Worker', 'HCW', 'healthcareWorker'],
   campDuration: ['Camp Duration', 'Duration', 'campDuration'],
   spocName: ['SPOC Name', 'spocName'],
   spocNumber: ['SPOC Number', 'spocNumber'],
   spocEmail: ['SPOC Email Address', 'SPOC Email', 'spocEmail'],
   requestTimeline: ['Request Timeline', 'requestTimeline'],
-  campTerms: ['Camp Terms', 'campTerms'],
-  poNumbers: ['PO Numbers', 'PO Number', 'poNumber', 'poNumbers'],
-  poNetValues: ['PO Net Values', 'PO Net Value', 'poNetValue', 'poNetValues'],
-  poApplyGst18: ['PO Apply 18% GST', 'Apply 18% GST', 'poApplyGst18'],
-  poIssueDate: ['PO Issue Date', 'PO Issue', 'poIssueDate'],
-  poExpiryDate: ['PO Expiry', 'PO Expiry Date', 'poExpiryDate'],
-  agreementStartDate: ['Agreement Start', 'agreementStartDate'],
-  agreementEffectiveDate: ['Agreement Effective', 'agreementEffectiveDate'],
-  agreementEndDate: ['Agreement End', 'agreementEndDate'],
+  assignedUserEmails: [
+    'Assigned User Login Emails',
+    'Assigned user login emails',
+    'Assigned User Emails',
+    'User Emails',
+    'Login Emails',
+    'assignedUserEmails',
+  ],
   executedCampUnit: ['Executed Camp Unit', 'executedCampUnit'],
   cancelledCampUnit: ['Cancelled Camp Unit', 'cancelledCampUnit'],
   otUnit: ['OT Unit', 'otUnit'],
   minimumPatientCovered: ['Minimum Patient Covered', 'Min Patients', 'minimumPatientCovered'],
-  minimumKmsCovered: ['Minimum KMs Covered', 'Min KMs', 'minimumKmsCovered'],
-  extPatientUnit: ['Ext Patient Unit', 'extPatientUnit'],
-  kmsUnit: ['KMs Unit', 'kmsUnit'],
-  assignedUserEmails: ['Assigned User Emails', 'User Emails', 'Login Emails', 'assignedUserEmails'],
-  isActive: ['Active', 'isActive'],
+  minimumKmsCovered: ['Minimum Kms Covered', 'Minimum KMs Covered', 'Min KMs', 'minimumKmsCovered'],
+  extPatientUnit: ['Ext. Patient Unit', 'Ext Patient Unit', 'extPatientUnit'],
+  kmsUnit: ['Kms Unit', 'KMs Unit', 'kmsUnit'],
+  mappedConsumables: ['Mapped Consumables', 'Consumables', 'mappedConsumables'],
+  campTerms: ['Camp Terms', 'campTerms'],
+  poNumbers: ['PO Number', 'PO Numbers', 'PO No.', 'poNumber', 'poNumbers'],
+  poNetValues: ['PO Net Value', 'PO Net Values', 'PO Value', 'poNetValue', 'poNetValues'],
+  poApplyGst18: ['PO Apply 18% GST', 'Apply 18% GST', 'poApplyGst18'],
+  poIssueDate: ['PO Issue Date', 'PO Issue', 'poIssueDate'],
+  poExpiryDate: ['PO Expiry Date', 'PO Expiry', 'poExpiryDate'],
+  agreementStartDate: ['Agreement Start Date', 'Agreement Start', 'Start date', 'agreementStartDate'],
+  agreementEffectiveDate: [
+    'Agreement Effective Date',
+    'Agreement Effective',
+    'Effective date',
+    'agreementEffectiveDate',
+  ],
+  agreementEndDate: ['Agreement End Date', 'Agreement End', 'End date', 'agreementEndDate'],
 };
 
 export function normalizeClientMasterDuration(value) {
@@ -215,7 +251,70 @@ function campTermsLabel(value) {
   }
 }
 
-export function parseClientMasterImportRow(row) {
+function parseStatusActive(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return true;
+  return !['no', 'false', '0', 'inactive'].includes(raw);
+}
+
+function formatMappedConsumables(rows = []) {
+  return normalizeMappedConsumables(rows)
+    .map((row) => row.itemName || row.productId)
+    .filter(Boolean)
+    .join('; ');
+}
+
+async function resolveMappedConsumablesFromNames(raw) {
+  const names = splitList(raw);
+  if (!names.length) return [];
+  const [products, uoms] = await Promise.all([
+    LogisticsProduct.find({
+      isDeleted: false,
+      isActive: true,
+      productType: 'Consumable',
+    }).limit(2000),
+    LogisticsUom.find({ isDeleted: false, isActive: true }),
+  ]);
+  const uomById = Object.fromEntries(
+    uoms.map((uom) => [String(uom._id), String(uom.name || uom.code || '').trim()])
+  );
+  const byName = new Map(
+    products.map((p) => [String(p.name || '').trim().toLowerCase(), p])
+  );
+  const resolved = [];
+  for (const name of names) {
+    const hit = byName.get(name.toLowerCase());
+    if (!hit) {
+      throw new Error(`Mapped consumable not found in Product Master: ${name}`);
+    }
+    const uomId = hit.uomId ? String(hit.uomId) : '';
+    resolved.push({
+      productId: String(hit._id),
+      itemName: hit.name || name,
+      unit: uomById[uomId] || '',
+      uomId,
+    });
+  }
+  return normalizeMappedConsumables(resolved);
+}
+
+function cellPresent(row, names) {
+  return cellValue(row, names) !== '';
+}
+
+function setIfPresent(target, key, value) {
+  if (value === undefined || value === null) return;
+  if (typeof value === 'string' && value.trim() === '') return;
+  if (Array.isArray(value) && value.length === 0) return;
+  target[key] = value;
+}
+
+/**
+ * Parse one Excel/CSV row into a Client Master patch.
+ * Blank cells are omitted (never emitted as '' / 0 / [] / 'none') so updates
+ * cannot silently wipe existing data.
+ */
+export async function parseClientMasterImportRow(row) {
   const clientName = cellValue(row, IMPORT_ALIASES.clientName);
   if (!clientName) return null;
 
@@ -235,108 +334,182 @@ export function parseClientMasterImportRow(row) {
     throw new Error('Method is required (select a method or specify Others)');
   }
 
-  const purchaseOrders = buildPurchaseOrdersFromImport(
-    cellValue(row, IMPORT_ALIASES.poNumbers),
-    cellValue(row, IMPORT_ALIASES.poNetValues),
-    cellValue(row, IMPORT_ALIASES.poApplyGst18)
-  );
+  const poNumbersRaw = cellValue(row, IMPORT_ALIASES.poNumbers);
+  const poNetsRaw = cellValue(row, IMPORT_ALIASES.poNetValues);
+  const poGstRaw = cellValue(row, IMPORT_ALIASES.poApplyGst18);
+  const purchaseOrders = buildPurchaseOrdersFromImport(poNumbersRaw, poNetsRaw, poGstRaw);
 
-  let campTerms = normalizeCampTermsImport(cellValue(row, IMPORT_ALIASES.campTerms));
-  if (campTerms === 'none' && purchaseOrders.length) campTerms = 'po_based';
-  if (
-    campTerms === 'none'
-    && (cellValue(row, IMPORT_ALIASES.agreementStartDate)
-      || cellValue(row, IMPORT_ALIASES.agreementEffectiveDate)
-      || cellValue(row, IMPORT_ALIASES.agreementEndDate))
-  ) {
-    campTerms = 'agreement_based';
-  }
-
-  const first = purchaseOrders[0] || null;
   const parsed = {
     clientName,
     programName,
     campName,
     campType,
-    coordinatorName: cellValue(row, IMPORT_ALIASES.coordinatorName),
-    healthcareWorker: normalizeHealthcareWorkers(cellValue(row, IMPORT_ALIASES.healthcareWorker)),
-    campDuration: normalizeClientMasterDuration(cellValue(row, IMPORT_ALIASES.campDuration)),
-    spocName: cellValue(row, IMPORT_ALIASES.spocName),
-    spocNumber: cellValue(row, IMPORT_ALIASES.spocNumber),
-    spocEmail: parseAssignedUserEmails(cellValue(row, IMPORT_ALIASES.spocEmail)).join(', '),
-    requestTimeline: cellValue(row, IMPORT_ALIASES.requestTimeline),
-    campTerms,
-    poNumber: first?.poNumber || cellValue(row, IMPORT_ALIASES.poNumbers).split(/[;|]/)[0]?.trim() || '',
-    poNetValue: first?.poNetValue ?? parseNumber(cellValue(row, IMPORT_ALIASES.poNetValues)),
-    poApplyGst18: first
-      ? Boolean(first.poApplyGst18)
-      : parseBoolToken(cellValue(row, IMPORT_ALIASES.poApplyGst18)),
-    poExpiryDate: cellValue(row, IMPORT_ALIASES.poExpiryDate).slice(0, 10),
-    poIssueDate: cellValue(row, IMPORT_ALIASES.poIssueDate).slice(0, 10),
-    agreementStartDate: cellValue(row, IMPORT_ALIASES.agreementStartDate).slice(0, 10),
-    agreementEffectiveDate: cellValue(row, IMPORT_ALIASES.agreementEffectiveDate).slice(0, 10),
-    agreementEndDate: cellValue(row, IMPORT_ALIASES.agreementEndDate).slice(0, 10),
-    executedCampUnit: parseNumber(cellValue(row, IMPORT_ALIASES.executedCampUnit)),
-    cancelledCampUnit: parseNumber(cellValue(row, IMPORT_ALIASES.cancelledCampUnit)),
-    otUnit: parseNumber(cellValue(row, IMPORT_ALIASES.otUnit)),
-    minimumPatientCovered: parseNumber(cellValue(row, IMPORT_ALIASES.minimumPatientCovered)),
-    minimumKmsCovered: parseNumber(cellValue(row, IMPORT_ALIASES.minimumKmsCovered)),
-    extPatientUnit: parseNumber(cellValue(row, IMPORT_ALIASES.extPatientUnit)),
-    kmsUnit: parseNumber(cellValue(row, IMPORT_ALIASES.kmsUnit)),
-    assignedUserEmails: cellValue(row, IMPORT_ALIASES.assignedUserEmails)
+  };
+
+  setIfPresent(parsed, 'clientCode', cellValue(row, IMPORT_ALIASES.clientCode).toUpperCase());
+
+  const billing = {};
+  setIfPresent(billing, 'address', cellValue(row, IMPORT_ALIASES.billingAddress));
+  setIfPresent(billing, 'stateName', cellValue(row, IMPORT_ALIASES.billingStateName));
+  setIfPresent(billing, 'stateCode', cellValue(row, IMPORT_ALIASES.billingStateCode));
+  setIfPresent(billing, 'gstin', cellValue(row, IMPORT_ALIASES.billingGstin).toUpperCase());
+  setIfPresent(billing, 'pan', cellValue(row, IMPORT_ALIASES.billingPan).toUpperCase());
+  if (Object.keys(billing).length) parsed.billing = billing;
+
+  if (cellPresent(row, IMPORT_ALIASES.healthcareWorker)) {
+    parsed.healthcareWorker = normalizeHealthcareWorkers(
+      cellValue(row, IMPORT_ALIASES.healthcareWorker)
+    );
+  }
+  if (cellPresent(row, IMPORT_ALIASES.campDuration)) {
+    parsed.campDuration = normalizeClientMasterDuration(
+      cellValue(row, IMPORT_ALIASES.campDuration)
+    );
+  }
+  setIfPresent(parsed, 'spocName', cellValue(row, IMPORT_ALIASES.spocName));
+  setIfPresent(parsed, 'spocNumber', cellValue(row, IMPORT_ALIASES.spocNumber));
+  if (cellPresent(row, IMPORT_ALIASES.spocEmail)) {
+    parsed.spocEmail = parseAssignedUserEmails(
+      cellValue(row, IMPORT_ALIASES.spocEmail)
+    ).join(', ');
+  }
+  setIfPresent(parsed, 'requestTimeline', cellValue(row, IMPORT_ALIASES.requestTimeline));
+
+  if (cellPresent(row, IMPORT_ALIASES.assignedUserEmails)) {
+    parsed.assignedUserEmails = cellValue(row, IMPORT_ALIASES.assignedUserEmails)
       .split(/[;,\n]/)
       .map((email) => email.trim().toLowerCase())
-      .filter(Boolean),
-    isActive: !['no', 'false', '0', 'inactive'].includes(
-      cellValue(row, IMPORT_ALIASES.isActive).toLowerCase()
-    ),
-  };
+      .filter(Boolean);
+  }
+
+  const numericFields = [
+    ['executedCampUnit', IMPORT_ALIASES.executedCampUnit],
+    ['cancelledCampUnit', IMPORT_ALIASES.cancelledCampUnit],
+    ['otUnit', IMPORT_ALIASES.otUnit],
+    ['minimumPatientCovered', IMPORT_ALIASES.minimumPatientCovered],
+    ['minimumKmsCovered', IMPORT_ALIASES.minimumKmsCovered],
+    ['extPatientUnit', IMPORT_ALIASES.extPatientUnit],
+    ['kmsUnit', IMPORT_ALIASES.kmsUnit],
+  ];
+  for (const [key, aliases] of numericFields) {
+    if (cellPresent(row, aliases)) parsed[key] = parseNumber(cellValue(row, aliases));
+  }
+
+  if (cellPresent(row, IMPORT_ALIASES.mappedConsumables)) {
+    parsed.mappedConsumables = await resolveMappedConsumablesFromNames(
+      cellValue(row, IMPORT_ALIASES.mappedConsumables)
+    );
+  }
+
+  if (cellPresent(row, IMPORT_ALIASES.isActive)) {
+    parsed.isActive = parseStatusActive(cellValue(row, IMPORT_ALIASES.isActive));
+  }
+
+  const campTermsRaw = cellValue(row, IMPORT_ALIASES.campTerms);
+  let campTerms;
+  if (campTermsRaw) {
+    campTerms = normalizeCampTermsImport(campTermsRaw);
+  } else if (purchaseOrders.length) {
+    campTerms = 'po_based';
+  } else if (
+    cellPresent(row, IMPORT_ALIASES.agreementStartDate)
+    || cellPresent(row, IMPORT_ALIASES.agreementEffectiveDate)
+    || cellPresent(row, IMPORT_ALIASES.agreementEndDate)
+  ) {
+    campTerms = 'agreement_based';
+  }
+  if (campTerms) parsed.campTerms = campTerms;
+
   if (purchaseOrders.length) {
-    const issue = parsed.poIssueDate || '';
-    const expiry = parsed.poExpiryDate || '';
+    const issue = cellValue(row, IMPORT_ALIASES.poIssueDate).slice(0, 10);
+    const expiry = cellValue(row, IMPORT_ALIASES.poExpiryDate).slice(0, 10);
     parsed.purchaseOrders = purchaseOrders.map((po, index) => ({
       ...po,
       poIssueDate: index === 0 ? issue : po.poIssueDate || '',
       poExpiryDate: index === 0 ? expiry : po.poExpiryDate || '',
     }));
+    const first = purchaseOrders[0];
+    setIfPresent(parsed, 'poNumber', first.poNumber);
+    if (first.poNetValue != null) parsed.poNetValue = first.poNetValue;
+    parsed.poApplyGst18 = Boolean(first.poApplyGst18);
+    setIfPresent(parsed, 'poIssueDate', issue);
+    setIfPresent(parsed, 'poExpiryDate', expiry);
+  } else {
+    setIfPresent(parsed, 'poIssueDate', cellValue(row, IMPORT_ALIASES.poIssueDate).slice(0, 10));
+    setIfPresent(parsed, 'poExpiryDate', cellValue(row, IMPORT_ALIASES.poExpiryDate).slice(0, 10));
   }
+
+  setIfPresent(
+    parsed,
+    'agreementStartDate',
+    cellValue(row, IMPORT_ALIASES.agreementStartDate).slice(0, 10)
+  );
+  setIfPresent(
+    parsed,
+    'agreementEffectiveDate',
+    cellValue(row, IMPORT_ALIASES.agreementEffectiveDate).slice(0, 10)
+  );
+  setIfPresent(
+    parsed,
+    'agreementEndDate',
+    cellValue(row, IMPORT_ALIASES.agreementEndDate).slice(0, 10)
+  );
+
   return parsed;
 }
 
-export function clientMasterToExcelRow(record) {
+/**
+ * @param {object} record Client Master row
+ * @param {object} [billing] Optional company billing view (gstin/pan/address/…)
+ * @param {object} [client] Optional company ({ code })
+ */
+export function clientMasterToExcelRow(record, billing = {}, client = null) {
   const orders = resolvePurchaseOrders(record);
   const first = orders[0] || null;
+  const bill = billing && typeof billing === 'object' ? billing : {};
   return [
-    record.clientName,
-    record.programName,
-    record.campName,
-    record.campType,
-    record.coordinatorName,
+    record.clientName || '',
+    client?.code || record.clientCode || '',
+    record.isActive === false ? 'Inactive' : 'Active',
+    bill.address || '',
+    bill.stateName || '',
+    bill.stateCode || '',
+    bill.gstin || '',
+    bill.pan || '',
+    record.programName || '',
+    record.campName || '',
+    record.campType || '',
     formatHealthcareWorkers(record.healthcareWorker),
-    record.campDuration,
-    record.spocName,
-    record.spocNumber,
-    record.spocEmail,
-    record.requestTimeline,
+    record.campDuration || '',
+    record.spocName || '',
+    record.spocNumber || '',
+    record.spocEmail || '',
+    record.requestTimeline || '',
+    Array.isArray(record.assignedUserEmails)
+      ? record.assignedUserEmails.join(', ')
+      : (record.assignedUserEmails || ''),
+    record.executedCampUnit ?? '',
+    record.cancelledCampUnit ?? '',
+    record.otUnit ?? '',
+    record.minimumPatientCovered ?? '',
+    record.minimumKmsCovered ?? '',
+    record.extPatientUnit ?? '',
+    record.kmsUnit ?? '',
+    formatMappedConsumables(record.mappedConsumables),
     campTermsLabel(record.campTerms),
-    record.poNumber || first?.poNumber || '',
-    record.poNetValue ?? first?.poNetValue ?? 0,
-    (record.poApplyGst18 ?? first?.poApplyGst18) ? 'Yes' : 'No',
+    orders.length > 1
+      ? orders.map((o) => o.poNumber || '').filter(Boolean).join('; ')
+      : (record.poNumber || first?.poNumber || ''),
+    orders.length > 1
+      ? orders.map((o) => o.poNetValue ?? 0).join('; ')
+      : (record.poNetValue ?? first?.poNetValue ?? 0),
+    orders.length > 1
+      ? orders.map((o) => (o.poApplyGst18 ? 'Yes' : 'No')).join('; ')
+      : ((record.poApplyGst18 ?? first?.poApplyGst18) ? 'Yes' : 'No'),
     record.poIssueDate || first?.poIssueDate || '',
     record.poExpiryDate || first?.poExpiryDate || '',
     record.agreementStartDate || '',
     record.agreementEffectiveDate || '',
     record.agreementEndDate || '',
-    record.executedCampUnit,
-    record.cancelledCampUnit,
-    record.otUnit,
-    record.minimumPatientCovered,
-    record.minimumKmsCovered,
-    record.extPatientUnit,
-    record.kmsUnit,
-    Array.isArray(record.assignedUserEmails)
-      ? record.assignedUserEmails.join(', ')
-      : (record.assignedUserEmails || ''),
-    record.isActive === false ? 'No' : 'Yes',
   ];
 }

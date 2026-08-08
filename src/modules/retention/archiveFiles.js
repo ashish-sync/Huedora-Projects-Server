@@ -103,11 +103,13 @@ export async function compressAttachmentsForArchive(row, { entityType, skipCompr
     const destAbs = path.join(bundleAbs, `${base}.gz`);
     try {
       await gzipFile(srcAbs, destAbs);
-      await fs.promises.unlink(srcAbs);
+      // Keep the original until the caller persists archive metadata — avoids
+      // orphaned .gz files / missing originals if row.save() fails afterward.
       archivedAttachmentPaths.push({
         originalRel: toUploadsRel(srcAbs) || safeRel(candidate.replace(/^\/?uploads\//i, '')),
         archivedRel: toUploadsRel(destAbs),
         originalRef: candidate,
+        originalAbs: srcAbs,
       });
       moved += 1;
     } catch (err) {
@@ -122,23 +124,45 @@ export async function compressAttachmentsForArchive(row, { entityType, skipCompr
   };
 }
 
+/** After archive metadata is saved, remove live originals that were gzipped. */
+export async function unlinkArchivedOriginals(archivedAttachmentPaths = []) {
+  let removed = 0;
+  for (const entry of archivedAttachmentPaths) {
+    const srcAbs = entry.originalAbs || resolveUploadAbs(entry.originalRel);
+    if (!srcAbs || !fs.existsSync(srcAbs)) continue;
+    try {
+      await fs.promises.unlink(srcAbs);
+      removed += 1;
+    } catch (err) {
+      console.error('[retention] unlink original failed:', srcAbs, err.message);
+    }
+  }
+  return { removed };
+}
+
 /** Restore gzipped attachments from archiveBundleKey mapping. */
 export async function restoreArchivedAttachments(row) {
   const entries = Array.isArray(row.archivedAttachmentPaths) ? row.archivedAttachmentPaths : [];
+  const remaining = [];
   let restored = 0;
   for (const entry of entries) {
     const srcAbs = resolveUploadAbs(entry.archivedRel);
     const destAbs = resolveUploadAbs(entry.originalRel);
-    if (!srcAbs || !destAbs || !fs.existsSync(srcAbs)) continue;
+    if (!srcAbs || !destAbs || !fs.existsSync(srcAbs)) {
+      remaining.push(entry);
+      continue;
+    }
     try {
       await gunzipFile(srcAbs, destAbs);
       await fs.promises.unlink(srcAbs);
       restored += 1;
     } catch (err) {
       console.error('[retention] restore failed:', entry.archivedRel, err.message);
+      remaining.push(entry);
     }
   }
-  row.archiveBundleKey = '';
-  row.archivedAttachmentPaths = [];
-  return { restored };
+  // Only clear archive metadata for successfully restored files — keep failed mappings.
+  row.archivedAttachmentPaths = remaining;
+  row.archiveBundleKey = remaining.length ? row.archiveBundleKey || '' : '';
+  return { restored, failed: remaining.length };
 }

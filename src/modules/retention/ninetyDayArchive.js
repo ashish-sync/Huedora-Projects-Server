@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { CampOpsCamp } from '../campOps/campOps.model.js';
 import { AssetRequest } from '../assetRequests/assetRequest.model.js';
 import { Asset } from '../assets/asset.model.js';
@@ -14,7 +15,11 @@ import {
   stampArchived,
   isArchived,
 } from './archivePolicy.js';
-import { compressAttachmentsForArchive } from './archiveFiles.js';
+import {
+  compressAttachmentsForArchive,
+  unlinkArchivedOriginals,
+  resolveUploadAbs,
+} from './archiveFiles.js';
 
 export {
   ARCHIVE_IDLE_DAYS,
@@ -234,13 +239,33 @@ async function processRow(entityType, row, { now, dryRun, label }) {
       preserveContentClock(row);
       stampArchived(row, { now, reason: 'inactive_90d' });
 
+      let packedPaths = [];
       if (!skipCompress) {
         const packed = await compressAttachmentsForArchive(row, { entityType, skipCompress: false });
+        packedPaths = packed.archivedAttachmentPaths || [];
         row.archiveBundleKey = packed.archiveBundleKey || '';
-        row.archivedAttachmentPaths = packed.archivedAttachmentPaths || [];
+        // Do not persist absolute filesystem paths on the document.
+        row.archivedAttachmentPaths = packedPaths.map(({ originalAbs, ...rest }) => rest);
       }
 
-      await row.save();
+      try {
+        await row.save();
+      } catch (err) {
+        // Metadata save failed — drop orphan .gz copies; originals were never unlinked.
+        for (const entry of packedPaths) {
+          const gzAbs = resolveUploadAbs(entry.archivedRel);
+          if (!gzAbs) continue;
+          try {
+            await fs.promises.unlink(gzAbs);
+          } catch {
+            /* ignore */
+          }
+        }
+        throw err;
+      }
+      if (!skipCompress && packedPaths.length) {
+        await unlinkArchivedOriginals(packedPaths);
+      }
       await writeAudit({
         actorType: 'SYSTEM',
         actorEmail: 'system@tylo.one',

@@ -4,10 +4,12 @@ import {
   saveCollection,
   upsertDocument,
   bulkUpsertDocuments,
+  deleteDocument,
   getPersistenceMode,
   resetAllCollections,
   registerCollection,
   getRegisteredCollections,
+  mergeDocumentFields,
 } from './persistence.js';
 
 function oid() {
@@ -91,8 +93,19 @@ function applyUpdate(doc, update) {
     for (const [k, v] of Object.entries(update.$set)) setPath(next, k, v);
   } else if (update.$inc) {
     for (const [k, v] of Object.entries(update.$inc)) setPath(next, k, Number(get(next, k) || 0) + v);
+  } else if (update.$unset) {
+    for (const k of Object.keys(update.$unset)) {
+      const parts = k.split('.');
+      let cur = next;
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (cur[parts[i]] == null || typeof cur[parts[i]] !== 'object') return;
+        cur = cur[parts[i]];
+      }
+      delete cur[parts[parts.length - 1]];
+    }
   } else {
-    Object.assign(next, update, { _id: doc._id });
+    // Partial merge — blank/omitted fields must not wipe existing data.
+    Object.assign(next, mergeDocumentFields(next, update), { _id: doc._id });
   }
   next.updatedAt = new Date().toISOString();
   return next;
@@ -290,8 +303,8 @@ export function defineCollection(name, defaults = {}) {
     async _all() {
       return loadCollection(name);
     },
-    async _write(rows) {
-      await saveCollection(name, rows);
+    async _write(rows, { allowDestructiveSync = false } = {}) {
+      await saveCollection(name, rows, { allowDestructiveSync });
     },
     _wrap(doc, { alreadyCloned = false } = {}) {
       const o = alreadyCloned ? doc : clone(doc);
@@ -480,8 +493,17 @@ export function defineCollection(name, defaults = {}) {
       }
       return { matchedCount: changed.length, modifiedCount: changed.length };
     },
+    async deleteOne(filter = {}) {
+      const rows = await model._all();
+      const idx = rows.findIndex((d) => match(d, filter));
+      if (idx < 0) return { deletedCount: 0 };
+      const removed = rows[idx];
+      await deleteDocument(name, removed._id);
+      invalidateIdIndex(name);
+      return { deletedCount: 1, deletedId: removed._id };
+    },
     async deleteMany() {
-      await model._write([]);
+      await model._write([], { allowDestructiveSync: true });
       invalidateIdIndex(name);
     },
     async aggregate(pipeline = []) {

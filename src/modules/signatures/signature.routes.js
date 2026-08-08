@@ -17,6 +17,7 @@ import {
   sampleCsvFilename,
 } from '../../utils/masterExcel.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 
 const router = Router();
 router.use(authenticate);
@@ -243,7 +244,8 @@ router.patch(
       throw new AppError('Signature image must be a PNG or JPEG', 400, 'VALIDATION_ERROR');
     }
 
-    Object.assign(row, payload, { updatedBy: req.user._id });
+    assignPreservingExisting(row, payload);
+    row.updatedBy = req.user._id;
     await row.save();
 
     await writeAudit({

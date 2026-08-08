@@ -4,6 +4,7 @@ import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import {
   CAMP_METHODS,
   CAMP_PROCESS_MAP,
@@ -339,7 +340,7 @@ router.patch(
     const fields = normalizeRequestBody(req.body, row, {
       relaxDate: row.status === 'Approved',
     });
-    Object.assign(row, fields);
+    assignPreservingExisting(row, fields);
     await row.save();
 
     await writeAudit({

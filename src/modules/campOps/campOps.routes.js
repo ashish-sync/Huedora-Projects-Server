@@ -1,3 +1,4 @@
+import { assignPreservingExisting, assertNotStale } from '../../store/dataIntegrity.js';
 import { Router } from 'express';
 import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
@@ -379,14 +380,13 @@ function applyClientBilling(client, body = {}) {
   if (!client || !hasClientBillingPayload(body)) return false;
   const next = extractClientBilling(body);
   let changed = false;
-  // Tax IDs are easy to wipe with empty form payloads / stale loads — only replace when
-  // the incoming value is non-empty, or both sides are empty (no-op).
-  const preserveIfBlank = new Set(['gstin', 'pan']);
+  // Never treat blank payload fields as permission to erase existing billing data.
   for (const [key, value] of Object.entries(next)) {
     const current = String(client[key] || '');
-    if (preserveIfBlank.has(key) && !value && current) continue;
-    if (current !== value) {
-      client[key] = value;
+    const incoming = String(value || '');
+    if (!incoming && current) continue;
+    if (current !== incoming) {
+      client[key] = incoming;
       changed = true;
     }
   }
@@ -1180,7 +1180,7 @@ router.put(
       );
     }
 
-    Object.assign(camp, payload);
+    assignPreservingExisting(camp, payload);
 
     if (!lifecycleOnly || stage === 'request') {
       try {
@@ -1257,7 +1257,7 @@ router.post(
 
     const before = camp.toObject();
     const payload = lifecyclePayloadFromBody(req.body, camp);
-    Object.assign(camp, payload);
+    assignPreservingExisting(camp, payload);
 
     const paymentSubmitStatus = normalizePaymentSubmitStatus(
       req.body.paymentSubmitStatus || camp.paymentSubmitStatus
@@ -1824,7 +1824,7 @@ function normalizePurchaseOrderRow(row, index, existingById = new Map()) {
   const tax = computePoTaxFields(entered, apply);
 
   let files = [];
-  if (Array.isArray(row?.files)) {
+  if (Array.isArray(row?.files) && row.files.length > 0) {
     files = row.files.map((doc, i) => normalizeCampTermsFile(doc, `${id}-f-${i + 1}`)).filter(Boolean);
   } else if (row?.poFile?.storedName) {
     const single = normalizeCampTermsFile(row.poFile, `${id}-f-1`);
@@ -2363,11 +2363,19 @@ router.get(
   canRead,
   asyncHandler(async (_req, res) => {
     const rows = await CampOpsClientMaster.find({ isDeleted: false }).sort('-updatedAt');
+    const clientIds = [...new Set(rows.map((r) => String(r.clientId || '')).filter(Boolean))];
+    const clients = clientIds.length
+      ? await CampOpsClient.find({ _id: { $in: clientIds }, isDeleted: false })
+      : [];
+    const clientsById = new Map(clients.map((c) => [String(c._id), c]));
     sendExcel(
       res,
       'Client_Master.xlsx',
       CLIENT_MASTER_HEADERS,
-      rows.map((r) => clientMasterToExcelRow(r)),
+      rows.map((r) => {
+        const client = clientsById.get(String(r.clientId || ''));
+        return clientMasterToExcelRow(r, clientBillingView(client), client);
+      }),
       { sheetName: 'Client Master' }
     );
   })
@@ -2398,28 +2406,53 @@ router.post(
       userId: req.user?._id,
       importType: 'CampOpsClientMaster',
       processRow: async ({ record: row }) => {
-        const parsed = parseClientMasterImportRow(row);
+        const parsed = await parseClientMasterImportRow(row);
         if (!parsed) return { skipped: true };
-        const client = await resolveClientFromBody({ clientName: parsed.clientName }, { allowCreate: true });
+        const billing = parsed.billing && typeof parsed.billing === 'object' ? parsed.billing : {};
+        const hasBilling = Object.values(billing).some((v) => String(v || '').trim());
+        const client = await resolveClientFromBody(
+          {
+            clientName: parsed.clientName,
+            clientCode: parsed.clientCode || undefined,
+            ...(hasBilling ? { billing } : {}),
+          },
+          { allowCreate: true }
+        );
         if (!client) throw new AppError('Client is required', 400, 'VALIDATION_ERROR');
-        const payload = buildMasterPayload(parsed, client);
-        assertClientMasterPayload(payload);
         const existing = await CampOpsClientMaster.findOne({
           isDeleted: false,
           clientId: client._id,
-          programName: payload.programName,
-          campName: payload.campName,
+          programName: parsed.programName,
+          campName: parsed.campName,
         });
+        const payload = buildMasterPayload(parsed, client, existing);
+        assertClientMasterPayload({
+          ...(existing?.toObject ? existing.toObject() : existing || {}),
+          ...payload,
+        });
+        const clearKeys =
+          payload.campTerms === 'none'
+            ? [
+                'poNumber',
+                'poIssueDate',
+                'poExpiryDate',
+                'agreementStartDate',
+                'agreementEffectiveDate',
+                'agreementEndDate',
+                'poFile',
+              ]
+            : [];
         if (existing) {
-          Object.assign(existing, payload, { updatedById: a.id });
+          assignPreservingExisting(existing, payload, { clearKeys });
+          existing.updatedById = a.id;
           await existing.save();
           return { updated: true };
         }
-          await CampOpsClientMaster.create({
-            ...payload,
-            createdById: a.id,
-            updatedById: a.id,
-          });
+        await CampOpsClientMaster.create({
+          ...payload,
+          createdById: a.id,
+          updatedById: a.id,
+        });
         return { ok: true };
       },
     });
@@ -2544,6 +2577,16 @@ router.put(
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    try {
+      assertNotStale(row, req.body.expectedUpdatedAt || req.body.updatedAt, {
+        label: 'Client Master',
+      });
+    } catch (err) {
+      if (err?.code === 'STALE_UPDATE') {
+        throw new AppError(err.message, 409, 'STALE_UPDATE');
+      }
+      throw err;
+    }
     const before = row.toObject();
     let client = null;
     if (req.body.clientId || req.body.clientName) {
@@ -2557,7 +2600,20 @@ router.put(
         await client.save();
       }
     }
-    Object.assign(row, buildMasterPayload(req.body, client, row));
+    const payload = buildMasterPayload(req.body, client, row);
+    const clearKeys =
+      payload.campTerms === 'none' && req.body.campTerms !== undefined
+        ? [
+            'poNumber',
+            'poIssueDate',
+            'poExpiryDate',
+            'agreementStartDate',
+            'agreementEffectiveDate',
+            'agreementEndDate',
+            'poFile',
+          ]
+        : [];
+    assignPreservingExisting(row, payload, { clearKeys });
     assertClientMasterPayload(row);
     row.updatedById = actor(req).id;
     await row.save();

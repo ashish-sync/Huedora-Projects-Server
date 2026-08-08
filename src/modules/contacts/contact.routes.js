@@ -25,6 +25,7 @@ import {
 import { normalizePhone } from '../../utils/identityNormalize.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { uploadDir } from '../../config/paths.js';
+import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import {
   assertSpreadsheetUpload,
   discardUploadBuffer,
@@ -368,7 +369,8 @@ router.patch(
       phone: payload.contact,
       excludeId: contact._id,
     });
-    Object.assign(contact, payload, { updatedBy: req.user._id });
+    assignPreservingExisting(contact, payload);
+    contact.updatedBy = req.user._id;
     await contact.save();
     res.json({ data: contact });
   })
@@ -535,7 +537,8 @@ router.post(
               phone: payload.contact,
               excludeId: existing._id,
             });
-            Object.assign(existing, payload, { updatedBy: req.user._id });
+            assignPreservingExisting(existing, payload);
+            existing.updatedBy = req.user._id;
             await existing.save();
             updated += 1;
           } else {
