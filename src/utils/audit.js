@@ -1,4 +1,5 @@
 import { AuditLog } from '../modules/audit/audit.model.js';
+import { sanitizeAuditSnapshot } from './stripEmbeddedMedia.js';
 
 export async function writeAudit({
   actorId = null,
@@ -23,8 +24,8 @@ export async function writeAudit({
     action,
     entityType,
     entityId,
-    before,
-    after,
+    before: before == null ? null : sanitizeAuditSnapshot(before),
+    after: after == null ? null : sanitizeAuditSnapshot(after),
     ip,
     userAgent,
     requestId,

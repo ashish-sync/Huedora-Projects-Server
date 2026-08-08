@@ -13,6 +13,8 @@
     "fresh-start:keep-users": "node scripts/fresh-start-keep-users.js",
     "purge:demo": "node scripts/purge-demo-data.js",
     "purge:demo:dry": "node scripts/purge-demo-data.js --dry-run",
+    "strip:embedded-media": "node scripts/strip-embedded-media.js",
+    "strip:embedded-media:dry": "node scripts/strip-embedded-media.js --dry-run",
     "purge:all-camps": "node scripts/purge-all-camps.js",
     "purge:all-camps:dry": "node scripts/purge-all-camps.js --dry-run",
     "predeploy:verify": "node scripts/predeploy-verify.js",

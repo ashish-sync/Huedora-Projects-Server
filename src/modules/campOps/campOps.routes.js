@@ -1646,6 +1646,7 @@ const MASTER_STRING_FIELDS = [
   'requestTimeline',
   'campTerms',
   'poNumber',
+  'poIssueDate',
   'poExpiryDate',
   'agreementStartDate',
   'agreementEffectiveDate',
@@ -1754,6 +1755,7 @@ function inferCampTerms(plain) {
     || plain.poNetValue
     || plain.poFile?.storedName
     || plain.poApplyGst18
+    || plain.poIssueDate
     || plain.poExpiryDate
   ) {
     return 'po_based';
@@ -1817,6 +1819,10 @@ function normalizePurchaseOrderRow(row, index, existingById = new Map()) {
     if (single) files = [single];
   }
 
+  const poIssueDate =
+    row?.poIssueDate !== undefined
+      ? trimStr(row.poIssueDate).slice(0, 10)
+      : trimStr(existing?.poIssueDate).slice(0, 10);
   const poExpiryDate =
     row?.poExpiryDate !== undefined
       ? trimStr(row.poExpiryDate).slice(0, 10)
@@ -1826,6 +1832,7 @@ function normalizePurchaseOrderRow(row, index, existingById = new Map()) {
     id,
     poNumber: trimStr(row?.poNumber).slice(0, 80),
     ...tax,
+    poIssueDate,
     poExpiryDate,
     files,
     poFile: files[0] || null,
@@ -1865,6 +1872,7 @@ function ensurePurchaseOrders(rowLike) {
         id: 'po-legacy-0',
         poNumber: trimStr(plain.poNumber),
         ...tax,
+        poIssueDate: trimStr(plain.poIssueDate).slice(0, 10),
         poExpiryDate: trimStr(plain.poExpiryDate).slice(0, 10),
         files,
         poFile: files[0] || plain.poFile || null,
@@ -1885,6 +1893,7 @@ function ensurePurchaseOrders(rowLike) {
         : (po.poFile ? [normalizeCampTermsFile(po.poFile)].filter(Boolean) : []);
       return {
         ...po,
+        poIssueDate: trimStr(po.poIssueDate || (index === 0 ? plain.poIssueDate : '')).slice(0, 10),
         poExpiryDate: trimStr(po.poExpiryDate || (index === 0 ? plain.poExpiryDate : '')).slice(0, 10),
         files,
         poFile: files[0] || po.poFile || null,
@@ -1896,6 +1905,7 @@ function ensurePurchaseOrders(rowLike) {
     poApplyGst18: plain.poApplyGst18 ?? Boolean(first?.poApplyGst18),
     poGstAmount: plain.poGstAmount ?? first?.poGstAmount ?? 0,
     poGrossValue: plain.poGrossValue ?? first?.poGrossValue ?? 0,
+    poIssueDate: plain.poIssueDate || first?.poIssueDate || '',
     poExpiryDate: plain.poExpiryDate || first?.poExpiryDate || '',
     poFile: plain.poFile || first?.poFile || campTermsFiles[0] || null,
     agreementStartDate: plain.agreementStartDate || '',
@@ -1970,6 +1980,7 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
             || row.poNetValue > 0
             || row.poFile?.storedName
             || (Array.isArray(row.files) && row.files.length)
+            || row.poIssueDate
             || row.poExpiryDate
         )
         .map(({ _index, ...rest }) => rest);
@@ -1999,6 +2010,10 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
       const tax = computePoTaxFields(entered, apply);
       const poNumber =
         body.poNumber !== undefined ? trimStr(body.poNumber).slice(0, 80) : trimStr(existing.poNumber);
+      const poIssueDate =
+        body.poIssueDate !== undefined
+          ? trimStr(body.poIssueDate).slice(0, 10)
+          : trimStr(existing.poIssueDate).slice(0, 10);
       const poExpiryDate =
         body.poExpiryDate !== undefined
           ? trimStr(body.poExpiryDate).slice(0, 10)
@@ -2011,6 +2026,7 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
           id: existing.purchaseOrders?.[0]?.id || 'po-primary',
           poNumber,
           ...tax,
+          poIssueDate,
           poExpiryDate,
           files: primaryFiles,
           poFile: primaryFiles[0] || null,
@@ -2026,6 +2042,7 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
             poNumber: '',
             poNetValue: 0,
             poApplyGst18: false,
+            poIssueDate: '',
             poExpiryDate: '',
             files: [],
           },
@@ -2052,6 +2069,7 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
       poApplyGst18: Boolean(primary.poApplyGst18),
       poGstAmount: primary.poGstAmount ?? 0,
       poGrossValue: primary.poGrossValue ?? 0,
+      poIssueDate: primary.poIssueDate || '',
       poExpiryDate: primary.poExpiryDate || '',
       ...combined,
       poFile: primary.poFile || flatFiles[0] || null,
@@ -2083,6 +2101,7 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
       poApplyGst18: false,
       poGstAmount: 0,
       poGrossValue: 0,
+      poIssueDate: '',
       poExpiryDate: '',
       poCombinedNet: 0,
       poCombinedGst: 0,
@@ -2103,6 +2122,7 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
       poApplyGst18: false,
       poGstAmount: 0,
       poGrossValue: 0,
+      poIssueDate: '',
       poExpiryDate: '',
       poCombinedNet: 0,
       poCombinedGst: 0,
@@ -2123,6 +2143,7 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
     poApplyGst18: false,
     poGstAmount: 0,
     poGrossValue: 0,
+    poIssueDate: '',
     poExpiryDate: '',
     poCombinedNet: 0,
     poCombinedGst: 0,
@@ -2149,6 +2170,7 @@ function applyPurchaseOrdersToPayload(payload, body, existingRow = null) {
           poNumber: body.poNumber,
           poNetValue: body.poNetValue,
           poApplyGst18: body.poApplyGst18,
+          poIssueDate: body.poIssueDate,
           poExpiryDate: body.poExpiryDate,
           campTermsFiles: body.campTermsFiles,
         },
@@ -2170,6 +2192,7 @@ function applyPurchaseOrdersToPayload(payload, body, existingRow = null) {
         || row.poNetValue > 0
         || row.poFile?.storedName
         || (Array.isArray(row.files) && row.files.length)
+        || row.poIssueDate
         || row.poExpiryDate
     )
     .map(({ _index, ...rest }) => rest);
@@ -2191,6 +2214,7 @@ function applyPurchaseOrdersToPayload(payload, body, existingRow = null) {
     poApplyGst18: Boolean(first?.poApplyGst18),
     poGstAmount: first?.poGstAmount ?? 0,
     poGrossValue: first?.poGrossValue ?? 0,
+    poIssueDate: first?.poIssueDate || '',
     poExpiryDate: first?.poExpiryDate || '',
     poFile: first?.poFile || null,
   });
@@ -2682,6 +2706,7 @@ function syncLegacyPoMirror(row) {
   row.poApplyGst18 = Boolean(first?.poApplyGst18);
   row.poGstAmount = first?.poGstAmount ?? 0;
   row.poGrossValue = first?.poGrossValue ?? 0;
+  row.poIssueDate = first?.poIssueDate || '';
   row.poExpiryDate = first?.poExpiryDate || '';
   row.poFile = first?.poFile || first?.files?.[0] || null;
   row.campTerms = orders.length ? 'po_based' : row.campTerms || 'none';
@@ -2742,6 +2767,7 @@ function findPoEntry(row, poId) {
       poApplyGst18: false,
       poGstAmount: 0,
       poGrossValue: 0,
+      poIssueDate: '',
       poExpiryDate: '',
       files: [],
       poFile: null,
@@ -2757,6 +2783,7 @@ function findPoEntry(row, poId) {
       poApplyGst18: false,
       poGstAmount: 0,
       poGrossValue: 0,
+      poIssueDate: '',
       poExpiryDate: '',
       files: [],
       poFile: null,

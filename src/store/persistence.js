@@ -8,7 +8,15 @@ let mode = 'file';
 let mongoDb = null;
 let dataDir = path.resolve(__dirname, '../../data');
 const cache = new Map();
+/** @type {Map<string, number>} file mtimeMs when cache was loaded */
+const fileMtime = new Map();
+/** Serialize file-mode writes per collection (last writer still wins, but no interleaved writeFile). */
+const writeLocks = new Map();
 const registeredCollections = new Set();
+
+/** Pretty-print only small collections — large ones blow disk and heap on every rewrite. */
+const COMPACT_JSON_MIN_ROWS = 100;
+const ALWAYS_COMPACT = new Set(['audit_logs', 'finance_commercial_documents', 'geo_pin_codes']);
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -20,6 +28,32 @@ function collectionKey(name) {
 
 function filePath(name) {
   return path.join(dataDir, `${name}.json`);
+}
+
+function withWriteLock(name, fn) {
+  const prev = writeLocks.get(name) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  writeLocks.set(
+    name,
+    run.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return run;
+}
+
+function shouldCompactJson(name, rows) {
+  if (ALWAYS_COMPACT.has(name)) return true;
+  return Array.isArray(rows) && rows.length >= COMPACT_JSON_MIN_ROWS;
+}
+
+function currentFileMtime(name) {
+  try {
+    return fs.statSync(filePath(name)).mtimeMs;
+  } catch {
+    return 0;
+  }
 }
 
 export function registerCollection(name) {
@@ -66,15 +100,17 @@ export function configurePersistence({ backend = 'file', dataDirectory, db } = {
  *   for uploads). Multi-instance without cache invalidation or shared file storage will
  *   serve stale reads and missing files. Native Mongo filter/limit pushdown is the
  *   long-term escape hatch for horizontal scale.
- * - File mode: local JSON under data/ — development only.
+ * - File mode: local JSON under data/ — development only. Collections are lazy-loaded;
+ *   loadCollection returns the live cache array (clone matched rows in Query.exec).
  */
 
 /**
  * Mongo: lazy-load collections on first access (do NOT hydrate entire DB into RAM at boot).
- * File: keep existing JSON index for CLI/dev sync.
+ * File: same — lazy-load on first access (avoids boot OOM when audit/commercial JSON is huge).
  */
 export async function hydratePersistence() {
   cache.clear();
+  fileMtime.clear();
   if (mode === 'mongo') {
     if (!mongoDb) throw new Error('MongoDB persistence is not configured');
     const collections = await mongoDb.listCollections().toArray();
@@ -85,17 +121,21 @@ export async function hydratePersistence() {
     return;
   }
 
-  for (const file of fs.readdirSync(dataDir)) {
-    if (!file.endsWith('.json')) continue;
-    const logicalName = file.replace(/\.json$/, '');
-    cache.set(logicalName, readFileCollection(logicalName));
+  let fileCount = 0;
+  try {
+    fileCount = fs.readdirSync(dataDir).filter((f) => f.endsWith('.json')).length;
+  } catch {
+    fileCount = 0;
   }
+  console.log(
+    `[db] File persistence ready at ${dataDir} (${fileCount} json file(s) — lazy-loaded, not pre-hydrated)`
+  );
 }
 
 /**
- * Return the live collection array (cache reference in mongo mode).
+ * Return the live collection array (cache reference).
  * Callers that need isolation must clone matched documents themselves (Query.exec does).
- * Deep-cloning the full collection on every read caused Render 512MB OOMs.
+ * Deep-cloning the full collection on every read caused multi‑GB RSS spikes with large audits.
  */
 export async function loadCollection(name) {
   if (mode === 'mongo') {
@@ -105,10 +145,15 @@ export async function loadCollection(name) {
     cache.set(name, rows);
     return rows;
   }
-  // Local JSON store: always read from disk so CLI scripts and the dev server stay in sync.
+
+  const mtimeMs = currentFileMtime(name);
+  if (cache.has(name) && fileMtime.get(name) === mtimeMs) {
+    return cache.get(name);
+  }
   const rows = readFileCollection(name);
   cache.set(name, rows);
-  return clone(rows);
+  fileMtime.set(name, mtimeMs);
+  return rows;
 }
 
 /** Upsert a single document — avoids rewriting the entire collection to Mongo. */
@@ -127,7 +172,6 @@ export async function upsertDocument(name, doc) {
       plain,
       { upsert: true }
     );
-    // Size change invalidates id indexes in filedb (reference stays same when updating in place).
     return plain;
   }
   await saveCollection(name, rows);
@@ -177,18 +221,12 @@ export async function bulkUpsertDocuments(name, docs = []) {
 }
 
 export async function saveCollection(name, rows) {
-  const snapshot = mode === 'mongo' ? rows : clone(rows);
-  if (mode === 'mongo') {
-    // Keep cache pointing at the live array (same reference when caller passed cache).
-    cache.set(name, Array.isArray(rows) ? rows : snapshot);
-  } else {
-    cache.set(name, snapshot);
-  }
+  const live = Array.isArray(rows) ? rows : [];
 
   if (mode === 'mongo') {
+    cache.set(name, live);
     if (!mongoDb) throw new Error('MongoDB persistence is not configured');
     const col = mongoDb.collection(collectionKey(name));
-    const live = cache.get(name) || [];
     const ids = live.map((doc) => doc._id);
     if (ids.length) {
       await col.deleteMany({ _id: { $nin: ids } });
@@ -211,7 +249,32 @@ export async function saveCollection(name, rows) {
     }
     return;
   }
-  fs.writeFileSync(filePath(name), JSON.stringify(snapshot, null, 2));
+
+  return withWriteLock(name, async () => {
+    cache.set(name, live);
+    const compact = shouldCompactJson(name, live);
+    const json = compact ? JSON.stringify(live) : JSON.stringify(live, null, 2);
+    const target = filePath(name);
+    const tmp = `${target}.tmp.${process.pid}.${Date.now()}`;
+    fs.writeFileSync(tmp, json);
+    try {
+      // Prefer atomic replace; on Windows an existing target can EPERM under antivirus/locks.
+      fs.renameSync(tmp, target);
+    } catch (err) {
+      try {
+        fs.copyFileSync(tmp, target);
+        fs.unlinkSync(tmp);
+      } catch (fallbackErr) {
+        try {
+          fs.unlinkSync(tmp);
+        } catch {
+          /* ignore */
+        }
+        throw fallbackErr || err;
+      }
+    }
+    fileMtime.set(name, currentFileMtime(name));
+  });
 }
 
 /**
@@ -223,10 +286,14 @@ export function clearPersistenceCache({ keep = [] } = {}) {
   const retain = new Set(keep);
   if (!retain.size) {
     cache.clear();
+    fileMtime.clear();
     return;
   }
   for (const name of [...cache.keys()]) {
-    if (!retain.has(name)) cache.delete(name);
+    if (!retain.has(name)) {
+      cache.delete(name);
+      fileMtime.delete(name);
+    }
   }
 }
 
@@ -237,6 +304,7 @@ export async function emptyCollection(name) {
 
 export async function resetAllCollections() {
   cache.clear();
+  fileMtime.clear();
   if (mode === 'mongo') {
     if (!mongoDb) return;
     const collections = await mongoDb.listCollections().toArray();

@@ -19,9 +19,9 @@ function normalizeKey(value) {
 }
 
 function billingAmount(doc) {
-  const subtotal = Number(doc.subtotal);
-  if (Number.isFinite(subtotal) && subtotal > 0) return roundMoney(subtotal);
-  return roundMoney(doc.grandTotal);
+  const grand = Number(doc.grandTotal);
+  if (Number.isFinite(grand) && grand > 0) return roundMoney(grand);
+  return roundMoney(doc.subtotal);
 }
 
 function matchesPo(doc, po) {
@@ -56,6 +56,7 @@ function ensurePurchaseOrders(master) {
     poApplyGst18: Boolean(row.poApplyGst18),
     poGstAmount: roundMoney(row.poGstAmount),
     poGrossValue: roundMoney(row.poGrossValue || row.poNetValue),
+    poIssueDate: trimStr(row.poIssueDate).slice(0, 10),
     poExpiryDate: trimStr(row.poExpiryDate).slice(0, 10),
   }));
 }
@@ -83,7 +84,9 @@ export async function computeClientMasterPoUtilization({
     clientMasterId: masterId,
     status: { $in: COMMITTED_STATUSES },
     documentType: { $in: [...BILLING_DOC_TYPES, ...ADJUST_DOC_TYPES] },
-  });
+  }).select(
+    'documentType status documentNumber documentDate subtotal grandTotal reference clientPurchaseOrderId clientMasterId'
+  );
 
   const list = Array.isArray(docs) ? docs : [];
   const utilization = purchaseOrders.map((po) => {
@@ -103,6 +106,7 @@ export async function computeClientMasterPoUtilization({
         id,
         documentType: type,
         documentNumber: doc.documentNumber || '',
+        documentDate: trimStr(doc.documentDate).slice(0, 10),
         status: doc.status,
         amount: signed,
       });

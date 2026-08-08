@@ -82,14 +82,26 @@ router.get(
   asyncHandler(async (_req, res) => {
     const [expenses, invoices, proformas, purchaseOrders, clientInvoices, creditNotes, deliveryChallans, billsOfSupply] =
       await Promise.all([
-        FinanceExpense.find({ isDeleted: false }),
-        FinanceInvoice.find({ isDeleted: false }),
-        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'proforma' }),
-        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'purchase_order' }),
-        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'client_invoice' }),
-        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'credit_note' }),
-        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'delivery_challan' }),
-        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'bill_of_supply' }),
+        FinanceExpense.find({ isDeleted: false }).select('amount status'),
+        FinanceInvoice.find({ isDeleted: false }).select('totalAmount status'),
+        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'proforma' }).select(
+          'status grandTotal'
+        ),
+        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'purchase_order' }).select(
+          'status grandTotal'
+        ),
+        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'client_invoice' }).select(
+          'status grandTotal'
+        ),
+        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'credit_note' }).select(
+          'status grandTotal'
+        ),
+        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'delivery_challan' }).select(
+          'status grandTotal'
+        ),
+        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'bill_of_supply' }).select(
+          'status grandTotal'
+        ),
       ]);
 
     const expenseTotal = expenses.reduce((s, r) => s + (Number(r.amount) || 0), 0);

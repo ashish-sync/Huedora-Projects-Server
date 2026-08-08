@@ -221,14 +221,16 @@ router.get(
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
       CampOpsCamp.countDocuments({ isDeleted: false }),
-      FinanceExpense.find({ isDeleted: false }),
-      FinanceInvoice.find({ isDeleted: false }),
-      FinanceCommercialDocument.find({ isDeleted: false, documentType: 'proforma' }),
-      FinanceCommercialDocument.find({ isDeleted: false, documentType: 'purchase_order' }),
+      FinanceExpense.find({ isDeleted: false }).select('amount status'),
+      FinanceInvoice.find({ isDeleted: false }).select('totalAmount status'),
+      FinanceCommercialDocument.find({ isDeleted: false, documentType: 'proforma' }).select('status'),
+      FinanceCommercialDocument.find({ isDeleted: false, documentType: 'purchase_order' }).select(
+        'status'
+      ),
       FinanceCommercialDocument.find({
         isDeleted: false,
         documentType: { $in: ['client_invoice', 'credit_note'] },
-      }),
+      }).select('documentType status grandTotal'),
     ]);
 
     const slaBreached = (repairOpenItems || []).filter(

@@ -172,6 +172,7 @@ router.get(
     const filter = commercialListFilter(req);
     const [data, total] = await Promise.all([
       FinanceCommercialDocument.find(filter)
+        .select('-builderForm')
         .sort(sort || '-documentDate')
         .skip(skip)
         .limit(limit),
@@ -415,6 +416,7 @@ router.get(
     }
     const [data, total] = await Promise.all([
       FinanceCommercialDocument.find(filter)
+        .select('-builderForm')
         .sort(sort || '-documentDate')
         .skip(skip)
         .limit(limit),
@@ -686,6 +688,7 @@ router.get(
     const filter = poListFilter(req);
     const [data, total] = await Promise.all([
       FinanceCommercialDocument.find(filter)
+        .select('-builderForm')
         .sort(sort || '-documentDate')
         .skip(skip)
         .limit(limit),
@@ -956,6 +959,7 @@ router.get(
     const filter = clientInvoiceListFilter(req);
     const [data, total] = await Promise.all([
       FinanceCommercialDocument.find(filter)
+        .select('-builderForm')
         .sort(sort || '-documentDate')
         .skip(skip)
         .limit(limit),
@@ -1165,6 +1169,7 @@ router.get(
     }
     const [data, total] = await Promise.all([
       FinanceCommercialDocument.find(filter)
+        .select('-builderForm')
         .sort(sort || '-documentDate')
         .skip(skip)
         .limit(limit),
@@ -1384,7 +1389,8 @@ function registerInvoiceLikeDocRoutes({
       }
       const [data, total] = await Promise.all([
         FinanceCommercialDocument.find(filter)
-          .sort(sort || '-documentDate')
+          .select('-builderForm')
+        .sort(sort || '-documentDate')
           .skip(skip)
           .limit(limit),
         FinanceCommercialDocument.countDocuments(filter),

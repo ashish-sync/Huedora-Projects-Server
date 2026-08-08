@@ -1,4 +1,5 @@
 import { AppError } from '../../utils/helpers.js';
+import { stripBuilderFormMedia } from '../../utils/stripEmbeddedMedia.js';
 import {
   COMMERCIAL_DOC_STATUSES,
   DEFAULT_ORG_PROFILE,
@@ -1016,7 +1017,11 @@ export function assertCancellable(status) {
 export function extractBuilderExtras(body = {}) {
   const out = {};
   if (body.builderForm !== undefined) {
-    out.builderForm = body.builderForm && typeof body.builderForm === 'object' ? body.builderForm : null;
+    // Keep org logo/QR/signature on FinanceOrgProfile only — never duplicate multi‑MB data-URLs per doc.
+    out.builderForm =
+      body.builderForm && typeof body.builderForm === 'object'
+        ? stripBuilderFormMedia(body.builderForm)
+        : null;
   }
   if (body.clientPurchaseOrderId !== undefined) {
     out.clientPurchaseOrderId = trimStr(body.clientPurchaseOrderId) || null;

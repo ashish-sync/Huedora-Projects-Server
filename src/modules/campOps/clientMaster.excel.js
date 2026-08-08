@@ -19,6 +19,7 @@ export const CLIENT_MASTER_HEADERS = [
   'PO Number',
   'PO Net Value',
   'PO Apply 18% GST',
+  'PO Issue Date',
   'PO Expiry',
   'Agreement Start',
   'Agreement Effective',
@@ -51,6 +52,7 @@ export const CLIENT_MASTER_SAMPLE_ROW = [
   'PO/2026/001',
   100000,
   'Yes',
+  '2026-01-15',
   '2026-12-31',
   '',
   '',
@@ -82,6 +84,7 @@ const IMPORT_ALIASES = {
   poNumbers: ['PO Numbers', 'PO Number', 'poNumber', 'poNumbers'],
   poNetValues: ['PO Net Values', 'PO Net Value', 'poNetValue', 'poNetValues'],
   poApplyGst18: ['PO Apply 18% GST', 'Apply 18% GST', 'poApplyGst18'],
+  poIssueDate: ['PO Issue Date', 'PO Issue', 'poIssueDate'],
   poExpiryDate: ['PO Expiry', 'PO Expiry Date', 'poExpiryDate'],
   agreementStartDate: ['Agreement Start', 'agreementStartDate'],
   agreementEffectiveDate: ['Agreement Effective', 'agreementEffectiveDate'],
@@ -269,6 +272,7 @@ export function parseClientMasterImportRow(row) {
       ? Boolean(first.poApplyGst18)
       : parseBoolToken(cellValue(row, IMPORT_ALIASES.poApplyGst18)),
     poExpiryDate: cellValue(row, IMPORT_ALIASES.poExpiryDate).slice(0, 10),
+    poIssueDate: cellValue(row, IMPORT_ALIASES.poIssueDate).slice(0, 10),
     agreementStartDate: cellValue(row, IMPORT_ALIASES.agreementStartDate).slice(0, 10),
     agreementEffectiveDate: cellValue(row, IMPORT_ALIASES.agreementEffectiveDate).slice(0, 10),
     agreementEndDate: cellValue(row, IMPORT_ALIASES.agreementEndDate).slice(0, 10),
@@ -288,7 +292,13 @@ export function parseClientMasterImportRow(row) {
     ),
   };
   if (purchaseOrders.length) {
-    parsed.purchaseOrders = purchaseOrders;
+    const issue = parsed.poIssueDate || '';
+    const expiry = parsed.poExpiryDate || '';
+    parsed.purchaseOrders = purchaseOrders.map((po, index) => ({
+      ...po,
+      poIssueDate: index === 0 ? issue : po.poIssueDate || '',
+      poExpiryDate: index === 0 ? expiry : po.poExpiryDate || '',
+    }));
   }
   return parsed;
 }
@@ -312,7 +322,8 @@ export function clientMasterToExcelRow(record) {
     record.poNumber || first?.poNumber || '',
     record.poNetValue ?? first?.poNetValue ?? 0,
     (record.poApplyGst18 ?? first?.poApplyGst18) ? 'Yes' : 'No',
-    record.poExpiryDate || '',
+    record.poIssueDate || first?.poIssueDate || '',
+    record.poExpiryDate || first?.poExpiryDate || '',
     record.agreementStartDate || '',
     record.agreementEffectiveDate || '',
     record.agreementEndDate || '',

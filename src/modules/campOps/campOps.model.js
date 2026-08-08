@@ -168,6 +168,7 @@ export const CampOpsClientMaster = defineCollection('camp_ops_client_masters', {
   poApplyGst18: false,
   poGstAmount: 0,
   poGrossValue: 0,
+  poIssueDate: '',
   poExpiryDate: '',
   poFile: null,
   agreementStartDate: '',
