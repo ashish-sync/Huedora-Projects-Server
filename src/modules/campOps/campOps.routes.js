@@ -379,8 +379,13 @@ function applyClientBilling(client, body = {}) {
   if (!client || !hasClientBillingPayload(body)) return false;
   const next = extractClientBilling(body);
   let changed = false;
+  // Tax IDs are easy to wipe with empty form payloads / stale loads — only replace when
+  // the incoming value is non-empty, or both sides are empty (no-op).
+  const preserveIfBlank = new Set(['gstin', 'pan']);
   for (const [key, value] of Object.entries(next)) {
-    if (String(client[key] || '') !== value) {
+    const current = String(client[key] || '');
+    if (preserveIfBlank.has(key) && !value && current) continue;
+    if (current !== value) {
       client[key] = value;
       changed = true;
     }
@@ -2548,6 +2553,8 @@ router.put(
       client = await CampOpsClient.findOne({ _id: row.clientId, isDeleted: false });
       if (!client) {
         client = { _id: row.clientId, name: row.clientName };
+      } else if (hasClientBillingPayload(req.body) && applyClientBilling(client, req.body)) {
+        await client.save();
       }
     }
     Object.assign(row, buildMasterPayload(req.body, client, row));

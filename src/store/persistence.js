@@ -22,6 +22,16 @@ function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
+/** Merge incoming onto existing — omitted/undefined keys do not wipe persisted fields. */
+export function mergeDocumentFields(existing = {}, incoming = {}) {
+  const out = { ...(existing && typeof existing === 'object' ? existing : {}) };
+  for (const [key, value] of Object.entries(incoming || {})) {
+    if (value === undefined) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 function collectionKey(name) {
   return `tylo_${name}`;
 }
@@ -159,21 +169,26 @@ export async function loadCollection(name) {
 /** Upsert a single document — avoids rewriting the entire collection to Mongo. */
 export async function upsertDocument(name, doc) {
   if (!doc?._id) throw new Error('upsertDocument requires _id');
-  const rows = await loadCollection(name);
-  const idx = rows.findIndex((r) => String(r._id) === String(doc._id));
-  const plain = clone(doc);
-  if (idx >= 0) rows[idx] = plain;
-  else rows.push(plain);
+  const incoming = clone(doc);
 
   if (mode === 'mongo') {
     if (!mongoDb) throw new Error('MongoDB persistence is not configured');
-    await mongoDb.collection(collectionKey(name)).replaceOne(
-      { _id: plain._id },
-      plain,
-      { upsert: true }
-    );
+    const col = mongoDb.collection(collectionKey(name));
+    const latest = await col.findOne({ _id: incoming._id });
+    const plain = mergeDocumentFields(latest || {}, incoming);
+    await col.replaceOne({ _id: plain._id }, plain, { upsert: true });
+    const rows = await loadCollection(name);
+    const idx = rows.findIndex((r) => String(r._id) === String(plain._id));
+    if (idx >= 0) rows[idx] = plain;
+    else rows.push(plain);
     return plain;
   }
+
+  const rows = await loadCollection(name);
+  const idx = rows.findIndex((r) => String(r._id) === String(incoming._id));
+  const plain = mergeDocumentFields(idx >= 0 ? rows[idx] : {}, incoming);
+  if (idx >= 0) rows[idx] = plain;
+  else rows.push(plain);
   await saveCollection(name, rows);
   return plain;
 }
