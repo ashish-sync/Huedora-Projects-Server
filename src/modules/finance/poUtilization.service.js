@@ -143,6 +143,90 @@ export async function computeClientMasterPoUtilization({
 }
 
 /**
+ * Summarize PO total / billed / remaining for one Client Master using preloaded docs.
+ * Remaining uses the same committed Billing Center docs as computeClientMasterPoUtilization.
+ */
+export function summarizeClientMasterPoBalance(master, docs = []) {
+  const purchaseOrders = ensurePurchaseOrders(master);
+  if (!purchaseOrders.length) {
+    return {
+      poTotalValue: 0,
+      poBilledAmount: 0,
+      poBalance: null,
+      hasPo: false,
+    };
+  }
+
+  const list = Array.isArray(docs) ? docs : [];
+  let totalValue = 0;
+  let billedAmount = 0;
+  let remainingBalance = 0;
+
+  for (const po of purchaseOrders) {
+    let billed = 0;
+    for (const doc of list) {
+      if (!matchesPo(doc, po)) continue;
+      const amount = billingAmount(doc);
+      const type = doc.documentType;
+      if (BILLING_DOC_TYPES.includes(type) || type === 'debit_note') billed += amount;
+      else if (type === 'credit_note') billed -= amount;
+    }
+    billed = roundMoney(Math.max(0, billed));
+    const poTotal = roundMoney(
+      Number(po.poGrossValue) > 0 ? po.poGrossValue : po.poNetValue
+    );
+    totalValue = roundMoney(totalValue + poTotal);
+    billedAmount = roundMoney(billedAmount + billed);
+    remainingBalance = roundMoney(remainingBalance + Math.max(0, poTotal - billed));
+  }
+
+  const hasPo = totalValue > 0 || purchaseOrders.some((po) => trimStr(po.poNumber));
+  return {
+    poTotalValue: totalValue,
+    poBilledAmount: billedAmount,
+    poBalance: hasPo ? remainingBalance : null,
+    hasPo,
+  };
+}
+
+/**
+ * Batch PO balance summaries for Client Master list rows.
+ * @returns {Map<string, { poTotalValue: number, poBilledAmount: number, poBalance: number|null, hasPo: boolean }>}
+ */
+export async function computeClientMasterPoBalanceMap(masters = []) {
+  const list = Array.isArray(masters) ? masters.filter(Boolean) : [];
+  const map = new Map();
+  if (!list.length) return map;
+
+  const ids = list.map((row) => String(row._id || row.id || '')).filter(Boolean);
+  const docs = ids.length
+    ? await FinanceCommercialDocument.find({
+        isDeleted: false,
+        clientMasterId: { $in: ids },
+        status: { $in: COMMITTED_STATUSES },
+        documentType: { $in: [...BILLING_DOC_TYPES, ...ADJUST_DOC_TYPES] },
+      }).select(
+        'documentType status subtotal grandTotal reference clientPurchaseOrderId clientMasterId'
+      )
+    : [];
+
+  const docsByMaster = new Map();
+  for (const doc of docs) {
+    const key = String(doc.clientMasterId || '');
+    if (!key) continue;
+    if (!docsByMaster.has(key)) docsByMaster.set(key, []);
+    docsByMaster.get(key).push(doc);
+  }
+
+  for (const master of list) {
+    const id = String(master._id || master.id || '');
+    if (!id) continue;
+    map.set(id, summarizeClientMasterPoBalance(master, docsByMaster.get(id) || []));
+  }
+  return map;
+}
+
+/**
  * Block Tax Invoice / Bill of Supply when amount exceeds remaining PO balance.
  */
 export async function assertCommercialDocWithinPoBalance(payload, { excludeDocId = null } = {}) {

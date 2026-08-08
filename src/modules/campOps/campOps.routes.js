@@ -147,6 +147,7 @@ import {
   resolveClosureSelection,
 } from './campOps.closure.js';
 import { notifyCampWorkflow } from './campOps.notifications.js';
+import { computeClientMasterPoBalanceMap } from '../finance/poUtilization.service.js';
 import {
   handleEmailArchive,
   handleEmailConfigGet,
@@ -2334,13 +2335,18 @@ router.get(
       ? await CampOpsClient.find({ isDeleted: false, _id: { $in: clientIds } })
       : [];
     const clientsById = new Map(clients.map((c) => [String(c._id), c]));
+    const poBalanceById = await computeClientMasterPoBalanceMap(data);
     const enriched = data.map((row) => {
       const plain = withSignedPoFile(row);
       const client = clientsById.get(String(plain.clientId || ''));
+      const poSummary = poBalanceById.get(String(plain._id || '')) || null;
       return {
         ...plain,
         clientCode: client?.code || '',
         billing: clientBillingView(client),
+        poTotalValue: poSummary?.poTotalValue ?? 0,
+        poBilledAmount: poSummary?.poBilledAmount ?? 0,
+        poBalance: poSummary?.poBalance ?? null,
       };
     });
     res.json(paginated(enriched, total, page, limit));
