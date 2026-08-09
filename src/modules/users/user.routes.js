@@ -130,6 +130,49 @@ router.post(
   })
 );
 
+router.post(
+  '/system/purge-camp',
+  requirePermission(PERMISSIONS.CAMPS_APPROVE, PERMISSIONS.ALL),
+  asyncHandler(async (req, res) => {
+    if (String(req.body?.confirm || '').trim() !== 'PURGE_CAMP') {
+      throw new AppError(
+        'Confirmation required. Send { "confirm": "PURGE_CAMP", "campId": "<id or campId>" }',
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
+
+    const key = String(req.body?.campId || req.body?.id || '').trim();
+    if (!key) {
+      throw new AppError('campId is required', 400, 'VALIDATION_ERROR');
+    }
+
+    const { purgeCampByKey } = await import('../../utils/purgeAllCamps.js');
+    const result = await purgeCampByKey(key, { actorId: req.user._id });
+    if (!result.purged) {
+      throw new AppError('Camp not found or already deleted', 404, 'NOT_FOUND');
+    }
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'SYSTEM.PURGE_CAMP',
+      entityType: 'camp_ops_camp',
+      entityId: result.camp?._id || null,
+      after: result,
+      requestId: req.requestId,
+    });
+
+    res.json({
+      data: {
+        ok: true,
+        message: 'Camp was soft-deleted and removed from Manage Camps.',
+        ...result,
+      },
+    });
+  })
+);
+
 router.get(
   '/designations',
   requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),
