@@ -133,7 +133,10 @@ export const CampOpsClient = defineCollection('camp_ops_clients', {
   ...softDelete,
   name: '',
   code: '',
-  /** Billing / invoice recipient details (shared across Client Master programs) */
+  /**
+   * Optional company-level defaults (legacy). Client Master program rows own their own
+   * billing (GSTIN/PAN/address) per Client + GSTIN + Division + Method.
+   */
   address: '',
   gstin: '',
   pan: '',
@@ -156,6 +159,12 @@ export const CampOpsClientMaster = defineCollection('camp_ops_client_masters', {
   coordinatorName: '',
   healthcareWorker: [],
   campDuration: '',
+  /** Per-row billing — independent for each Client + GSTIN + Division + Method */
+  billingAddress: '',
+  billingGstin: '',
+  billingPan: '',
+  billingStateName: '',
+  billingStateCode: '',
   spocName: '',
   spocNumber: '',
   spocEmail: '',

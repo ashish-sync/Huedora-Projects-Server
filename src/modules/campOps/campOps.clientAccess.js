@@ -34,7 +34,7 @@ export async function resolveCampClientScope(user = {}) {
     if (!emails.length) continue;
     anyAssignmentsConfigured = true;
     if (emails.includes(email) && master.clientId) {
-      scopedClientIds.add(String(master.clientId));
+      scopedClientIds.add(String(master.clientId).toLowerCase());
     }
   }
 
@@ -53,7 +53,7 @@ export function applyClientScopeToFilter(filter, scopedClientIds) {
     return { ...filter, clientId: '__none__' };
   }
   const ids = [...scopedClientIds];
-  if (filter.clientId && !ids.includes(String(filter.clientId))) {
+  if (filter.clientId && !ids.includes(String(filter.clientId).toLowerCase())) {
     return { ...filter, clientId: '__none__' };
   }
   if (!filter.clientId) {
@@ -65,7 +65,7 @@ export function applyClientScopeToFilter(filter, scopedClientIds) {
 export async function assertCampClientAccess(user, camp) {
   const scoped = await resolveCampClientScope(user);
   if (!scoped) return;
-  if (!camp?.clientId || !scoped.has(String(camp.clientId))) {
+  if (!camp?.clientId || !scoped.has(String(camp.clientId).toLowerCase())) {
     throw new AppError('You do not have access to this camp', 403, 'FORBIDDEN');
   }
 }

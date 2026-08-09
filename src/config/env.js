@@ -88,4 +88,11 @@ export const env = {
   googleMapsApiKey: String(
     process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || ''
   ).trim(),
+  /** OpenAI key for Manual Paste hybrid event extraction (server-only). */
+  openaiApiKey: String(process.env.OPENAI_API_KEY || '').trim(),
+  openaiModel: String(process.env.OPENAI_MODEL || 'gpt-4o-mini').trim() || 'gpt-4o-mini',
+  openaiTimeoutMs: Math.max(5000, Number(process.env.OPENAI_TIMEOUT_MS || 25000) || 25000),
+  /** When false, Manual Paste stays deterministic-only even if a key is present. */
+  eventExtractorEnabled:
+    String(process.env.EVENT_EXTRACTOR_ENABLED || 'true').toLowerCase() !== 'false',
 };

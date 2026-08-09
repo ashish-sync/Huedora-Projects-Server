@@ -281,10 +281,10 @@ export function mergeOrgProfile(body = {}) {
     let value;
     if (key === 'defaultTerms' || key === 'proformaNotes' || key === 'defaultPoTerms') {
       value = Array.isArray(body[key])
-        ? body[key].map((t) => String(t).trim()).filter(Boolean)
-        : String(body[key] || '')
-            .split('\n')
-            .map((t) => t.trim())
+            ? body[key].map((t) => String(t).trim()).filter(Boolean)
+            : String(body[key] || '')
+                .split('\n')
+                .map((t) => t.trim())
             .filter(Boolean);
     } else if (key === 'defaultPaymentTermsDays' || key === 'defaultPurchaseTaxRate') {
       value = Number(body[key]) || 0;

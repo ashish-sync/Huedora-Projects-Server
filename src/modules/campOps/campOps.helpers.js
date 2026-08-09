@@ -3,8 +3,10 @@ import { normalizeCampName } from './campOps.constants.js';
 import {
   getRequestStageBlockers,
   getRequestStageCompletion,
+  getPasteCreationBlockers,
+  getPasteCreationMissingKeys,
+  isPasteCreationEligible,
   isPastePartialImportEligible,
-  REQUEST_PARTIAL_THRESHOLD,
 } from './campOps.requestValidation.js';
 import { normalizeContactPersons } from './campContactPersons.js';
 import { cleanSpaces, formatTextValue } from '../../utils/textFormat.js';
@@ -484,6 +486,7 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
   const validRows = [];
   const invalidRows = [];
   const partialRows = [];
+  const isPaste = source === 'paste';
 
   for (const row of rows) {
     const errors = [];
@@ -502,11 +505,32 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
         : Number(row.expectedPatients);
     if (Number.isNaN(expectedPatients)) errors.push('Expected patients must be a number');
 
-    const schedule = resolveCampSchedule({
-      startTime: trimStr(row.startTime) || '09:00',
-      endTime: trimStr(row.endTime),
-      durationHours: row.durationHours,
-    });
+    const rawStart = trimStr(row.startTime);
+    const rawEnd = trimStr(row.endTime);
+    // Paste: never invent mandatory startTime (or optional endTime) during validation.
+    // Excel/dashboard keep prior schedule defaults for compatibility.
+    let schedule;
+    if (isPaste) {
+      if (rawStart && rawEnd) {
+        schedule = resolveCampSchedule({
+          startTime: rawStart,
+          endTime: rawEnd,
+          durationHours: row.durationHours,
+        });
+      } else {
+        schedule = {
+          startTime: rawStart,
+          endTime: rawEnd,
+          durationHours: Number(row.durationHours) || null,
+        };
+      }
+    } else {
+      schedule = resolveCampSchedule({
+        startTime: rawStart || '09:00',
+        endTime: rawEnd,
+        durationHours: row.durationHours,
+      });
+    }
 
     const city = trimStr(row.city);
     const state = trimStr(row.state);
@@ -547,15 +571,49 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
 
     const blockers = getRequestStageBlockers(normalized);
     const completion = getRequestStageCompletion(normalized);
+    const pasteCreationBlockers = isPaste ? getPasteCreationBlockers(normalized) : [];
+    const pasteMissingKeys = isPaste ? getPasteCreationMissingKeys(normalized) : [];
 
     if (!blockers.length) {
       validRows.push(normalized);
       continue;
     }
 
+    // Manual Paste: creatable when Doctor + PIN + Camp Date + Start Time are valid.
+    // Optional enrichment gaps never block creation (partial / requestIncomplete).
+    if (isPaste && allowPartial) {
+      if (!pasteCreationBlockers.length && !errors.length) {
+        partialRows.push({
+          ...normalized,
+          errors: blockers,
+          partial: true,
+          partialFields: completion.missingKeys,
+          completionPercent: completion.percentLabel,
+          requestIncomplete: true,
+          creationEligible: true,
+          mandatoryMissing: [],
+        });
+        continue;
+      }
+
+      invalidRows.push({
+        ...normalized,
+        errors: [...new Set([
+          ...errors,
+          ...pasteCreationBlockers,
+          // Keep optional enrichment messages as review hints, not creation blockers,
+          // but still surface mandatory failures first.
+        ])],
+        creationEligible: false,
+        mandatoryMissing: pasteMissingKeys,
+        reviewStatus: 'REVIEW_REQUIRED',
+      });
+      continue;
+    }
+
     const partialEligible = allowPartial && (
       completion.partial
-      || (source === 'paste' && isPastePartialImportEligible(normalized))
+      || isPastePartialImportEligible(normalized)
     );
 
     if (partialEligible) {
@@ -566,6 +624,8 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
         partialFields: completion.missingKeys,
         completionPercent: completion.percentLabel,
         requestIncomplete: true,
+        creationEligible: isPaste ? isPasteCreationEligible(normalized) : undefined,
+        mandatoryMissing: isPaste ? pasteMissingKeys : undefined,
       });
       continue;
     }
@@ -573,7 +633,15 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
     if (errors.length) errors.push(...blockers);
     else errors.push(...blockers);
 
-    if (errors.length) invalidRows.push({ ...normalized, errors: [...new Set(errors)] });
+    if (errors.length) {
+      invalidRows.push({
+        ...normalized,
+        errors: [...new Set(errors)],
+        creationEligible: false,
+        mandatoryMissing: isPaste ? pasteMissingKeys : undefined,
+        reviewStatus: isPaste ? 'REVIEW_REQUIRED' : undefined,
+      });
+    }
   }
 
   return { validRows, partialRows, invalidRows };

@@ -156,7 +156,11 @@ router.get(
 router.get(
   '/',
   asyncHandler(async (req, res) => {
-    const { page, limit, skip, sort } = parsePagination(req.query);
+    const isHcwDirectory = String(req.query.contactCategory || '').trim() === 'Healthcare Worker';
+    const { page, limit, skip, sort } = parsePagination(req.query, {
+      // Assignment needs the full HCW directory; default list pages stay capped at 200.
+      maxLimit: isHcwDirectory ? 2000 : 200,
+    });
     const filter = { isDeleted: false };
     if (req.query.q) {
       const q = escapeRegex(String(req.query.q));

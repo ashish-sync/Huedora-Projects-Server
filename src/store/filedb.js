@@ -11,6 +11,7 @@ import {
   getRegisteredCollections,
   mergeDocumentFields,
 } from './persistence.js';
+import { entityIdMapKey, idsEqual } from '../utils/entityIds.js';
 
 function oid() {
   return randomBytes(12).toString('hex');
@@ -28,17 +29,17 @@ function match(doc, filter = {}) {
     if (val && typeof val === 'object' && !(val instanceof Date) && !Array.isArray(val)) {
       if (val.$in) {
         const current = get(doc, key);
-        const values = val.$in.map(String);
+        const values = val.$in;
         return Array.isArray(current)
-          ? current.some((item) => values.includes(String(item)))
-          : values.includes(String(current));
+          ? current.some((item) => values.some((expected) => idsEqual(item, expected)))
+          : values.some((expected) => idsEqual(current, expected));
       }
       if (val.$nin) {
         const current = get(doc, key);
-        const values = val.$nin.map(String);
+        const values = val.$nin;
         return Array.isArray(current)
-          ? current.every((item) => !values.includes(String(item)))
-          : !values.includes(String(current));
+          ? current.every((item) => values.every((expected) => !idsEqual(item, expected)))
+          : values.every((expected) => !idsEqual(current, expected));
       }
       if (Object.prototype.hasOwnProperty.call(val, '$ne')) {
         const current = get(doc, key);
@@ -46,7 +47,7 @@ function match(doc, filter = {}) {
         // Match Mongo semantics: null/undefined are unequal to any concrete value.
         if (expected == null) return current != null && current !== '';
         if (current == null) return expected != null;
-        return String(current) !== String(expected);
+        return !idsEqual(current, expected);
       }
       if (val.$exists !== undefined) {
         const parts = key.split('.');
@@ -78,8 +79,8 @@ function match(doc, filter = {}) {
     }
     if (val instanceof RegExp) return val.test(String(get(doc, key) ?? ''));
     const cur = get(doc, key);
-    if (cur && typeof cur === 'object' && cur._id) return String(cur._id) === String(val);
-    return String(cur) === String(val);
+    if (cur && typeof cur === 'object' && cur._id) return idsEqual(cur._id, val);
+    return idsEqual(cur, val);
   });
 }
 
@@ -266,7 +267,13 @@ async function idIndexFor(name) {
   let entry = idIndexByCollection.get(name);
   if (!entry || entry.rows !== rows || entry.size !== rows.length) {
     const map = new Map();
-    for (const row of rows) map.set(String(row._id), row);
+    for (const row of rows) {
+      const key = entityIdMapKey(row._id);
+      if (key) map.set(key, row);
+      // Keep raw key too so exact lookups still work during transition.
+      const raw = String(row._id ?? '');
+      if (raw && raw !== key) map.set(raw, row);
+    }
     entry = { rows, map, size: rows.length };
     idIndexByCollection.set(name, entry);
   }
@@ -340,7 +347,7 @@ export function defineCollection(name, defaults = {}) {
         for (const row of rows) {
           if (!Array.isArray(row.roleIds)) continue;
           row.roleIds = row.roleIds.map((id) => {
-            const found = byId.get(String(id?._id || id));
+            const found = byId.get(entityIdMapKey(id?._id || id)) || byId.get(String(id?._id || id));
             return found ? project(found, select, { sanitize: true }) : id;
           });
         }

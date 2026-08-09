@@ -2,6 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mergeDocumentFields } from './dataIntegrity.js';
+import {
+  idsEqual,
+  isHexObjectId,
+  normalizeDocumentEntityIds,
+  normalizeEntityId,
+} from '../utils/entityIds.js';
 
 export { mergeDocumentFields, assignPreservingExisting, isBlankValue, pickDefinedPatch, assertNotStale } from './dataIntegrity.js';
 
@@ -162,24 +168,33 @@ export async function loadCollection(name) {
 /** Upsert a single document — avoids rewriting the entire collection to Mongo. */
 export async function upsertDocument(name, doc) {
   if (!doc?._id) throw new Error('upsertDocument requires _id');
-  const incoming = clone(doc);
+  const incoming = normalizeDocumentEntityIds(clone(doc));
 
   if (mode === 'mongo') {
     if (!mongoDb) throw new Error('MongoDB persistence is not configured');
     const col = mongoDb.collection(collectionKey(name));
-    const latest = await col.findOne({ _id: incoming._id });
-    const plain = mergeDocumentFields(latest || {}, incoming);
+    let existing = await col.findOne({ _id: incoming._id });
+    if (!existing && isHexObjectId(incoming._id)) {
+      const raw = String(doc._id || '');
+      if (raw && raw !== incoming._id) existing = await col.findOne({ _id: raw });
+    }
+    const plain = mergeDocumentFields(existing || {}, incoming);
+    plain._id = normalizeEntityId(plain._id) || plain._id;
     await col.replaceOne({ _id: plain._id }, plain, { upsert: true });
+    if (existing && String(existing._id) !== String(plain._id)) {
+      await col.deleteOne({ _id: existing._id });
+    }
     const rows = await loadCollection(name);
-    const idx = rows.findIndex((r) => String(r._id) === String(plain._id));
+    const idx = rows.findIndex((r) => idsEqual(r._id, plain._id));
     if (idx >= 0) rows[idx] = plain;
     else rows.push(plain);
     return plain;
   }
 
   const rows = await loadCollection(name);
-  const idx = rows.findIndex((r) => String(r._id) === String(incoming._id));
+  const idx = rows.findIndex((r) => idsEqual(r._id, incoming._id));
   const plain = mergeDocumentFields(idx >= 0 ? rows[idx] : {}, incoming);
+  plain._id = normalizeEntityId(plain._id) || plain._id;
   if (idx >= 0) rows[idx] = plain;
   else rows.push(plain);
   await saveCollection(name, rows);
@@ -190,15 +205,16 @@ export async function upsertDocument(name, doc) {
 export async function bulkUpsertDocuments(name, docs = []) {
   if (!docs.length) return 0;
   const rows = await loadCollection(name);
-  const byId = new Map(rows.map((r, i) => [String(r._id), i]));
+  const byId = new Map(rows.map((r, i) => [normalizeEntityId(r._id) || String(r._id), i]));
   const ops = [];
 
   for (const doc of docs) {
     if (!doc?._id) continue;
-    const incoming = clone(doc);
-    const key = String(incoming._id);
+    const incoming = normalizeDocumentEntityIds(clone(doc));
+    const key = normalizeEntityId(incoming._id) || String(incoming._id);
     const existing = byId.has(key) ? rows[byId.get(key)] : {};
     const plain = mergeDocumentFields(existing || {}, incoming);
+    plain._id = key;
     if (byId.has(key)) rows[byId.get(key)] = plain;
     else {
       byId.set(key, rows.length);

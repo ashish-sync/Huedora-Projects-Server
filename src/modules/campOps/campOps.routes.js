@@ -32,6 +32,12 @@ import {
   normalizeClientMasterDuration,
   parseClientMasterImportRow,
 } from './clientMaster.excel.js';
+import {
+  normalizeMasterBillingGstin,
+  buildClientMasterBusinessKeyFilter,
+  seedMasterBillingFromCompany,
+  buildLegacyEmptyGstinMatchFilter,
+} from './clientMaster.businessKey.js';
 import { normalizeHealthcareWorkers } from './healthcareWorkers.js';
 import {
   CampOpsCamp,
@@ -426,12 +432,12 @@ function assertRawDoctorName(body = {}) {
   if (error) throw new AppError(error, 400, 'VALIDATION_ERROR');
 }
 
-async function resolveClientFromBody(body, { allowCreate = false } = {}) {
+async function resolveClientFromBody(body, { allowCreate = false, syncBilling = true } = {}) {
   const clientId = body.clientId || body.client;
   if (clientId) {
     const byId = await CampOpsClient.findOne({ _id: String(clientId), isDeleted: false });
     if (byId) {
-      if (applyClientBilling(byId, body)) await byId.save();
+      if (syncBilling && applyClientBilling(byId, body)) await byId.save();
       return byId;
     }
   }
@@ -439,7 +445,7 @@ async function resolveClientFromBody(body, { allowCreate = false } = {}) {
   if (!name) return null;
   const existing = await CampOpsClient.findOne({ isDeleted: false, name });
   if (existing) {
-    if (applyClientBilling(existing, body)) await existing.save();
+    if (syncBilling && applyClientBilling(existing, body)) await existing.save();
     return existing;
   }
   if (!allowCreate) return null;
@@ -449,7 +455,7 @@ async function resolveClientFromBody(body, { allowCreate = false } = {}) {
     name,
     code,
     isActive: true,
-    ...extractClientBilling(body),
+    ...(syncBilling ? extractClientBilling(body) : {}),
   });
 }
 
@@ -558,10 +564,12 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const clientId = trimStr(req.query.clientId);
-    if (!clientId) throw new AppError('Client is required', 400, 'VALIDATION_ERROR');
+    const clientName = trimStr(req.query.clientName);
+    if (!clientId && !clientName) throw new AppError('Client is required', 400, 'VALIDATION_ERROR');
     const data = await resolveMappedConsumablesForCamp(clientId, {
       campaignType: trimStr(req.query.campaignType),
       campaignName: trimStr(req.query.campaignName),
+      clientName,
     });
     res.json({ data });
   }),
@@ -1657,6 +1665,11 @@ const MASTER_STRING_FIELDS = [
   'campType',
   'coordinatorName',
   'campDuration',
+  'billingAddress',
+  'billingGstin',
+  'billingPan',
+  'billingStateName',
+  'billingStateCode',
   'spocName',
   'spocNumber',
   'spocEmail',
@@ -1678,6 +1691,75 @@ const MASTER_NUMERIC_FIELDS = [
   'extPatientUnit',
   'kmsUnit',
 ];
+
+/**
+ * Billing for a Client Master row. Row fields win; company billing is legacy fallback only.
+ */
+function masterBillingView(row = {}, client = null) {
+  const company = clientBillingView(client);
+  return {
+    address: trimStr(row.billingAddress) || company.address,
+    gstin: normalizeMasterBillingGstin(row.billingGstin) || company.gstin,
+    pan: trimStr(row.billingPan).toUpperCase() || company.pan,
+    stateName: trimStr(row.billingStateName) || company.stateName,
+    stateCode: trimStr(row.billingStateCode) || company.stateCode,
+    contactPerson: trimStr(row.spocName) || company.contactPerson,
+    email: trimStr(row.spocEmail).split(',')[0]?.trim().toLowerCase() || company.email,
+    phone: trimStr(row.spocNumber) || company.phone,
+  };
+}
+
+/** Map body.billing / flat aliases onto per-row billing fields (never onto the company). */
+function applyMasterBillingFields(payload, body = {}) {
+  const nested = body.billing && typeof body.billing === 'object' ? body.billing : {};
+  const read = (...keys) => {
+    for (const key of keys) {
+      if (body[key] !== undefined) return body[key];
+      if (nested[key] !== undefined) return nested[key];
+    }
+    return undefined;
+  };
+
+  const address = read('billingAddress', 'address');
+  const gstin = read('billingGstin', 'gstin', 'GSTIN');
+  const pan = read('billingPan', 'pan', 'panNumber');
+  const stateName = read('billingStateName', 'stateName', 'state');
+  const stateCode = read('billingStateCode', 'stateCode');
+
+  if (address !== undefined) payload.billingAddress = trimStr(address);
+  if (gstin !== undefined) payload.billingGstin = normalizeMasterBillingGstin(gstin);
+  if (pan !== undefined) payload.billingPan = trimStr(pan).toUpperCase();
+  if (stateName !== undefined) payload.billingStateName = trimStr(stateName);
+  if (stateCode !== undefined) payload.billingStateCode = trimStr(stateCode);
+}
+
+/**
+ * Backend uniqueness: Client + GSTIN + Division + Method must not repeat.
+ */
+async function assertClientMasterBusinessKeyUnique({
+  clientId,
+  billingGstin,
+  programName,
+  campName,
+  excludeId = null,
+} = {}) {
+  const clash = await CampOpsClientMaster.findOne(
+    buildClientMasterBusinessKeyFilter({
+      clientId,
+      billingGstin,
+      programName,
+      campName,
+      excludeId,
+    })
+  );
+  if (clash) {
+    throw new AppError(
+      'A Client Master record already exists for this Client + GSTIN + Division + Method combination',
+      409,
+      'DUPLICATE_CLIENT_MASTER_KEY'
+    );
+  }
+}
 
 const CAMP_TERMS_VALUES = new Set(['none', 'po_based', 'agreement_based', 'approval_based']);
 
@@ -2256,11 +2338,14 @@ function buildMasterPayload(body, client, existingRow = null) {
         payload[field] = parseAssignedUserEmails(body[field]).join(', ');
       } else if (field === 'campTerms') {
         payload[field] = normalizeCampTermsValue(body[field]);
+      } else if (field === 'billingGstin' || field === 'billingPan') {
+        payload[field] = trimStr(body[field]).toUpperCase();
       } else {
         payload[field] = trimStr(body[field]);
       }
     }
   }
+  applyMasterBillingFields(payload, body);
   if (body.healthcareWorker !== undefined) {
     payload.healthcareWorker = normalizeHealthcareWorkers(body.healthcareWorker);
   }
@@ -2273,6 +2358,12 @@ function buildMasterPayload(body, client, existingRow = null) {
   applyPurchaseOrdersToPayload(payload, body, existingRow);
   if (body.mappedConsumables !== undefined) {
     payload.mappedConsumables = normalizeMappedConsumables(body.mappedConsumables);
+  }
+  // Ensure GSTIN key field is always normalized when present on the merged row.
+  if (payload.billingGstin !== undefined) {
+    payload.billingGstin = normalizeMasterBillingGstin(payload.billingGstin);
+  } else if (existingRow?.billingGstin !== undefined && body.billing === undefined) {
+    // keep existing via assignPreservingExisting
   }
   return payload;
 }
@@ -2339,16 +2430,23 @@ router.get(
     const clients = clientIds.length
       ? await CampOpsClient.find({ isDeleted: false, _id: { $in: clientIds } })
       : [];
-    const clientsById = new Map(clients.map((c) => [String(c._id), c]));
+    const clientsById = new Map();
+    for (const c of clients) {
+      const key = String(c._id || '');
+      clientsById.set(key, c);
+      if (/^[a-f0-9]{24}$/i.test(key)) clientsById.set(key.toLowerCase(), c);
+    }
     const poBalanceById = await computeClientMasterPoBalanceMap(data);
     const enriched = data.map((row) => {
       const plain = withSignedPoFile(row);
-      const client = clientsById.get(String(plain.clientId || ''));
+      const clientId = String(plain.clientId || '');
+      const client = clientsById.get(clientId)
+        || (/^[a-f0-9]{24}$/i.test(clientId) ? clientsById.get(clientId.toLowerCase()) : null);
       const poSummary = poBalanceById.get(String(plain._id || '')) || null;
       return {
         ...plain,
         clientCode: client?.code || '',
-        billing: clientBillingView(client),
+        billing: masterBillingView(plain, client),
         poTotalValue: poSummary?.poTotalValue ?? 0,
         poBilledAmount: poSummary?.poBilledAmount ?? 0,
         poBalance: poSummary?.poBalance ?? null,
@@ -2367,14 +2465,21 @@ router.get(
     const clients = clientIds.length
       ? await CampOpsClient.find({ _id: { $in: clientIds }, isDeleted: false })
       : [];
-    const clientsById = new Map(clients.map((c) => [String(c._id), c]));
+    const clientsById = new Map();
+    for (const c of clients) {
+      const key = String(c._id || '');
+      clientsById.set(key, c);
+      if (/^[a-f0-9]{24}$/i.test(key)) clientsById.set(key.toLowerCase(), c);
+    }
     sendExcel(
       res,
       'Client_Master.xlsx',
       CLIENT_MASTER_HEADERS,
       rows.map((r) => {
-        const client = clientsById.get(String(r.clientId || ''));
-        return clientMasterToExcelRow(r, clientBillingView(client), client);
+        const clientId = String(r.clientId || '');
+        const client = clientsById.get(clientId)
+          || (/^[a-f0-9]{24}$/i.test(clientId) ? clientsById.get(clientId.toLowerCase()) : null);
+        return clientMasterToExcelRow(r, masterBillingView(r, client), client);
       }),
       { sheetName: 'Client Master' }
     );
@@ -2408,24 +2513,39 @@ router.post(
       processRow: async ({ record: row }) => {
         const parsed = await parseClientMasterImportRow(row);
         if (!parsed) return { skipped: true };
-        const billing = parsed.billing && typeof parsed.billing === 'object' ? parsed.billing : {};
-        const hasBilling = Object.values(billing).some((v) => String(v || '').trim());
         const client = await resolveClientFromBody(
           {
             clientName: parsed.clientName,
             clientCode: parsed.clientCode || undefined,
-            ...(hasBilling ? { billing } : {}),
           },
-          { allowCreate: true }
+          { allowCreate: true, syncBilling: false }
         );
         if (!client) throw new AppError('Client is required', 400, 'VALIDATION_ERROR');
-        const existing = await CampOpsClientMaster.findOne({
-          isDeleted: false,
-          clientId: client._id,
-          programName: parsed.programName,
-          campName: parsed.campName,
-        });
+        const importGstin = normalizeMasterBillingGstin(
+          parsed.billing?.gstin || parsed.billingGstin || ''
+        );
+        let existing = await CampOpsClientMaster.findOne(
+          buildClientMasterBusinessKeyFilter({
+            clientId: client._id,
+            billingGstin: importGstin,
+            programName: parsed.programName,
+            campName: parsed.campName,
+          })
+        );
+        // Legacy rows: billing lived on the company; row GSTIN may still be empty.
+        if (!existing && importGstin) {
+          existing = await CampOpsClientMaster.findOne(
+            buildLegacyEmptyGstinMatchFilter({
+              clientId: client._id,
+              programName: parsed.programName,
+              campName: parsed.campName,
+            })
+          );
+        }
         const payload = buildMasterPayload(parsed, client, existing);
+        if (payload.billingGstin === undefined) {
+          payload.billingGstin = importGstin;
+        }
         assertClientMasterPayload({
           ...(existing?.toObject ? existing.toObject() : existing || {}),
           ...payload,
@@ -2448,6 +2568,12 @@ router.post(
           await existing.save();
           return { updated: true };
         }
+        await assertClientMasterBusinessKeyUnique({
+          clientId: client._id,
+          billingGstin: payload.billingGstin,
+          programName: payload.programName,
+          campName: payload.campName,
+        });
         await CampOpsClientMaster.create({
           ...payload,
           createdById: a.id,
@@ -2472,33 +2598,77 @@ router.post(
   })
 );
 
+function idsEqualClient(a, b) {
+  const left = String(a ?? '');
+  const right = String(b ?? '');
+  if (left === right) return true;
+  if (/^[a-f0-9]{24}$/i.test(left) && /^[a-f0-9]{24}$/i.test(right)) {
+    return left.toLowerCase() === right.toLowerCase();
+  }
+  return false;
+}
+
 router.get(
   '/client-masters/by-client/:clientId',
-  canRead,
+  canReadClientMaster,
   asyncHandler(async (req, res) => {
-    const data = await CampOpsClientMaster.find({
-      isDeleted: false,
-      clientId: String(req.params.clientId),
-    }).sort('programName');
-    res.json({ data });
+    const clientId = String(req.params.clientId || '').trim();
+    const clientName = trimStr(req.query.clientName);
+    let rows = clientId && clientId !== 'undefined' && clientId !== '[object Object]'
+      ? await CampOpsClientMaster.find({
+        isDeleted: false,
+        clientId,
+      }).sort('programName')
+      : [];
+
+    // Fallback when camp/client id casing or legacy linkage differs from Client Master.
+    if (!rows.length && clientName) {
+      const all = await CampOpsClientMaster.find({ isDeleted: false }).sort('programName');
+      const needle = clientName.toLowerCase();
+      rows = all.filter((row) => trimStr(row.clientName).toLowerCase() === needle);
+    }
+
+    res.json({
+      data: rows.map((row) => (row.toObject ? row.toObject() : row)),
+    });
   })
 );
 
 router.get(
   '/client-masters/by-client/:clientId/divisions',
-  canRead,
+  canReadClientMaster,
   asyncHandler(async (req, res) => {
-    const clientId = String(req.params.clientId);
-    const client = await CampOpsClient.findOne({ _id: clientId, isDeleted: false });
+    const clientId = String(req.params.clientId || '').trim();
+    const clientName = trimStr(req.query.clientName);
+    let client = clientId && clientId !== 'undefined' && clientId !== '[object Object]'
+      ? await CampOpsClient.findOne({ _id: clientId, isDeleted: false })
+      : null;
+    if (!client && clientName) {
+      client = await CampOpsClient.findOne({
+        isDeleted: false,
+        name: new RegExp(`^${escapeRegex(clientName)}$`, 'i'),
+      });
+    }
     if (!client) throw new AppError('Client not found', 404, 'NOT_FOUND');
 
     const records = await CampOpsClientMaster.find({
       isDeleted: false,
-      clientId,
+      clientId: client._id,
     }).sort('programName');
 
+    // Include case-variant / name-linked masters if id match alone is empty.
+    let rows = records;
+    if (!rows.length) {
+      const all = await CampOpsClientMaster.find({ isDeleted: false }).sort('programName');
+      const needle = trimStr(client.name).toLowerCase();
+      rows = all.filter((row) => (
+        idsEqualClient(row.clientId, client._id)
+        || trimStr(row.clientName).toLowerCase() === needle
+      ));
+    }
+
     const divisionMap = new Map();
-    for (const record of records) {
+    for (const record of rows) {
       const division = trimStr(record.programName || record.campType);
       if (!division) continue;
       if (!divisionMap.has(division)) {
@@ -2529,15 +2699,18 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
-    const plain = withSignedPoFile(row);
-    const client = plain.clientId
-      ? await CampOpsClient.findOne({ _id: plain.clientId, isDeleted: false })
+    const client = row.clientId
+      ? await CampOpsClient.findOne({ _id: row.clientId, isDeleted: false })
       : null;
+    if (client && seedMasterBillingFromCompany(row, client)) {
+      await row.save();
+    }
+    const plain = withSignedPoFile(row);
     res.json({
       data: {
         ...plain,
         clientCode: client?.code || '',
-        billing: clientBillingView(client),
+        billing: masterBillingView(plain, client),
         client: client
           ? {
               _id: client._id,
@@ -2555,11 +2728,19 @@ router.post(
   '/client-masters',
   canRequest,
   asyncHandler(async (req, res) => {
-    const client = await resolveClientFromBody(req.body, { allowCreate: true });
+    // Never sync form billing onto the shared company — billing is per Client Master row.
+    const client = await resolveClientFromBody(req.body, { allowCreate: true, syncBilling: false });
     if (!client) throw new AppError('Client is required', 400, 'VALIDATION_ERROR');
     const payload = buildMasterPayload(req.body, client);
+    if (payload.billingGstin === undefined) payload.billingGstin = '';
     assertClientMasterPayload(payload);
     if (!payload.campName) payload.campName = 'BMD';
+    await assertClientMasterBusinessKeyUnique({
+      clientId: client._id,
+      billingGstin: payload.billingGstin,
+      programName: payload.programName,
+      campName: payload.campName,
+    });
     const a = actor(req);
     const row = await CampOpsClientMaster.create({
       ...payload,
@@ -2567,7 +2748,13 @@ router.post(
       updatedById: a.id,
     });
     await audit(req, 'camp_ops.client_master_create', 'camp_ops_client_master', row._id, null, row.toObject());
-    res.status(201).json({ data: withSignedPoFile(row) });
+    const plain = withSignedPoFile(row);
+    res.status(201).json({
+      data: {
+        ...plain,
+        billing: masterBillingView(plain, client),
+      },
+    });
   })
 );
 
@@ -2590,14 +2777,12 @@ router.put(
     const before = row.toObject();
     let client = null;
     if (req.body.clientId || req.body.clientName) {
-      client = await resolveClientFromBody(req.body, { allowCreate: false });
+      client = await resolveClientFromBody(req.body, { allowCreate: false, syncBilling: false });
       if (!client) throw new AppError('Client not found', 404, 'NOT_FOUND');
     } else {
       client = await CampOpsClient.findOne({ _id: row.clientId, isDeleted: false });
       if (!client) {
         client = { _id: row.clientId, name: row.clientName };
-      } else if (hasClientBillingPayload(req.body) && applyClientBilling(client, req.body)) {
-        await client.save();
       }
     }
     const payload = buildMasterPayload(req.body, client, row);
@@ -2614,11 +2799,26 @@ router.put(
           ]
         : [];
     assignPreservingExisting(row, payload, { clearKeys });
+    if (client) seedMasterBillingFromCompany(row, client);
+    row.billingGstin = normalizeMasterBillingGstin(row.billingGstin);
     assertClientMasterPayload(row);
+    await assertClientMasterBusinessKeyUnique({
+      clientId: row.clientId,
+      billingGstin: row.billingGstin,
+      programName: row.programName,
+      campName: row.campName,
+      excludeId: row._id,
+    });
     row.updatedById = actor(req).id;
     await row.save();
     await audit(req, 'camp_ops.client_master_update', 'camp_ops_client_master', row._id, before, row.toObject());
-    res.json({ data: withSignedPoFile(row) });
+    const plain = withSignedPoFile(row);
+    res.json({
+      data: {
+        ...plain,
+        billing: masterBillingView(plain, client),
+      },
+    });
   })
 );
 
@@ -3397,8 +3597,62 @@ router.post(
       campaignType: trimStr(req.body?.campaignType),
       campaignName: trimStr(req.body?.campaignName),
     };
-    const data = await extractManualPastePreview({ text, defaults, user: req.user });
+    const data = await extractManualPastePreview({
+      text,
+      defaults,
+      user: req.user,
+      referenceDate: trimStr(req.body?.referenceDate) || null,
+      timezone: trimStr(req.body?.timezone) || 'Asia/Kolkata',
+    });
     res.json({ data });
+  })
+);
+
+/**
+ * Preview-only hybrid event extractor (deterministic → OpenAI fallback).
+ * Never writes camps — feed results into /communications/paste/process after review.
+ */
+router.post(
+  '/communications/event-extractor/extract',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const text = preserveMultilineText(req.body?.text);
+    if (!text) throw new AppError('Paste text is required', 400, 'VALIDATION_ERROR');
+    const defaults = {
+      clientName: trimStr(req.body?.clientName) || 'Unassigned Client',
+      campaignType: trimStr(req.body?.campaignType) || 'Screening',
+      campaignName: trimStr(req.body?.campaignName) || 'BMD',
+    };
+    // Allow standalone extractor calls without full paste context by using safe defaults
+    // when omitted — still never persists without /paste/process.
+    const data = await extractManualPastePreview({
+      text,
+      defaults: {
+        clientName: trimStr(req.body?.clientName) || defaults.clientName,
+        campaignType: trimStr(req.body?.campaignType) || defaults.campaignType,
+        campaignName: trimStr(req.body?.campaignName) || defaults.campaignName,
+      },
+      user: req.user,
+      referenceDate: trimStr(req.body?.referenceDate) || null,
+      timezone: trimStr(req.body?.timezone) || 'Asia/Kolkata',
+    });
+    res.json({
+      data: {
+        status: data.bodyPreview?.some((r) => r.extraction?.status === 'CONFLICT')
+          ? 'CONFLICT'
+          : data.bodyPreview?.every((r) => r.valid)
+            ? 'READY'
+            : 'REVIEW_REQUIRED',
+        events: data.bodyPreview || [],
+        warnings: (data.bodyPreview || []).flatMap((r) => r.extraction?.warnings || r.errors || []),
+        conflicts: (data.bodyPreview || []).flatMap((r) => r.extraction?.conflicts || []),
+        confidence: data.bodyPreview?.[0]?.extraction?.confidence ?? null,
+        summary: data.summary,
+        referenceDate: data.referenceDate,
+        timezone: data.timezone,
+        extractedAt: data.extractedAt,
+      },
+    });
   })
 );
 

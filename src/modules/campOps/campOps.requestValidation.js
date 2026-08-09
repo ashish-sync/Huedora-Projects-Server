@@ -8,46 +8,96 @@ import { getDoctorNameFormatError } from '../../utils/textFormat.js';
 
 export const REQUEST_PARTIAL_THRESHOLD = 0.6;
 
-/** Manual paste: at least one substantive field from pasted text (not context defaults). */
-const PASTE_PARTIAL_ANCHOR_KEYS = [
+/**
+ * Manual Paste creation gate (only these four). Everything else is optional enrichment.
+ * Full request-stage blockers still apply later for approval completeness.
+ */
+export const PASTE_CREATION_MANDATORY_KEYS = [
   'doctorName',
-  'doctorCode',
-  'campDate',
-  'campAddress',
   'pincode',
-  'city',
-  'state',
-  'district',
-  'hq',
-  'expectedPatients',
-  'contactPersons',
+  'campDate',
+  'startTime',
 ];
+
+const PASTE_CREATION_FIELD_LABELS = {
+  doctorName: 'Doctor Name',
+  pincode: 'PIN Code',
+  campDate: 'Camp Date',
+  startTime: 'Camp Start Time',
+};
 
 function hasText(value) {
   return Boolean(trimStr(value));
 }
 
-function hasPasteAnchorField(camp = {}) {
-  return PASTE_PARTIAL_ANCHOR_KEYS.some((key) => {
-    if (key === 'pincode') return /^\d{6}$/.test(trimStr(camp.pincode));
-    if (key === 'expectedPatients') {
-      const raw = String(camp.expectedPatients ?? '').trim();
-      return raw !== '' && /^\d+$/.test(raw) && Number(raw) > 0;
-    }
-    if (key === 'contactPersons') {
-      return normalizeContactPersons(camp).some(
-        (contact) => hasText(contact.name) || isValidPhone(contact.phone),
-      );
-    }
-    return hasText(camp[key]);
-  });
+function isValidPasteStartTime(value) {
+  const raw = trimStr(value);
+  if (!raw) return false;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(raw);
+  if (!match) return false;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
 }
 
-/** Paste imports may create incomplete camps when a few fields were captured from text. */
+/**
+ * Blockers for Manual Paste camp creation. Missing optional fields never appear here.
+ * Does not invent values — callers must not default mandatory fields before this check.
+ */
+export function getPasteCreationBlockers(camp = {}) {
+  const errors = [];
+
+  if (!hasText(camp.doctorName)) {
+    errors.push('Doctor name is required');
+  } else {
+    const doctorNameError = getDoctorNameFormatError(camp.doctorName);
+    if (doctorNameError && doctorNameError !== 'Doctor name is required') {
+      errors.push(doctorNameError);
+    }
+  }
+
+  if (!/^\d{6}$/.test(trimStr(camp.pincode))) {
+    errors.push('Valid 6-digit PIN code is required');
+  }
+
+  if (!hasText(camp.campDate)) {
+    errors.push('Camp date is required');
+  }
+
+  if (!hasText(camp.startTime)) {
+    errors.push('Camp start time is required');
+  } else if (!isValidPasteStartTime(camp.startTime)) {
+    errors.push('Camp start time is invalid');
+  }
+
+  return errors;
+}
+
+export function isPasteCreationEligible(camp = {}) {
+  return getPasteCreationBlockers(camp).length === 0;
+}
+
+export function getPasteCreationMissingKeys(camp = {}) {
+  const missing = [];
+  if (!hasText(camp.doctorName)) missing.push('doctorName');
+  if (!/^\d{6}$/.test(trimStr(camp.pincode))) missing.push('pincode');
+  if (!hasText(camp.campDate)) missing.push('campDate');
+  if (!hasText(camp.startTime) || !isValidPasteStartTime(camp.startTime)) missing.push('startTime');
+  return missing;
+}
+
+export function labelPasteCreationField(key) {
+  return PASTE_CREATION_FIELD_LABELS[key] || key;
+}
+
+/**
+ * Paste may create when the four mandatory fields are present+valid,
+ * even if optional enrichment / full request-stage fields are incomplete.
+ */
 export function isPastePartialImportEligible(camp = {}) {
   const completion = getRequestStageCompletion(camp);
   if (completion.complete) return false;
-  return hasPasteAnchorField(camp);
+  return isPasteCreationEligible(camp);
 }
 
 /** Required request-stage checks used for completion percentage (paste partial import). */

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { PASTE_FIXTURE_LABELED } from '../src/modules/campOps/eventExtractor/fixtures.js';
 import {
   extractManualPasteFields,
   formatManualPasteOutput,
@@ -6,23 +7,7 @@ import {
 } from '../src/modules/campOps/manualPaste.extract.js';
 import { applyPasteDefaults } from '../src/modules/campOps/manualPaste.service.js';
 
-const SAMPLE = `
-Date: 15/08/2026
-Camp Type: Screening
-Doctor Name: Dr. Rajesh Kumar
-Doctor Code: DOC123
-Camp Address: 12 MG Road, Pune, Maharashtra 411001
-Expected Patients: 45
-Technician Name: Ignore Me
-Technician Mobile: 9999999999
-Client: Some Client
-SE Name: Amit Sharma
-SE Mobile: 9876543210
-ABM Name: Should Not Pick
-ABM Mobile: 1111111111
-Start Time: 10:00 AM
-End Time: 02:30 PM
-`.trim();
+const SAMPLE = PASTE_FIXTURE_LABELED;
 
 function test(name, fn) {
   try {
@@ -100,12 +85,13 @@ Expected Patients: 10
   assert.equal(display.zone, 'North Zone');
 });
 
-test('formatManualPasteOutput includes zone label', () => {
+test('formatManualPasteOutput includes camp date and contact', () => {
   const { display } = extractManualPasteFields(SAMPLE);
   const output = formatManualPasteOutput(display);
-  assert.match(output, /^Camp Date:\n/);
-  assert.match(output, /Zone:\n/);
-  assert.match(output, /Contact Person Number:\n9876543210\n/);
+  assert.match(output, /^Source of Request:\n/);
+  assert.match(output, /Camp Date:\n2026-08-15\n/);
+  assert.match(output, /City:\nPune\n/);
+  assert.match(output, /Contact Person Number:\n9876543210/);
 });
 
 test('manual paste uses selected method instead of defaulting to Others', () => {

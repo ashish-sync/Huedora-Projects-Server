@@ -11,9 +11,10 @@ export function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
 
-export function parsePagination(query) {
+export function parsePagination(query, { maxLimit = 200 } = {}) {
   const page = Math.max(1, Number(query.page) || 1);
-  const limit = Math.min(200, Math.max(1, Number(query.limit) || 50));
+  const requested = Number(query.limit) || 50;
+  const limit = Math.min(maxLimit, Math.max(1, requested));
   const skip = (page - 1) * limit;
   const sort = query.sort || '-updatedAt';
   return { page, limit, skip, sort };

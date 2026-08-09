@@ -18,6 +18,8 @@ import {
   getHistoricalCampDateErrors,
   localTodayIso,
 } from './campDatePolicy.js';
+import { getPasteCreationBlockers } from './campOps.requestValidation.js';
+import { assistPasteBlockWithLlm } from './eventExtractor/index.js';
 
 const BLOCK_SEPARATOR = /(?:^|\n)\s*(?:---+|===+|\*\*\*+)\s*(?:\n|$)/;
 
@@ -175,8 +177,9 @@ function applyHistoricalDatePreviewFlags(entry, user) {
   return entry;
 }
 
-async function buildBodyPreview(text, defaults = {}, { user } = {}) {
+async function buildBodyPreview(text, defaults = {}, { user, referenceDate = null, timezone = 'Asia/Kolkata' } = {}) {
   const blocks = splitPasteBlocks(text);
+  const refDate = referenceDate || localTodayIso();
 
   return Promise.all(
     blocks.map(async (block, index) => {
@@ -192,25 +195,106 @@ async function buildBodyPreview(text, defaults = {}, { user } = {}) {
       const validRow = validRows[0];
       const partialRow = partialRows[0];
       const invalidRow = invalidRows[0];
-      const creatableRow = validRow || partialRow;
+      let creatableRow = validRow || partialRow;
 
-      const entry = {
+      let entry = {
         rowNumber: index + 1,
         valid: Boolean(validRow),
         partial: Boolean(partialRow),
         partialFields: partialRow?.partialFields || [],
         completionPercent: partialRow?.completionPercent ?? (validRow ? 100 : 0),
         errors: invalidRow?.errors || partialRow?.errors || [],
+        creationEligible: Boolean(
+          validRow
+          || partialRow?.creationEligible
+          || (partialRow && !invalidRow),
+        ),
+        mandatoryMissing: invalidRow?.mandatoryMissing
+          || partialRow?.mandatoryMissing
+          || [],
+        reviewStatus: invalidRow?.reviewStatus
+          || (validRow ? 'READY' : partialRow ? 'REVIEW_REQUIRED' : 'REVIEW_REQUIRED'),
         row: creatableRow
           ? { ...creatableRow }
           : invalidRow
             ? { ...invalidRow }
-            : null,
+            : { ...rowForValidation },
         pasteDisplay: extracted.pasteDisplay || null,
         pasteFormatted: extracted.pasteFormatted || '',
         block,
         duplicateOf: null,
+        extraction: {
+          method: 'deterministic',
+          usedLlm: false,
+          confidence: validRow ? 0.92 : partialRow ? 0.55 : 0.25,
+          status: validRow ? 'READY' : 'REVIEW_REQUIRED',
+          warnings: [],
+          conflicts: [],
+          fieldProvenance: {},
+          peopleMatches: [],
+        },
       };
+
+      // Hybrid: AI fills gaps only when deterministic path is incomplete/ambiguous.
+      const assist = await assistPasteBlockWithLlm({
+        block,
+        deterministicEntry: entry,
+        referenceDate: refDate,
+        timezone,
+      });
+      if (assist.rowPatch) {
+        const enrichedAssist = await enrichPasteLocationFromPin(assist.rowPatch, {});
+        const assisted = applyPasteDefaults(enrichedAssist.row, defaults);
+        const revalidated = validateMappedImportRows([assisted], {
+          source: 'paste',
+          allowPartial: true,
+        });
+        const nextValid = revalidated.validRows[0];
+        const nextPartial = revalidated.partialRows[0];
+        const nextInvalid = revalidated.invalidRows[0];
+        creatableRow = nextValid || nextPartial;
+        const nextRow = creatableRow
+          ? { ...creatableRow }
+          : nextInvalid
+            ? { ...nextInvalid }
+            : { ...assisted };
+        entry = {
+          ...entry,
+          valid: Boolean(nextValid),
+          partial: Boolean(nextPartial),
+          partialFields: nextPartial?.partialFields || [],
+          completionPercent: nextPartial?.completionPercent ?? (nextValid ? 100 : 0),
+          creationEligible: Boolean(
+            nextValid
+            || nextPartial?.creationEligible
+            || (nextPartial && !nextInvalid),
+          ),
+          mandatoryMissing: nextInvalid?.mandatoryMissing
+            || nextPartial?.mandatoryMissing
+            || [],
+          reviewStatus: nextInvalid?.reviewStatus
+            || (nextValid ? 'READY' : 'REVIEW_REQUIRED'),
+          errors: [
+            ...(nextInvalid?.errors || nextPartial?.errors || []),
+            ...(assist.meta.warnings || []),
+          ],
+          row: nextRow,
+          pasteDisplay: {
+            ...(extracted.pasteDisplay || {}),
+            ...(enrichedAssist.display || {}),
+          },
+          pasteFormatted: formatManualPasteOutput({
+            ...(extracted.pasteDisplay || {}),
+            ...(enrichedAssist.display || {}),
+          }),
+          extraction: assist.meta,
+        };
+      } else if (assist.meta) {
+        entry.extraction = { ...entry.extraction, ...assist.meta };
+        if (assist.meta.warnings?.length) {
+          entry.errors = [...new Set([...(entry.errors || []), ...assist.meta.warnings])];
+        }
+      }
 
       if (!creatableRow || !entry.row) {
         return entry;
@@ -235,7 +319,13 @@ async function buildBodyPreview(text, defaults = {}, { user } = {}) {
   );
 }
 
-export async function extractManualPastePreview({ text = '', defaults = {}, user } = {}) {
+export async function extractManualPastePreview({
+  text = '',
+  defaults = {},
+  user,
+  referenceDate = null,
+  timezone = 'Asia/Kolkata',
+} = {}) {
   const bodyText = String(text || '').trim();
   if (!bodyText) {
     throw new AppError('Paste some camp details before extracting', 400, 'VALIDATION_ERROR');
@@ -246,7 +336,11 @@ export async function extractManualPastePreview({ text = '', defaults = {}, user
     throw new AppError(defaultErrors.join('. '), 400, 'VALIDATION_ERROR');
   }
 
-  const bodyPreview = await buildBodyPreview(bodyText, defaults, { user });
+  const bodyPreview = await buildBodyPreview(bodyText, defaults, {
+    user,
+    referenceDate,
+    timezone,
+  });
 
   const creatableRows = bodyPreview.filter(
     (row) => (row.valid || row.partial) && !row.duplicateOf && !row.historicalDateBlocked,
@@ -262,7 +356,10 @@ export async function extractManualPastePreview({ text = '', defaults = {}, user
       partialBodyRows: creatableRows.filter((row) => row.partial).length,
       invalidBodyRows: bodyPreview.filter((row) => !row.valid && !row.partial).length,
       duplicateBodyRows: bodyPreview.filter((row) => row.duplicateOf).length,
+      hybridAssistedRows: bodyPreview.filter((row) => row.extraction?.usedLlm).length,
     },
+    referenceDate: referenceDate || localTodayIso(),
+    timezone: timezone || 'Asia/Kolkata',
   };
 }
 
@@ -274,7 +371,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
 
   const preview = previewData?.bodyPreview
     ? previewData
-    : await extractManualPastePreview({ text, defaults });
+    : await extractManualPastePreview({ text, defaults, user: helpers.user });
 
   const bodyPreview = preview?.bodyPreview || [];
   if (!bodyPreview.length) {
@@ -291,6 +388,17 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
         status: 'invalid',
         rowNumber: entry.rowNumber,
         errors: entry.errors || ['Invalid camp row'],
+      });
+      continue;
+    }
+
+    const pasteBlockers = getPasteCreationBlockers(entry.row);
+    if (pasteBlockers.length) {
+      results.push({
+        status: 'invalid',
+        rowNumber: entry.rowNumber,
+        errors: pasteBlockers,
+        mandatoryMissing: entry.mandatoryMissing || [],
       });
       continue;
     }
