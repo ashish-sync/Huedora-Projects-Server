@@ -196,6 +196,7 @@ export function buildCampFilter(query = {}) {
   const lifecycleStage = trimStr(query.lifecycleStage || query.stage);
   const assignmentFilter = trimStr(query.assignmentFilter);
   const financialFilter = trimStr(query.financialFilter);
+  const hcwContactId = trimStr(query.hcwContactId);
   const search = trimStr(query.search || query.q);
   const offHoursOnly = query.offHours === '1' || query.offHours === 'true';
   const weekendAttentionOnly = query.weekendAttention === '1' || query.weekendAttention === 'true';
@@ -238,6 +239,7 @@ export function buildCampFilter(query = {}) {
   if (client) filter.clientId = client;
   if (state) filter.state = state;
   if (campaignType) filter.campaignType = campaignType;
+  if (hcwContactId) filter.hcwContactId = hcwContactId;
 
   const skipLifecycleForRequestReview = requestReviewStatus === 'request_approved'
     || requestReviewStatus === 'request_rejected';

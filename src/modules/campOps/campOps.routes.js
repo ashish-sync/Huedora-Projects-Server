@@ -136,6 +136,7 @@ import {
 } from './campOps.export.js';
 import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.requestValidation.js';
 import { assertHistoricalCampDatesAllowed } from './campDatePolicy.js';
+import { assertHcwAssignmentGap } from './hcwAssignmentGap.js';
 import {
   resolveCampClientScope,
   applyClientScopeToFilter,
@@ -1212,6 +1213,23 @@ router.put(
         applyAssignmentStageOutcome(camp, req.body);
       } catch (err) {
         throw new AppError(err.message || 'Invalid assignment', 400, 'VALIDATION_ERROR');
+      }
+    }
+
+    // Same HCW, same date: next camp must start ≥ 1h30 after the previous camp ends.
+    if (
+      camp.assignmentDecision === 'assign'
+      && trimStr(camp.hcwContactId)
+      && !['cancelled', 'rejected'].includes(trimStr(camp.status))
+    ) {
+      try {
+        await assertHcwAssignmentGap(camp);
+      } catch (err) {
+        throw new AppError(
+          err.message || 'HCW schedule gap validation failed',
+          409,
+          err.code || 'HCW_ASSIGNMENT_GAP',
+        );
       }
     }
 
