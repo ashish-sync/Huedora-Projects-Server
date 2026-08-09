@@ -73,4 +73,23 @@ assert.equal(isCampDateDueForExecution({ campDate: isoOffset(0, now) }, now), tr
   assert.equal(camp.lifecycleStage, 'assignment');
 }
 
+{
+  // Reassignment must not demote a camp already in Execution.
+  const camp = {
+    ...assignedCamp(isoOffset(1, now)),
+    lifecycleStage: 'execution',
+    hcwContactId: 'hcw-1',
+  };
+  applyAssignmentStageOutcome(camp, {
+    editingStage: 'assignment',
+    assignmentDecision: 'assign',
+    hcwCategory: 'Technician',
+    hcwName: 'Anita',
+    hcwContact: '8888888888',
+    hcwContactId: 'hcw-2',
+  }, now);
+  assert.equal(camp.lifecycleStage, 'execution');
+  assert.equal(camp.assignmentStatus, 'Assigned');
+}
+
 console.log('campOps.executionAdvance.test.js: ok');

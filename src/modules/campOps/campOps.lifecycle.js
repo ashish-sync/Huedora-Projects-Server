@@ -555,12 +555,18 @@ export function applyAssignmentStageOutcome(camp, body = {}, now = new Date()) {
     if (!hcwCategory || !hcwName || !hcwContact) {
       throw new Error('HCW Category, Name, and Contact are required when assigning');
     }
+    const previousStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
     camp.assignmentDecision = 'assign';
     camp.assignmentStatus = 'Assigned';
     camp.assignmentRefusalReason = '';
-    camp.lifecycleStage = 'assignment';
+    // Reassignment must not demote camps already in Execution / Finance.
+    if (previousStage === 'execution' || previousStage === 'financial') {
+      camp.lifecycleStage = previousStage;
+    } else {
+      camp.lifecycleStage = 'assignment';
+      promoteAssignedCampToExecutionIfDue(camp, now);
+    }
     camp.executionStatus = syncExecutionStatusForSave(camp, now);
-    promoteAssignedCampToExecutionIfDue(camp, now);
     return;
   }
 

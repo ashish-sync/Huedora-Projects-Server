@@ -2180,6 +2180,25 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
       ).map((doc) => normalizeCampTermsFile(doc)).filter(Boolean)
     );
 
+    const agreementStartDate =
+      body.agreementStartDate !== undefined
+        ? trimStr(body.agreementStartDate).slice(0, 10)
+        : trimStr(existing.agreementStartDate).slice(0, 10);
+    const agreementEffectiveDate =
+      body.agreementEffectiveDate !== undefined
+        ? trimStr(body.agreementEffectiveDate).slice(0, 10)
+        : trimStr(existing.agreementEffectiveDate).slice(0, 10);
+    const agreementEndDate =
+      body.agreementEndDate !== undefined
+        ? trimStr(body.agreementEndDate).slice(0, 10)
+        : trimStr(existing.agreementEndDate).slice(0, 10);
+    // Keep agreement uploads separate from PO row files when the client sends them.
+    const agreementFiles = body.campTermsFiles !== undefined
+      ? files
+      : collectCampTermsFiles({
+        campTermsFiles: existing.campTermsFiles,
+      });
+
     Object.assign(payload, {
       poNumber: primary.poNumber || '',
       poNetValue: primary.poNetValue ?? 0,
@@ -2191,15 +2210,36 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
       ...combined,
       poFile: primary.poFile || flatFiles[0] || null,
       purchaseOrders: orders,
-      campTermsFiles: flatFiles,
-      agreementStartDate: '',
-      agreementEffectiveDate: '',
-      agreementEndDate: '',
+      campTermsFiles: agreementFiles.length ? agreementFiles : existingFiles,
+      agreementStartDate,
+      agreementEffectiveDate,
+      agreementEndDate,
     });
     return;
   }
 
-  if (campTerms === 'agreement_based') {
+  if (campTerms === 'agreement_based' || campTerms === 'approval_based') {
+    // Preserve PO rows/details when Agreement/Approval is the active type.
+    let orders = existing.purchaseOrders || [];
+    if (Array.isArray(body.purchaseOrders)) {
+      const existingById = new Map(
+        (existing.purchaseOrders || []).map((po) => [String(po.id), po])
+      );
+      orders = body.purchaseOrders
+        .map((row, index) => normalizePurchaseOrderRow(row, index, existingById))
+        .filter(
+          (row) =>
+            row.poNumber
+            || row.poNetValue > 0
+            || row.poFile?.storedName
+            || (Array.isArray(row.files) && row.files.length)
+            || row.poIssueDate
+            || row.poExpiryDate
+        )
+        .map(({ _index, ...rest }) => rest);
+    }
+    const combined = combinePurchaseOrders(orders);
+    const primary = orders[0] || null;
     Object.assign(payload, {
       agreementStartDate:
         body.agreementStartDate !== undefined
@@ -2213,61 +2253,51 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
         body.agreementEndDate !== undefined
           ? trimStr(body.agreementEndDate).slice(0, 10)
           : trimStr(existing.agreementEndDate).slice(0, 10),
-      poNumber: '',
-      poNetValue: 0,
-      poApplyGst18: false,
-      poGstAmount: 0,
-      poGrossValue: 0,
-      poIssueDate: '',
-      poExpiryDate: '',
-      poCombinedNet: 0,
-      poCombinedGst: 0,
-      poCombinedGross: 0,
-      poFile: null,
-      purchaseOrders: [],
+      poNumber: primary?.poNumber || trimStr(existing.poNumber),
+      poNetValue: primary?.poNetValue ?? (Number(existing.poNetValue) || 0),
+      poApplyGst18: primary
+        ? Boolean(primary.poApplyGst18)
+        : Boolean(existing.poApplyGst18),
+      poGstAmount: primary?.poGstAmount ?? (Number(existing.poGstAmount) || 0),
+      poGrossValue: primary?.poGrossValue ?? (Number(existing.poGrossValue) || 0),
+      poIssueDate: primary?.poIssueDate || trimStr(existing.poIssueDate).slice(0, 10),
+      poExpiryDate: primary?.poExpiryDate || trimStr(existing.poExpiryDate).slice(0, 10),
+      ...combined,
+      poFile: primary?.poFile || existing.poFile || null,
+      purchaseOrders: orders,
     });
     return;
   }
 
-  if (campTerms === 'approval_based') {
-    Object.assign(payload, {
-      agreementStartDate: '',
-      agreementEffectiveDate: '',
-      agreementEndDate: '',
-      poNumber: '',
-      poNetValue: 0,
-      poApplyGst18: false,
-      poGstAmount: 0,
-      poGrossValue: 0,
-      poIssueDate: '',
-      poExpiryDate: '',
-      poCombinedNet: 0,
-      poCombinedGst: 0,
-      poCombinedGross: 0,
-      poFile: null,
-      purchaseOrders: [],
-    });
-    return;
-  }
-
-  // none
+  // none — keep previously entered PO/Agreement details so users can switch back.
   Object.assign(payload, {
-    agreementStartDate: '',
-    agreementEffectiveDate: '',
-    agreementEndDate: '',
-    poNumber: '',
-    poNetValue: 0,
-    poApplyGst18: false,
-    poGstAmount: 0,
-    poGrossValue: 0,
-    poIssueDate: '',
-    poExpiryDate: '',
-    poCombinedNet: 0,
-    poCombinedGst: 0,
-    poCombinedGross: 0,
-    poFile: null,
-    purchaseOrders: [],
-    campTermsFiles: [],
+    agreementStartDate:
+      body.agreementStartDate !== undefined
+        ? trimStr(body.agreementStartDate).slice(0, 10)
+        : trimStr(existing.agreementStartDate).slice(0, 10),
+    agreementEffectiveDate:
+      body.agreementEffectiveDate !== undefined
+        ? trimStr(body.agreementEffectiveDate).slice(0, 10)
+        : trimStr(existing.agreementEffectiveDate).slice(0, 10),
+    agreementEndDate:
+      body.agreementEndDate !== undefined
+        ? trimStr(body.agreementEndDate).slice(0, 10)
+        : trimStr(existing.agreementEndDate).slice(0, 10),
+    poNumber: trimStr(existing.poNumber),
+    poNetValue: Number(existing.poNetValue) || 0,
+    poApplyGst18: Boolean(existing.poApplyGst18),
+    poGstAmount: Number(existing.poGstAmount) || 0,
+    poGrossValue: Number(existing.poGrossValue) || 0,
+    poIssueDate: trimStr(existing.poIssueDate).slice(0, 10),
+    poExpiryDate: trimStr(existing.poExpiryDate).slice(0, 10),
+    poCombinedNet: Number(existing.poCombinedNet) || 0,
+    poCombinedGst: Number(existing.poCombinedGst) || 0,
+    poCombinedGross: Number(existing.poCombinedGross) || 0,
+    poFile: existing.poFile || null,
+    purchaseOrders: Array.isArray(body.purchaseOrders)
+      ? body.purchaseOrders
+      : (existing.purchaseOrders || []),
+    campTermsFiles: body.campTermsFiles !== undefined ? files : existingFiles,
   });
 }
 
