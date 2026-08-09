@@ -18,6 +18,7 @@ import {
   getFieldLabelsMap,
   getPasteTabularFieldKeys,
 } from './import/campRequestFieldSchema.js';
+import { normalizePasteStartTime } from './pasteTimeNormalize.js';
 
 export const NOT_PROVIDED = 'Not Provided';
 
@@ -86,14 +87,7 @@ function pickFieldValue(text, internalKey) {
 function normalizeSingleTime(token) {
   const raw = trimStr(token);
   if (!raw || isNullValue(raw)) return '';
-  const match = raw.match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
-  if (!match) return raw;
-  let hours = Number(match[1]);
-  const minutes = match[2];
-  const meridiem = match[3]?.toUpperCase();
-  if (meridiem === 'PM' && hours < 12) hours += 12;
-  if (meridiem === 'AM' && hours === 12) hours = 0;
-  return `${String(hours).padStart(2, '0')}:${minutes}`;
+  return normalizePasteStartTime(raw);
 }
 
 function parseTimeRange(value) {
@@ -109,13 +103,21 @@ function parseTimeRange(value) {
 function extractCampTimes(text) {
   const labeledStart = pickFieldValue(text, 'startTime');
   const labeledEnd = pickFieldValue(text, 'endTime');
-  const timeLabelValue = pickLabeledValue(text, ['Time', 'Camp Time']);
+  const timeLabelValue = pickLabeledValue(text, ['Time', 'Camp Time', 'Timing']);
 
   const startRange = parseTimeRange(labeledStart) || parseTimeRange(timeLabelValue);
   const endRange = parseTimeRange(labeledEnd);
 
   const mentioned = extractMentionedTimes(text);
-  const startTime = startRange?.startTime || normalizeSingleTime(labeledStart) || mentioned[0] || '';
+  const onwards = String(timeLabelValue || labeledStart || text).match(
+    /\b(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*onwards?\b/i,
+  );
+  const startTime = startRange?.startTime
+    || normalizeSingleTime(labeledStart)
+    || normalizeSingleTime(onwards?.[1])
+    || normalizeSingleTime(timeLabelValue)
+    || mentioned[0]
+    || '';
   const endTime = endRange?.endTime || startRange?.endTime || normalizeSingleTime(labeledEnd) || mentioned[1] || '';
   return { startTime, endTime };
 }
@@ -130,7 +132,7 @@ function extractPinCode(text, location = {}) {
 }
 
 function extractMentionedTimes(text) {
-  const matches = [...String(text || '').matchAll(/\b(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)\b/gi)];
+  const matches = [...String(text || '').matchAll(/\b(\d{1,2}(?::\d{2})?\s*(?:AM|PM)|(?:\d{1,2}:\d{2}))\b/gi)];
   return matches.map((match) => normalizeSingleTime(match[1])).filter(Boolean);
 }
 
@@ -250,7 +252,7 @@ export function extractManualPasteFields(text) {
       speciality: toCampValue(speciality),
       hospitalName: toCampValue(formatTextValue(hospitalName, 'hospitalName')),
       campDate: toCampValue(campDate),
-      startTime: toCampValue(startTime) || '09:00',
+      startTime: toCampValue(startTime),
       endTime: toCampValue(endTime),
       campAddress: toCampValue(formatTextValue(campAddress, 'campAddress')),
       state: toCampValue(formatTextValue(resolvedState, 'state')),

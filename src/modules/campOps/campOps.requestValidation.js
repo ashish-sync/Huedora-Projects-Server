@@ -5,6 +5,7 @@ import { resolveZoneNameForState } from '../geo/geo.zones.js';
 import { isValidPhone } from '../../utils/identityNormalize.js';
 import { normalizeContactPersons } from './campContactPersons.js';
 import { getDoctorNameFormatError } from '../../utils/textFormat.js';
+import { normalizePasteStartTime } from './pasteTimeNormalize.js';
 
 export const REQUEST_PARTIAL_THRESHOLD = 0.6;
 
@@ -31,13 +32,7 @@ function hasText(value) {
 }
 
 function isValidPasteStartTime(value) {
-  const raw = trimStr(value);
-  if (!raw) return false;
-  const match = /^(\d{1,2}):(\d{2})$/.exec(raw);
-  if (!match) return false;
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
+  return Boolean(normalizePasteStartTime(value));
 }
 
 /**
@@ -46,31 +41,44 @@ function isValidPasteStartTime(value) {
  */
 export function getPasteCreationBlockers(camp = {}) {
   const errors = [];
+  const normalized = normalizePasteCreationRow(camp);
 
-  if (!hasText(camp.doctorName)) {
+  if (!hasText(normalized.doctorName)) {
     errors.push('Doctor name is required');
   } else {
-    const doctorNameError = getDoctorNameFormatError(camp.doctorName);
+    const doctorNameError = getDoctorNameFormatError(normalized.doctorName);
     if (doctorNameError && doctorNameError !== 'Doctor name is required') {
       errors.push(doctorNameError);
     }
   }
 
-  if (!/^\d{6}$/.test(trimStr(camp.pincode))) {
+  if (!/^\d{6}$/.test(trimStr(normalized.pincode))) {
     errors.push('Valid 6-digit PIN code is required');
   }
 
-  if (!hasText(camp.campDate)) {
+  if (!hasText(normalized.campDate)) {
     errors.push('Camp date is required');
   }
 
-  if (!hasText(camp.startTime)) {
+  if (!hasText(normalized.startTime)) {
     errors.push('Camp start time is required');
-  } else if (!isValidPasteStartTime(camp.startTime)) {
+  } else if (!isValidPasteStartTime(normalized.startTime)) {
     errors.push('Camp start time is invalid');
   }
 
   return errors;
+}
+
+/** Normalize paste row fields used by the 4-field creation gate (no invention). */
+export function normalizePasteCreationRow(row = {}) {
+  const startTime = normalizePasteStartTime(row.startTime) || trimStr(row.startTime);
+  return {
+    ...row,
+    doctorName: trimStr(row.doctorName),
+    pincode: trimStr(row.pincode),
+    campDate: trimStr(row.campDate),
+    startTime,
+  };
 }
 
 export function isPasteCreationEligible(camp = {}) {
@@ -78,11 +86,14 @@ export function isPasteCreationEligible(camp = {}) {
 }
 
 export function getPasteCreationMissingKeys(camp = {}) {
+  const normalized = normalizePasteCreationRow(camp);
   const missing = [];
-  if (!hasText(camp.doctorName)) missing.push('doctorName');
-  if (!/^\d{6}$/.test(trimStr(camp.pincode))) missing.push('pincode');
-  if (!hasText(camp.campDate)) missing.push('campDate');
-  if (!hasText(camp.startTime) || !isValidPasteStartTime(camp.startTime)) missing.push('startTime');
+  if (!hasText(normalized.doctorName)) missing.push('doctorName');
+  if (!/^\d{6}$/.test(trimStr(normalized.pincode))) missing.push('pincode');
+  if (!hasText(normalized.campDate)) missing.push('campDate');
+  if (!hasText(normalized.startTime) || !isValidPasteStartTime(normalized.startTime)) {
+    missing.push('startTime');
+  }
   return missing;
 }
 

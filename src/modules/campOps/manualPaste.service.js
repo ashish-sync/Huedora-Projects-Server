@@ -18,8 +18,12 @@ import {
   getHistoricalCampDateErrors,
   localTodayIso,
 } from './campDatePolicy.js';
-import { getPasteCreationBlockers } from './campOps.requestValidation.js';
+import {
+  getPasteCreationBlockers,
+  getRequestStageBlockers,
+} from './campOps.requestValidation.js';
 import { assistPasteBlockWithLlm } from './eventExtractor/index.js';
+import { normalizePasteStartTime } from './pasteTimeNormalize.js';
 
 const BLOCK_SEPARATOR = /(?:^|\n)\s*(?:---+|===+|\*\*\*+)\s*(?:\n|$)/;
 
@@ -174,6 +178,8 @@ function applyHistoricalDatePreviewFlags(entry, user) {
   // Keep row data for edit, but do not treat as importable until date is fixed.
   entry.valid = false;
   entry.partial = false;
+  entry.creationEligible = false;
+  entry.reviewStatus = 'REVIEW_REQUIRED';
   return entry;
 }
 
@@ -382,23 +388,11 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
   const results = [];
 
   for (const entry of bodyPreview) {
-    const creatable = (entry.valid || entry.partial) && entry.row;
-    if (!creatable) {
+    if (!entry?.row) {
       results.push({
         status: 'invalid',
         rowNumber: entry.rowNumber,
         errors: entry.errors || ['Invalid camp row'],
-      });
-      continue;
-    }
-
-    const pasteBlockers = getPasteCreationBlockers(entry.row);
-    if (pasteBlockers.length) {
-      results.push({
-        status: 'invalid',
-        rowNumber: entry.rowNumber,
-        errors: pasteBlockers,
-        mandatoryMissing: entry.mandatoryMissing || [],
       });
       continue;
     }
@@ -413,21 +407,44 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
       continue;
     }
 
+    if (entry.historicalDateBlocked) {
+      results.push({
+        status: 'invalid',
+        rowNumber: entry.rowNumber,
+        errors: entry.errors || ['Historical camp dates are not allowed'],
+      });
+      continue;
+    }
+
+    // Creation gate is only the 4 mandatory fields — ignore stale valid/partial flags from edit.
+    const pasteBlockers = getPasteCreationBlockers(entry.row);
+    if (pasteBlockers.length) {
+      results.push({
+        status: 'invalid',
+        rowNumber: entry.rowNumber,
+        errors: pasteBlockers,
+        mandatoryMissing: entry.mandatoryMissing || [],
+      });
+      continue;
+    }
+
     try {
       const client = await resolveClientFromBody(
         { clientName: entry.row.clientName || 'Unassigned' },
         { allowCreate: true },
       );
       const today = localTodayIso();
+      const normalizedStart = normalizePasteStartTime(entry.row.startTime) || trimStr(entry.row.startTime);
       const payload = campPayloadFromBody(
         {
           ...entry.row,
+          startTime: normalizedStart,
           source: 'paste',
           clientName: client?.name || entry.row.clientName,
         },
         null,
         client,
-        { allowPartial: Boolean(entry.partial) },
+        { allowPartial: true },
       );
 
       // Missing dates default to local today before policy checks (UTC ISO can be "yesterday").
@@ -446,6 +463,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
         },
       );
 
+      const incomplete = getRequestStageBlockers(payload).length > 0;
       const camp = await CampOpsCamp.create({
         ...payload,
         campId: payload.campDate ? await generateCampId(payload.campDate) : await generateCampId(),
@@ -453,7 +471,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
         lifecycleStage: 'request',
         requestReviewStatus: 'review_pending',
         source: 'paste',
-        requestIncomplete: Boolean(entry.partial),
+        requestIncomplete: incomplete,
         requestDate,
         createdById: actor.id,
         createdByEmail: actor.email,
@@ -461,11 +479,11 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
       });
 
       results.push({
-        status: entry.partial ? 'created_partial' : 'created',
+        status: incomplete ? 'created_partial' : 'created',
         rowNumber: entry.rowNumber,
         campId: camp.campId,
         id: camp._id,
-        partial: Boolean(entry.partial),
+        partial: incomplete,
         partialFields: entry.partialFields || [],
       });
     } catch (error) {

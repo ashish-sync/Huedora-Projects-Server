@@ -8,6 +8,7 @@ import {
   isPasteCreationEligible,
   isPastePartialImportEligible,
 } from './campOps.requestValidation.js';
+import { normalizePasteStartTime } from './pasteTimeNormalize.js';
 import { normalizeContactPersons } from './campContactPersons.js';
 import { cleanSpaces, formatTextValue } from '../../utils/textFormat.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
@@ -505,22 +506,26 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
         : Number(row.expectedPatients);
     if (Number.isNaN(expectedPatients)) errors.push('Expected patients must be a number');
 
-    const rawStart = trimStr(row.startTime);
-    const rawEnd = trimStr(row.endTime);
+    const rawStart = isPaste
+      ? (normalizePasteStartTime(row.startTime) || trimStr(row.startTime))
+      : trimStr(row.startTime);
+    const rawEnd = isPaste
+      ? (normalizePasteStartTime(row.endTime) || trimStr(row.endTime))
+      : trimStr(row.endTime);
     // Paste: never invent mandatory startTime (or optional endTime) during validation.
     // Excel/dashboard keep prior schedule defaults for compatibility.
     let schedule;
     if (isPaste) {
-      if (rawStart && rawEnd) {
+      if (rawStart && rawEnd && normalizePasteStartTime(rawStart) && normalizePasteStartTime(rawEnd)) {
         schedule = resolveCampSchedule({
-          startTime: rawStart,
-          endTime: rawEnd,
+          startTime: normalizePasteStartTime(rawStart),
+          endTime: normalizePasteStartTime(rawEnd),
           durationHours: row.durationHours,
         });
       } else {
         schedule = {
-          startTime: rawStart,
-          endTime: rawEnd,
+          startTime: normalizePasteStartTime(rawStart) || rawStart,
+          endTime: normalizePasteStartTime(rawEnd) || rawEnd,
           durationHours: Number(row.durationHours) || null,
         };
       }
@@ -582,16 +587,19 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
     // Manual Paste: creatable when Doctor + PIN + Camp Date + Start Time are valid.
     // Optional enrichment gaps never block creation (partial / requestIncomplete).
     if (isPaste && allowPartial) {
-      if (!pasteCreationBlockers.length && !errors.length) {
+      if (!pasteCreationBlockers.length && !errors.some((err) => /camp date is invalid/i.test(err))) {
         partialRows.push({
           ...normalized,
-          errors: blockers,
+          // Do not treat optional request-stage gaps as create blockers in the UI.
+          errors: errors.filter((err) => /camp date is invalid/i.test(err)),
+          enrichmentGaps: blockers,
           partial: true,
           partialFields: completion.missingKeys,
           completionPercent: completion.percentLabel,
           requestIncomplete: true,
           creationEligible: true,
           mandatoryMissing: [],
+          reviewStatus: 'READY',
         });
         continue;
       }
@@ -599,11 +607,10 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
       invalidRows.push({
         ...normalized,
         errors: [...new Set([
-          ...errors,
+          ...errors.filter((err) => /camp date is invalid|request date is invalid|expected patients/i.test(err)),
           ...pasteCreationBlockers,
-          // Keep optional enrichment messages as review hints, not creation blockers,
-          // but still surface mandatory failures first.
         ])],
+        enrichmentGaps: blockers,
         creationEligible: false,
         mandatoryMissing: pasteMissingKeys,
         reviewStatus: 'REVIEW_REQUIRED',
