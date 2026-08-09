@@ -102,6 +102,33 @@ test('manual paste uses selected method instead of defaulting to Others', () => 
   assert.equal(row.campaignName, 'BMD');
 });
 
+test('extracts bulleted Coimbatore-style request with In/Out Time', () => {
+  const text = `
+- Doctor Name: Dr Leo bernard 
+- Doctor SC Code: 0000409698
+- Employee name: Mohamed Thameem 
+- Employee Mobile no : 9043584663
+- Camp Venue: Leo Ortho care Hospital 
+- 790, Near Nilgiris & Opposite RHR Hotel, Trichy Road, Ramanathapuram, Coimbatore-641045, Tamil Nadu
+- Pincode of camp place: 641045
+- Date: 15.08.2026
+- In Time: 08.30 am
+- Out Time: 2.30pm
+- Expected Patients: 80
+`.trim();
+  const { row, display } = extractManualPasteFields(text);
+  assert.equal(row.doctorName, 'Leo Bernard');
+  assert.equal(row.doctorCode, '0000409698');
+  assert.equal(row.campDate, '2026-08-15');
+  assert.equal(row.startTime, '08:30');
+  assert.equal(row.endTime, '14:30');
+  assert.equal(row.pincode, '641045');
+  assert.equal(row.expectedPatients, 80);
+  assert.equal(row.fieldPersonName, 'Mohamed Thameem');
+  assert.equal(row.fieldPersonPhone, '9043584663');
+  assert.match(display.campAddress, /Trichy Road|Leo Ortho/i);
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

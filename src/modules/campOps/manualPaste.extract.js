@@ -45,6 +45,41 @@ function toCampValue(value) {
   return v;
 }
 
+/** Strip WhatsApp/email list bullets so "- Doctor Name:" still matches. */
+function stripListBullet(line = '') {
+  return String(line || '')
+    .replace(/^\s*(?:[-*•◦▪▫–—]+|\d+[.)])\s*/u, '')
+    .replace(/^\s*\*\s*/, '')
+    .trim();
+}
+
+function splitLabeledLine(line = '') {
+  const cleaned = stripListBullet(line);
+  if (!cleaned) return null;
+  // Prefer colon/equals — avoid treating "Coimbatore-641045" as Label-Value.
+  const match = cleaned.match(/^(.{2,60}?)\s*[:：=]\s*(.+)$/)
+    || cleaned.match(/^([A-Za-z][A-Za-z0-9 /&.()]{1,50}?)\s*[-–—]\s*(.+)$/);
+  if (!match) return null;
+  const left = trimStr(match[1]);
+  const right = trimStr(match[2]);
+  if (!left || !right || isNullValue(right)) return null;
+  // Address/locality lines are not field labels.
+  if (/,/.test(left) || /\d{4,}/.test(left)) return null;
+  return { left, right };
+}
+
+function labelMatches(left, label) {
+  const leftCompact = compactFieldName(left);
+  const labelCompact = compactFieldName(label);
+  if (!leftCompact || !labelCompact) return false;
+  if (leftCompact === labelCompact) return true;
+  // Allow "Doctor SC Code" ↔ "SC Code", "Pincode of camp place" ↔ "Pincode"
+  // Keep threshold high so short aliases like "name" / "dr" do not over-match.
+  if (leftCompact.endsWith(labelCompact) && labelCompact.length >= 6) return true;
+  if (labelCompact.endsWith(leftCompact) && leftCompact.length >= 6) return true;
+  return false;
+}
+
 function pickLabeledValue(text, labels = []) {
   const raw = String(text || '');
   const ordered = [...labels]
@@ -53,8 +88,8 @@ function pickLabeledValue(text, labels = []) {
 
   for (const label of ordered) {
     const re = new RegExp(
-      `(?:^|\\n)\\s*${escapeRegex(label)}\\s*[:\\-=–*]+\\s*(.+?)(?:\\n|$)`,
-      'i',
+      `(?:^|\\n)\\s*(?:[-*•◦▪▫–—]+|\\d+[.)])?\\s*${escapeRegex(label)}\\s*[:：=\\-–—]+\\s*(.+?)(?:\\n|$)`,
+      'iu',
     );
     const match = raw.match(re);
     if (match?.[1]) {
@@ -65,14 +100,11 @@ function pickLabeledValue(text, labels = []) {
 
   const lines = raw.split('\n');
   for (const line of lines) {
-    const parts = line.split(/[:=\-–*]/);
-    if (parts.length < 2) continue;
-    const left = preprocessFieldName(parts[0]);
-    const right = trimStr(parts.slice(1).join(':'));
-    if (!right || isNullValue(right)) continue;
+    const parsed = splitLabeledLine(line);
+    if (!parsed) continue;
     for (const label of ordered) {
-      if (compactFieldName(left) === compactFieldName(label)) {
-        return right;
+      if (labelMatches(parsed.left, label)) {
+        return parsed.right;
       }
     }
   }
@@ -98,6 +130,22 @@ function parseTimeRange(value) {
     startTime: normalizeSingleTime(range[1]),
     endTime: normalizeSingleTime(range[2]),
   };
+}
+
+function extractUnlabeledAddressLine(text, hospitalName = '') {
+  const lines = String(text || '').split('\n').map(stripListBullet).filter(Boolean);
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (splitLabeledLine(line)) continue;
+    // Prefer a free-form line after Camp Venue / with PIN / comma-separated locality.
+    const prev = i > 0 ? stripListBullet(lines[i - 1]) : '';
+    const afterVenue = /camp\s*venue|hospital|clinic|venue/i.test(prev);
+    const looksLikeAddress = /\b\d{6}\b/.test(line) || (/,/.test(line) && line.length >= 20);
+    if ((afterVenue || looksLikeAddress) && (!hospitalName || !compactFieldName(line).includes(compactFieldName(hospitalName).slice(0, 8)))) {
+      return trimStr(line);
+    }
+  }
+  return '';
 }
 
 function extractCampTimes(text) {
@@ -164,14 +212,14 @@ function extractLocationFromAddress(address) {
   if (state) {
     const stateIndex = parts.findIndex((part) => new RegExp(`\\b${escapeRegex(state)}\\b`, 'i').test(part));
     if (stateIndex > 0) {
-      city = parts[stateIndex - 1].replace(/\b\d{6}\b/g, '').trim();
+      city = parts[stateIndex - 1].replace(/-?\d{6}\b/g, '').replace(/[-–—\s]+$/g, '').trim();
     }
   }
 
   if (!city && pincode) {
     const beforePin = raw.split(pincode)[0] || '';
     const pinParts = beforePin.split(/[,;\n]/).map((part) => trimStr(part)).filter(Boolean);
-    city = pinParts[pinParts.length - 1] || '';
+    city = (pinParts[pinParts.length - 1] || '').replace(/[-–—\s]+$/g, '').trim();
   }
 
   if (!city && parts.length >= 2) {
@@ -203,13 +251,17 @@ export function extractManualPasteFields(text) {
   const doctorName = pickFieldValue(raw, 'doctorName');
   const doctorCode = pickFieldValue(raw, 'doctorCode');
   const speciality = pickFieldValue(raw, 'speciality');
-  const hospitalName = pickFieldValue(raw, 'hospitalName');
   const campDate = extractCampDate(raw);
   const { startTime, endTime } = extractCampTimes(raw);
-  const campAddress = pickFieldValue(raw, 'campAddress') || pickFieldValue(raw, 'hospitalName');
+  const hospitalName = pickFieldValue(raw, 'hospitalName');
+  const labeledAddress = pickFieldValue(raw, 'campAddress');
+  const unlabeledAddress = extractUnlabeledAddressLine(raw, hospitalName);
+  const campAddress = labeledAddress
+    || [hospitalName, unlabeledAddress].filter(Boolean).join(', ')
+    || hospitalName;
   const city = pickFieldValue(raw, 'city');
   const state = pickFieldValue(raw, 'state');
-  const location = extractLocationFromAddress(campAddress);
+  const location = extractLocationFromAddress(campAddress || unlabeledAddress);
   const pincode = extractPinCode(raw, location);
   const hq = pickFieldValue(raw, 'hq');
   const zone = (state || location.state) ? resolveZoneNameForState(state || location.state) : '';
