@@ -40,6 +40,7 @@ import {
   CONTACT_KYC_MAX_BYTES,
   CONTACT_KYC_REJECT_MESSAGE,
   isAllowedContactKycFile,
+  withSignedContactKyc,
 } from './contactKycUpload.js';
 
 const contactUploadRoot = uploadDir('contacts');
@@ -95,7 +96,7 @@ async function enrichContactsWithProviders(contacts = []) {
   if (!ids.length) return contacts;
   const providers = await Contact.find({ _id: { $in: ids }, isDeleted: false });
   const byId = Object.fromEntries(providers.map((p) => [String(p._id), p.name || '']));
-  return contacts.map((c) => ({
+  return contacts.map((c) => withSignedContactKyc({
     ...c,
     serviceProviderName: c.serviceProviderContactId
       ? byId[String(c.serviceProviderContactId)] || ''
@@ -284,7 +285,7 @@ router.get(
       serviceProviderContactId: provider._id,
     }).sort('name');
     res.json({
-      data: staff,
+      data: staff.map((row) => withSignedContactKyc(row)),
       meta: {
         count: staff.length,
         employeeCount: (provider.providerEmployees || []).length,
@@ -323,10 +324,10 @@ router.post(
         after: contact.toObject(),
         requestId: req.requestId,
       });
-      return res.status(201).json({ data: contact });
+      return res.status(201).json({ data: withSignedContactKyc(contact) });
     }
 
-    res.status(200).json({ data: contact, meta: { reused: Boolean(reused) } });
+    res.status(200).json({ data: withSignedContactKyc(contact), meta: { reused: Boolean(reused) } });
   })
 );
 
@@ -391,7 +392,7 @@ router.patch(
     assignPreservingExisting(contact, payload);
     contact.updatedBy = req.user._id;
     await contact.save();
-    res.json({ data: contact });
+    res.json({ data: withSignedContactKyc(contact) });
   })
 );
 
@@ -429,7 +430,7 @@ router.post(
       requestId: req.requestId,
     });
 
-    res.json({ data: contact });
+    res.json({ data: withSignedContactKyc(contact) });
   })
 );
 
