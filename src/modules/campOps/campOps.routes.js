@@ -140,7 +140,10 @@ import { assertHcwAssignmentGap } from './hcwAssignmentGap.js';
 import {
   resolveCampClientScope,
   applyClientScopeToFilter,
+  applyClientScopeToIdField,
   assertCampClientAccess,
+  assertClientIdAccess,
+  isClientIdInScope,
   parseAssignedUserEmails,
 } from './campOps.clientAccess.js';
 import {
@@ -278,6 +281,12 @@ async function scopeCampFilter(req, filter) {
   const scoped = await resolveCampClientScope(req.user);
   if (!scoped) return filter;
   return applyClientScopeToFilter(filter, scoped);
+}
+
+async function scopeEntityIdFilter(req, filter, field = '_id') {
+  const scoped = await resolveCampClientScope(req.user);
+  if (!scoped) return filter;
+  return applyClientScopeToIdField(filter, scoped, field);
 }
 
 function sendCampExportResponse(res, camps, columnKeys, format) {
@@ -698,8 +707,9 @@ router.get(
 router.get(
   '/dashboard/clients',
   canRead,
-  asyncHandler(async (_req, res) => {
-    const clients = await CampOpsClient.find({ isDeleted: false }).sort('name');
+  asyncHandler(async (req, res) => {
+    const filter = await scopeEntityIdFilter(req, { isDeleted: false }, '_id');
+    const clients = await CampOpsClient.find(filter).sort('name');
     res.json({ data: clients });
   })
 );
@@ -893,8 +903,7 @@ router.post(
 
     for (const id of ids) {
       try {
-        const camp = await CampOpsCamp.findOne({ _id: String(id), isDeleted: false });
-        if (!camp) throw new Error('Camp not found');
+        const camp = await loadCampForUser(req, String(id));
 
         const before = camp.toObject();
         if (config.from && !config.from.includes(camp.status)) {
@@ -1110,6 +1119,7 @@ router.post(
       campDate: payload.campDate,
       requestDate: payload.requestDate,
     });
+    await assertClientIdAccess(req.user, resolved._id);
 
     const tracking = captureSubmissionTracking();
     const a = actor(req);
@@ -1156,6 +1166,7 @@ router.put(
     if (!lifecycleOnly && (req.body.clientId !== undefined || req.body.client !== undefined || req.body.clientName)) {
       client = await resolveClientFromBody(req.body, { allowCreate: false });
       if (!client) throw new AppError('Client not found', 404, 'NOT_FOUND');
+      await assertClientIdAccess(req.user, client._id);
     }
 
     if (!lifecycleOnly && stage === 'request') {
@@ -1355,8 +1366,7 @@ router.get(
   '/camps/:id/finance-export',
   canRead,
   asyncHandler(async (req, res) => {
-    const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
-    if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
+    const camp = await loadCampForUser(req, req.params.id);
     assertCampSubmittedToFinance(camp);
     sendExcel(
       res,
@@ -1472,8 +1482,7 @@ router.post(
   '/camps/:id/request-information',
   canApprove,
   asyncHandler(async (req, res) => {
-    const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
-    if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
+    const camp = await loadCampForUser(req, req.params.id);
     if (camp.status !== 'pending_review') {
       throw new AppError('Only pending review camps can receive an information request', 400, 'VALIDATION_ERROR');
     }
@@ -1503,8 +1512,7 @@ router.post(
   '/camps/:id/close',
   canApprove,
   asyncHandler(async (req, res) => {
-    const camp = await CampOpsCamp.findOne({ _id: req.params.id, isDeleted: false });
-    if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
+    const camp = await loadCampForUser(req, req.params.id);
     if (!canCloseCampRecord(camp)) {
       throw new AppError(
         camp.lifecycleStage === 'financial'
@@ -1573,7 +1581,7 @@ router.get(
   canReadClientMaster,
   asyncHandler(async (req, res) => {
     const { page, limit, skip } = parsePagination(req.query);
-    const filter = { isDeleted: false };
+    const filter = await scopeEntityIdFilter(req, { isDeleted: false }, '_id');
     const search = trimStr(req.query.search || req.query.q);
     if (search) {
       const regex = new RegExp(escapeRegex(search), 'i');
@@ -1591,6 +1599,7 @@ router.get(
   '/clients/:id',
   canReadClientMaster,
   asyncHandler(async (req, res) => {
+    await assertClientIdAccess(req.user, req.params.id);
     const client = await CampOpsClient.findOne({ _id: req.params.id, isDeleted: false });
     if (!client) throw new AppError('Client not found', 404, 'NOT_FOUND');
     res.json({ data: client });
@@ -2470,9 +2479,10 @@ router.get(
       const regex = new RegExp(escapeRegex(search), 'i');
       filter.$or = [{ clientName: regex }, { programName: regex }, { campName: regex }];
     }
+    const scopedFilter = await scopeEntityIdFilter(req, filter, 'clientId');
     const [data, total] = await Promise.all([
-      CampOpsClientMaster.find(filter).sort('-updatedAt').skip(skip).limit(limit),
-      CampOpsClientMaster.countDocuments(filter),
+      CampOpsClientMaster.find(scopedFilter).sort('-updatedAt').skip(skip).limit(limit),
+      CampOpsClientMaster.countDocuments(scopedFilter),
     ]);
     const clientIds = [...new Set(data.map((row) => String(row.clientId || '')).filter(Boolean))];
     const clients = clientIds.length
@@ -2507,8 +2517,9 @@ router.get(
 router.get(
   '/client-masters/export',
   canRead,
-  asyncHandler(async (_req, res) => {
-    const rows = await CampOpsClientMaster.find({ isDeleted: false }).sort('-updatedAt');
+  asyncHandler(async (req, res) => {
+    const scopedFilter = await scopeEntityIdFilter(req, { isDeleted: false }, 'clientId');
+    const rows = await CampOpsClientMaster.find(scopedFilter).sort('-updatedAt');
     const clientIds = [...new Set(rows.map((r) => String(r.clientId || '')).filter(Boolean))];
     const clients = clientIds.length
       ? await CampOpsClient.find({ _id: { $in: clientIds }, isDeleted: false })
@@ -2661,6 +2672,9 @@ router.get(
   canReadClientMaster,
   asyncHandler(async (req, res) => {
     const clientId = String(req.params.clientId || '').trim();
+    if (clientId && clientId !== 'undefined' && clientId !== '[object Object]') {
+      await assertClientIdAccess(req.user, clientId);
+    }
     const clientName = trimStr(req.query.clientName);
     let rows = clientId && clientId !== 'undefined' && clientId !== '[object Object]'
       ? await CampOpsClientMaster.find({
@@ -2674,6 +2688,11 @@ router.get(
       const all = await CampOpsClientMaster.find({ isDeleted: false }).sort('programName');
       const needle = clientName.toLowerCase();
       rows = all.filter((row) => trimStr(row.clientName).toLowerCase() === needle);
+    }
+    // Name fallback must not widen past assigned-client scope.
+    const scoped = await resolveCampClientScope(req.user);
+    if (scoped) {
+      rows = rows.filter((row) => isClientIdInScope(scoped, row.clientId));
     }
 
     res.json({
@@ -2698,6 +2717,7 @@ router.get(
       });
     }
     if (!client) throw new AppError('Client not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, client._id);
 
     const records = await CampOpsClientMaster.find({
       isDeleted: false,
@@ -2747,6 +2767,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, row.clientId);
     const client = row.clientId
       ? await CampOpsClient.findOne({ _id: row.clientId, isDeleted: false })
       : null;
@@ -3546,6 +3567,7 @@ router.post(
         campDate: row.campDate,
         requestDate: row.requestDate,
       });
+      await assertClientIdAccess(req.user, client._id);
       const tracking = captureSubmissionTracking();
       const contactFields = resolveContactPersonFields(row);
       const camp = await CampOpsCamp.create(formatCampTextPayload({
@@ -3846,6 +3868,7 @@ router.post(
       campDate: payload.campDate,
       requestDate: payload.requestDate,
     });
+    await assertClientIdAccess(req.user, client?._id || payload.clientId);
     const tracking = captureSubmissionTracking();
     const camp = await CampOpsCamp.create({
       ...payload,
@@ -3908,6 +3931,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const { page, limit, skip } = parsePagination(req.query);
     const filter = { isDeleted: false };
+    if (req.query.activeOnly === '1' || req.query.activeOnly === 'true') {
+      filter.isActive = { $ne: false };
+    }
     const search = trimStr(req.query.search || req.query.q);
     if (search) {
       const regex = new RegExp(escapeRegex(search), 'i');
