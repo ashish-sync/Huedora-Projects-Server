@@ -24,6 +24,7 @@ const UPLOAD_SUBDIRS = [
   'archive',
   'asset-requests',
   'camp-ops',
+  'contacts',
   'finance',
   'finance-vendor-bills',
   'import-errors',

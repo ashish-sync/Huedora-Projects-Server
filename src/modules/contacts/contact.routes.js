@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { Router } from 'express';
 import multer from 'multer';
 import { authenticate, requirePermission } from '../../middleware/auth.js';
@@ -104,7 +105,14 @@ async function enrichContactsWithProviders(contacts = []) {
 
 const kycUpload = multer({
   storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, contactUploadRoot),
+    destination: (_req, _file, cb) => {
+      try {
+        fs.mkdirSync(contactUploadRoot, { recursive: true });
+        cb(null, contactUploadRoot);
+      } catch (err) {
+        cb(err);
+      }
+    },
     filename: (_req, file, cb) => {
       const safe = String(file.originalname || 'document').replace(/[^\w.\-]+/g, '_');
       cb(null, `${Date.now()}-${safe}`);
