@@ -35,7 +35,7 @@ export function getHcwFinanceBlockers(contact = {}, { requireDocuments = true, l
 
   if (requireDocuments) {
     if (!localTrim(contact.passbookCopyUrl)) {
-      blockers.push(`${who} passbook copy is not uploaded in Contact Directory`);
+      blockers.push(`${who} bank account proof is not uploaded in Contact Directory`);
     }
     if (!localTrim(contact.panCardCopyUrl)) {
       blockers.push(`${who} PAN card copy is not uploaded in Contact Directory`);

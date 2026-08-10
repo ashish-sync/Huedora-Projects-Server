@@ -35,6 +35,11 @@ import {
 } from '../../utils/masterExcel.js';
 import { importRateLimiter } from '../../middleware/importRateLimit.js';
 import { loadCappedRowsFromUpload } from '../imports/streaming/loadCappedRows.js';
+import {
+  CONTACT_KYC_MAX_BYTES,
+  CONTACT_KYC_REJECT_MESSAGE,
+  isAllowedContactKycFile,
+} from './contactKycUpload.js';
 
 const contactUploadRoot = uploadDir('contacts');
 
@@ -105,11 +110,13 @@ const kycUpload = multer({
       cb(null, `${Date.now()}-${safe}`);
     },
   }),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: CONTACT_KYC_MAX_BYTES },
   fileFilter: (_req, file, cb) => {
-    const mime = String(file.mimetype || '').toLowerCase();
-    const allowed = mime.startsWith('image/') || mime === 'application/pdf';
-    cb(allowed ? null : new Error('Passbook and PAN copies must be an image or PDF'), allowed);
+    const allowed = isAllowedContactKycFile({
+      mimetype: file.mimetype,
+      originalname: file.originalname,
+    });
+    cb(allowed ? null : new Error(CONTACT_KYC_REJECT_MESSAGE), allowed);
   },
 });
 
