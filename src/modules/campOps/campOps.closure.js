@@ -1,4 +1,7 @@
 import { applyRequestReviewTransition } from './campOps.requestReview.js';
+import { CHARGEABLE_STATUSES } from './campOps.lifecycle.js';
+
+export { CHARGEABLE_STATUSES };
 
 export const CAMP_CLOSURE_TYPES = [
   'Cancelled by Client',
@@ -198,6 +201,7 @@ export function applyCampClosure(camp, {
   reasonCode,
   closureReasonCode,
   closureRemarks = '',
+  chargeableStatus,
   actor,
 } = {}) {
   const resolved = resolveClosureSelection({
@@ -214,6 +218,14 @@ export function applyCampClosure(camp, {
   }
   if (!canCloseCampStatus(camp.status)) {
     throw new Error('Camp is already closed');
+  }
+
+  const stage = String(camp?.lifecycleStage || 'request').trim();
+  const nextChargeableStatus = String(chargeableStatus ?? '').trim();
+  if (stage === 'execution') {
+    if (!CHARGEABLE_STATUSES.includes(nextChargeableStatus)) {
+      throw new Error('Select Chargeable Status');
+    }
   }
 
   const remark = buildClosureRemark({
@@ -236,6 +248,10 @@ export function applyCampClosure(camp, {
   camp.hcwName = '';
   camp.hcwContact = '';
   camp.remarks = remark;
+
+  if (stage === 'execution' && CHARGEABLE_STATUSES.includes(nextChargeableStatus)) {
+    camp.chargeableStatus = nextChargeableStatus;
+  }
 
   if (resolved.closureType === 'Refused') {
     const wasPendingReview = camp.status === 'pending_review';

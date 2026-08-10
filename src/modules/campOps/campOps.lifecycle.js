@@ -6,6 +6,7 @@ import {
   getCampEndDateTime,
 } from './campOps.helpers.js';
 import { daysFromToday, localTodayIso } from './campDatePolicy.js';
+import { computeCampRevenueFromPricing } from './campOps.clientMasterPricing.js';
 
 function localTrim(v) {
   return v == null ? '' : String(v).trim();
@@ -338,7 +339,7 @@ function num(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-export function computeLifecycleDerived(camp = {}) {
+export function computeLifecycleDerived(camp = {}, { pricing = null } = {}) {
   const startTime = localTrim(camp.startTime);
   const endTime = localTrim(camp.endTime);
   const inTime = localTrim(camp.inTime);
@@ -357,9 +358,15 @@ export function computeLifecycleDerived(camp = {}) {
     extraHours = Math.max(0, Math.round((totalHours - durationHours) * 100) / 100);
   }
 
-  const campRevenue = num(camp.campRevenue);
-  const overtimeRevenue = num(camp.overtimeRevenue);
-  const otherRevenue = num(camp.otherRevenue);
+  const autoRevenue = pricing
+    ? computeCampRevenueFromPricing({ ...camp, totalHours, extraHours }, pricing)
+    : null;
+
+  const campRevenue = autoRevenue ? autoRevenue.campRevenue : num(camp.campRevenue);
+  const overtimeRevenue = autoRevenue ? autoRevenue.overtimeRevenue : num(camp.overtimeRevenue);
+  const otherRevenue = autoRevenue ? autoRevenue.otherRevenue : num(camp.otherRevenue);
+  const otherRevenuePatients = autoRevenue ? autoRevenue.otherRevenuePatients : 0;
+  const otherRevenueDistance = autoRevenue ? autoRevenue.otherRevenueDistance : 0;
   const totalRevenue = Math.round((campRevenue + overtimeRevenue + otherRevenue) * 100) / 100;
 
   const campAmount = num(camp.campAmount);
@@ -379,15 +386,21 @@ export function computeLifecycleDerived(camp = {}) {
     campSlot,
     totalHours: totalHours ?? null,
     extraHours,
+    campRevenue,
+    overtimeRevenue,
+    otherRevenue,
+    otherRevenuePatients,
+    otherRevenueDistance,
     totalRevenue,
     totalPayout,
     balance,
     kmRoundTrip,
     punctuality,
+    revenueAutoCalculated: Boolean(autoRevenue),
   };
 }
 
-export function lifecyclePayloadFromBody(body, existing = null) {
+export function lifecyclePayloadFromBody(body, existing = null, { pricing = null } = {}) {
   const pick = (key, fallback = '') => {
     if (body[key] !== undefined) return body[key];
     return existing?.[key] ?? fallback;
@@ -520,8 +533,19 @@ export function lifecyclePayloadFromBody(body, existing = null) {
     payload.consumablesUsed = [];
   }
 
-  const derived = computeLifecycleDerived({ ...existing, ...body, ...payload });
-  return { ...payload, ...derived };
+  const derived = computeLifecycleDerived({ ...existing, ...body, ...payload }, { pricing });
+  const next = { ...payload, ...derived };
+  if (pricing && derived.revenueAutoCalculated) {
+    next.campRevenue = derived.campRevenue;
+    next.overtimeRevenue = derived.overtimeRevenue;
+    next.otherRevenue = derived.otherRevenue;
+    next.totalRevenue = derived.totalRevenue;
+  }
+  // Don't persist transient breakdown / flag fields on the camp document.
+  delete next.otherRevenuePatients;
+  delete next.otherRevenueDistance;
+  delete next.revenueAutoCalculated;
+  return next;
 }
 
 export function withCampLifecycle(camp) {
@@ -529,6 +553,9 @@ export function withCampLifecycle(camp) {
   obj.lifecycleStage = normalizeLifecycleStage(obj.lifecycleStage, 'request');
   const derived = computeLifecycleDerived(obj);
   Object.assign(obj, derived);
+  delete obj.otherRevenuePatients;
+  delete obj.otherRevenueDistance;
+  delete obj.revenueAutoCalculated;
   obj.patientsCount = obj.actualPatients ?? 0;
   obj.lifecycleStages = CAMP_LIFECYCLE_STAGES;
   obj.effectiveExecutionStatus = resolveEffectiveExecutionStatus(obj);

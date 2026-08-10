@@ -116,6 +116,7 @@ import {
   normalizeMappedConsumables,
   resolveMappedConsumablesForCamp,
 } from './clientMasterConsumables.js';
+import { resolveClientMasterPricingForCamp } from './campOps.clientMasterPricing.js';
 import {
   assertCampSubmittedToFinance,
   buildCampFinanceExportRow,
@@ -538,7 +539,7 @@ function campPayloadFromBody(body, existing = null, client = null, options = {})
       ? trimStr(body.source)
       : existing?.source || 'dashboard',
     remarks: trimStr(body.remarks ?? existing?.remarks),
-    ...lifecyclePayloadFromBody(body, existing),
+    ...lifecyclePayloadFromBody(body, existing, { pricing: options.pricing || null }),
   });
 }
 
@@ -1172,7 +1173,13 @@ router.put(
     if (!lifecycleOnly && stage === 'request') {
       assertRawDoctorName(req.body);
     }
-    const payload = campPayloadFromBody(req.body, camp, client);
+    const pricingClientId = client?._id || camp.clientId;
+    const pricing = await resolveClientMasterPricingForCamp(pricingClientId, {
+      campaignType: req.body.campaignType ?? camp.campaignType,
+      campaignName: req.body.campaignName ?? camp.campaignName,
+      clientName: client?.name || camp.clientName,
+    });
+    const payload = campPayloadFromBody(req.body, camp, client, { pricing });
     const executionOnlyKeys = [
       'executionStatus', 'chargeableStatus', 'inTime', 'outTime', 'kmRoundTrip', 'punctuality',
       'attire', 'labCoat', 'patientsCount', 'rxCount', 'cancellationReason', 'actualPatients',
@@ -1293,7 +1300,12 @@ router.post(
     }
 
     const before = camp.toObject();
-    const payload = lifecyclePayloadFromBody(req.body, camp);
+    const pricing = await resolveClientMasterPricingForCamp(camp.clientId, {
+      campaignType: req.body.campaignType ?? camp.campaignType,
+      campaignName: req.body.campaignName ?? camp.campaignName,
+      clientName: camp.clientName,
+    });
+    const payload = lifecyclePayloadFromBody(req.body, camp, { pricing });
     assignPreservingExisting(camp, payload);
 
     const paymentSubmitStatus = normalizePaymentSubmitStatus(
@@ -1548,6 +1560,7 @@ router.post(
         reasonCategory,
         subReason,
         closureRemarks,
+        chargeableStatus: trimStr(req.body?.chargeableStatus),
         actor: actor(req),
       });
     } catch (err) {
