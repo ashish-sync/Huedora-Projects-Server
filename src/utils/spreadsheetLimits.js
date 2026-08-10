@@ -5,6 +5,8 @@
  */
 export const MAX_SPREADSHEET_UPLOAD_BYTES = 3 * 1024 * 1024; // 3 MB
 export const MAX_IMPORT_ROWS = 1_000;
+/** PIN Geography uses State/District/Pin Codes rows — no practical spreadsheet-row cap. */
+export const MAX_PIN_GEOGRAPHY_IMPORT_ROWS = 500_000;
 export const IMPORT_BATCH_SIZE = 500;
 export const MAX_EXPORT_ROWS = 10_000;
 export const MAX_CAMP_EXPORT_ROWS = 5_000;
@@ -16,3 +18,5 @@ export const IMPORT_ACCEPT_ATTR =
   '.csv,.xlsx,.xls,.xlsb,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.binary.macroEnabled.12';
 export const IMPORT_ACCEPT_HINT =
   'Supported: .csv UTF-8 (preferred), .xlsx, .xls, or .xlsb · max 1,000 rows · max 3 MB.';
+export const PIN_GEOGRAPHY_IMPORT_HINT =
+  'Supported: .csv UTF-8 (preferred), .xlsx, .xls, or .xlsb · columns State, District, Pin Codes · no 1,000-row limit · max 3 MB.';

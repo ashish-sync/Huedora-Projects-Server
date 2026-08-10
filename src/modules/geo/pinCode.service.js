@@ -1,6 +1,5 @@
 import { randomUUID } from 'crypto';
 import { AppError } from '../../utils/helpers.js';
-import { MAX_IMPORT_ROWS } from '../../utils/spreadsheetLimits.js';
 import { bulkUpsertDocuments } from '../../store/persistence.js';
 import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import { scanCollection } from '../../store/filedb.js';
@@ -345,22 +344,16 @@ export async function upsertNormalizedPin({
 }
 
 export function pinToExcelRow(row) {
-  return [row.pinCode, row.stateName || '', row.zone || '', row.districtName || '', row.cityName || ''];
+  return [row.stateName || '', row.districtName || '', row.pinCode || ''];
 }
 
 /**
  * Bulk-import PIN rows (State + District + PIN Code; City optional).
  * Loads geo masters once; loads only PIN docs present in this batch (not the full collection).
+ * Row-count caps are enforced by the PIN Geography stream (not here) so district-grouped
+ * files can expand to many PIN upserts per spreadsheet row.
  */
 export async function bulkImportPinRows(inputRows = [], { updatedBy = null } = {}) {
-  if (inputRows.length > MAX_IMPORT_ROWS) {
-    throw new AppError(
-      `Import limited to ${MAX_IMPORT_ROWS} data rows. This file has more than ${MAX_IMPORT_ROWS} rows — split the file and retry.`,
-      400,
-      'VALIDATION_ERROR'
-    );
-  }
-
   const [states, districts, cities] = await Promise.all([
     GeoState.find({ isDeleted: false }),
     GeoDistrict.find({ isDeleted: false }),

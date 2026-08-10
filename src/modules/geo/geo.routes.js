@@ -14,19 +14,24 @@ import {
   MAX_EXPORT_ROWS,
   sampleCsvFilename,
 } from '../../utils/masterExcel.js';
-import { IMPORT_BATCH_SIZE } from '../../utils/spreadsheetLimits.js';
+import { IMPORT_BATCH_SIZE, MAX_PIN_GEOGRAPHY_IMPORT_ROWS } from '../../utils/spreadsheetLimits.js';
 import { withMemoryLog, logMemory } from '../../utils/memory.js';
 import { forceReseedGeoMasters } from './geo.seed.js';
 import { resolveZoneForStateRecord, resolveZoneNameForState } from './geo.zones.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState, GeoZone } from './geo.model.js';
-import { PIN_CODE_HEADERS, PIN_CODE_IMPORT_HEADERS, PIN_CODE_SAMPLE_ROWS } from './pinCodes.excel.js';
+import {
+  PIN_CODE_HEADERS,
+  PIN_CODE_IMPORT_HEADERS,
+  PIN_CODE_SAMPLE_ROWS,
+  expandPinGeographyImportRow,
+  pinsToGroupedExcelRows,
+} from './pinCodes.excel.js';
 import {
   attachPinCounts,
   bulkImportPinRows,
   enrichPinRecord,
   enrichPinRecords,
   getPinPreview,
-  pinToExcelRow,
   resolvePinTargets,
   upsertNormalizedPin,
 } from './pinCode.service.js';
@@ -284,13 +289,14 @@ router.get(
         .sort('pinCode')
         .limit(MAX_EXPORT_ROWS);
       const enriched = await enrichPinRecords(rows);
+      const excelRows = pinsToGroupedExcelRows(enriched);
 
       if (format === 'xlsx') {
         sendExcel(
           res,
           'Pin_Code_Master.xlsx',
           PIN_CODE_HEADERS,
-          enriched.map(pinToExcelRow),
+          excelRows,
           { sheetName: 'PIN Codes' }
         );
         return;
@@ -301,7 +307,7 @@ router.get(
         res,
         'Pin_Code_Master.csv',
         PIN_CODE_HEADERS,
-        enriched.map(pinToExcelRow)
+        excelRows
       );
     });
   })
@@ -360,23 +366,14 @@ router.post(
         ext: validated.ext,
         originalName: validated.originalname,
         jobId: job._id,
+        maxRows: MAX_PIN_GEOGRAPHY_IMPORT_ROWS,
         processRow: async ({ rowNum, record: row }) => {
-          const pinCode = String(cellValue(row, ['PIN Code', 'PIN', 'pinCode'])).replace(/\D+/g, '');
-          if (!pinCode) {
+          const expanded = expandPinGeographyImportRow(row, { rowNum, cellValue });
+          if (!expanded.length) {
             skipped += 1;
             return { skipped: true };
           }
-          const activeRaw = cellValue(row, ['Active', 'Status', 'isActive']);
-          pending.push({
-            rowNum,
-            pinCode,
-            stateName: cellValue(row, ['State', 'stateName']),
-            districtName: cellValue(row, ['District', 'District Name', 'districtName']),
-            cityName: cellValue(row, ['City', 'cityName']),
-            locality: cellValue(row, ['Locality', 'locality']),
-            notes: cellValue(row, ['Notes', 'notes']),
-            isActive: !['no', 'false', '0', 'inactive'].includes(String(activeRaw).toLowerCase()),
-          });
+          pending.push(...expanded);
           if (pending.length >= IMPORT_BATCH_SIZE) await flush();
           return { skipped: true }; // counts handled in flush
         },
