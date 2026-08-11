@@ -21,7 +21,10 @@ import {
 import { CampOpsCamp, CampOpsClient } from './campOps.model.js';
 import { MAX_PREVIEW_BODY_ROWS } from '../../utils/spreadsheetLimits.js';
 import { logMemory } from '../../utils/memory.js';
-import { parseExcelBuffer } from './communications/utils/excelParser.js';
+import {
+  buildClientMasterImportCatalog,
+  applyClientMasterValidationToResult,
+} from './import/importClientMasterValidation.js';
 
 async function resolveClientForRow(row, { allowCreate = false } = {}) {
   const name = trimStr(row.clientName);
@@ -84,7 +87,8 @@ async function findExistingDuplicateCamp({ client, row }) {
   return candidates.find((camp) => doctorsMatch(row, camp)) || null;
 }
 
-async function buildBodyPreviewFromMappedRows(mappedRows, defaults = {}) {
+async function buildBodyPreviewFromMappedRows(mappedRows, defaults = {}, catalog = null) {
+  const clientMasterCatalog = catalog || await buildClientMasterImportCatalog();
   const capped = mappedRows.slice(0, MAX_PREVIEW_BODY_ROWS);
   const out = [];
   const BATCH = 50;
@@ -96,9 +100,12 @@ async function buildBodyPreviewFromMappedRows(mappedRows, defaults = {}) {
         const withDefaults = applyPasteDefaults(row, defaults);
         const enriched = await enrichPasteLocationFromPin(withDefaults);
         const rowForValidation = { ...enriched.row };
-        const { validRows, partialRows, invalidRows } = validateMappedImportRows(
-          [rowForValidation],
-          { source: 'excel', allowPartial: true },
+        const { validRows, partialRows, invalidRows } = applyClientMasterValidationToResult(
+          validateMappedImportRows(
+            [rowForValidation],
+            { source: 'excel', allowPartial: true },
+          ),
+          clientMasterCatalog,
         );
         const validRow = validRows[0];
         const partialRow = partialRows[0];
@@ -229,7 +236,8 @@ export async function extractPasteImportPreview({
   const parsed = await parsePasteImportFile(file || buffer, { fieldKeys });
   const finalMapping = mergeMapping(parsed.mapping, mapping);
   const mappedRows = mapRows(parsed.rows, finalMapping, defaults.clientName);
-  const bodyPreview = await buildBodyPreviewFromMappedRows(mappedRows, defaults);
+  const catalog = await buildClientMasterImportCatalog();
+  const bodyPreview = await buildBodyPreviewFromMappedRows(mappedRows, defaults, catalog);
 
   const unmappedHeaders = parsed.headers.filter(
     (header) => !Object.values(finalMapping).includes(header),
@@ -288,7 +296,8 @@ export async function extractPasteImportPreviewFromRows({
   const columnMatch = headers.length ? matchImportColumns(headers, fieldKeys) : { mapping: {} };
   const finalMapping = mergeMapping(columnMatch.mapping, mapping);
   const mappedRows = mapRows(rows, finalMapping, defaults.clientName);
-  const bodyPreview = await buildBodyPreviewFromMappedRows(mappedRows, defaults);
+  const catalog = await buildClientMasterImportCatalog();
+  const bodyPreview = await buildBodyPreviewFromMappedRows(mappedRows, defaults, catalog);
 
   return {
     fileName,

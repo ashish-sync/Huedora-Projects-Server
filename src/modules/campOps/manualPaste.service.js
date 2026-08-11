@@ -22,7 +22,11 @@ import {
   getPasteCreationBlockers,
   getRequestStageBlockers,
 } from './campOps.requestValidation.js';
-import { assistPasteBlockWithLlm } from './eventExtractor/index.js';
+import {
+  buildClientMasterImportCatalog,
+  applyClientMasterValidationToResult,
+  getClientMasterImportErrors,
+} from './import/importClientMasterValidation.js';
 import { normalizePasteStartTime } from './pasteTimeNormalize.js';
 
 const BLOCK_SEPARATOR = /(?:^|\n)\s*(?:---+|===+|\*\*\*+)\s*(?:\n|$)/;
@@ -183,9 +187,10 @@ function applyHistoricalDatePreviewFlags(entry, user) {
   return entry;
 }
 
-async function buildBodyPreview(text, defaults = {}, { user, referenceDate = null, timezone = 'Asia/Kolkata' } = {}) {
+async function buildBodyPreview(text, defaults = {}, { user, referenceDate = null, timezone = 'Asia/Kolkata', catalog = null } = {}) {
   const blocks = splitPasteBlocks(text);
   const refDate = referenceDate || localTodayIso();
+  const clientMasterCatalog = catalog || await buildClientMasterImportCatalog();
 
   return Promise.all(
     blocks.map(async (block, index) => {
@@ -194,9 +199,12 @@ async function buildBodyPreview(text, defaults = {}, { user, referenceDate = nul
         defaults,
       );
       const { pasteDisplay, pasteFormatted, ...rowForValidation } = extracted;
-      const { validRows, partialRows, invalidRows } = validateMappedImportRows(
-        [rowForValidation],
-        { source: 'paste', allowPartial: true },
+      const { validRows, partialRows, invalidRows } = applyClientMasterValidationToResult(
+        validateMappedImportRows(
+          [rowForValidation],
+          { source: 'paste', allowPartial: true },
+        ),
+        clientMasterCatalog,
       );
       const validRow = validRows[0];
       const partialRow = partialRows[0];
@@ -251,10 +259,13 @@ async function buildBodyPreview(text, defaults = {}, { user, referenceDate = nul
       if (assist.rowPatch) {
         const enrichedAssist = await enrichPasteLocationFromPin(assist.rowPatch, {});
         const assisted = applyPasteDefaults(enrichedAssist.row, defaults);
-        const revalidated = validateMappedImportRows([assisted], {
-          source: 'paste',
-          allowPartial: true,
-        });
+        const revalidated = applyClientMasterValidationToResult(
+          validateMappedImportRows([assisted], {
+            source: 'paste',
+            allowPartial: true,
+          }),
+          clientMasterCatalog,
+        );
         const nextValid = revalidated.validRows[0];
         const nextPartial = revalidated.partialRows[0];
         const nextInvalid = revalidated.invalidRows[0];
@@ -386,6 +397,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
 
   const tracking = captureSubmissionTracking();
   const results = [];
+  const catalog = await buildClientMasterImportCatalog();
 
   for (const entry of bodyPreview) {
     if (!entry?.row) {
@@ -416,6 +428,16 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
       continue;
     }
 
+    const clientMasterErrors = getClientMasterImportErrors(entry.row, catalog);
+    if (clientMasterErrors.length) {
+      results.push({
+        status: 'invalid',
+        rowNumber: entry.rowNumber,
+        errors: clientMasterErrors,
+      });
+      continue;
+    }
+
     // Creation gate is only the 4 mandatory fields — ignore stale valid/partial flags from edit.
     const pasteBlockers = getPasteCreationBlockers(entry.row);
     if (pasteBlockers.length) {
@@ -431,8 +453,16 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
     try {
       const client = await resolveClientFromBody(
         { clientName: entry.row.clientName || 'Unassigned' },
-        { allowCreate: true },
+        { allowCreate: false },
       );
+      if (!client?._id) {
+        results.push({
+          status: 'invalid',
+          rowNumber: entry.rowNumber,
+          errors: [`Client "${entry.row.clientName}" is not configured in Client Master`],
+        });
+        continue;
+      }
       const today = localTodayIso();
       const normalizedStart = normalizePasteStartTime(entry.row.startTime) || trimStr(entry.row.startTime);
       const payload = campPayloadFromBody(

@@ -89,6 +89,7 @@ import {
   enrichMappedImportRowsFromPin,
   normalizeImportSource,
 } from './import/importRowEnrichment.js';
+import { validateMappedImportRowsWithClientMaster } from './import/importClientMasterValidation.js';
 import {
   parseCampRequestWithValidation,
   parsedFieldsToCampRow,
@@ -3525,7 +3526,7 @@ router.post(
     }
     const mappedRows = mapImportRows(rows, mapping, defaultClientName);
     const enrichedRows = await enrichMappedImportRowsFromPin(mappedRows);
-    const { validRows, invalidRows } = validateMappedImportRows(enrichedRows);
+    const { validRows, invalidRows } = await validateMappedImportRowsWithClientMaster(enrichedRows);
     res.json({
       summary: {
         total: mappedRows.length,
@@ -3549,7 +3550,7 @@ router.post(
     }
     const mappedRows = mapImportRows(rows, mapping, defaultClientName);
     const enrichedRows = await enrichMappedImportRowsFromPin(mappedRows);
-    const { validRows, invalidRows } = validateMappedImportRows(enrichedRows);
+    const { validRows, invalidRows } = await validateMappedImportRowsWithClientMaster(enrichedRows);
     if (!validRows.length) {
       throw importAppError('NO_VALID_ROWS', 400, 'VALIDATION_ERROR', { invalidRows });
     }
@@ -3561,14 +3562,14 @@ router.post(
     const skipped = [];
 
     for (const row of validRows) {
-      let client = clientMap.get(row.clientName.toLowerCase());
+      const client = clientMap.get(row.clientName.toLowerCase());
       if (!client) {
-        client = await CampOpsClient.create({
-          name: row.clientName,
-          code: await ensureUniqueClientCode(buildClientCode(row.clientName)),
-          isActive: true,
+        skipped.push({
+          rowNumber: row.rowNumber,
+          clientName: row.clientName,
+          reason: `Client "${row.clientName}" is not configured in Client Master`,
         });
-        clientMap.set(row.clientName.toLowerCase(), client);
+        continue;
       }
 
       const schedule = resolveCampSchedule({
@@ -3860,7 +3861,7 @@ router.post(
     if (!row.campAddress && (row.city || row.state || row.pincode)) {
       row.campAddress = [row.city, row.district, row.state, row.pincode].filter(Boolean).join(', ');
     }
-    const { validRows, invalidRows } = validateMappedImportRows([row]);
+    const { validRows, invalidRows } = await validateMappedImportRowsWithClientMaster([row]);
     if (!validRows.length) {
       throw new AppError(
         (invalidRows[0]?.errors || ['Invalid camp data']).join('. '),
@@ -3870,8 +3871,15 @@ router.post(
     }
     const client = await resolveClientFromBody(
       { clientName: validRows[0].clientName || 'Unassigned' },
-      { allowCreate: true },
+      { allowCreate: false },
     );
+    if (!client?._id) {
+      throw new AppError(
+        `Client "${validRows[0].clientName}" is not configured in Client Master`,
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
     const payload = campPayloadFromBody(
       { ...validRows[0], source: 'parser', clientName: client?.name || validRows[0].clientName },
       null,
