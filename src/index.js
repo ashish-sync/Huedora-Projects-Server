@@ -40,6 +40,15 @@ async function maybeFreshStart() {
   }
 }
 
+/** One-shot soft-delete of every Camp One camp (all stages). Safe for production. */
+async function maybePurgeAllCampsOnBoot() {
+  if (String(process.env.PURGE_ALL_CAMPS_ON_BOOT || '').toLowerCase() !== 'true') return;
+  const { purgeAllCamps } = await import('./utils/purgeAllCamps.js');
+  const result = await purgeAllCamps({ actorId: 'boot:PURGE_ALL_CAMPS_ON_BOOT' });
+  console.warn('[camps] PURGE_ALL_CAMPS_ON_BOOT=true — soft-deleted camps:', result);
+  console.warn('[camps] Set PURGE_ALL_CAMPS_ON_BOOT=false after this deploy');
+}
+
 async function maybeReseedGeoOnBoot() {
   if (String(process.env.RESEED_GEO_ON_BOOT || '').toLowerCase() !== 'true') return;
   const result = await forceReseedGeoMasters();
@@ -62,6 +71,7 @@ async function main() {
   ensureUploadDirs();
   await hydrateEmailIngestState();
   await maybeFreshStart();
+  await maybePurgeAllCampsOnBoot();
   await ensureSeed();
   try {
     const { ensureTeamUsersInDatabase } = await import('./boot/ensureTeamUsers.js');
