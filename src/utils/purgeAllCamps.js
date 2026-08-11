@@ -1,5 +1,86 @@
 import { CampOpsCamp } from '../modules/campOps/campOps.model.js';
 
+function normalizeClientNames(clientNames = []) {
+  return [...new Set(
+    (Array.isArray(clientNames) ? clientNames : [clientNames])
+      .map((name) => String(name || '').trim())
+      .filter(Boolean),
+  )];
+}
+
+function clientNameFilter(clientNames = []) {
+  const names = normalizeClientNames(clientNames);
+  if (!names.length) return null;
+  return {
+    isDeleted: false,
+    $or: names.map((name) => ({
+      clientName: new RegExp(`^${String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+    })),
+  };
+}
+
+/**
+ * Soft-delete Camp One camps whose clientName matches any of the given names.
+ */
+export async function purgeCampsByClientNames(clientNames = [], { actorId = null } = {}) {
+  const filter = clientNameFilter(clientNames);
+  if (!filter) {
+    return { purged: 0, remaining: 0, matched: 0, clientNames: [] };
+  }
+
+  const matched = await CampOpsCamp.countDocuments(filter);
+  if (!matched) {
+    return {
+      purged: 0,
+      remaining: 0,
+      matched: 0,
+      clientNames: normalizeClientNames(clientNames),
+    };
+  }
+
+  const now = new Date().toISOString();
+  await CampOpsCamp.updateMany(filter, {
+    $set: {
+      isDeleted: true,
+      deletedAt: now,
+      deletedBy: actorId ? String(actorId) : null,
+    },
+  });
+
+  const remaining = await CampOpsCamp.countDocuments(filter);
+  return {
+    purged: matched - remaining,
+    remaining,
+    matched,
+    clientNames: normalizeClientNames(clientNames),
+  };
+}
+
+export async function countCampsByClientNames(clientNames = []) {
+  const filter = clientNameFilter(clientNames);
+  if (!filter) return { total: 0, byClient: {}, samples: [] };
+
+  const camps = await CampOpsCamp.find(filter);
+  const byClient = {};
+  for (const camp of camps) {
+    const key = String(camp.clientName || '').trim() || '(blank)';
+    byClient[key] = (byClient[key] || 0) + 1;
+  }
+
+  return {
+    total: camps.length,
+    byClient,
+    samples: camps.slice(0, 10).map((camp) => ({
+      campId: camp.campId || null,
+      clientName: camp.clientName || null,
+      campaignType: camp.campaignType || null,
+      campaignName: camp.campaignName || null,
+      lifecycleStage: camp.lifecycleStage || null,
+      status: camp.status || null,
+    })),
+  };
+}
+
 /**
  * Soft-delete every Camp One camp across all lifecycle stages.
  * Manage Camps only lists isDeleted:false rows, so they disappear from every stage tab.
