@@ -50,16 +50,39 @@ async function maybePurgeAllCampsOnBoot() {
 }
 
 /**
+ * Legacy soft-delete boot purge by Division/Therapy (campaignType).
+ * Not invoked from main() — production MOM cleanup uses hard delete via
+ * maybeHardDeleteCampsByCampaignTypeOnBoot() and PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT.
+ */
+async function maybePurgeCampsByCampaignTypeOnBoot() {
+  const raw = String(process.env.PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT || '').trim();
+  if (!raw || raw.toLowerCase() === 'false') return;
+  const {
+    parseCampaignTypesEnv,
+    purgeCampsByCampaignTypes,
+  } = await import('./utils/purgeAllCamps.js');
+  const campaignTypes = parseCampaignTypesEnv(raw);
+  if (!campaignTypes.length) return;
+  const result = await purgeCampsByCampaignTypes(campaignTypes, {
+    actorId: 'boot:PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT',
+  });
+  console.warn(
+    `[camps] PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT=${campaignTypes.join(',')} — soft-deleted:`,
+    result,
+  );
+  console.warn('[camps] Clear PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT after this deploy');
+}
+
+/**
  * One-shot permanent delete of Camp One camps by Division/Therapy (campaignType).
  * Exact match only (trim + case fold) — e.g. MOM matches "MOM"/" mom " but not "MOM Camp".
  * Example: PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT=MOM
  * Dry-run: PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT_DRY_RUN=true
  */
 async function maybeHardDeleteCampsByCampaignTypeOnBoot() {
-  const { maybeHardDeleteCampsByCampaignTypeOnBoot } = await import(
-    './utils/hardDeleteCampsByCampaignTypeOnBoot.js'
-  );
-  await maybeHardDeleteCampsByCampaignTypeOnBoot();
+  const { maybeHardDeleteCampsByCampaignTypeOnBoot: runHardDeleteCampsByCampaignTypeOnBoot } =
+    await import('./utils/hardDeleteCampsByCampaignTypeOnBoot.js');
+  await runHardDeleteCampsByCampaignTypeOnBoot();
 }
 
 async function maybeReseedGeoOnBoot() {
@@ -81,11 +104,11 @@ async function main() {
   await connectDb();
   const db = getDbInfo();
   console.log(`[api] Persistence: ${db.mode}${db.useMongoose ? ' (MongoDB)' : ' (local JSON — not for production)'}`);
+  await maybeHardDeleteCampsByCampaignTypeOnBoot();
   ensureUploadDirs();
   await hydrateEmailIngestState();
   await maybeFreshStart();
   await maybePurgeAllCampsOnBoot();
-  await maybeHardDeleteCampsByCampaignTypeOnBoot();
   await ensureSeed();
   try {
     const { ensureTeamUsersInDatabase } = await import('./boot/ensureTeamUsers.js');
