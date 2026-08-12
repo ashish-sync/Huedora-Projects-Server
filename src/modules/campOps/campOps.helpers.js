@@ -673,3 +673,13 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
 
   return { validRows, partialRows, invalidRows };
 }
+
+/** Soft-delete (archive) a camp — used by admin delete actions. */
+export function archiveCampRecord(camp, { actorId = null, deletedAt = null } = {}) {
+  if (!camp) return camp;
+  const now = deletedAt || new Date().toISOString();
+  camp.isDeleted = true;
+  camp.deletedAt = now;
+  camp.deletedBy = actorId ? String(actorId) : null;
+  return camp;
+}

@@ -72,6 +72,7 @@ import {
   groupCount,
   mapImportRows,
   validateMappedImportRows,
+  archiveCampRecord,
 } from './campOps.helpers.js';
 import { matchesExecutionFilter } from './campStageFilters.js';
 import { resolveContactPersonFields } from './campContactPersons.js';
@@ -928,9 +929,13 @@ router.post(
       approve: { nextStatus: 'approved', from: ['pending_review'], needApprove: true },
       reject: { nextStatus: 'rejected', from: ['pending_review'], needApprove: true },
       execute: { nextStatus: 'executed', from: ['approved'], needApprove: true },
+      delete: { archive: true, needAdmin: true },
     };
     const config = configs[action];
     if (!config) throw new AppError('Invalid bulk action', 400, 'VALIDATION_ERROR');
+    if (config.needAdmin && !req.permissions.has(PERMISSIONS.ALL)) {
+      throw new AppError('Only administrators can delete camps', 403, 'FORBIDDEN');
+    }
     if (
       config.needApprove &&
       !req.permissions.has(PERMISSIONS.ALL) &&
@@ -947,6 +952,15 @@ router.post(
         const camp = await loadCampForUser(req, String(id));
 
         const before = camp.toObject();
+
+        if (config.archive) {
+          archiveCampRecord(camp, { actorId: a.id });
+          await camp.save();
+          await audit(req, 'camp_ops.camp_delete', 'camp_ops_camp', camp._id, before, camp.toObject());
+          results.success.push({ id: camp._id, campId: camp.campId });
+          continue;
+        }
+
         if (config.from && !config.from.includes(camp.status)) {
           throw new Error(`Camp ${camp.campId} is ${camp.status} and cannot be ${action}d`);
         }
@@ -1656,8 +1670,14 @@ router.delete(
   '/camps/:id',
   requireAdmin,
   asyncHandler(async (req, res) => {
-    throw new AppError('Camps cannot be deleted. Cancel or refuse the camp instead.', 403, 'FORBIDDEN');
-  })
+    const camp = await loadCampForUser(req, req.params.id);
+    const before = camp.toObject();
+    const a = actor(req);
+    archiveCampRecord(camp, { actorId: a.id });
+    await camp.save();
+    await audit(req, 'camp_ops.camp_delete', 'camp_ops_camp', camp._id, before, camp.toObject());
+    res.json({ message: 'Camp archived successfully', data: { ok: true } });
+  }),
 );
 
 /* -------------------------------------------------------------------------- */
