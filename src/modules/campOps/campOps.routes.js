@@ -1270,14 +1270,25 @@ router.put(
       }
     }
 
-    // Same HCW, same date: next camp must start ≥ 1h30 after the previous camp ends.
+    // Same HCW, same date: recommend ≥ 30m after previous camp ends (soft warning).
     if (
       camp.assignmentDecision === 'assign'
       && trimStr(camp.hcwContactId)
       && !['cancelled', 'rejected'].includes(trimStr(camp.status))
     ) {
+      const allowGapOverride = req.body?.hcwGapOverrideAcknowledged === true
+        || req.body?.hcwGapOverrideAcknowledged === 'true'
+        || req.body?.hcwGapOverrideAcknowledged === 1
+        || req.body?.hcwGapOverrideAcknowledged === '1';
       try {
-        await assertHcwAssignmentGap(camp);
+        const gapResult = await assertHcwAssignmentGap(camp, { allowOverride: allowGapOverride });
+        if (gapResult?.overridden) {
+          camp.hcwGapOverridePendingApproval = true;
+          camp.hcwGapOverrideAcknowledgedAt = new Date().toISOString();
+        } else {
+          camp.hcwGapOverridePendingApproval = false;
+          camp.hcwGapOverrideAcknowledgedAt = null;
+        }
       } catch (err) {
         throw new AppError(
           err.message || 'HCW schedule gap validation failed',
@@ -1285,6 +1296,9 @@ router.put(
           err.code || 'HCW_ASSIGNMENT_GAP',
         );
       }
+    } else if (camp.assignmentDecision !== 'assign' || !trimStr(camp.hcwContactId)) {
+      camp.hcwGapOverridePendingApproval = false;
+      camp.hcwGapOverrideAcknowledgedAt = null;
     }
 
     if (stage === 'execution') {
@@ -2648,7 +2662,7 @@ router.post(
         );
         let existing = await CampOpsClientMaster.findOne(
           buildClientMasterBusinessKeyFilter({
-            clientId: client._id,
+          clientId: client._id,
             billingGstin: importGstin,
             programName: parsed.programName,
             campName: parsed.campName,
@@ -2696,11 +2710,11 @@ router.post(
           programName: payload.programName,
           campName: payload.campName,
         });
-        await CampOpsClientMaster.create({
-          ...payload,
-          createdById: a.id,
-          updatedById: a.id,
-        });
+          await CampOpsClientMaster.create({
+            ...payload,
+            createdById: a.id,
+            updatedById: a.id,
+          });
         return { ok: true };
       },
     });
@@ -2741,7 +2755,7 @@ router.get(
     const clientName = trimStr(req.query.clientName);
     let rows = clientId && clientId !== 'undefined' && clientId !== '[object Object]'
       ? await CampOpsClientMaster.find({
-        isDeleted: false,
+      isDeleted: false,
         clientId,
       }).sort('programName')
       : [];

@@ -7,8 +7,11 @@ import {
   trimStr,
 } from './campOps.helpers.js';
 
-/** Minimum gap between one camp's end and the next camp's start for the same HCW. */
-export const HCW_ASSIGNMENT_GAP_MINUTES = 90;
+/** Minimum recommended gap between one camp's end and the next camp's start for the same HCW. */
+export const HCW_ASSIGNMENT_GAP_MINUTES = 30;
+
+export const HCW_GAP_APPROVAL_MESSAGE =
+  'This assignment requires approval from your Reporting Manager.';
 
 const TERMINAL_CAMP_STATUSES = ['cancelled', 'rejected'];
 const TERMINAL_EXECUTION_STATUSES = ['Cancelled', 'Refused', 'Rejected'];
@@ -30,6 +33,8 @@ export function clearCampHcwAssignment(camp = {}) {
   camp.hcwCategory = '';
   camp.hcwName = '';
   camp.hcwContact = '';
+  camp.hcwGapOverridePendingApproval = false;
+  camp.hcwGapOverrideAcknowledgedAt = null;
 }
 
 function scheduleBounds(camp = {}) {
@@ -65,9 +70,9 @@ function buildHcwAssignmentGapMessage({
 }) {
   const gapLabel = formatGapDurationLabel(gapMinutes);
   if (isCandidate) {
-    return `HCW Schedule Conflict: This camp is scheduled until ${endsAtTime}. A mandatory ${gapLabel} gap is required before the next camp for this HCW, so the earliest available start time for that camp is ${earliestStartTime}.`;
+    return `HCW Schedule Conflict: This camp is scheduled until ${endsAtTime}. A ${gapLabel} gap is recommended before the next camp for this HCW, so the earliest available start time for that camp is ${earliestStartTime}.`;
   }
-  return `HCW Schedule Conflict: This HCW has another camp scheduled until ${endsAtTime}. A mandatory ${gapLabel} gap is required, so the earliest available start time is ${earliestStartTime}.`;
+  return `HCW Schedule Conflict: This HCW has another camp scheduled until ${endsAtTime}. A ${gapLabel} gap is recommended, so the earliest available start time is ${earliestStartTime}.`;
 }
 
 /**
@@ -132,6 +137,8 @@ export function findHcwAssignmentGapConflict(
 
     return {
       message,
+      approvalMessage: HCW_GAP_APPROVAL_MESSAGE,
+      softWarning: true,
       conflictingCamp: conflicting,
       earliestStartTime,
       gapMinutes,
@@ -142,16 +149,17 @@ export function findHcwAssignmentGapConflict(
 }
 
 /**
- * Load same-HCW camps and assert the 90-minute gap rule.
- * Throws Error with a clear message when violated.
+ * Load same-HCW camps and check the 30-minute gap rule.
+ * Soft warning: pass allowOverride to proceed; otherwise throws.
+ * Returns { conflict, overridden } when override is used.
  */
-export async function assertHcwAssignmentGap(candidate = {}) {
-  if (!isActiveHcwAssignedCamp(candidate)) return;
+export async function assertHcwAssignmentGap(candidate = {}, { allowOverride = false } = {}) {
+  if (!isActiveHcwAssignedCamp(candidate)) return null;
 
   const hcwContactId = trimStr(candidate.hcwContactId);
   const campDate = parseLocalDateInput(candidate.campDate)
     || trimStr(candidate.campDate).slice(0, 10);
-  if (!hcwContactId || !campDate) return;
+  if (!hcwContactId || !campDate) return null;
 
   const rows = await CampOpsCamp.find({
     hcwContactId,
@@ -159,10 +167,14 @@ export async function assertHcwAssignmentGap(candidate = {}) {
   });
 
   const conflict = findHcwAssignmentGapConflict(candidate, rows);
-  if (conflict) {
-    const err = new Error(conflict.message);
-    err.code = 'HCW_ASSIGNMENT_GAP';
-    err.conflict = conflict;
-    throw err;
+  if (!conflict) return null;
+
+  if (allowOverride) {
+    return { conflict, overridden: true };
   }
+
+  const err = new Error(conflict.message);
+  err.code = 'HCW_ASSIGNMENT_GAP';
+  err.conflict = conflict;
+  throw err;
 }

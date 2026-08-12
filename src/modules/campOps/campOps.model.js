@@ -53,6 +53,9 @@ export const CampOpsCamp = defineCollection('camp_ops_camps', {
   hcwCategory: '',
   hcwName: '',
   hcwContact: '',
+  /** True when HCW was assigned with < 30m gap; needs Reporting Manager approval. */
+  hcwGapOverridePendingApproval: false,
+  hcwGapOverrideAcknowledgedAt: null,
   executionStatus: 'Camp Scheduled',
   cancellationReason: '',
   closureReasonCode: '',
