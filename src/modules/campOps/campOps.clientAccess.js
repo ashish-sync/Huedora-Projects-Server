@@ -1,7 +1,6 @@
 import { AppError } from '../../utils/helpers.js';
-import { PERMISSIONS } from '../../config/constants.js';
-import { userHasAnyPermission } from '../../middleware/auth.js';
 import { normalizeEntityId } from '../../utils/entityIds.js';
+import { normalizeDesignationKey } from '../users/designationAccess.js';
 import { CampOpsClientMaster } from './campOps.model.js';
 import {
   campMatchesProgramAssignment,
@@ -17,6 +16,26 @@ function normalizeEmail(value) {
 
 function normalizeClientId(value) {
   return normalizeEntityId(value) || String(value || '').trim().toLowerCase();
+}
+
+const CAMP_COORDINATOR_DESIGNATION_KEY = 'healthcare camp coordinator';
+const CAMP_COORDINATOR_ROLE_NAME = 'camp coordinator';
+
+/**
+ * Assigned-Users camp/program scoping applies only to Healthcare Camp Coordinators.
+ * All other designations/roles can view every camp.
+ */
+export function isHealthcareCampCoordinator(user = {}) {
+  if (normalizeDesignationKey(user.designation) === CAMP_COORDINATOR_DESIGNATION_KEY) {
+    return true;
+  }
+  const roles = Array.isArray(user.roleIds) ? user.roleIds : [];
+  return roles.some((role) => {
+    const name = String(role?.name || role || '')
+      .trim()
+      .toLowerCase();
+    return name === CAMP_COORDINATOR_ROLE_NAME;
+  });
 }
 
 export function parseAssignedUserEmails(raw) {
@@ -35,13 +54,16 @@ export function parseAssignedUserEmails(raw) {
  * Returns assignment rows `{ clientId, programName, campName }` when listed on masters.
  *
  * Policy when any master has assignments configured:
- * - User listed on one or more masters → only those client + division + method combos.
- * - User not listed + Admin (`*`) → unrestricted (internal ops).
- * - User not listed + everyone else (including camps:approve) → empty scope (sees nothing).
+ * - Healthcare Camp Coordinators listed on masters → only those client + division + method combos.
+ * - Healthcare Camp Coordinators not listed → empty scope (see nothing).
+ * - Everyone else (Admin, Approver, Requester, etc.) → unrestricted (view all camps).
  */
 export async function resolveCampClientScope(user = {}) {
   const email = normalizeEmail(user.email);
   if (!email) return null;
+
+  // Only Healthcare Camp Coordinators are limited by Assigned Users.
+  if (!isHealthcareCampCoordinator(user)) return null;
 
   const masters = await CampOpsClientMaster.find({ isDeleted: false });
   let anyAssignmentsConfigured = false;
@@ -71,10 +93,6 @@ export async function resolveCampClientScope(user = {}) {
   }
 
   if (!anyAssignmentsConfigured) return null;
-  if (!assignments.length) {
-    if (userHasAnyPermission(user, PERMISSIONS.ALL)) return null;
-    return [];
-  }
   return assignments;
 }
 

@@ -6,6 +6,7 @@ import {
   applyClientScopeToIdField,
   isClientIdInScope,
   isClientMasterInScope,
+  isHealthcareCampCoordinator,
   resolveCampClientScope,
   assertCampClientAccess,
 } from './campOps.clientAccess.js';
@@ -16,6 +17,15 @@ import {
 import { CampOpsClientMaster } from './campOps.model.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { AppError } from '../../utils/helpers.js';
+
+test('isHealthcareCampCoordinator matches designation or Camp Coordinator role', () => {
+  assert.equal(isHealthcareCampCoordinator({ designation: 'Healthcare Camp Coordinator' }), true);
+  assert.equal(isHealthcareCampCoordinator({ roleIds: [{ name: 'Camp Coordinator' }] }), true);
+  assert.equal(isHealthcareCampCoordinator({
+    designation: 'Manager',
+    roleIds: [{ name: 'Approver', permissions: [PERMISSIONS.CAMPS_APPROVE] }],
+  }), false);
+});
 
 test('parseAssignedUserEmails normalizes and dedupes', () => {
   assert.deepEqual(
@@ -109,7 +119,7 @@ test('resolveAssignedUserEmailsFromRecords unions emails for exact program scope
   ], { programName: 'Ortho', campName: 'BMD' }), ['ops@client.com', 'user@client.in']);
 });
 
-test('resolveCampClientScope scopes listed users to client + division + method', async (t) => {
+test('resolveCampClientScope scopes listed Healthcare Camp Coordinators to client + division + method', async (t) => {
   const suffix = Date.now();
   const assignedEmail = `assigned-${suffix}@client.test`;
   const clientId = `aaaaaaaaaaaaaaaaaaaa${String(suffix).slice(-4)}`.slice(0, 24);
@@ -128,7 +138,8 @@ test('resolveCampClientScope scopes listed users to client + division + method',
 
   const scoped = await resolveCampClientScope({
     email: assignedEmail.toUpperCase(),
-    roleIds: [{ permissions: [PERMISSIONS.CAMPS_APPROVE] }],
+    designation: 'Healthcare Camp Coordinator',
+    roleIds: [{ name: 'Camp Coordinator', permissions: [PERMISSIONS.CAMPS_APPROVE] }],
   });
   assert.ok(Array.isArray(scoped));
   assert.equal(scoped.length, 1);
@@ -137,19 +148,27 @@ test('resolveCampClientScope scopes listed users to client + division + method',
 
   await assert.rejects(
     () => assertCampClientAccess(
-      { email: assignedEmail, roleIds: [{ permissions: [PERMISSIONS.CAMPS_APPROVE] }] },
+      {
+        email: assignedEmail,
+        designation: 'Healthcare Camp Coordinator',
+        roleIds: [{ name: 'Camp Coordinator' }],
+      },
       { clientId, campaignType: 'Cardio', campaignName: 'BMD' },
     ),
     (err) => err instanceof AppError && err.status === 403,
   );
 
   await assertCampClientAccess(
-    { email: assignedEmail, roleIds: [{ permissions: [PERMISSIONS.CAMPS_READ] }] },
+    {
+      email: assignedEmail,
+      designation: 'Healthcare Camp Coordinator',
+      roleIds: [{ name: 'Camp Coordinator' }],
+    },
     { clientId, campaignType: 'Ortho', campaignName: 'BMD' },
   );
 });
 
-test('resolveCampClientScope restricts unassigned approvers when assignments configured', async (t) => {
+test('resolveCampClientScope leaves non-coordinators unrestricted even when not assigned', async (t) => {
   const suffix = Date.now();
   const master = await CampOpsClientMaster.create({
     clientId: `ccccccccccccccc${String(suffix).slice(-8)}`.slice(0, 24),
@@ -164,37 +183,29 @@ test('resolveCampClientScope restricts unassigned approvers when assignments con
     await master.save();
   });
 
-  const scope = await resolveCampClientScope({
+  const approverScope = await resolveCampClientScope({
     email: `ops-${suffix}@tylo.test`,
-    roleIds: [{ permissions: [PERMISSIONS.CAMPS_APPROVE] }],
+    designation: 'Manager',
+    roleIds: [{ name: 'Approver', permissions: [PERMISSIONS.CAMPS_APPROVE] }],
   });
-  assert.ok(Array.isArray(scope));
-  assert.equal(scope.length, 0);
-});
+  assert.equal(approverScope, null);
 
-test('resolveCampClientScope leaves unassigned admins unrestricted', async (t) => {
-  const suffix = Date.now();
-  const master = await CampOpsClientMaster.create({
-    clientId: `eeeeeeeeeeeeeee${String(suffix).slice(-8)}`.slice(0, 24),
-    clientName: `Admin Client ${suffix}`,
-    programName: 'Ortho',
-    campName: 'BMD',
-    assignedUserEmails: [`owner-${suffix}@client.test`],
-  });
-  t.after(async () => {
-    master.isDeleted = true;
-    master.deletedAt = new Date().toISOString();
-    await master.save();
-  });
-
-  const scope = await resolveCampClientScope({
+  const adminScope = await resolveCampClientScope({
     email: `admin-${suffix}@tylo.test`,
-    roleIds: [{ permissions: [PERMISSIONS.ALL] }],
+    designation: 'Director',
+    roleIds: [{ name: 'Admin', permissions: [PERMISSIONS.ALL] }],
   });
-  assert.equal(scope, null);
+  assert.equal(adminScope, null);
+
+  const viewerScope = await resolveCampClientScope({
+    email: `viewer-${suffix}@client.test`,
+    designation: 'Individual Contributor',
+    roleIds: [{ name: 'Viewer', permissions: [PERMISSIONS.CAMPS_READ] }],
+  });
+  assert.equal(viewerScope, null);
 });
 
-test('resolveCampClientScope hides camps from unassigned non-approvers', async (t) => {
+test('resolveCampClientScope hides camps from unassigned Healthcare Camp Coordinators', async (t) => {
   const suffix = Date.now();
   const master = await CampOpsClientMaster.create({
     clientId: `ddddddddddddddd${String(suffix).slice(-8)}`.slice(0, 24),
@@ -210,8 +221,9 @@ test('resolveCampClientScope hides camps from unassigned non-approvers', async (
   });
 
   const scope = await resolveCampClientScope({
-    email: `viewer-${suffix}@client.test`,
-    roleIds: [{ permissions: [PERMISSIONS.CAMPS_READ] }],
+    email: `coord-${suffix}@client.test`,
+    designation: 'Healthcare Camp Coordinator',
+    roleIds: [{ name: 'Camp Coordinator', permissions: [PERMISSIONS.CAMPS_READ] }],
   });
   assert.ok(Array.isArray(scope));
   assert.equal(scope.length, 0);
