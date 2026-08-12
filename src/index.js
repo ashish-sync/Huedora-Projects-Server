@@ -43,6 +43,13 @@ async function maybeFreshStart() {
 /** One-shot soft-delete of every Camp One camp (all stages). Safe for production. */
 async function maybePurgeAllCampsOnBoot() {
   if (String(process.env.PURGE_ALL_CAMPS_ON_BOOT || '').toLowerCase() !== 'true') return;
+  const campaignPurge = String(process.env.PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT || '').trim();
+  if (campaignPurge && campaignPurge.toLowerCase() !== 'false') {
+    console.warn(
+      '[camps] PURGE_ALL_CAMPS_ON_BOOT skipped — PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT is also set',
+    );
+    return;
+  }
   const { purgeAllCamps } = await import('./utils/purgeAllCamps.js');
   const result = await purgeAllCamps({ actorId: 'boot:PURGE_ALL_CAMPS_ON_BOOT' });
   console.warn('[camps] PURGE_ALL_CAMPS_ON_BOOT=true — soft-deleted camps:', result);

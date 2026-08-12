@@ -52,7 +52,7 @@ async function writeBootLock(doc) {
   await upsertDocument(BOOT_LOCK_COLLECTION, doc);
 }
 
-async function acquireBootLock(campaignType, { dryRun = false } = {}) {
+async function acquireBootLock(campaignType) {
   const id = lockIdForType(campaignType);
   const now = new Date().toISOString();
   const existing = await readBootLock(campaignType);
@@ -77,8 +77,8 @@ async function acquireBootLock(campaignType, { dryRun = false } = {}) {
     collection: CAMP_OPS_COLLECTION,
     mongoCollection: MONGO_COLLECTION,
     field: CAMP_CAMPAIGN_TYPE_FIELD,
-    status: dryRun ? 'dry_run' : 'running',
-    dryRun: Boolean(dryRun),
+    status: 'running',
+    dryRun: false,
     startedAt: now,
     updatedAt: now,
     completedAt: null,
@@ -230,7 +230,14 @@ export async function maybeHardDeleteCampsByCampaignTypeOnBoot() {
     validateCampModelOrThrow();
 
     for (const campaignType of campaignTypes) {
-      const lockResult = await acquireBootLock(campaignType, { dryRun });
+      if (dryRun) {
+        const result = await hardDeleteCampsByCampaignTypeExact(campaignType, { dryRun: true });
+        console.warn('[camps-hard-delete] Boot purge result (dry-run):', result);
+        results.push(result);
+        continue;
+      }
+
+      const lockResult = await acquireBootLock(campaignType);
       if (!lockResult.acquired) {
         console.warn('[camps-hard-delete] Skipped — lock not acquired:', {
           campaignType,

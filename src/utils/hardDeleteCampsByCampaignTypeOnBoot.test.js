@@ -64,3 +64,22 @@ test('collection and field constants match CampOpsCamp schema', () => {
   assert.equal(MONGO_COLLECTION, 'tylo_camp_ops_camps');
   assert.equal(CAMP_CAMPAIGN_TYPE_FIELD, 'campaignType');
 });
+
+test('hardDeleteCampsByCampaignTypeExact dry-run reports matches without deleting', async () => {
+  const { hardDeleteCampsByCampaignTypeExact } = await import('./hardDeleteCampsByCampaignTypeOnBoot.js');
+  const { CampOpsCamp } = await import('../modules/campOps/campOps.model.js');
+
+  const before = await CampOpsCamp.find({}).exec();
+  const momBefore = before.filter((c) => campMatchesCampaignTypeExact(c, 'MOM')).length;
+
+  const result = await hardDeleteCampsByCampaignTypeExact('MOM', { dryRun: true });
+
+  assert.equal(result.dryRun, true);
+  assert.equal(result.deletedCount, 0);
+  assert.equal(result.completed, false);
+  assert.equal(result.matchingCount, momBefore);
+  assert.equal(result.mongoCollection, 'tylo_camp_ops_camps');
+
+  const after = await CampOpsCamp.find({}).exec();
+  assert.equal(after.length, before.length);
+});
