@@ -1,5 +1,9 @@
 import { CampOpsCamp } from '../modules/campOps/campOps.model.js';
 
+function escapeRegex(value = '') {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function normalizeClientNames(clientNames = []) {
   return [...new Set(
     (Array.isArray(clientNames) ? clientNames : [clientNames])
@@ -8,13 +12,46 @@ function normalizeClientNames(clientNames = []) {
   )];
 }
 
+function normalizeCampaignTypes(campaignTypes = []) {
+  const list = Array.isArray(campaignTypes)
+    ? campaignTypes
+    : String(campaignTypes || '').split(/[,|]/);
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    const name = String(raw || '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+  }
+  return out;
+}
+
+/** Public alias for route/boot input normalization. */
+export function normalizeCampaignTypesInput(campaignTypes = []) {
+  return normalizeCampaignTypes(campaignTypes);
+}
+
 function clientNameFilter(clientNames = []) {
   const names = normalizeClientNames(clientNames);
   if (!names.length) return null;
   return {
     isDeleted: false,
     $or: names.map((name) => ({
-      clientName: new RegExp(`^${String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+      clientName: new RegExp(`^${escapeRegex(name)}$`, 'i'),
+    })),
+  };
+}
+
+function campaignTypeFilter(campaignTypes = []) {
+  const types = normalizeCampaignTypes(campaignTypes);
+  if (!types.length) return null;
+  return {
+    isDeleted: false,
+    $or: types.map((type) => ({
+      campaignType: new RegExp(`^${escapeRegex(type)}$`, 'i'),
     })),
   };
 }
@@ -70,6 +107,68 @@ export async function countCampsByClientNames(clientNames = []) {
   return {
     total: camps.length,
     byClient,
+    samples: camps.slice(0, 10).map((camp) => ({
+      campId: camp.campId || null,
+      clientName: camp.clientName || null,
+      campaignType: camp.campaignType || null,
+      campaignName: camp.campaignName || null,
+      lifecycleStage: camp.lifecycleStage || null,
+      status: camp.status || null,
+    })),
+  };
+}
+
+/**
+ * Soft-delete Camp One camps whose Division/Therapy (campaignType) matches.
+ */
+export async function purgeCampsByCampaignTypes(campaignTypes = [], { actorId = null } = {}) {
+  const filter = campaignTypeFilter(campaignTypes);
+  if (!filter) {
+    return { purged: 0, remaining: 0, matched: 0, campaignTypes: [] };
+  }
+
+  const matched = await CampOpsCamp.countDocuments(filter);
+  if (!matched) {
+    return {
+      purged: 0,
+      remaining: 0,
+      matched: 0,
+      campaignTypes: normalizeCampaignTypes(campaignTypes),
+    };
+  }
+
+  const now = new Date().toISOString();
+  await CampOpsCamp.updateMany(filter, {
+    $set: {
+      isDeleted: true,
+      deletedAt: now,
+      deletedBy: actorId ? String(actorId) : null,
+    },
+  });
+
+  const remaining = await CampOpsCamp.countDocuments(filter);
+  return {
+    purged: matched - remaining,
+    remaining,
+    matched,
+    campaignTypes: normalizeCampaignTypes(campaignTypes),
+  };
+}
+
+export async function countCampsByCampaignTypes(campaignTypes = []) {
+  const filter = campaignTypeFilter(campaignTypes);
+  if (!filter) return { total: 0, byCampaignType: {}, samples: [] };
+
+  const camps = await CampOpsCamp.find(filter);
+  const byCampaignType = {};
+  for (const camp of camps) {
+    const key = String(camp.campaignType || '').trim() || '(blank)';
+    byCampaignType[key] = (byCampaignType[key] || 0) + 1;
+  }
+
+  return {
+    total: camps.length,
+    byCampaignType,
     samples: camps.slice(0, 10).map((camp) => ({
       campId: camp.campId || null,
       clientName: camp.clientName || null,
@@ -141,4 +240,9 @@ export async function purgeCampByKey(key, { actorId = null } = {}) {
       campDate: camp.campDate || null,
     },
   };
+}
+
+/** Parse boot env like `MOM` or `MOM,Oncology` into a clean list. */
+export function parseCampaignTypesEnv(raw = '') {
+  return normalizeCampaignTypes(String(raw || '').split(/[,|]/));
 }

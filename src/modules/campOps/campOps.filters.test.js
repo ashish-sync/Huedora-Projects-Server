@@ -169,3 +169,16 @@ test('buildCampFilter excludes closed camps for same-day HCW schedule lookups', 
   assert.deepEqual(filter.assignmentDecision, { $ne: 'refuse' });
   assert.equal(filter.hcwContactId, 'hcw-1');
 });
+
+test('buildCampFilter search matches key camp headers', () => {
+  const filter = buildCampFilter({ search: 'Mumbai' });
+  const fields = filter.$or.map((clause) => Object.keys(clause)[0]);
+  assert.ok(fields.includes('clientName'));
+  assert.ok(fields.includes('campaignType'));
+  assert.ok(fields.includes('doctorName'));
+  assert.ok(fields.includes('state'));
+  assert.ok(fields.includes('city'));
+  const campIdClause = filter.$or.find((c) => c.campId);
+  assert.equal(campIdClause.campId.source, 'Mumbai');
+  assert.equal(campIdClause.campId.flags, 'i');
+});

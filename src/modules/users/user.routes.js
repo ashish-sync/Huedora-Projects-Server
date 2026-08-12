@@ -131,6 +131,59 @@ router.post(
 );
 
 router.post(
+  '/system/purge-camps-by-campaign-type',
+  requirePermission(PERMISSIONS.CAMPS_APPROVE, PERMISSIONS.ALL),
+  asyncHandler(async (req, res) => {
+    if (String(req.body?.confirm || '').trim() !== 'PURGE_CAMPS_BY_CAMPAIGN_TYPE') {
+      throw new AppError(
+        'Confirmation required. Send { "confirm": "PURGE_CAMPS_BY_CAMPAIGN_TYPE", "campaignType": "MOM" }',
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
+
+    const {
+      normalizeCampaignTypesInput,
+      countCampsByCampaignTypes,
+      purgeCampsByCampaignTypes,
+    } = await import('../../utils/purgeAllCamps.js');
+
+    const campaignTypes = normalizeCampaignTypesInput(
+      req.body?.campaignTypes ?? req.body?.campaignType,
+    );
+    if (!campaignTypes.length) {
+      throw new AppError(
+        'campaignType is required (Division / Therapy), e.g. "MOM"',
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
+
+    const preview = await countCampsByCampaignTypes(campaignTypes);
+    const result = await purgeCampsByCampaignTypes(campaignTypes, { actorId: req.user._id });
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'SYSTEM.PURGE_CAMPS_BY_CAMPAIGN_TYPE',
+      entityType: 'camp_ops_camp',
+      entityId: null,
+      after: { preview, result },
+      requestId: req.requestId,
+    });
+
+    res.json({
+      data: {
+        ok: true,
+        message: `Soft-deleted Camp One camps for Division/Therapy: ${campaignTypes.join(', ')}.`,
+        preview,
+        ...result,
+      },
+    });
+  })
+);
+
+router.post(
   '/system/purge-camp',
   requirePermission(PERMISSIONS.CAMPS_APPROVE, PERMISSIONS.ALL),
   asyncHandler(async (req, res) => {

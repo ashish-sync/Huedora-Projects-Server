@@ -12,7 +12,7 @@ import { AppError } from '../../utils/helpers.js';
 
 /**
  * Map snake_case parser output → camelCase camp import row.
- * Ready for duplicate detection: client + doctor + date + time.
+ * Ready for duplicate detection: client + doctor + division/therapy + date + start time.
  */
 export function parsedFieldsToCampRow(parsedFields = {}, defaults = {}, pinMaster = null) {
   const city = trimStr(parsedFields.city) || trimStr(pinMaster?.cityName);

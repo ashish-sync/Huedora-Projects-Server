@@ -342,12 +342,17 @@ export function buildCampFilter(query = {}) {
     const regex = new RegExp(escapeRegex(search), 'i');
     filter.$or = [
       { campId: regex },
+      { clientName: regex },
+      { campaignType: regex },
+      { campaignName: regex },
       { doctorName: regex },
+      { doctorCode: regex },
+      { state: regex },
+      { city: regex },
+      { district: regex },
       { hospitalName: regex },
       { clinicName: regex },
-      { city: regex },
-      { clientName: regex },
-      { campaignName: regex },
+      { pincode: regex },
     ];
   }
 

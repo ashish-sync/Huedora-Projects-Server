@@ -28,10 +28,14 @@ import {
   getClientMasterImportErrors,
 } from './import/importClientMasterValidation.js';
 import { normalizePasteStartTime } from './pasteTimeNormalize.js';
+import {
+  buildCampDuplicateKey,
+  buildDuplicatePreviewFlag,
+  findExistingDuplicateCamp,
+  formatDuplicateCampMessage,
+} from './campDuplicate.js';
 
 const BLOCK_SEPARATOR = /(?:^|\n)\s*(?:---+|===+|\*\*\*+)\s*(?:\n|$)/;
-
-const DUPLICATE_STATUSES = ['pending_review', 'approved', 'executed'];
 
 function splitPasteBlocks(text) {
   const raw = String(text || '').trim();
@@ -43,61 +47,6 @@ function splitPasteBlocks(text) {
     .filter(Boolean);
 
   return blocks.length ? blocks : [raw];
-}
-
-function normalizeDoctorName(value = '') {
-  return String(trimStr(value) || '')
-    .replace(/^dr\.?\s*/i, '')
-    .replace(/\./g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
-
-function doctorsMatch(row = {}, camp = {}) {
-  const rowCode = trimStr(row.doctorCode).toLowerCase();
-  const campCode = trimStr(camp.doctorCode).toLowerCase();
-  if (rowCode && campCode) return rowCode === campCode;
-
-  const rowName = normalizeDoctorName(row.doctorName);
-  const campName = normalizeDoctorName(camp.doctorName);
-  return Boolean(rowName && campName && rowName === campName);
-}
-
-async function findExistingDuplicateCamp({ client, row }) {
-  const campDate = parseLocalDateInput(row?.campDate);
-  if (!campDate) return null;
-
-  const doctorCode = trimStr(row.doctorCode);
-  const doctorName = trimStr(row.doctorName);
-  if (!doctorCode && !doctorName) return null;
-
-  const filter = {
-    isDeleted: false,
-    status: { $in: DUPLICATE_STATUSES },
-    campDate,
-    campaignType: trimStr(row.campaignType) || 'Screening',
-  };
-
-  if (client?._id) {
-    filter.clientId = String(client._id);
-  } else if (client?.name) {
-    filter.clientName = new RegExp(`^${escapeRegex(client.name)}$`, 'i');
-  } else {
-    return null;
-  }
-
-  const candidates = await CampOpsCamp.find(filter);
-  return candidates.find((camp) => doctorsMatch(row, camp)) || null;
-}
-
-function buildDuplicatePreviewFlag(existingCamp) {
-  if (!existingCamp) return null;
-  return {
-    campId: existingCamp.campId,
-    id: existingCamp._id,
-    status: existingCamp.status,
-  };
 }
 
 async function resolveClientForRow(row, { allowCreate = true } = {}) {
@@ -192,7 +141,7 @@ async function buildBodyPreview(text, defaults = {}, { user, referenceDate = nul
   const refDate = referenceDate || localTodayIso();
   const clientMasterCatalog = catalog || await buildClientMasterImportCatalog();
 
-  return Promise.all(
+  const entries = await Promise.all(
     blocks.map(async (block, index) => {
       const extracted = applyPasteDefaults(
         await enrichExtractedPasteFields(extractFieldsFromPasteBlock(block)),
@@ -327,13 +276,53 @@ async function buildBodyPreview(text, defaults = {}, { user, referenceDate = nul
       if (duplicate) {
         entry.errors = [
           ...(entry.errors || []),
-          `Duplicate of existing camp ${duplicate.campId} for same client, division, date, and doctor`,
+          formatDuplicateCampMessage(duplicate),
         ];
       }
 
       return applyHistoricalDatePreviewFlags(entry, user);
     }),
   );
+
+  return markBatchDuplicateRows(entries);
+}
+
+function markBatchDuplicateRows(entries = []) {
+  const seen = new Map();
+  return entries.map((entry) => {
+    if (!entry?.row || entry.duplicateOf || entry.historicalDateBlocked) return entry;
+    const key = buildCampDuplicateKey({
+      clientId: entry.row.clientId,
+      clientName: entry.row.clientName,
+      doctorName: entry.row.doctorName,
+      campaignType: entry.row.campaignType,
+      campDate: entry.row.campDate,
+      startTime: entry.row.startTime,
+    });
+    if (!key) return entry;
+    if (seen.has(key)) {
+      const first = seen.get(key);
+      return {
+        ...entry,
+        duplicateOf: {
+          campId: first.campId || `row-${first.rowNumber}`,
+          id: first.id || null,
+          status: 'batch',
+          batchRowNumber: first.rowNumber,
+        },
+        errors: [
+          ...(entry.errors || []),
+          `Duplicate of row ${first.rowNumber} for same client, doctor, division, date, and start time`,
+        ],
+      };
+    }
+    seen.set(key, {
+      rowNumber: entry.rowNumber,
+      campId: entry.row.campId || '',
+      id: null,
+    });
+    return entry;
+  });
 }
 
 export async function extractManualPastePreview({
@@ -493,6 +482,26 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
         },
       );
 
+      const liveDuplicate = await findExistingDuplicateCamp({
+        client,
+        row: {
+          clientName: client.name || entry.row.clientName,
+          doctorName: payload.doctorName,
+          campaignType: payload.campaignType,
+          campDate: payload.campDate,
+          startTime: payload.startTime,
+        },
+      });
+      if (liveDuplicate) {
+        results.push({
+          status: 'duplicate',
+          rowNumber: entry.rowNumber,
+          campId: liveDuplicate.campId,
+          id: liveDuplicate._id,
+        });
+        continue;
+      }
+
       const incomplete = getRequestStageBlockers(payload).length > 0;
       const camp = await CampOpsCamp.create({
         ...payload,
@@ -535,7 +544,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
   if (!created.length) {
     if (duplicates.length) {
       throw new AppError(
-        `No new camps created. ${duplicates.length} row(s) matched existing camps for the same client, division, date, and doctor.`,
+        `No new camps created. ${duplicates.length} row(s) matched existing camps for the same client, doctor, division, date, and start time.`,
         409,
         'DUPLICATE_CAMP',
       );

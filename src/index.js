@@ -49,6 +49,29 @@ async function maybePurgeAllCampsOnBoot() {
   console.warn('[camps] Set PURGE_ALL_CAMPS_ON_BOOT=false after this deploy');
 }
 
+/**
+ * One-shot soft-delete of Camp One camps by Division/Therapy (campaignType).
+ * Example: PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT=MOM
+ */
+async function maybePurgeCampsByCampaignTypeOnBoot() {
+  const raw = String(process.env.PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT || '').trim();
+  if (!raw || raw.toLowerCase() === 'false') return;
+  const {
+    parseCampaignTypesEnv,
+    purgeCampsByCampaignTypes,
+  } = await import('./utils/purgeAllCamps.js');
+  const campaignTypes = parseCampaignTypesEnv(raw);
+  if (!campaignTypes.length) return;
+  const result = await purgeCampsByCampaignTypes(campaignTypes, {
+    actorId: 'boot:PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT',
+  });
+  console.warn(
+    `[camps] PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT=${campaignTypes.join(',')} — soft-deleted:`,
+    result,
+  );
+  console.warn('[camps] Clear PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT after this deploy');
+}
+
 async function maybeReseedGeoOnBoot() {
   if (String(process.env.RESEED_GEO_ON_BOOT || '').toLowerCase() !== 'true') return;
   const result = await forceReseedGeoMasters();
@@ -72,6 +95,7 @@ async function main() {
   await hydrateEmailIngestState();
   await maybeFreshStart();
   await maybePurgeAllCampsOnBoot();
+  await maybePurgeCampsByCampaignTypeOnBoot();
   await ensureSeed();
   try {
     const { ensureTeamUsersInDatabase } = await import('./boot/ensureTeamUsers.js');

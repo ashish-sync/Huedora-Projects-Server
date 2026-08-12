@@ -13,18 +13,23 @@ import {
 } from './manualPaste.service.js';
 import { enrichPasteLocationFromPin } from './manualPaste.enrich.js';
 import {
-  escapeRegex,
   parseLocalDateInput,
   trimStr,
   validateMappedImportRows,
 } from './campOps.helpers.js';
-import { CampOpsCamp, CampOpsClient } from './campOps.model.js';
+import { CampOpsClient } from './campOps.model.js';
 import { MAX_PREVIEW_BODY_ROWS } from '../../utils/spreadsheetLimits.js';
 import { logMemory } from '../../utils/memory.js';
 import {
   buildClientMasterImportCatalog,
   applyClientMasterValidationToResult,
 } from './import/importClientMasterValidation.js';
+import {
+  buildCampDuplicateKey,
+  buildDuplicatePreviewFlag,
+  findExistingDuplicateCamp,
+  formatDuplicateCampMessage,
+} from './campDuplicate.js';
 
 async function resolveClientForRow(row, { allowCreate = false } = {}) {
   const name = trimStr(row.clientName);
@@ -41,50 +46,38 @@ async function resolveClientForRow(row, { allowCreate = false } = {}) {
   });
 }
 
-function normalizeDoctorName(value = '') {
-  return String(trimStr(value) || '')
-    .replace(/^dr\.?\s*/i, '')
-    .replace(/\./g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
-
-function doctorsMatch(row = {}, camp = {}) {
-  const rowCode = trimStr(row.doctorCode).toLowerCase();
-  const campCode = trimStr(camp.doctorCode).toLowerCase();
-  if (rowCode && campCode) return rowCode === campCode;
-
-  const rowName = normalizeDoctorName(row.doctorName);
-  const campName = normalizeDoctorName(camp.doctorName);
-  return Boolean(rowName && campName && rowName === campName);
-}
-
-async function findExistingDuplicateCamp({ client, row }) {
-  const campDate = parseLocalDateInput(row?.campDate);
-  if (!campDate) return null;
-
-  const doctorCode = trimStr(row.doctorCode);
-  const doctorName = trimStr(row.doctorName);
-  if (!doctorCode && !doctorName) return null;
-
-  const filter = {
-    isDeleted: false,
-    status: { $in: ['pending_review', 'approved', 'executed'] },
-    campDate,
-    campaignType: trimStr(row.campaignType) || 'Screening',
-  };
-
-  if (client?._id) {
-    filter.clientId = String(client._id);
-  } else if (client?.name) {
-    filter.clientName = new RegExp(`^${escapeRegex(client.name)}$`, 'i');
-  } else {
-    return null;
-  }
-
-  const candidates = await CampOpsCamp.find(filter);
-  return candidates.find((camp) => doctorsMatch(row, camp)) || null;
+function markBatchDuplicateRows(entries = []) {
+  const seen = new Map();
+  return entries.map((entry) => {
+    if (!entry?.row || entry.duplicateOf) return entry;
+    const key = buildCampDuplicateKey({
+      clientId: entry.row.clientId,
+      clientName: entry.row.clientName,
+      doctorName: entry.row.doctorName,
+      campaignType: entry.row.campaignType,
+      campDate: entry.row.campDate,
+      startTime: entry.row.startTime,
+    });
+    if (!key) return entry;
+    if (seen.has(key)) {
+      const first = seen.get(key);
+      return {
+        ...entry,
+        duplicateOf: {
+          campId: first.campId || `row-${first.rowNumber}`,
+          id: null,
+          status: 'batch',
+          batchRowNumber: first.rowNumber,
+        },
+        errors: [
+          ...(entry.errors || []),
+          `Duplicate of row ${first.rowNumber} for same client, doctor, division, date, and start time`,
+        ],
+      };
+    }
+    seen.set(key, { rowNumber: entry.rowNumber, campId: entry.row.campId || '' });
+    return entry;
+  });
 }
 
 async function buildBodyPreviewFromMappedRows(mappedRows, defaults = {}, catalog = null) {
@@ -137,14 +130,10 @@ async function buildBodyPreviewFromMappedRows(mappedRows, defaults = {}, catalog
 
         const duplicate = await findExistingDuplicateCamp({ client, row: entry.row });
         if (duplicate) {
-          entry.duplicateOf = {
-            campId: duplicate.campId,
-            id: duplicate._id,
-            status: duplicate.status,
-          };
+          entry.duplicateOf = buildDuplicatePreviewFlag(duplicate);
           entry.errors = [
             ...(entry.errors || []),
-            `Duplicate of existing camp ${duplicate.campId} for same client, division, date, and doctor`,
+            formatDuplicateCampMessage(duplicate),
           ];
         }
 
@@ -153,7 +142,7 @@ async function buildBodyPreviewFromMappedRows(mappedRows, defaults = {}, catalog
     );
     out.push(...entries);
   }
-  return out;
+  return markBatchDuplicateRows(out);
 }
 
 function mergeMapping(autoMapping = {}, manualMapping = {}) {

@@ -140,6 +140,10 @@ import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.r
 import { assertHistoricalCampDatesAllowed } from './campDatePolicy.js';
 import { assertHcwAssignmentGap } from './hcwAssignmentGap.js';
 import {
+  findExistingDuplicateCamp,
+  formatDuplicateCampMessage,
+} from './campDuplicate.js';
+import {
   resolveCampClientScope,
   applyClientScopeToFilter,
   applyClientScopeToIdField,
@@ -1157,6 +1161,24 @@ router.post(
       requestDate: payload.requestDate,
     });
     await assertClientIdAccess(req.user, resolved._id);
+
+    const duplicate = await findExistingDuplicateCamp({
+      client: resolved,
+      row: {
+        clientName: resolved.name,
+        doctorName: payload.doctorName,
+        campaignType: payload.campaignType,
+        campDate: payload.campDate,
+        startTime: payload.startTime,
+      },
+    });
+    if (duplicate) {
+      throw new AppError(
+        formatDuplicateCampMessage(duplicate),
+        409,
+        'DUPLICATE_CAMP',
+      );
+    }
 
     const tracking = captureSubmissionTracking();
     const a = actor(req);
