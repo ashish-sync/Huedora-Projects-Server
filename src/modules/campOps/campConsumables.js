@@ -44,7 +44,10 @@ export function getConsumablesCompletionBlockers(mapped = [], rows = []) {
   if (!Array.isArray(mapped) || !mapped.length) return [];
   const rowsById = Object.fromEntries((rows || []).map((row) => [String(row.productId), row]));
   return mapped
-    .filter((item) => !isConsumableRowComplete(rowsById[String(item.productId)] || {}))
+    .filter((item) => {
+      const row = rowsById[String(item.productId)] || {};
+      return !row.excluded && !isConsumableRowComplete(row);
+    })
     .map((item) => `Enter usage and wastage for ${item.itemName || 'consumable'}`);
 }
 
@@ -52,6 +55,7 @@ export function normalizeConsumablesUsed(rows = [], { requiredProductIds = [] } 
   if (!Array.isArray(rows)) return [];
   const required = new Set((requiredProductIds || []).map(String));
   return rows
+    .filter((row) => !row?.excluded)
     .map((row) => ({
       productId: String(row?.productId || '').trim(),
       itemName: String(row?.itemName || '').trim(),
@@ -63,7 +67,7 @@ export function normalizeConsumablesUsed(rows = [], { requiredProductIds = [] } 
     .filter((row) => {
       if (!row.productId) return false;
       if (required.has(row.productId)) return isConsumableRowComplete(row);
-      return row.quantityUsed > 0;
+      return row.quantityUsed > 0 || row.wastage > 0;
     });
 }
 
