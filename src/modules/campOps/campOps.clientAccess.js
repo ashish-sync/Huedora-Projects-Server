@@ -36,8 +36,8 @@ export function parseAssignedUserEmails(raw) {
  *
  * Policy when any master has assignments configured:
  * - User listed on one or more masters → only those client + division + method combos.
- * - User not listed + Admin (`*`) or camps:approve → unrestricted (internal ops).
- * - User not listed + no approve → empty scope (sees nothing).
+ * - User not listed + Admin (`*`) → unrestricted (internal ops).
+ * - User not listed + everyone else (including camps:approve) → empty scope (sees nothing).
  */
 export async function resolveCampClientScope(user = {}) {
   const email = normalizeEmail(user.email);
@@ -72,7 +72,7 @@ export async function resolveCampClientScope(user = {}) {
 
   if (!anyAssignmentsConfigured) return null;
   if (!assignments.length) {
-    if (userHasAnyPermission(user, PERMISSIONS.ALL, PERMISSIONS.CAMPS_APPROVE)) return null;
+    if (userHasAnyPermission(user, PERMISSIONS.ALL)) return null;
     return [];
   }
   return assignments;
@@ -137,6 +137,14 @@ export async function assertClientIdAccess(user, clientId) {
   const normalized = normalizeClientId(clientId);
   if (!scoped.some((assignment) => normalizeClientId(assignment.clientId) === normalized)) {
     throw new AppError('You do not have access to this client', 403, 'FORBIDDEN');
+  }
+}
+
+export async function assertClientMasterAccess(user, master = {}) {
+  const scoped = await resolveCampClientScope(user);
+  if (!scoped) return;
+  if (!isClientMasterInScope(scoped, master)) {
+    throw new AppError('You do not have access to this program', 403, 'FORBIDDEN');
   }
 }
 

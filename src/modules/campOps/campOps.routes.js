@@ -150,6 +150,7 @@ import {
   applyClientScopeToIdField,
   assertCampClientAccess,
   assertClientIdAccess,
+  assertClientMasterAccess,
   isClientIdInScope,
   isClientMasterInScope,
   filterRowsByCampClientScope,
@@ -2638,7 +2639,11 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const scopedFilter = await scopeEntityIdFilter(req, { isDeleted: false }, 'clientId');
-    const rows = await CampOpsClientMaster.find(scopedFilter).sort('-updatedAt');
+    const scoped = await resolveCampClientScope(req.user);
+    let rows = await CampOpsClientMaster.find(scopedFilter).sort('-updatedAt');
+    if (Array.isArray(scoped)) {
+      rows = filterRowsByCampClientScope(rows, scoped, { master: true });
+    }
     const clientIds = [...new Set(rows.map((r) => String(r.clientId || '')).filter(Boolean))];
     const clients = clientIds.length
       ? await CampOpsClient.find({ _id: { $in: clientIds }, isDeleted: false })
@@ -2854,6 +2859,12 @@ router.get(
       ));
     }
 
+    // Name fallback must not widen past assigned-client scope.
+    const scoped = await resolveCampClientScope(req.user);
+    if (scoped) {
+      rows = rows.filter((row) => isClientMasterInScope(scoped, row));
+    }
+
     const divisionMap = new Map();
     for (const record of rows) {
       const division = trimStr(record.programName || record.campType);
@@ -2887,6 +2898,7 @@ router.get(
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
     await assertClientIdAccess(req.user, row.clientId);
+    await assertClientMasterAccess(req.user, row);
     const client = row.clientId
       ? await CampOpsClient.findOne({ _id: row.clientId, isDeleted: false })
       : null;
@@ -2953,6 +2965,7 @@ router.put(
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientMasterAccess(req.user, row);
     try {
       assertNotStale(row, req.body.expectedUpdatedAt || req.body.updatedAt, {
         label: 'Client Master',

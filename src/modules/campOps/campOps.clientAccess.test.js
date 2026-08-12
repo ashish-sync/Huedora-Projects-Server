@@ -149,7 +149,7 @@ test('resolveCampClientScope scopes listed users to client + division + method',
   );
 });
 
-test('resolveCampClientScope leaves unassigned approvers unrestricted', async (t) => {
+test('resolveCampClientScope restricts unassigned approvers when assignments configured', async (t) => {
   const suffix = Date.now();
   const master = await CampOpsClientMaster.create({
     clientId: `ccccccccccccccc${String(suffix).slice(-8)}`.slice(0, 24),
@@ -167,6 +167,29 @@ test('resolveCampClientScope leaves unassigned approvers unrestricted', async (t
   const scope = await resolveCampClientScope({
     email: `ops-${suffix}@tylo.test`,
     roleIds: [{ permissions: [PERMISSIONS.CAMPS_APPROVE] }],
+  });
+  assert.ok(Array.isArray(scope));
+  assert.equal(scope.length, 0);
+});
+
+test('resolveCampClientScope leaves unassigned admins unrestricted', async (t) => {
+  const suffix = Date.now();
+  const master = await CampOpsClientMaster.create({
+    clientId: `eeeeeeeeeeeeeee${String(suffix).slice(-8)}`.slice(0, 24),
+    clientName: `Admin Client ${suffix}`,
+    programName: 'Ortho',
+    campName: 'BMD',
+    assignedUserEmails: [`owner-${suffix}@client.test`],
+  });
+  t.after(async () => {
+    master.isDeleted = true;
+    master.deletedAt = new Date().toISOString();
+    await master.save();
+  });
+
+  const scope = await resolveCampClientScope({
+    email: `admin-${suffix}@tylo.test`,
+    roleIds: [{ permissions: [PERMISSIONS.ALL] }],
   });
   assert.equal(scope, null);
 });
