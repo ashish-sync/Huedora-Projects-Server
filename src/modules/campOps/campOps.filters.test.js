@@ -157,3 +157,15 @@ test('parseExportFormat normalizes csv and defaults to xlsx', () => {
   assert.equal(parseExportFormat('XLSX'), 'xlsx');
   assert.equal(parseExportFormat(''), 'xlsx');
 });
+
+test('buildCampFilter excludes closed camps for same-day HCW schedule lookups', () => {
+  const filter = buildCampFilter({
+    hcwContactId: 'hcw-1',
+    dateFrom: '2026-08-15',
+    dateTo: '2026-08-15',
+  });
+
+  assert.deepEqual(filter.status, { $nin: ['cancelled', 'rejected'] });
+  assert.deepEqual(filter.assignmentDecision, { $ne: 'refuse' });
+  assert.equal(filter.hcwContactId, 'hcw-1');
+});

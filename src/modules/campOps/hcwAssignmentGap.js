@@ -10,11 +10,26 @@ import {
 /** Minimum gap between one camp's end and the next camp's start for the same HCW. */
 export const HCW_ASSIGNMENT_GAP_MINUTES = 90;
 
-function isActiveHcwAssignedCamp(camp = {}) {
-  if (['cancelled', 'rejected'].includes(trimStr(camp.status))) return false;
-  if (!trimStr(camp.hcwContactId)) return false;
+const TERMINAL_CAMP_STATUSES = ['cancelled', 'rejected'];
+const TERMINAL_EXECUTION_STATUSES = ['Cancelled', 'Refused', 'Rejected'];
+
+export function isActiveHcwAssignedCamp(camp = {}) {
+  if (TERMINAL_CAMP_STATUSES.includes(trimStr(camp.status))) return false;
+  if (TERMINAL_EXECUTION_STATUSES.includes(trimStr(camp.executionStatus))) return false;
   if (trimStr(camp.assignmentDecision) === 'refuse') return false;
+  if (trimStr(camp.assignmentStatus) === 'Unassigned') return false;
+  if (!trimStr(camp.hcwContactId)) return false;
   return true;
+}
+
+/** Clear HCW assignment so the worker is immediately available for other camps. */
+export function clearCampHcwAssignment(camp = {}) {
+  camp.assignmentDecision = 'refuse';
+  camp.assignmentStatus = 'Unassigned';
+  camp.hcwContactId = null;
+  camp.hcwCategory = '';
+  camp.hcwName = '';
+  camp.hcwContact = '';
 }
 
 function scheduleBounds(camp = {}) {
@@ -34,8 +49,25 @@ function scheduleBounds(camp = {}) {
   };
 }
 
-function campLabel(camp = {}) {
-  return trimStr(camp.campId) || trimStr(camp._id) || 'another camp';
+function formatGapDurationLabel(minutes) {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours && mins) return `${hours}h ${mins}m`;
+  if (hours) return `${hours}h`;
+  return `${mins}m`;
+}
+
+function buildHcwAssignmentGapMessage({
+  endsAtTime,
+  earliestStartTime,
+  gapMinutes,
+  isCandidate,
+}) {
+  const gapLabel = formatGapDurationLabel(gapMinutes);
+  if (isCandidate) {
+    return `HCW Schedule Conflict: This camp is scheduled until ${endsAtTime}. A mandatory ${gapLabel} gap is required before the next camp for this HCW, so the earliest available start time for that camp is ${earliestStartTime}.`;
+  }
+  return `HCW Schedule Conflict: This HCW has another camp scheduled until ${endsAtTime}. A mandatory ${gapLabel} gap is required, so the earliest available start time is ${earliestStartTime}.`;
 }
 
 /**
@@ -91,13 +123,12 @@ export function findHcwAssignmentGapConflict(
 
     const conflicting = earlier.isCandidate ? later.camp : earlier.camp;
     const earliestStartTime = formatMinutes(earliestAllowed);
-    const earlierEnd = earlier.bounds.endTime;
-    const pin = trimStr(conflicting.pincode);
-    const pinSuffix = pin ? `, PIN ${pin}` : '';
-    const windowLabel = `${earlier.bounds.startTime}–${earlierEnd}${pinSuffix}`;
-    const message = earlier.isCandidate
-      ? `This camp ends at ${earlierEnd}. The next camp for this HCW on the same date (${campLabel(conflicting)}${pinSuffix}) must start at ${earliestStartTime} or later (1 hour 30 minutes gap required).`
-      : `This HCW already has camp ${campLabel(conflicting)} (${windowLabel}) until ${earlierEnd}. Earliest allowed start for this camp is ${earliestStartTime} (1 hour 30 minutes after that camp ends).`;
+    const message = buildHcwAssignmentGapMessage({
+      endsAtTime: earlier.bounds.endTime,
+      earliestStartTime,
+      gapMinutes,
+      isCandidate: earlier.isCandidate,
+    });
 
     return {
       message,

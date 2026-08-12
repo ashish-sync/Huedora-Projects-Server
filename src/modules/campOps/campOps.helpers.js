@@ -325,6 +325,19 @@ export function buildCampFilter(query = {}) {
     if (dateTo) filter.campDate.$lte = dateTo;
   }
 
+  // Same-day HCW schedule lookups should only return camps that still block assignment.
+  if (
+    hcwContactId
+    && (dateFrom || dateTo)
+    && !status
+    && !requestReviewStatus
+    && !assignmentFilter
+    && !financialFilter
+  ) {
+    filter.status = { $nin: ['cancelled', 'rejected'] };
+    filter.assignmentDecision = { $ne: 'refuse' };
+  }
+
   if (search) {
     const regex = new RegExp(escapeRegex(search), 'i');
     filter.$or = [

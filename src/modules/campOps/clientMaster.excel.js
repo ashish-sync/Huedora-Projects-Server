@@ -19,6 +19,7 @@ export const CLIENT_MASTER_HEADERS = [
   'GSTIN',
   'PAN',
   'Division / Therapy',
+  'Display Name',
   'Method',
   'Service Model',
   'Healthcare Worker',
@@ -58,6 +59,7 @@ export const CLIENT_MASTER_SAMPLE_ROW = [
   '27AABCU9603R1ZM',
   'AABCU9603R',
   'Oncology Screening',
+  'Oncology BMD',
   'BMD',
   'HCW + Device (Light Device)',
   'Technician',
@@ -89,6 +91,7 @@ export const CLIENT_MASTER_SAMPLE_ROW = [
 const IMPORT_ALIASES = {
   clientName: ['Client Name', 'Client', 'clientName'],
   clientCode: ['Client Code', 'Code', 'clientCode'],
+  displayName: ['Display Name', 'displayName'],
   isActive: ['Status', 'Active', 'isActive'],
   billingAddress: ['Billing Address', 'Billing address', 'address', 'billingAddress'],
   billingStateName: ['State', 'Billing State', 'billingStateName', 'stateName'],
@@ -347,6 +350,7 @@ export async function parseClientMasterImportRow(row) {
   };
 
   setIfPresent(parsed, 'clientCode', cellValue(row, IMPORT_ALIASES.clientCode).toUpperCase());
+  setIfPresent(parsed, 'displayName', cellValue(row, IMPORT_ALIASES.displayName));
 
   const billing = {};
   setIfPresent(billing, 'address', cellValue(row, IMPORT_ALIASES.billingAddress));
@@ -477,6 +481,7 @@ export function clientMasterToExcelRow(record, billing = {}, client = null) {
     bill.gstin || '',
     bill.pan || '',
     record.programName || '',
+    record.displayName || '',
     record.campName || '',
     record.campType || '',
     formatHealthcareWorkers(record.healthcareWorker),

@@ -7,6 +7,7 @@ import {
 } from './campOps.helpers.js';
 import { daysFromToday, localTodayIso } from './campDatePolicy.js';
 import { computeCampRevenueFromPricing } from './campOps.clientMasterPricing.js';
+import { clearCampHcwAssignment } from './hcwAssignmentGap.js';
 
 function localTrim(v) {
   return v == null ? '' : String(v).trim();
@@ -604,14 +605,9 @@ export function applyAssignmentStageOutcome(camp, body = {}, now = new Date()) {
     throw new Error('Select a refusal reason');
   }
 
-  camp.assignmentDecision = 'refuse';
-  camp.assignmentStatus = 'Unassigned';
   camp.assignmentRefusalReason = reason;
   camp.cancellationReason = reason;
-  camp.hcwContactId = null;
-  camp.hcwCategory = '';
-  camp.hcwName = '';
-  camp.hcwContact = '';
+  clearCampHcwAssignment(camp);
 
   if (reason === 'Refused' || reason === 'Rejected') {
     camp.status = 'rejected';

@@ -146,8 +146,14 @@ import {
   assertCampClientAccess,
   assertClientIdAccess,
   isClientIdInScope,
+  isClientMasterInScope,
+  filterRowsByCampClientScope,
   parseAssignedUserEmails,
 } from './campOps.clientAccess.js';
+import {
+  campMatchesProgramAssignment,
+  syncAssignedUserEmailsForProgramScope,
+} from './clientMaster.programScope.js';
 import {
   withRequestReview,
   applyRequestReviewTransition,
@@ -157,6 +163,7 @@ import {
   applyCampClosure,
   canCloseCampStatus,
   canCloseCampRecord,
+  clearCampHcwAssignment,
   resolveClosureSelection,
 } from './campOps.closure.js';
 import { notifyCampWorkflow } from './campOps.notifications.js';
@@ -283,6 +290,19 @@ async function scopeCampFilter(req, filter) {
   const scoped = await resolveCampClientScope(req.user);
   if (!scoped) return filter;
   return applyClientScopeToFilter(filter, scoped);
+}
+
+async function resolveScopedCampPredicate(req) {
+  const scoped = await resolveCampClientScope(req.user);
+  if (scoped === null || scoped === undefined) return null;
+  if (!scoped.length) return () => false;
+  return (camp) => scoped.some((assignment) => campMatchesProgramAssignment(camp, assignment));
+}
+
+function combinePredicates(...predicates) {
+  const fns = predicates.filter(Boolean);
+  if (!fns.length) return null;
+  return (row) => fns.every((fn) => fn(row));
 }
 
 async function scopeEntityIdFilter(req, filter, field = '_id') {
@@ -731,11 +751,14 @@ router.get(
     const requestReviewStatus = trimStr(req.query.requestReviewStatus);
     const executionFilter = trimStr(req.query.executionFilter);
     const filter = await scopeCampFilter(req, buildCampFilter(req.query));
+    const scopePredicate = await resolveScopedCampPredicate(req);
 
     if (reactionRequired) {
       return res.json(
-        await paginateCampsInMemory(filter, { page, limit, skip }, (row) =>
-          row.requestReviewStatus === 'information_requested'
+        await paginateCampsInMemory(
+          filter,
+          { page, limit, skip },
+          combinePredicates(scopePredicate, (row) => row.requestReviewStatus === 'information_requested'),
         )
       );
     }
@@ -745,15 +768,17 @@ router.get(
         await paginateCampsInMemory(
           filter,
           { page, limit, skip },
-          (row) => row.requestReviewStatus === requestReviewStatus
+          combinePredicates(scopePredicate, (row) => row.requestReviewStatus === requestReviewStatus),
         )
       );
     }
 
     if (executionFilter) {
       return res.json(
-        await paginateCampsInMemory(filter, { page, limit, skip }, (row) =>
-          matchesExecutionFilter(row, executionFilter)
+        await paginateCampsInMemory(
+          filter,
+          { page, limit, skip },
+          combinePredicates(scopePredicate, (row) => matchesExecutionFilter(row, executionFilter)),
         )
       );
     }
@@ -761,7 +786,17 @@ router.get(
     if (overdueOnly) {
       filter.status = 'approved';
       return res.json(
-        await paginateCampsInMemory(filter, { page, limit, skip }, (row) => isCampOverdue(row))
+        await paginateCampsInMemory(
+          filter,
+          { page, limit, skip },
+          combinePredicates(scopePredicate, (row) => isCampOverdue(row)),
+        )
+      );
+    }
+
+    if (scopePredicate) {
+      return res.json(
+        await paginateCampsInMemory(filter, { page, limit, skip }, scopePredicate),
       );
     }
 
@@ -1428,6 +1463,7 @@ async function transitionCamp(req, res, nextStatus, action) {
       throw new AppError('Refusal reason is required', 400, 'VALIDATION_ERROR');
     }
     applyRequestReviewTransition(camp, 'reject', { reason: rejectionReason });
+    clearCampHcwAssignment(camp);
   }
   if (nextStatus === 'executed') {
     try {
@@ -1455,6 +1491,8 @@ async function transitionCamp(req, res, nextStatus, action) {
     }
     camp.cancelledBy = cancelledBy;
     camp.remarks = remarks;
+    camp.cancellationReason = remarks;
+    clearCampHcwAssignment(camp);
   } else if (req.body?.remarks) {
     camp.remarks = trimStr(req.body.remarks);
   }
@@ -1702,6 +1740,7 @@ router.delete(
 
 const MASTER_STRING_FIELDS = [
   'programName',
+  'displayName',
   'campName',
   'campType',
   'coordinatorName',
@@ -2494,10 +2533,20 @@ router.get(
       filter.$or = [{ clientName: regex }, { programName: regex }, { campName: regex }];
     }
     const scopedFilter = await scopeEntityIdFilter(req, filter, 'clientId');
-    const [data, total] = await Promise.all([
-      CampOpsClientMaster.find(scopedFilter).sort('-updatedAt').skip(skip).limit(limit),
-      CampOpsClientMaster.countDocuments(scopedFilter),
-    ]);
+    const scoped = await resolveCampClientScope(req.user);
+    let data;
+    let total;
+    if (Array.isArray(scoped)) {
+      const allRows = await CampOpsClientMaster.find(scopedFilter).sort('-updatedAt');
+      const scopedRows = filterRowsByCampClientScope(allRows, scoped, { master: true });
+      total = scopedRows.length;
+      data = scopedRows.slice(skip, skip + limit);
+    } else {
+      [data, total] = await Promise.all([
+        CampOpsClientMaster.find(scopedFilter).sort('-updatedAt').skip(skip).limit(limit),
+        CampOpsClientMaster.countDocuments(scopedFilter),
+      ]);
+    }
     const clientIds = [...new Set(data.map((row) => String(row.clientId || '')).filter(Boolean))];
     const clients = clientIds.length
       ? await CampOpsClient.find({ isDeleted: false, _id: { $in: clientIds } })
@@ -2706,7 +2755,7 @@ router.get(
     // Name fallback must not widen past assigned-client scope.
     const scoped = await resolveCampClientScope(req.user);
     if (scoped) {
-      rows = rows.filter((row) => isClientIdInScope(scoped, row.clientId));
+      rows = rows.filter((row) => isClientMasterInScope(scoped, row));
     }
 
     res.json({
@@ -2835,6 +2884,7 @@ router.post(
     res.status(201).json({
       data: {
         ...plain,
+        clientCode: client?.code || '',
         billing: masterBillingView(plain, client),
       },
     });
@@ -2894,11 +2944,15 @@ router.put(
     });
     row.updatedById = actor(req).id;
     await row.save();
+    if (req.body.assignedUserEmails !== undefined) {
+      await syncAssignedUserEmailsForProgramScope(row, row.assignedUserEmails);
+    }
     await audit(req, 'camp_ops.client_master_update', 'camp_ops_client_master', row._id, before, row.toObject());
     const plain = withSignedPoFile(row);
     res.json({
       data: {
         ...plain,
+        clientCode: client?.code || '',
         billing: masterBillingView(plain, client),
       },
     });

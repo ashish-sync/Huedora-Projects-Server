@@ -1,5 +1,6 @@
 import { applyRequestReviewTransition } from './campOps.requestReview.js';
 import { CHARGEABLE_STATUSES } from './campOps.lifecycle.js';
+import { clearCampHcwAssignment } from './hcwAssignmentGap.js';
 
 export { CHARGEABLE_STATUSES };
 
@@ -75,6 +76,8 @@ export function isCampHcwAssigned(camp = {}) {
   if (camp.lifecycleStage === 'execution' && camp.assignmentDecision === 'assign') return true;
   return false;
 }
+
+export { clearCampHcwAssignment } from './hcwAssignmentGap.js';
 
 export function getAvailableClosureTypes(camp = {}) {
   const stage = String(camp.lifecycleStage || 'request').trim();
@@ -241,12 +244,7 @@ export function applyCampClosure(camp, {
   camp.closureReasonCode = resolved.subReason;
   camp.cancellationReason = remark;
   camp.assignmentRefusalReason = resolved.closureType;
-  camp.assignmentDecision = 'refuse';
-  camp.assignmentStatus = 'Unassigned';
-  camp.hcwContactId = null;
-  camp.hcwCategory = '';
-  camp.hcwName = '';
-  camp.hcwContact = '';
+  clearCampHcwAssignment(camp);
   camp.remarks = remark;
 
   if (stage === 'execution' && CHARGEABLE_STATUSES.includes(nextChargeableStatus)) {

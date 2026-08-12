@@ -153,6 +153,7 @@ export const CampOpsClientMaster = defineCollection('camp_ops_client_masters', {
   clientId: null,
   clientName: '',
   programName: '',
+  displayName: '',
   drugTherapyName: '',
   campName: 'BMD',
   campType: '',

@@ -37,7 +37,10 @@ test('blocks next camp before end + 90 minutes', () => {
   assert.ok(conflict);
   assert.equal(conflict.earliestStartTime, '15:30');
   assert.equal(conflict.gapMinutes, HCW_ASSIGNMENT_GAP_MINUTES);
-  assert.match(conflict.message, /15:30/);
+  assert.match(
+    conflict.message,
+    /HCW Schedule Conflict: This HCW has another camp scheduled until 14:00\. A mandatory 1h 30m gap is required, so the earliest available start time is 15:30\./,
+  );
 });
 
 test('blocks overlapping camps for the same HCW', () => {
@@ -77,6 +80,24 @@ test('ignores cancelled or refused camps', () => {
     findHcwAssignmentGapConflict(
       camp({ _id: 'b', startTime: '14:30', endTime: '17:00' }),
       [camp({ assignmentDecision: 'refuse' })],
+    ),
+    null,
+  );
+  assert.equal(
+    findHcwAssignmentGapConflict(
+      camp({ _id: 'b', startTime: '14:30', endTime: '17:00' }),
+      [camp({
+        status: 'cancelled',
+        assignmentDecision: 'assign',
+        assignmentStatus: 'Assigned',
+      })],
+    ),
+    null,
+  );
+  assert.equal(
+    findHcwAssignmentGapConflict(
+      camp({ _id: 'b', startTime: '14:30', endTime: '17:00' }),
+      [camp({ executionStatus: 'Cancelled' })],
     ),
     null,
   );

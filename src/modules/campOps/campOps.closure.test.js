@@ -39,6 +39,8 @@ test('execution cancel updates Chargeable Status', () => {
   assert.equal(camp.status, 'cancelled');
   assert.equal(camp.chargeableStatus, 'Non-Chargeable');
   assert.equal(camp.assignmentRefusalReason, 'Cancelled by Tylo');
+  assert.equal(camp.hcwContactId, null);
+  assert.equal(camp.assignmentStatus, 'Unassigned');
 });
 
 test('assignment close does not require Chargeable Status', () => {
