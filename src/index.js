@@ -50,26 +50,16 @@ async function maybePurgeAllCampsOnBoot() {
 }
 
 /**
- * One-shot soft-delete of Camp One camps by Division/Therapy (campaignType).
+ * One-shot permanent delete of Camp One camps by Division/Therapy (campaignType).
+ * Exact match only (trim + case fold) — e.g. MOM matches "MOM"/" mom " but not "MOM Camp".
  * Example: PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT=MOM
+ * Dry-run: PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT_DRY_RUN=true
  */
-async function maybePurgeCampsByCampaignTypeOnBoot() {
-  const raw = String(process.env.PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT || '').trim();
-  if (!raw || raw.toLowerCase() === 'false') return;
-  const {
-    parseCampaignTypesEnv,
-    purgeCampsByCampaignTypes,
-  } = await import('./utils/purgeAllCamps.js');
-  const campaignTypes = parseCampaignTypesEnv(raw);
-  if (!campaignTypes.length) return;
-  const result = await purgeCampsByCampaignTypes(campaignTypes, {
-    actorId: 'boot:PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT',
-  });
-  console.warn(
-    `[camps] PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT=${campaignTypes.join(',')} — soft-deleted:`,
-    result,
+async function maybeHardDeleteCampsByCampaignTypeOnBoot() {
+  const { maybeHardDeleteCampsByCampaignTypeOnBoot } = await import(
+    './utils/hardDeleteCampsByCampaignTypeOnBoot.js'
   );
-  console.warn('[camps] Clear PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT after this deploy');
+  await maybeHardDeleteCampsByCampaignTypeOnBoot();
 }
 
 async function maybeReseedGeoOnBoot() {
@@ -95,7 +85,7 @@ async function main() {
   await hydrateEmailIngestState();
   await maybeFreshStart();
   await maybePurgeAllCampsOnBoot();
-  await maybePurgeCampsByCampaignTypeOnBoot();
+  await maybeHardDeleteCampsByCampaignTypeOnBoot();
   await ensureSeed();
   try {
     const { ensureTeamUsersInDatabase } = await import('./boot/ensureTeamUsers.js');
