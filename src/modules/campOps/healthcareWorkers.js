@@ -1,3 +1,5 @@
+import { canonicalizeDieticianLabel } from '../../utils/dieticianSpelling.js';
+
 /**
  * Client Master Healthcare Worker may be stored as a string (legacy) or string[].
  * Returns unique trimmed role labels.
@@ -13,11 +15,9 @@ export function normalizeHealthcareWorkers(value) {
   const seen = new Set();
   const out = [];
   for (const part of parts) {
-    const label = String(part || '').trim();
+    const label = canonicalizeDieticianLabel(String(part || '').trim());
     if (!label) continue;
-    const key = label.toLowerCase() === 'dietician' || label.toLowerCase() === 'dietitian'
-      ? 'dietitian'
-      : label.toLowerCase();
+    const key = label.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(label);

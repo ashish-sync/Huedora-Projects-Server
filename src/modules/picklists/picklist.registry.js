@@ -13,7 +13,7 @@ import { SIGNATURE_ROLES } from '../signatures/signature.constants.js';
 import { CAMP_NAME_OPTIONS, DOCTOR_SPECIALTY_OPTIONS } from '../campOps/campOps.constants.js';
 
 /** Hiring / transport picklists mirrored from Request One */
-export const HCW_TYPES = ['Phlebotomist', 'Technician', 'Dietitian', 'Physio', 'Others'];
+export const HCW_TYPES = ['Phlebotomist', 'Technician', 'Dietician', 'Physio', 'Others'];
 export const HIRING_METHODS = [...CAMP_NAME_OPTIONS];
 
 /**

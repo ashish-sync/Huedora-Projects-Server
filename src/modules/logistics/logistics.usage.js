@@ -9,7 +9,7 @@ const PROCESS_INVENTORY = {
   Neuro: 'Neuro Consumable',
   BMD: 'BMD Report',
   Uroflow: 'Uroflow Consumable',
-  Dietitian: 'Dietitian Kit',
+  Dietician: 'Dietician Kit',
 };
 
 /**

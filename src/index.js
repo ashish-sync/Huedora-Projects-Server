@@ -185,6 +185,14 @@ async function main() {
   console.log(`[api] Persistence: ${db.mode}${db.useMongoose ? ' (MongoDB)' : ' (local JSON — not for production)'}`);
   await maybeHardDeleteCampsByCampaignTypeOnBoot();
   await maybeDedupeAssetSerialsOnBoot();
+  try {
+    const { maybeCanonicalizeDieticianSpellingOnBoot } = await import(
+      './utils/canonicalizeDieticianSpelling.js'
+    );
+    await maybeCanonicalizeDieticianSpellingOnBoot();
+  } catch (err) {
+    console.error('[spelling] Dietician boot canonicalize failed:', err.message);
+  }
   ensureUploadDirs();
   await hydrateEmailIngestState();
   await maybeFreshStart();

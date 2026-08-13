@@ -1,6 +1,7 @@
 /** Canonical picklists for Contact Directory */
 
 import { randomUUID } from 'crypto';
+import { canonicalizeDieticianLabel } from '../../utils/dieticianSpelling.js';
 
 export const CONTACT_CATEGORIES = ['Resource', 'Client', 'Vendor', 'Healthcare Worker'];
 
@@ -60,7 +61,7 @@ export function normalizeProviderEmployees(raw, contactCategory, resourceType) {
 export const PROFESSIONS = [
   'Technician',
   'Phlebotomist',
-  'Dietitian',
+  'Dietician',
   'Doctor',
   'Nurse',
   'Biomedical Engineer',
@@ -99,7 +100,7 @@ export const HEALTHCARE_WORKER_PROFESSIONS = [
   'Nurse',
   'Phlebotomist',
   'Technician',
-  'Dietitian',
+  'Dietician',
   'Physio',
   'Biomedical Engineer',
   'Other',
@@ -150,9 +151,9 @@ export function matchPicklist(value, options) {
     'full-time': 'Full-Time',
     'full timer': 'Full-Time',
     serviceprovider: 'Service Provider',
-    deitician: 'Dietitian',
-    dietician: 'Dietitian',
-    dietitian: 'Dietitian',
+    deitician: 'Dietician',
+    dietician: 'Dietician',
+    dietitian: 'Dietician',
     humanresources: 'Human Resources',
     itsupport: 'IT Support',
     projectmanager: 'Project Manager',
@@ -200,7 +201,7 @@ export function allowCustomPicklistValue(raw, options, otherLabel = 'Other') {
 
 export function normalizeProfession(raw, contactCategory) {
   const options = professionsForCategory(contactCategory);
-  const value = String(raw || '').trim();
+  const value = canonicalizeDieticianLabel(String(raw || '').trim());
   if (!value) return '';
 
   if (contactCategory === 'Client') {
@@ -243,8 +244,10 @@ export function normalizeProfession(raw, contactCategory) {
       nurse: 'Nurse',
       phlebotomist: 'Phlebotomist',
       technician: 'Technician',
-      dietitian: 'Dietitian',
-      dietician: 'Dietitian',
+      dietitian: 'Dietician',
+      dietician: 'Dietician',
+      deitician: 'Dietician',
+      dieitician: 'Dietician',
       physio: 'Physio',
       physiotherapist: 'Physio',
       biomedicalengineer: 'Biomedical Engineer',

@@ -66,7 +66,7 @@ export const HIRING_TYPES = ['Full Timer', 'Freelancer'];
 export const HIRING_HCW_TYPES = [
   'Phlebotomist',
   'Technician',
-  'Dietitian',
+  'Dietician',
   'Physio',
   'Others',
 ];
