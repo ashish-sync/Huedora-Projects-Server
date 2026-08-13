@@ -217,6 +217,31 @@ export function buildCampFilter(query = {}) {
     filter.paymentSubmitStatus = 'payment_confirmed';
   } else if (financialFilter === 'payment_on_hold') {
     filter.paymentSubmitStatus = 'payment_hold';
+  } else if (financialFilter === 'cancelled_by_tylo' || financialFilter === 'cancelled_by_tcpl') {
+    filter.status = 'cancelled';
+    filter.$and = [
+      ...(filter.$and || []),
+      {
+        $or: [
+          { assignmentRefusalReason: 'Cancelled by Tylo' },
+          { assignmentRefusalReason: 'Cancelled by TCPL' },
+          { executionStatus: 'Cancelled by Tylo' },
+          { cancelledBy: 'khw' },
+        ],
+      },
+    ];
+  } else if (financialFilter === 'cancelled_by_client') {
+    filter.status = 'cancelled';
+    filter.$and = [
+      ...(filter.$and || []),
+      {
+        $or: [
+          { assignmentRefusalReason: 'Cancelled by Client' },
+          { executionStatus: 'Cancelled by Client' },
+          { cancelledBy: 'brand' },
+        ],
+      },
+    ];
   } else if (financialFilter) {
     filter.paymentSubmitStatus = financialFilter;
   }
@@ -282,11 +307,15 @@ export function buildCampFilter(query = {}) {
         $or: [
           { assignmentRefusalReason: 'Cancelled by Tylo' },
           { assignmentRefusalReason: 'Cancelled by TCPL' },
+          { executionStatus: 'Cancelled by Tylo' },
           { cancelledBy: 'khw' },
         ],
       },
     ];
-    if (lifecycleStage === 'assignment') filter.lifecycleStage = 'assignment';
+    // Cancelled-by closures advance to Finance & Settlement.
+    if (lifecycleStage === 'assignment' || lifecycleStage === 'execution' || lifecycleStage === 'financial') {
+      filter.lifecycleStage = 'financial';
+    }
   } else if (assignmentFilter === 'cancelled_by_client') {
     filter.status = 'cancelled';
     filter.$and = [
@@ -294,11 +323,14 @@ export function buildCampFilter(query = {}) {
       {
         $or: [
           { assignmentRefusalReason: 'Cancelled by Client' },
+          { executionStatus: 'Cancelled by Client' },
           { cancelledBy: 'brand' },
         ],
       },
     ];
-    if (lifecycleStage === 'assignment') filter.lifecycleStage = 'assignment';
+    if (lifecycleStage === 'assignment' || lifecycleStage === 'execution' || lifecycleStage === 'financial') {
+      filter.lifecycleStage = 'financial';
+    }
   } else if (lifecycleStage && !assignmentFilter && !skipLifecycleForRequestReview) {
     if (lifecycleStage === 'request') {
       filter.$and = [
@@ -313,7 +345,27 @@ export function buildCampFilter(query = {}) {
         },
       ];
     } else {
-      filter.lifecycleStage = lifecycleStage;
+      const executionFilter = trimStr(query.executionFilter);
+      const financialFilterValue = trimStr(query.financialFilter);
+      const cancelLifecycleFilter = [
+        'cancelled_by_tylo',
+        'cancelled_by_tcpl',
+        'cancelled_by_client',
+      ].includes(executionFilter)
+        || [
+          'cancelled_by_tylo',
+          'cancelled_by_tcpl',
+          'cancelled_by_client',
+        ].includes(financialFilterValue);
+      // Cancelled camps live in Finance after Closure Type is applied.
+      if (
+        cancelLifecycleFilter
+        && (lifecycleStage === 'execution' || lifecycleStage === 'financial')
+      ) {
+        filter.lifecycleStage = 'financial';
+      } else {
+        filter.lifecycleStage = lifecycleStage;
+      }
     }
   }
 

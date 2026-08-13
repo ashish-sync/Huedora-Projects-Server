@@ -263,4 +263,13 @@ export function applyCampClosure(camp, {
 
   camp.status = 'cancelled';
   camp.cancelledBy = resolved.closureType === 'Cancelled by Client' ? 'brand' : 'khw';
+
+  // Closure Type = Execution Status. These cancels advance to Finance & Settlement.
+  if (
+    resolved.closureType === 'Cancelled by Tylo'
+    || resolved.closureType === 'Cancelled by Client'
+  ) {
+    camp.executionStatus = resolved.closureType;
+    camp.lifecycleStage = 'financial';
+  }
 }

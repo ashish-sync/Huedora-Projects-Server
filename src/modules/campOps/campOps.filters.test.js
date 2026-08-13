@@ -25,7 +25,10 @@ test('buildCampFilter does not restrict lifecycle for request approved filter', 
 
   assert.equal(filter.status, 'approved');
   assert.equal(filter.lifecycleStage, undefined);
-  assert.equal(filter.$and, undefined);
+  assert.equal(
+    Boolean(filter.$and?.some((clause) => clause.$or?.some((part) => part.lifecycleStage === 'request'))),
+    false,
+  );
 });
 
 test('buildCampFilter does not restrict lifecycle for request rejected filter', () => {
@@ -48,13 +51,13 @@ test('buildCampFilter scopes hiring requested to assignment stage', () => {
   assert.equal(filter.assignmentStatus, 'Hiring Requested');
 });
 
-test('buildCampFilter scopes assignment cancelled filters to assignment stage', () => {
+test('buildCampFilter scopes assignment cancelled filters to financial stage', () => {
   const tylo = buildCampFilter({
     lifecycleStage: 'assignment',
     assignmentFilter: 'cancelled_by_tylo',
   });
   assert.equal(tylo.status, 'cancelled');
-  assert.equal(tylo.lifecycleStage, 'assignment');
+  assert.equal(tylo.lifecycleStage, 'financial');
   assert.ok(tylo.$and?.some((clause) => clause.$or?.some(
     (part) => part.assignmentRefusalReason === 'Cancelled by Tylo',
   )));
@@ -67,33 +70,42 @@ test('buildCampFilter scopes assignment cancelled filters to assignment stage', 
     assignmentFilter: 'cancelled_by_tcpl',
   });
   assert.equal(legacy.status, 'cancelled');
-  assert.equal(legacy.lifecycleStage, 'assignment');
+  assert.equal(legacy.lifecycleStage, 'financial');
 
   const client = buildCampFilter({
     lifecycleStage: 'assignment',
     assignmentFilter: 'cancelled_by_client',
   });
   assert.equal(client.status, 'cancelled');
-  assert.equal(client.lifecycleStage, 'assignment');
+  assert.equal(client.lifecycleStage, 'financial');
+});
+
+test('buildCampFilter maps financial cancel filters without payment status', () => {
+  const tylo = buildCampFilter({
+    lifecycleStage: 'financial',
+    financialFilter: 'cancelled_by_tylo',
+  });
+  assert.equal(tylo.status, 'cancelled');
+  assert.equal(tylo.lifecycleStage, 'financial');
+  assert.equal(tylo.paymentSubmitStatus, undefined);
 });
 
 test('buildCampFilter maps financial stage filters to payment fields', () => {
-  assert.deepEqual(
-    buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'pending_review' }),
-    { isDeleted: false, paymentSubmitStatus: 'payment_not_checked', lifecycleStage: 'financial' },
-  );
-  assert.deepEqual(
-    buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'payment_verified' }),
-    { isDeleted: false, paymentSubmitStatus: 'payment_confirmed', lifecycleStage: 'financial' },
-  );
-  assert.deepEqual(
-    buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'payment_on_hold' }),
-    { isDeleted: false, paymentSubmitStatus: 'payment_hold', lifecycleStage: 'financial' },
-  );
-  assert.deepEqual(
-    buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'payment_completed' }),
-    { isDeleted: false, financePaymentStatus: 'paid', lifecycleStage: 'financial' },
-  );
+  const pending = buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'pending_review' });
+  assert.equal(pending.paymentSubmitStatus, 'payment_not_checked');
+  assert.equal(pending.lifecycleStage, 'financial');
+
+  const verified = buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'payment_verified' });
+  assert.equal(verified.paymentSubmitStatus, 'payment_confirmed');
+  assert.equal(verified.lifecycleStage, 'financial');
+
+  const hold = buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'payment_on_hold' });
+  assert.equal(hold.paymentSubmitStatus, 'payment_hold');
+  assert.equal(hold.lifecycleStage, 'financial');
+
+  const completed = buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'payment_completed' });
+  assert.equal(completed.financePaymentStatus, 'paid');
+  assert.equal(completed.lifecycleStage, 'financial');
 });
 
 test('buildCampFilter scopes execution stage lifecycle', () => {

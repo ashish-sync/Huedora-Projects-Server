@@ -10,15 +10,19 @@ const CANCELLED_BY_TYLO_REASONS = new Set([
 ]);
 
 function isCancelledByTylo(camp = {}) {
+  const executionStatus = normalizeExecutionStatus(camp.executionStatus);
   return camp.status === 'cancelled' && (
     CANCELLED_BY_TYLO_REASONS.has(camp.assignmentRefusalReason)
+    || executionStatus === 'Cancelled by Tylo'
     || camp.cancelledBy === 'khw'
   );
 }
 
 function isCancelledByClient(camp = {}) {
+  const executionStatus = normalizeExecutionStatus(camp.executionStatus);
   return camp.status === 'cancelled' && (
     camp.assignmentRefusalReason === 'Cancelled by Client'
+    || executionStatus === 'Cancelled by Client'
     || camp.cancelledBy === 'brand'
   );
 }

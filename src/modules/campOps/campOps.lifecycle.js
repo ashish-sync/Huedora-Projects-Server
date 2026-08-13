@@ -85,6 +85,12 @@ export const EXECUTION_STATUSES = [
 
 export const LEGACY_EXECUTION_CLOSED_STATUSES = ['Cancelled', 'Refused'];
 
+/** Closure Type values that also serve as Execution Status. */
+export const EXECUTION_CANCELLATION_STATUSES = [
+  'Cancelled by Tylo',
+  'Cancelled by Client',
+];
+
 const LEGACY_EXECUTION_STATUS_ALIASES = {
   Pending: EXECUTION_STATUS.CAMP_SCHEDULED,
   'Yet to Start': EXECUTION_STATUS.CAMP_SCHEDULED,
@@ -92,6 +98,7 @@ const LEGACY_EXECUTION_STATUS_ALIASES = {
   Ongoing: EXECUTION_STATUS.CAMP_ONGOING,
   Executed: EXECUTION_STATUS.MARKED_EXECUTED,
   Completed: EXECUTION_STATUS.CAMP_COMPLETED,
+  'Cancelled by TCPL': 'Cancelled by Tylo',
 };
 
 export function normalizeExecutionStatus(executionStatus) {
@@ -102,7 +109,9 @@ export function normalizeExecutionStatus(executionStatus) {
 }
 
 export function isExecutionClosedOut(executionStatus) {
-  return LEGACY_EXECUTION_CLOSED_STATUSES.includes(normalizeExecutionStatus(executionStatus));
+  const normalized = normalizeExecutionStatus(executionStatus);
+  return LEGACY_EXECUTION_CLOSED_STATUSES.includes(normalized)
+    || EXECUTION_CANCELLATION_STATUSES.includes(normalized);
 }
 
 export function resolveScheduledExecutionStatus(camp = {}, now = new Date()) {
@@ -615,6 +624,10 @@ export function applyAssignmentStageOutcome(camp, body = {}, now = new Date()) {
     camp.status = 'cancelled';
     camp.cancelledBy = reason === 'Cancelled by Client' ? 'brand' : 'khw';
     camp.remarks = reason;
+    if (reason === 'Cancelled by Tylo' || reason === 'Cancelled by Client') {
+      camp.executionStatus = reason;
+      camp.lifecycleStage = 'financial';
+    }
   }
 }
 

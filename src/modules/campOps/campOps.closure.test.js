@@ -39,8 +39,39 @@ test('execution cancel updates Chargeable Status', () => {
   assert.equal(camp.status, 'cancelled');
   assert.equal(camp.chargeableStatus, 'Non-Chargeable');
   assert.equal(camp.assignmentRefusalReason, 'Cancelled by Tylo');
+  assert.equal(camp.executionStatus, 'Cancelled by Tylo');
+  assert.equal(camp.lifecycleStage, 'financial');
   assert.equal(camp.hcwContactId, null);
   assert.equal(camp.assignmentStatus, 'Unassigned');
+});
+
+test('execution cancel by client advances to financial stage', () => {
+  const camp = baseCamp({ chargeableStatus: 'Chargeable' });
+  applyCampClosure(camp, {
+    closureType: 'Cancelled by Client',
+    reasonCategory: 'Client Decision',
+    subReason: 'client_cancelled',
+    chargeableStatus: 'Non-Chargeable',
+  });
+  assert.equal(camp.status, 'cancelled');
+  assert.equal(camp.executionStatus, 'Cancelled by Client');
+  assert.equal(camp.lifecycleStage, 'financial');
+  assert.equal(camp.cancelledBy, 'brand');
+});
+
+test('assignment cancel by tylo advances to financial stage', () => {
+  const camp = baseCamp({
+    lifecycleStage: 'assignment',
+    chargeableStatus: '',
+  });
+  applyCampClosure(camp, {
+    closureType: 'Cancelled by Tylo',
+    reasonCategory: 'Resource Issue',
+    subReason: 'hcw_unavailability',
+  });
+  assert.equal(camp.status, 'cancelled');
+  assert.equal(camp.executionStatus, 'Cancelled by Tylo');
+  assert.equal(camp.lifecycleStage, 'financial');
 });
 
 test('assignment close does not require Chargeable Status', () => {
@@ -55,4 +86,5 @@ test('assignment close does not require Chargeable Status', () => {
   });
   assert.equal(camp.status, 'rejected');
   assert.equal(camp.chargeableStatus, '');
+  assert.notEqual(camp.lifecycleStage, 'financial');
 });
