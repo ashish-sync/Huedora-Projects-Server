@@ -9,6 +9,7 @@ import { findContactByIdentity, resolveOrCreateContact } from '../contacts/conta
 import { DeviceMaster } from '../devices/device.model.js';
 import { Asset } from '../assets/asset.model.js';
 import { createAsset } from '../assets/asset.service.js';
+import { normalizeSerialNumber, findActiveAssetBySerial } from '../assets/serialNumber.js';
 import {
   normalizeAgreementStatus,
   normalizeDeviceCustody,
@@ -53,6 +54,7 @@ async function processInventory(rows, mode, user) {
   const errors = [];
   let success = 0;
   const summary = { contacts: 0, devices: 0, assets: 0 };
+  const seenSerials = new Set();
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -63,7 +65,9 @@ async function processInventory(rows, mode, user) {
       ).trim();
       const name = String(normKey(row, ['Name', 'name', 'Custodian Name'])).trim();
       const deviceName = String(normKey(row, ['Asset Name', 'Device Name', 'deviceName'])).trim();
-      const serial = String(normKey(row, ['Serial No', 'Serial Number', 'serialNumber'])).trim();
+      const serial = normalizeSerialNumber(
+        normKey(row, ['Serial No', 'Serial Number', 'serialNumber']),
+      );
       if (!name || !deviceName) {
         errors.push({
           row: rowNum,
@@ -71,6 +75,28 @@ async function processInventory(rows, mode, user) {
           message: 'Custodian Name and Asset Name required',
         });
         continue;
+      }
+      if (serial) {
+        if (seenSerials.has(serial)) {
+          errors.push({
+            row: rowNum,
+            field: 'Serial Number',
+            message: `Serial number “${serial}” is duplicated in this file`,
+            code: 'SERIAL_EXISTS',
+          });
+          continue;
+        }
+        seenSerials.add(serial);
+        const existingAsset = await findActiveAssetBySerial(serial);
+        if (existingAsset) {
+          errors.push({
+            row: rowNum,
+            field: 'Serial Number',
+            message: `Serial number “${serial}” already exists`,
+            code: 'SERIAL_EXISTS',
+          });
+          continue;
+        }
       }
 
       if (mode === 'COMMIT') {
@@ -167,7 +193,9 @@ async function processVerification(rows, mode, user) {
     const rowNum = i + 2;
     try {
       const periodRaw = String(normKey(row, ["Month'Year", 'MonthYear', 'periodKey'])).trim();
-      const serial = String(normKey(row, ['Serial No', 'Serial No.', 'serialNumber'])).trim();
+      const serial = normalizeSerialNumber(
+        normKey(row, ['Serial No', 'Serial No.', 'serialNumber']),
+      );
       if (!periodRaw) {
         errors.push({ row: rowNum, field: 'periodKey', message: "Month'Year required" });
         continue;
@@ -191,7 +219,7 @@ async function processVerification(rows, mode, user) {
 
         let asset = null;
         if (serial) {
-          asset = await Asset.findOne({ serialNumber: serial, isDeleted: false });
+          asset = await findActiveAssetBySerial(serial);
           if (!asset) {
             // try match by device name without serial enrichment create. skip create
           }

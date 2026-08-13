@@ -96,6 +96,47 @@ router.post(
 );
 
 router.post(
+  '/system/dedupe-asset-serials',
+  requirePermission(PERMISSIONS.ALL),
+  asyncHandler(async (req, res) => {
+    if (String(req.body?.confirm || '').trim() !== 'DEDUPE_ASSET_SERIALS') {
+      throw new AppError(
+        'Confirmation required. Send { "confirm": "DEDUPE_ASSET_SERIALS", "dryRun": true|false }',
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
+
+    const dryRun = req.body?.dryRun === true || String(req.body?.dryRun || '').toLowerCase() === 'true';
+    const { dedupeAssetsBySerialNumber } = await import('../../utils/dedupeAssetsBySerial.js');
+    const result = await dedupeAssetsBySerialNumber({
+      actorId: req.user._id,
+      dryRun,
+    });
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'SYSTEM.DEDUPE_ASSET_SERIALS',
+      entityType: 'asset',
+      entityId: null,
+      after: result,
+      requestId: req.requestId,
+    });
+
+    res.json({
+      data: {
+        ok: true,
+        message: dryRun
+          ? 'Dry-run complete — no assets were deleted.'
+          : 'Duplicate Asset One serial numbers were soft-deleted (one row kept per serial).',
+        ...result,
+      },
+    });
+  })
+);
+
+router.post(
   '/system/purge-all-camps',
   requirePermission(PERMISSIONS.CAMPS_APPROVE, PERMISSIONS.ALL),
   asyncHandler(async (req, res) => {

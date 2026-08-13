@@ -11,6 +11,7 @@ import { env } from '../../config/env.js';
 import { Asset } from './asset.model.js';
 import { AssetEvent } from './assetEvent.model.js';
 import { createAsset, transitionAsset } from './asset.service.js';
+import { assertSerialNumberAvailable } from './serialNumber.js';
 import { DeviceMaster } from '../devices/device.model.js';
 import { LogisticsProduct } from '../logistics/logistics.model.js';
 import { productMasterAssetName, productPurchaseCost } from '../logistics/productMasterLabel.js';
@@ -616,22 +617,10 @@ router.patch(
     }
 
     if (req.body.serialNumber != null) {
-      const serialNumber = String(req.body.serialNumber).trim();
-      if (!serialNumber) throw new AppError('Serial Number is required', 400, 'VALIDATION_ERROR');
-      if (serialNumber !== asset.serialNumber) {
-        const clash = await Asset.findOne({
-          serialNumber,
-          isDeleted: false,
-          _id: { $ne: asset._id },
-        });
-        if (clash) {
-          throw new AppError(
-            `Serial number “${serialNumber}” already exists`,
-            400,
-            'SERIAL_EXISTS'
-          );
-        }
-      }
+      const serialNumber = await assertSerialNumberAvailable(req.body.serialNumber, {
+        excludeAssetId: asset._id,
+        excludeDeviceMasterId: asset.deviceMasterId || null,
+      });
       asset.serialNumber = serialNumber;
       masterPatch.serialNumber = serialNumber;
     }

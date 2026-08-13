@@ -80,6 +80,78 @@ async function maybePurgeCampsByCampaignTypeOnBoot() {
   console.warn('[camps] Clear PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT after this deploy');
 }
 
+/** One-shot soft-delete of duplicate Asset One rows that share a serial number.
+ * Runs once automatically after deploy (completion lock), unless disabled.
+ * Force again: DEDUPE_ASSET_SERIALS_ON_BOOT=true
+ * Disable: DEDUPE_ASSET_SERIALS_ON_BOOT=false
+ * Preview: DEDUPE_ASSET_SERIALS_ON_BOOT_DRY_RUN=true
+ */
+async function maybeDedupeAssetSerialsOnBoot() {
+  const flag = String(process.env.DEDUPE_ASSET_SERIALS_ON_BOOT || 'auto').trim().toLowerCase();
+  if (flag === 'false' || flag === '0' || flag === 'off') return;
+
+  const dryRun = String(process.env.DEDUPE_ASSET_SERIALS_ON_BOOT_DRY_RUN || '').toLowerCase() === 'true';
+  const force = flag === 'true';
+  const lockId = 'dedupe_asset_serials:v1';
+
+  const { loadCollection, upsertDocument } = await import('./store/persistence.js');
+  const locks = await loadCollection('system_boot_locks');
+  const existing = locks.find((row) => String(row._id) === lockId) || null;
+  if (!force && !dryRun && existing?.status === 'completed') {
+    return;
+  }
+
+  if (!dryRun) {
+    await upsertDocument('system_boot_locks', {
+      _id: lockId,
+      ...(existing || {}),
+      job: 'dedupe_asset_serials',
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  try {
+    const { dedupeAssetsBySerialNumber } = await import('./utils/dedupeAssetsBySerial.js');
+    const result = await dedupeAssetsBySerialNumber({
+      actorId: 'boot:DEDUPE_ASSET_SERIALS_ON_BOOT',
+      dryRun,
+    });
+    console.warn(
+      `[assets] serial dedupe ${dryRun ? 'dry-run' : 'complete'}:`,
+      result,
+    );
+
+    if (!dryRun) {
+      await upsertDocument('system_boot_locks', {
+        _id: lockId,
+        job: 'dedupe_asset_serials',
+        status: 'completed',
+        completedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ...result,
+      });
+      if (force) {
+        console.warn('[assets] Clear DEDUPE_ASSET_SERIALS_ON_BOOT after this deploy');
+      }
+    } else {
+      console.warn('[assets] Dry-run only — no assets deleted, completion lock not set');
+    }
+  } catch (err) {
+    if (!dryRun) {
+      await upsertDocument('system_boot_locks', {
+        _id: lockId,
+        job: 'dedupe_asset_serials',
+        status: 'failed',
+        error: String(err?.message || err),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    console.error('[assets] serial dedupe failed:', err.message);
+  }
+}
+
 /**
  * One-shot permanent delete of Camp One camps by Division/Therapy (campaignType).
  * Exact match only (trim + case fold) — e.g. MOM matches "MOM"/" mom " but not "MOM Camp".
@@ -112,6 +184,7 @@ async function main() {
   const db = getDbInfo();
   console.log(`[api] Persistence: ${db.mode}${db.useMongoose ? ' (MongoDB)' : ' (local JSON — not for production)'}`);
   await maybeHardDeleteCampsByCampaignTypeOnBoot();
+  await maybeDedupeAssetSerialsOnBoot();
   ensureUploadDirs();
   await hydrateEmailIngestState();
   await maybeFreshStart();

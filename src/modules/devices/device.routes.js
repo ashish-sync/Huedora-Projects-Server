@@ -24,6 +24,7 @@ import {
 } from './device.constants.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { formatTextValue, cleanSpaces } from '../../utils/textFormat.js';
+import { assertSerialNumberAvailable, normalizeSerialNumber } from '../assets/serialNumber.js';
 import {
   assertSpreadsheetUpload,
   discardUploadBuffer,
@@ -123,7 +124,7 @@ function parseMasterFields(input) {
     );
   }
 
-  const serialNumber = formatTextValue(String(input.serialNumber || ''), 'serialNumber');
+  const serialNumber = normalizeSerialNumber(String(input.serialNumber || ''));
   if (!serialNumber) throw new AppError('Serial Number is required', 400, 'VALIDATION_ERROR');
 
   const purchaseMonth = input.purchaseMonth;
@@ -260,10 +261,7 @@ async function createDeviceRecord(input, user, requestId) {
   const fields = parseMasterFields(await resolveInputFromProduct(resolved));
   const withContact = await applyContactToFields(fields, resolved.contactId);
 
-  const existing = await Asset.findOne({ serialNumber: withContact.serialNumber, isDeleted: false });
-  if (existing) {
-    throw new AppError(`Serial number “${withContact.serialNumber}” already exists`, 400, 'SERIAL_EXISTS');
-  }
+  await assertSerialNumberAvailable(withContact.serialNumber);
 
   const purchaseDate = purchaseMonthToDate(withContact.purchaseMonth);
 
@@ -462,6 +460,7 @@ router.post(
 
     const errors = [];
     const created = [];
+    const seenSerials = new Set();
 
     for (let i = 0; i < rows.length; i += 1) {
       const row = rows[i];
@@ -490,7 +489,7 @@ router.post(
           'ownershipType',
           'Type',
         ])).trim();
-        const serialNumber = String(
+        const serialNumber = normalizeSerialNumber(
           normKey(row, [
             'Serial Number',
             'Serial No',
@@ -498,7 +497,17 @@ router.post(
             'serialNumber',
             'Serial',
           ])
-        ).trim();
+        );
+        if (serialNumber) {
+          if (seenSerials.has(serialNumber)) {
+            throw new AppError(
+              `Serial number “${serialNumber}” is duplicated in this file`,
+              400,
+              'SERIAL_EXISTS',
+            );
+          }
+          seenSerials.add(serialNumber);
+        }
         const cost = Number(
           normKey(row, [
             'Purchase Amount',
@@ -667,23 +676,10 @@ router.patch(
       updates.description = String(req.body.description).trim() || null;
     }
     if (req.body.serialNumber != null || req.body.serial != null) {
-      updates.serialNumber = String(req.body.serialNumber || req.body.serial).trim();
-      if (!updates.serialNumber) {
-        throw new AppError('Serial Number is required', 400, 'VALIDATION_ERROR');
-      }
-      if (updates.serialNumber !== device.serialNumber) {
-        const clash = await Asset.findOne({
-          serialNumber: updates.serialNumber,
-          isDeleted: false,
-        });
-        if (clash && String(clash.deviceMasterId) !== String(device._id)) {
-          throw new AppError(
-            `Serial number “${updates.serialNumber}” already exists`,
-            400,
-            'SERIAL_EXISTS'
-          );
-        }
-      }
+      updates.serialNumber = await assertSerialNumberAvailable(
+        req.body.serialNumber || req.body.serial,
+        { excludeDeviceMasterId: device._id },
+      );
     }
     if (req.body.cost != null || req.body.assetValue != null || req.body.deviceValue != null) {
       const cost = Number(req.body.cost ?? req.body.assetValue ?? req.body.deviceValue);

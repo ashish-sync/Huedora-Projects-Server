@@ -5,6 +5,7 @@ import { AppError } from '../../utils/helpers.js';
 import { writeAudit } from '../../utils/audit.js';
 import { nextSequence } from '../../utils/counters.js';
 import { Contact } from '../contacts/contact.model.js';
+import { assertSerialNumberAvailable, normalizeSerialNumber } from './serialNumber.js';
 
 export async function transitionAsset({
   assetId,
@@ -94,10 +95,17 @@ export async function transitionAsset({
 }
 
 export async function createAsset(payload, actor) {
-  const assetTag = payload.assetTag || (await nextSequence('assetTag', 'AST'));
-  const qrCode = payload.qrCode || `TYLO-${assetTag.replace(/^AST-/, '')}`;
+  const nextPayload = { ...payload };
+  if (nextPayload.serialNumber != null && String(nextPayload.serialNumber).trim() !== '') {
+    nextPayload.serialNumber = await assertSerialNumberAvailable(nextPayload.serialNumber);
+  } else if (nextPayload.serialNumber != null) {
+    nextPayload.serialNumber = normalizeSerialNumber(nextPayload.serialNumber) || undefined;
+  }
+
+  const assetTag = nextPayload.assetTag || (await nextSequence('assetTag', 'AST'));
+  const qrCode = nextPayload.qrCode || `TYLO-${assetTag.replace(/^AST-/, '')}`;
   const asset = await Asset.create({
-    ...payload,
+    ...nextPayload,
     assetTag,
     qrCode,
     createdBy: actor?._id,
