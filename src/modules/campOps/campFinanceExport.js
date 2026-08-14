@@ -6,15 +6,15 @@ import {
 import { AppError } from '../../utils/helpers.js';
 
 const PAYMENT_SUBMIT_LABELS = {
-  payment_confirmed: 'Validation Completed',
-  payment_not_checked: 'Validation Pending',
-  payment_hold: 'Payment On Hold',
+  payment_confirmed: 'Confirmed Payment',
+  payment_not_checked: 'Pending Confirmation',
+  payment_hold: 'Hold',
 };
 
 const FINANCE_PAYMENT_LABELS = {
-  not_paid: 'Not Paid',
-  under_review: 'Under Review',
-  paid: 'Payment Completed',
+  not_paid: 'Pending Confirmation',
+  under_review: 'Pending Confirmation',
+  paid: 'Payment Done',
 };
 
 export const CAMP_FINANCE_EXPORT_COLUMNS = [
@@ -36,6 +36,7 @@ export const CAMP_FINANCE_EXPORT_COLUMNS = [
   { key: 'patientsCount', label: 'Patients Count' },
   { key: 'rxCount', label: 'Rx Count' },
   { key: 'campRevenue', label: 'Camp Revenue' },
+  { key: 'travelRevenue', label: 'Travel Revenue' },
   { key: 'overtimeRevenue', label: 'Overtime Revenue' },
   { key: 'otherRevenue', label: 'Other Revenue' },
   { key: 'totalRevenue', label: 'Total Revenue' },
@@ -44,6 +45,7 @@ export const CAMP_FINANCE_EXPORT_COLUMNS = [
   { key: 'overtimeExpense', label: 'Overtime Expense' },
   { key: 'otherExpenses', label: 'Other Expenses' },
   { key: 'totalPayout', label: 'Total Payout' },
+  { key: 'netContribution', label: 'Net Contribution' },
   { key: 'paymentSubmitStatus', label: 'Payment Check' },
   { key: 'financePaymentStatus', label: 'Finance Status' },
   { key: 'paidAmount', label: 'Paid Amount' },

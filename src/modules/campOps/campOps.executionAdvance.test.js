@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import {
   applyAssignmentStageOutcome,
-  isCampDateDueForExecution,
   promoteAssignedCampToExecutionIfDue,
+  EXECUTION_STATUS,
 } from './campOps.lifecycle.js';
 
 function isoOffset(days, now = new Date('2026-08-03T12:00:00')) {
@@ -32,11 +32,8 @@ function assignedCamp(campDate) {
   };
 }
 
-assert.equal(isCampDateDueForExecution({ campDate: isoOffset(2, now) }, now), false);
-assert.equal(isCampDateDueForExecution({ campDate: isoOffset(1, now) }, now), true);
-assert.equal(isCampDateDueForExecution({ campDate: isoOffset(0, now) }, now), true);
-
 {
+  // Assign moves to Execution / Planned immediately (any camp date).
   const camp = assignedCamp(isoOffset(5, now));
   applyAssignmentStageOutcome(camp, {
     editingStage: 'assignment',
@@ -46,7 +43,8 @@ assert.equal(isCampDateDueForExecution({ campDate: isoOffset(0, now) }, now), tr
     hcwContact: '9999999999',
   }, now);
   assert.equal(camp.assignmentStatus, 'Assigned');
-  assert.equal(camp.lifecycleStage, 'assignment');
+  assert.equal(camp.lifecycleStage, 'execution');
+  assert.equal(camp.executionStatus, EXECUTION_STATUS.CAMP_SCHEDULED);
 }
 
 {
@@ -62,15 +60,9 @@ assert.equal(isCampDateDueForExecution({ campDate: isoOffset(0, now) }, now), tr
 }
 
 {
-  const camp = assignedCamp(isoOffset(1, now));
+  const camp = assignedCamp(isoOffset(10, now));
   assert.equal(promoteAssignedCampToExecutionIfDue(camp, now), true);
   assert.equal(camp.lifecycleStage, 'execution');
-}
-
-{
-  const camp = assignedCamp(isoOffset(3, now));
-  assert.equal(promoteAssignedCampToExecutionIfDue(camp, now), false);
-  assert.equal(camp.lifecycleStage, 'assignment');
 }
 
 {
@@ -90,6 +82,24 @@ assert.equal(isCampDateDueForExecution({ campDate: isoOffset(0, now) }, now), tr
   }, now);
   assert.equal(camp.lifecycleStage, 'execution');
   assert.equal(camp.assignmentStatus, 'Assigned');
+}
+
+{
+  // Assignment refuse → Request / Refused
+  const camp = {
+    status: 'approved',
+    lifecycleStage: 'assignment',
+    assignmentDecision: 'refuse',
+    assignmentStatus: 'Pending',
+  };
+  applyAssignmentStageOutcome(camp, {
+    editingStage: 'assignment',
+    assignmentDecision: 'refuse',
+    assignmentRefusalReason: 'Refused',
+  }, now);
+  assert.equal(camp.status, 'rejected');
+  assert.equal(camp.lifecycleStage, 'request');
+  assert.equal(camp.requestReviewStatus, 'request_rejected');
 }
 
 console.log('campOps.executionAdvance.test.js: ok');

@@ -59,22 +59,22 @@ test('execution cancel by client advances to financial stage', () => {
   assert.equal(camp.cancelledBy, 'brand');
 });
 
-test('assignment cancel by tylo advances to financial stage', () => {
+test('assignment cancel by tylo is rejected (cancellation is Execution-only)', () => {
   const camp = baseCamp({
     lifecycleStage: 'assignment',
     chargeableStatus: '',
   });
-  applyCampClosure(camp, {
-    closureType: 'Cancelled by Tylo',
-    reasonCategory: 'Resource Issue',
-    subReason: 'hcw_unavailability',
-  });
-  assert.equal(camp.status, 'cancelled');
-  assert.equal(camp.executionStatus, 'Cancelled by Tylo');
-  assert.equal(camp.lifecycleStage, 'financial');
+  assert.throws(
+    () => applyCampClosure(camp, {
+      closureType: 'Cancelled by Tylo',
+      reasonCategory: 'Resource Issue',
+      subReason: 'hcw_unavailability',
+    }),
+    /Only Refused is allowed at the assignment stage/,
+  );
 });
 
-test('assignment close does not require Chargeable Status', () => {
+test('assignment refuse moves to Request / Refused without Chargeable Status', () => {
   const camp = baseCamp({
     lifecycleStage: 'assignment',
     chargeableStatus: '',
@@ -85,6 +85,8 @@ test('assignment close does not require Chargeable Status', () => {
     subReason: 'duplicate_request',
   });
   assert.equal(camp.status, 'rejected');
+  assert.equal(camp.lifecycleStage, 'request');
+  assert.equal(camp.requestReviewStatus, 'request_rejected');
   assert.equal(camp.chargeableStatus, '');
   assert.notEqual(camp.lifecycleStage, 'financial');
 });

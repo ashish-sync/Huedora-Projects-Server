@@ -4,7 +4,7 @@ import {
   computeCampRevenueFromPricing,
   resolveClientMasterPricingFromRecords,
 } from './campOps.clientMasterPricing.js';
-import { computeLifecycleDerived } from './campOps.lifecycle.js';
+import { computeLifecycleDerived, lifecyclePayloadFromBody } from './campOps.lifecycle.js';
 
 const pricing = {
   executedCampUnit: 5000,
@@ -55,7 +55,7 @@ test('camp revenue uses executed unit when chargeable and executed', () => {
   assert.equal(result.totalRevenue, 5400);
 });
 
-test('other revenue is excess patients and kms over Client Master minimums', () => {
+test('other revenue is patient excess; travel revenue is kms excess', () => {
   const result = computeCampRevenueFromPricing({
     status: 'executed',
     executionStatus: 'Camp Completed',
@@ -66,7 +66,9 @@ test('other revenue is excess patients and kms over Client Master minimums', () 
   }, pricing);
   assert.equal(result.otherRevenuePatients, 100); // (60 − 50) × 10
   assert.equal(result.otherRevenueDistance, 100); // (120 − 100) × 5
-  assert.equal(result.otherRevenue, 200);
+  assert.equal(result.travelRevenue, 100);
+  assert.equal(result.otherRevenue, 100);
+  assert.equal(result.totalRevenue, 5200); // 5000 camp + 100 travel + 100 other
 });
 
 test('camp revenue uses cancelled unit when chargeable and cancelled', () => {
@@ -100,15 +102,54 @@ test('computeLifecycleDerived applies Client Master pricing when provided', () =
     actualPatients: 45,
     kmRoundTrip: 90,
     campRevenue: 1,
+    travelRevenue: 1,
     overtimeRevenue: 1,
     otherRevenue: 1,
   }, { pricing });
   assert.equal(derived.extraHours, 1);
   assert.equal(derived.campRevenue, 5000);
+  assert.equal(derived.travelRevenue, 0);
   assert.equal(derived.overtimeRevenue, 400);
   assert.equal(derived.otherRevenuePatients, 0); // 45 < min 50
   assert.equal(derived.otherRevenueDistance, 0); // 90 < min 100
   assert.equal(derived.otherRevenue, 0);
   assert.equal(derived.totalRevenue, 5400);
   assert.equal(derived.revenueAutoCalculated, true);
+});
+
+test('net contribution is total revenue minus total payout', () => {
+  const derived = computeLifecycleDerived({
+    campRevenue: 5000,
+    travelRevenue: 200,
+    overtimeRevenue: 100,
+    otherRevenue: 50,
+    campAmount: 3000,
+    travelling: 400,
+    overtimeExpense: 100,
+    otherExpenses: 50,
+  });
+  assert.equal(derived.totalRevenue, 5350);
+  assert.equal(derived.totalPayout, 3550);
+  assert.equal(derived.netContribution, 1800);
+});
+
+test('lifecyclePayloadFromBody preserves explicit total overrides and net contribution', () => {
+  const next = lifecyclePayloadFromBody(
+    {
+      campAmount: 1000,
+      travelling: 0,
+      overtimeExpense: 0,
+      otherExpenses: 0,
+      totalPayout: 2500,
+      campRevenue: 4000,
+      travelRevenue: 0,
+      overtimeRevenue: 0,
+      otherRevenue: 0,
+      totalRevenue: 4100,
+    },
+    { lifecycleStage: 'financial' },
+  );
+  assert.equal(next.totalPayout, 2500);
+  assert.equal(next.totalRevenue, 4100);
+  assert.equal(next.netContribution, 1600);
 });

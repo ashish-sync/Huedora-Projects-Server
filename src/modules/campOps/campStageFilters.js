@@ -35,17 +35,23 @@ export function matchesExecutionFilter(camp = {}, filter = '') {
     return isCancelledByTylo(camp);
   }
   if (value === 'cancelled_by_client') return isCancelledByClient(camp);
-  if (value === 'completed') {
-    return normalizeExecutionStatus(camp.executionStatus) === EXECUTION_STATUS.CAMP_COMPLETED;
-  }
 
   if (['cancelled', 'rejected'].includes(camp.status)) return false;
 
   const effective = camp.effectiveExecutionStatus || resolveEffectiveExecutionStatus(camp);
-  if (value === 'scheduled' || value === 'yet_to_start') {
-    return effective === EXECUTION_STATUS.CAMP_SCHEDULED;
+  // Guide: Planned covers scheduled + ongoing; Executed = Marked Executed (pre–Mark Complete).
+  if (value === 'planned' || value === 'scheduled' || value === 'yet_to_start' || value === 'ongoing') {
+    return (
+      effective === EXECUTION_STATUS.CAMP_SCHEDULED
+      || effective === EXECUTION_STATUS.CAMP_ONGOING
+    );
   }
-  if (value === 'ongoing') return effective === EXECUTION_STATUS.CAMP_ONGOING;
-  if (value === 'executed') return effective === EXECUTION_STATUS.MARKED_EXECUTED;
+  if (value === 'executed') {
+    return effective === EXECUTION_STATUS.MARKED_EXECUTED;
+  }
+  // Legacy alias — Camp Completed is Financial, not an Execution selectable status.
+  if (value === 'completed') {
+    return normalizeExecutionStatus(camp.executionStatus) === EXECUTION_STATUS.CAMP_COMPLETED;
+  }
   return true;
 }

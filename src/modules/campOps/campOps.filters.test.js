@@ -91,21 +91,21 @@ test('buildCampFilter maps financial cancel filters without payment status', () 
 });
 
 test('buildCampFilter maps financial stage filters to payment fields', () => {
-  const pending = buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'pending_review' });
+  const pending = buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'payment_not_checked' });
   assert.equal(pending.paymentSubmitStatus, 'payment_not_checked');
   assert.equal(pending.lifecycleStage, 'financial');
 
-  const verified = buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'payment_verified' });
+  const verified = buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'payment_confirmed' });
   assert.equal(verified.paymentSubmitStatus, 'payment_confirmed');
   assert.equal(verified.lifecycleStage, 'financial');
 
-  const hold = buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'payment_on_hold' });
+  const hold = buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'payment_hold' });
   assert.equal(hold.paymentSubmitStatus, 'payment_hold');
   assert.equal(hold.lifecycleStage, 'financial');
 
-  const completed = buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'payment_completed' });
-  assert.equal(completed.financePaymentStatus, 'paid');
-  assert.equal(completed.lifecycleStage, 'financial');
+  const done = buildCampFilter({ lifecycleStage: 'financial', financialFilter: 'payment_done' });
+  assert.equal(done.financePaymentStatus, 'paid');
+  assert.equal(done.lifecycleStage, 'financial');
 });
 
 test('buildCampFilter scopes execution stage lifecycle', () => {
@@ -143,15 +143,17 @@ test('matchesExecutionFilter maps execution filter values to effective status', 
     assignmentRefusalReason: 'Cancelled by TCPL',
   };
 
+  assert.equal(matchesExecutionFilter(scheduled, 'planned'), true);
+  assert.equal(matchesExecutionFilter(ongoing, 'planned'), true);
   assert.equal(matchesExecutionFilter(scheduled, 'scheduled'), true);
-  assert.equal(matchesExecutionFilter(scheduled, 'yet_to_start'), true);
   assert.equal(matchesExecutionFilter(ongoing, 'ongoing'), true);
   assert.equal(matchesExecutionFilter(completed, 'completed'), true);
   assert.equal(matchesExecutionFilter(executed, 'executed'), true);
+  assert.equal(matchesExecutionFilter(executed, 'planned'), false);
   assert.equal(matchesExecutionFilter(cancelledTylo, 'cancelled_by_tylo'), true);
   assert.equal(matchesExecutionFilter(cancelledLegacyTcpl, 'cancelled_by_tylo'), true);
   assert.equal(matchesExecutionFilter(cancelledTylo, 'cancelled_by_tcpl'), true);
-  assert.equal(matchesExecutionFilter(cancelledTylo, 'ongoing'), false);
+  assert.equal(matchesExecutionFilter(cancelledTylo, 'planned'), false);
 });
 
 test('resolveExportColumns keeps requested order and ignores unknown keys', () => {

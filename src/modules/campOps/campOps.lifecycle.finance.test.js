@@ -5,6 +5,7 @@ import {
   getExecutionFinanceBlockers,
   isExecutionCancellationForFinance,
   isExecutionReadyForFinance,
+  lifecyclePayloadFromBody,
   resolveCancelledClosureExecutionStatus,
 } from './campOps.lifecycle.js';
 
@@ -47,4 +48,18 @@ test('legacy refused execution still blocks finance readiness', () => {
   const camp = { executionStatus: 'Refused' };
   assert.equal(isExecutionCancellationForFinance(camp), false);
   assert.ok(getExecutionFinanceBlockers(camp).length > 0);
+});
+
+test('Camp PUT cannot set or reverse Payment Done (Finance One only)', () => {
+  const unpaid = lifecyclePayloadFromBody(
+    { financePaymentStatus: 'paid' },
+    { financePaymentStatus: 'under_review' },
+  );
+  assert.notEqual(unpaid.financePaymentStatus, 'paid');
+
+  const paid = lifecyclePayloadFromBody(
+    { financePaymentStatus: 'not_paid' },
+    { financePaymentStatus: 'paid' },
+  );
+  assert.equal(paid.financePaymentStatus, 'paid');
 });

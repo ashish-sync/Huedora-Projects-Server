@@ -20,6 +20,9 @@ const PLAIN_FIELDS = new Set([
   'requestReviewStatus', 'paymentSubmitStatus', 'financePaymentStatus',
   'closureType', 'closureReasonCode', 'closureSubReason', 'closureReasonCategory',
   'cancelledBy', 'editingStage', 'campSlot',
+  // Client Master Camp Terms — dates / PO identifiers must stay verbatim
+  'campTerms', 'poNumber', 'poIssueDate', 'poExpiryDate',
+  'agreementStartDate', 'agreementEffectiveDate', 'agreementEndDate',
 ]);
 
 const CODE_FIELDS = new Set([

@@ -14,7 +14,8 @@ export const REQUEST_REVIEW_LABELS = {
   review_pending: 'Review Pending',
   review_overdue: 'Review Overdue',
   information_requested: 'Info Requested',
-  request_approved: 'Request Approved',
+  // Internal post-confirm — not a Request Stage selectable status.
+  request_approved: 'Review Pending',
   request_rejected: 'Refused',
 };
 

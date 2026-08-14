@@ -88,10 +88,7 @@ export function getAvailableClosureTypes(camp = {}) {
     return ['Cancelled by Tylo', 'Cancelled by Client'];
   }
 
-  if (stage === 'assignment') {
-    return ['Refused', 'Cancelled by Tylo', 'Cancelled by Client'];
-  }
-
+  // Assignment and Request: Refuse only (cancellation is Execution-only).
   return ['Refused'];
 }
 
@@ -155,7 +152,7 @@ export function resolveClosureSelection({
       throw new Error('At execution stage, only Cancelled by Tylo or Cancelled by Client is allowed');
     }
     if (stage === 'assignment') {
-      throw new Error('Choose Refused, Cancelled by Tylo, or Cancelled by Client');
+      throw new Error('Only Refused is allowed at the assignment stage');
     }
     throw new Error('Only Refused is allowed at the request stage');
   }
@@ -252,13 +249,18 @@ export function applyCampClosure(camp, {
   }
 
   if (resolved.closureType === 'Refused') {
-    const wasPendingReview = camp.status === 'pending_review';
     camp.status = 'rejected';
     camp.rejectionReason = remark;
-    if (wasPendingReview) {
-      applyRequestReviewTransition(camp, 'reject', { reason: remark, actor });
-    }
+    camp.lifecycleStage = 'request';
+    camp.requestReviewStatus = 'request_rejected';
+    camp.assignmentStatus = 'Unassigned';
+    applyRequestReviewTransition(camp, 'reject', { reason: remark, actor });
     return;
+  }
+
+  // Cancellation only valid from Execution (enforced by getAvailableClosureTypes).
+  if (stage !== 'execution') {
+    throw new Error('Cancellation is only permitted during Execution');
   }
 
   camp.status = 'cancelled';
@@ -271,5 +273,6 @@ export function applyCampClosure(camp, {
   ) {
     camp.executionStatus = resolved.closureType;
     camp.lifecycleStage = 'financial';
+    camp.paymentSubmitStatus = camp.paymentSubmitStatus || 'payment_not_checked';
   }
 }

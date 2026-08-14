@@ -19,6 +19,7 @@ import { VENDOR_BILL_ACTIVE_STATUSES, normalizeVendorBillStatus } from './vendor
 import {
   computeLifecycleDerived,
   normalizeFinancePaymentStatus,
+  normalizePaymentSubmitStatus,
   FINANCE_PAYMENT_STATUSES,
 } from '../campOps/campOps.lifecycle.js';
 import {
@@ -404,9 +405,29 @@ function applyCampPayoutFields(camp, body = {}, actor = {}) {
     );
   }
 
-  camp.financePaymentStatus = status;
+  const alreadyPaid = normalizeFinancePaymentStatus(camp.financePaymentStatus) === 'paid';
+  if (status === 'paid' && alreadyPaid) {
+    // Idempotent: same UTR/payment update must not re-mutate or spam audits upstream.
+    const transactionId = trimStr(body.transactionId ?? camp.transactionId);
+    if (transactionId && camp.transactionId && transactionId !== camp.transactionId) {
+      throw new AppError('Payment Done already recorded with a different UTR', 409, 'CONFLICT');
+    }
+    return { camp, changed: false };
+  }
 
   if (status === 'paid') {
+    const submit = normalizePaymentSubmitStatus(camp.paymentSubmitStatus) || 'payment_not_checked';
+    if (submit === 'payment_hold') {
+      throw new AppError('Release Hold before marking Payment Done', 400, 'INVALID_TRANSITION');
+    }
+    if (submit !== 'payment_confirmed') {
+      throw new AppError(
+        'Confirm Payment in Camp Management before marking Payment Done',
+        400,
+        'INVALID_TRANSITION',
+      );
+    }
+
     const paidAmount = toAmount(body.paidAmount ?? camp.paidAmount);
     const transactionId = trimStr(body.transactionId ?? camp.transactionId);
     if (!paidAmount) {
@@ -418,19 +439,26 @@ function applyCampPayoutFields(camp, body = {}, actor = {}) {
     camp.paidAmount = paidAmount;
     camp.transactionId = transactionId;
     camp.paymentRemark = trimStr(body.paymentRemark ?? camp.paymentRemark);
+    camp.financePaymentStatus = 'paid';
+    camp.financeProcessedAt = trimStr(body.paymentDate || body.financeProcessedAt)
+      || new Date().toISOString();
   } else {
+    if (alreadyPaid) {
+      throw new AppError('Payment Done cannot be reversed from Finance One', 400, 'INVALID_TRANSITION');
+    }
+    camp.financePaymentStatus = status;
     if (body.paidAmount !== undefined) camp.paidAmount = toAmount(body.paidAmount);
     if (body.transactionId !== undefined) camp.transactionId = trimStr(body.transactionId);
     if (body.paymentRemark !== undefined) camp.paymentRemark = trimStr(body.paymentRemark);
+    camp.financeProcessedAt = new Date().toISOString();
   }
 
   const derived = computeLifecycleDerived(camp);
   camp.balance = derived.balance;
   camp.totalPayout = derived.totalPayout;
-  camp.financeProcessedAt = new Date().toISOString();
   camp.financeProcessedById = actor?._id || null;
   camp.financeProcessedByEmail = actor?.email || '';
-  return camp;
+  return { camp, changed: true };
 }
 
 function buildCampPayoutFilter(query = {}) {
@@ -532,13 +560,13 @@ const bulkUpdateCampPayouts = asyncHandler(async (req, res) => {
       );
     }
 
-    applyCampPayoutFields(camp, {
+    const { changed } = applyCampPayoutFields(camp, {
       financePaymentStatus: status,
       paidAmount,
       transactionId: status === 'paid' ? transactionId : (req.body?.transactionId ?? camp.transactionId),
       paymentRemark: paymentRemark || camp.paymentRemark,
     }, a);
-    await camp.save();
+    if (changed) await camp.save();
     updated.push(await campPayoutSummaryWithPayeeBank(camp));
   }
 
@@ -589,23 +617,24 @@ const updateCampPayoutById = asyncHandler(async (req, res) => {
   if (!camp) throw new AppError('Camp payout not found', 404);
 
   const a = req.user;
-  applyCampPayoutFields(camp, req.body, a);
-  await camp.save();
-
-  await writeAudit({
-    actorId: a?._id || null,
-    actorEmail: a?.email || null,
-    action: 'FINANCE.CAMP_PAYOUT_UPDATE',
-    entityType: 'camp_ops_camp',
-    entityId: camp._id,
-    after: {
-      financePaymentStatus: camp.financePaymentStatus,
-      paidAmount: camp.paidAmount,
-      transactionId: camp.transactionId,
-      balance: camp.balance,
-    },
-    requestId: req.requestId,
-  });
+  const { changed } = applyCampPayoutFields(camp, req.body, a);
+  if (changed) {
+    await camp.save();
+    await writeAudit({
+      actorId: a?._id || null,
+      actorEmail: a?.email || null,
+      action: 'FINANCE.CAMP_PAYOUT_UPDATE',
+      entityType: 'camp_ops_camp',
+      entityId: camp._id,
+      after: {
+        financePaymentStatus: camp.financePaymentStatus,
+        paidAmount: camp.paidAmount,
+        transactionId: camp.transactionId,
+        balance: camp.balance,
+      },
+      requestId: req.requestId,
+    });
+  }
 
   res.json({ data: await campPayoutSummaryWithPayeeBank(camp) });
 });

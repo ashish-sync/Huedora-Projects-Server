@@ -36,7 +36,8 @@ test('matches effective execution status from camp time', () => {
     startTime: '09:00',
     endTime: '12:00',
   };
+  assert.equal(matchesExecutionFilter(camp, 'planned'), true);
   assert.equal(matchesExecutionFilter(camp, 'scheduled'), true);
   assert.equal(matchesExecutionFilter(camp, 'yet_to_start'), true);
-  assert.equal(matchesExecutionFilter(camp, 'ongoing'), false);
+  assert.equal(matchesExecutionFilter(camp, 'executed'), false);
 });

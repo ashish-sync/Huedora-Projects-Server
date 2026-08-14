@@ -38,6 +38,10 @@ import {
   seedMasterBillingFromCompany,
   buildLegacyEmptyGstinMatchFilter,
 } from './clientMaster.businessKey.js';
+import {
+  isMeaningfulPurchaseOrder,
+  resolveCampTermsFilesForPersist,
+} from './clientMaster.campTermsPersist.js';
 import { normalizeHealthcareWorkers } from './healthcareWorkers.js';
 import {
   CampOpsCamp,
@@ -68,6 +72,7 @@ import {
   buildCampFilter,
   generateCampId,
   captureSubmissionTracking,
+  preserveOrCaptureSubmissionTracking,
   buildClientCode,
   groupCount,
   mapImportRows,
@@ -117,6 +122,16 @@ import {
   normalizePaymentSubmitStatus,
   PAYMENT_SUBMIT_STATUSES,
 } from './campOps.lifecycle.js';
+import {
+  WORKFLOW_ACTIONS,
+  assertWorkflowAction,
+  applyAutoPlannedToExecuted,
+  applyMarkCompleteTransition,
+  applyConfirmPaymentTransition,
+  applyHoldTransition,
+  applyReleaseHoldTransition,
+  getMarkCompleteBlockers,
+} from './campOps.workflow.js';
 import {
   normalizeMappedConsumables,
   resolveMappedConsumablesForCamp,
@@ -174,6 +189,7 @@ import {
   canCloseCampRecord,
   clearCampHcwAssignment,
   resolveClosureSelection,
+  normalizeClosureType,
 } from './campOps.closure.js';
 import { notifyCampWorkflow } from './campOps.notifications.js';
 import { computeClientMasterPoBalanceMap } from '../finance/poUtilization.service.js';
@@ -360,6 +376,10 @@ function actor(req) {
     id: req.user?._id || null,
     email: req.user?.email || '',
   };
+}
+
+function isCampAdmin(req) {
+  return Boolean(req.permissions?.has?.(PERMISSIONS.ALL));
 }
 
 async function audit(req, action, entityType, entityId, before = null, after = null) {
@@ -1077,7 +1097,7 @@ router.post(
   campDocUpload.array('documents', 10),
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
-    if (!canEditLifecycleStage(camp, 'execution')) {
+    if (!canEditLifecycleStage(camp, 'execution', { isAdmin: isCampAdmin(req) })) {
       throw new AppError('Cannot upload execution documents for this camp', 400, 'VALIDATION_ERROR');
     }
 
@@ -1252,7 +1272,7 @@ router.put(
     );
     const lifecycleOnly = req.body.lifecycleOnly === true;
 
-    if (!canEditLifecycleStage(camp, stage)) {
+    if (!canEditLifecycleStage(camp, stage, { isAdmin: isCampAdmin(req) })) {
       throw new AppError(`Cannot edit ${stage} stage for this camp`, 400, 'VALIDATION_ERROR');
     }
 
@@ -1278,15 +1298,18 @@ router.put(
       'executionStatus', 'chargeableStatus', 'inTime', 'outTime', 'kmRoundTrip', 'punctuality',
       'attire', 'labCoat', 'patientsCount', 'rxCount', 'cancellationReason', 'actualPatients',
     ];
-    const financialOnlyKeys = [
-      'paymentSubmitStatus', 'paymentRemark', 'financePaymentStatus', 'submittedToFinanceAt',
-      'submittedToFinanceById', 'submittedToFinanceByEmail',
-    ];
     if (stage === 'request' || stage === 'assignment') {
       executionOnlyKeys.forEach((key) => { delete payload[key]; });
     }
+    // paymentSubmitStatus / financePaymentStatus are never free-select via Camp PUT:
+    // Confirm Payment / Hold / Release Hold endpoints + Finance One Payment Done only.
+    delete payload.paymentSubmitStatus;
+    delete payload.financePaymentStatus;
+    delete payload.submittedToFinanceAt;
+    delete payload.submittedToFinanceById;
+    delete payload.submittedToFinanceByEmail;
     if (stage !== 'financial') {
-      financialOnlyKeys.forEach((key) => { delete payload[key]; });
+      delete payload.paymentRemark;
     }
 
     if (stage === 'request' || !lifecycleOnly) {
@@ -1316,7 +1339,8 @@ router.put(
       }
       if (camp.requestReviewStatus === 'information_requested' && camp.status === 'pending_review') {
         applyRequestReviewTransition(camp, 'submit');
-        Object.assign(camp, captureSubmissionTracking());
+        // Do not restart the 6-working-hour review timer.
+        Object.assign(camp, preserveOrCaptureSubmissionTracking(camp));
       }
     }
 
@@ -1366,19 +1390,39 @@ router.put(
       });
       try {
         assertExecutionStageSave(camp);
+        applyAutoPlannedToExecuted(camp);
         if (!isExecutionCancellationForFinance(camp)) {
           assertExecutionConsumablesComplete(camp, mappedConsumables);
         }
       } catch (err) {
         throw new AppError(err.message || 'Invalid execution stage', 400, 'VALIDATION_ERROR');
       }
+
+      const wantsMarkComplete =
+        req.body?.markComplete === true
+        || req.body?.markComplete === 'true'
+        || normalizeLifecycleStage(req.body?.lifecycleStage, '') === 'financial'
+        || camp.executionStatus === EXECUTION_STATUS.CAMP_COMPLETED;
+
       if (isExecutionCancellationForFinance(camp)) {
         camp.lifecycleStage = 'financial';
-      } else if (isExecutionReadyForFinance(camp, mappedConsumables)) {
-        camp.lifecycleStage = 'financial';
-        if (camp.status === 'approved') {
-          camp.status = 'executed';
+        camp.paymentSubmitStatus = camp.paymentSubmitStatus || 'payment_not_checked';
+      } else if (wantsMarkComplete) {
+        try {
+          applyMarkCompleteTransition(camp, mappedConsumables);
+        } catch (err) {
+          // If client only saved execution fields without completing Mark Complete, keep Executed.
+          if (camp.executionStatus === EXECUTION_STATUS.CAMP_COMPLETED) {
+            throw new AppError(err.message || 'Cannot mark complete', 400, 'VALIDATION_ERROR');
+          }
+          const blockers = getMarkCompleteBlockers(camp, mappedConsumables);
+          if (req.body?.markComplete === true || req.body?.markComplete === 'true') {
+            throw new AppError(blockers[0] || err.message, 400, 'VALIDATION_ERROR');
+          }
         }
+      } else if (isExecutionReadyForFinance(camp, mappedConsumables)) {
+        // Backward-compatible auto Mark Complete when all required fields are present.
+        applyMarkCompleteTransition(camp, mappedConsumables);
       }
     }
 
@@ -1404,7 +1448,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
     camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
-    if (!canEditLifecycleStage(camp, 'financial')) {
+    if (!canEditLifecycleStage(camp, 'financial', { isAdmin: isCampAdmin(req) })) {
       throw new AppError('Financial stage is not editable for this camp', 400, 'VALIDATION_ERROR');
     }
     if (camp.submittedToFinanceAt) {
@@ -1420,18 +1464,13 @@ router.post(
     const payload = lifecyclePayloadFromBody(req.body, camp, { pricing });
     assignPreservingExisting(camp, payload);
 
-    const paymentSubmitStatus = normalizePaymentSubmitStatus(
-      req.body.paymentSubmitStatus || camp.paymentSubmitStatus
-    );
-    if (!paymentSubmitStatus) {
+    const paymentSubmitStatus = normalizePaymentSubmitStatus(camp.paymentSubmitStatus);
+    if (paymentSubmitStatus !== 'payment_confirmed') {
       throw new AppError(
-        'Select Validation Completed, Validation Pending, or Payment On Hold before submitting',
+        'Confirm Payment before submitting to Finance One',
         400,
-        'VALIDATION_ERROR'
+        'VALIDATION_ERROR',
       );
-    }
-    if (!PAYMENT_SUBMIT_STATUSES.includes(paymentSubmitStatus)) {
-      throw new AppError('Invalid payment submit status', 400, 'VALIDATION_ERROR');
     }
 
     const hcwContactId = camp.hcwContactId || payload.hcwContactId;
@@ -1521,10 +1560,14 @@ async function transitionCamp(req, res, nextStatus, action) {
   camp.status = nextStatus;
 
   if (nextStatus === 'pending_review') {
+    assertWorkflowAction(before, WORKFLOW_ACTIONS.REOPEN);
     applyRequestReviewTransition(camp, 'submit');
-    Object.assign(camp, captureSubmissionTracking());
+    // Refused → Review Pending must not restart the review timer.
+    Object.assign(camp, preserveOrCaptureSubmissionTracking(before));
+    camp.lifecycleStage = 'request';
   }
   if (nextStatus === 'approved') {
+    assertWorkflowAction({ ...before, status: 'pending_review', lifecycleStage: 'request' }, WORKFLOW_ACTIONS.CONFIRM);
     const blockers = getRequestStageBlockers(camp);
     if (blockers.length) {
       throw new AppError(blockers[0], 400, 'VALIDATION_ERROR');
@@ -1532,46 +1575,54 @@ async function transitionCamp(req, res, nextStatus, action) {
     camp.approvedById = a.id;
     camp.approvedByEmail = a.email;
     applyRequestReviewTransition(camp, 'approve');
-    if (normalizeLifecycleStage(camp.lifecycleStage, 'request') === 'request') {
-      camp.lifecycleStage = 'assignment';
-    }
+    camp.lifecycleStage = 'assignment';
+    camp.assignmentStatus = 'Unassigned';
   }
   if (nextStatus === 'rejected') {
+    assertWorkflowAction(before, WORKFLOW_ACTIONS.REFUSE);
     const rejectionReason = trimStr(req.body?.rejectionReason || req.body?.remarks);
     if (!rejectionReason) {
       throw new AppError('Refusal reason is required', 400, 'VALIDATION_ERROR');
     }
     applyRequestReviewTransition(camp, 'reject', { reason: rejectionReason });
     clearCampHcwAssignment(camp);
+    camp.lifecycleStage = 'request';
   }
   if (nextStatus === 'executed') {
-    try {
-      assertCanMarkCampExecuted(camp);
-    } catch (err) {
-      throw new AppError(err.message || 'Cannot mark camp executed', 400, 'VALIDATION_ERROR');
+    // Compat: POST /execute performs Mark Complete when ready; otherwise Planned→Executed.
+    applyAutoPlannedToExecuted(camp);
+    const mappedConsumables = await resolveMappedConsumablesForCamp(camp.clientId, {
+      campaignType: camp.campaignType,
+      campaignName: camp.campaignName,
+    });
+    const blockers = getMarkCompleteBlockers(camp, mappedConsumables);
+    if (blockers.length) {
+      // Allow partial execute = move to Executed (3 fields) without Financial yet.
+      try {
+        assertCanMarkCampExecuted(camp);
+      } catch (err) {
+        throw new AppError(err.message || blockers[0], 400, 'VALIDATION_ERROR');
+      }
+      camp.executionStatus = EXECUTION_STATUS.MARKED_EXECUTED;
+      camp.status = 'approved';
+      await camp.save();
+      await audit(req, 'camp_ops.execute', 'camp_ops_camp', camp._id, before, camp.toObject());
+      return res.json({ data: enrichCamp(camp) });
     }
+    applyMarkCompleteTransition(camp, mappedConsumables);
     camp.executedById = a.id;
     camp.executedByEmail = a.email;
     camp.executedAt = new Date().toISOString();
-    camp.lifecycleStage = 'financial';
-    camp.executionStatus = EXECUTION_STATUS.CAMP_COMPLETED;
     if (req.body?.actualPatients != null) {
       camp.actualPatients = Math.max(0, Number(req.body.actualPatients) || 0);
     }
   }
   if (nextStatus === 'cancelled') {
-    const cancelledBy = trimStr(req.body?.cancelledBy).toLowerCase();
-    const remarks = trimStr(req.body?.remarks);
-    if (!CAMP_OPS_CANCEL_SOURCES.includes(cancelledBy)) {
-      throw new AppError('Select who cancelled the camp: brand or khw', 400, 'VALIDATION_ERROR');
-    }
-    if (!remarks) {
-      throw new AppError('Cancellation remark is required', 400, 'VALIDATION_ERROR');
-    }
-    camp.cancelledBy = cancelledBy;
-    camp.remarks = remarks;
-    camp.cancellationReason = remarks;
-    clearCampHcwAssignment(camp);
+    throw new AppError(
+      'Use close with Cancelled by Tylo / Cancelled by Client during Execution',
+      400,
+      'INVALID_TRANSITION',
+    );
   } else if (req.body?.remarks) {
     camp.remarks = trimStr(req.body.remarks);
   }
@@ -1673,6 +1724,12 @@ router.post(
 
     const before = camp.toObject();
     try {
+      if (trimStr(req.body?.closureType || req.body?.assignmentRefusalReason) === 'Refused'
+        || normalizeClosureType(trimStr(req.body?.closureType || req.body?.assignmentRefusalReason)) === 'Refused') {
+        assertWorkflowAction(camp, WORKFLOW_ACTIONS.REFUSE);
+      } else {
+        assertWorkflowAction(camp, WORKFLOW_ACTIONS.CANCEL);
+      }
       applyCampClosure(camp, {
         closureType,
         reasonCategory,
@@ -1682,7 +1739,7 @@ router.post(
         actor: actor(req),
       });
     } catch (err) {
-      throw new AppError(err.message || 'Invalid closure details', 400, 'VALIDATION_ERROR');
+      throw new AppError(err.message || 'Invalid closure details', 400, err.code || 'VALIDATION_ERROR');
     }
     await camp.save();
     await audit(req, 'camp_ops.close', 'camp_ops_camp', camp._id, before, camp.toObject());
@@ -1693,6 +1750,58 @@ router.post(
   '/camps/:id/execute',
   canApprove,
   asyncHandler(async (req, res) => transitionCamp(req, res, 'executed', 'execute'))
+);
+
+router.post(
+  '/camps/:id/confirm-payment',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const camp = await loadCampForUser(req, req.params.id);
+    const before = camp.toObject();
+    try {
+      applyConfirmPaymentTransition(camp);
+    } catch (err) {
+      throw new AppError(err.message || 'Cannot confirm payment', 400, err.code || 'VALIDATION_ERROR');
+    }
+    await camp.save();
+    await audit(req, 'camp_ops.confirm_payment', 'camp_ops_camp', camp._id, before, camp.toObject());
+    res.json({ data: enrichCamp(camp) });
+  })
+);
+
+router.post(
+  '/camps/:id/hold',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const camp = await loadCampForUser(req, req.params.id);
+    const remark = trimStr(req.body?.paymentRemark || req.body?.holdRemark || req.body?.remarks);
+    const before = camp.toObject();
+    try {
+      applyHoldTransition(camp, remark);
+    } catch (err) {
+      throw new AppError(err.message || 'Cannot put payment on hold', 400, err.code || 'VALIDATION_ERROR');
+    }
+    await camp.save();
+    await audit(req, 'camp_ops.payment_hold', 'camp_ops_camp', camp._id, before, camp.toObject());
+    res.json({ data: enrichCamp(camp) });
+  })
+);
+
+router.post(
+  '/camps/:id/release-hold',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const camp = await loadCampForUser(req, req.params.id);
+    const before = camp.toObject();
+    try {
+      applyReleaseHoldTransition(camp);
+    } catch (err) {
+      throw new AppError(err.message || 'Cannot release hold', 400, err.code || 'VALIDATION_ERROR');
+    }
+    await camp.save();
+    await audit(req, 'camp_ops.release_hold', 'camp_ops_camp', camp._id, before, camp.toObject());
+    res.json({ data: enrichCamp(camp) });
+  })
 );
 
 router.delete(
@@ -2213,6 +2322,38 @@ function withSignedPoFile(row) {
   return plain;
 }
 
+function dedicatedCampTermsFiles(rowLike = {}) {
+  const list = Array.isArray(rowLike.campTermsFiles) ? rowLike.campTermsFiles : [];
+  return list.map((doc, i) => normalizeCampTermsFile(doc, `ctf-${i + 1}`)).filter(Boolean);
+}
+
+function mapBodyPurchaseOrders(bodyOrders, existing) {
+  const existingById = new Map(
+    (existing.purchaseOrders || []).map((po) => [String(po.id), po])
+  );
+  return (Array.isArray(bodyOrders) ? bodyOrders : [])
+    .map((row, index) => normalizePurchaseOrderRow(row, index, existingById))
+    .filter(isMeaningfulPurchaseOrder)
+    .map(({ _index, ...rest }) => rest);
+}
+
+function agreementDatesFromBody(body, existing) {
+  return {
+    agreementStartDate:
+      body.agreementStartDate !== undefined
+        ? trimStr(body.agreementStartDate).slice(0, 10)
+        : trimStr(existing.agreementStartDate).slice(0, 10),
+    agreementEffectiveDate:
+      body.agreementEffectiveDate !== undefined
+        ? trimStr(body.agreementEffectiveDate).slice(0, 10)
+        : trimStr(existing.agreementEffectiveDate).slice(0, 10),
+    agreementEndDate:
+      body.agreementEndDate !== undefined
+        ? trimStr(body.agreementEndDate).slice(0, 10)
+        : trimStr(existing.agreementEndDate).slice(0, 10),
+  };
+}
+
 function applyCampTermsToPayload(payload, body, existingRow = null) {
   const existing = ensurePurchaseOrders(existingRow || {});
   const campTerms =
@@ -2220,14 +2361,16 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
       ? normalizeCampTermsValue(body.campTerms)
       : existing.campTerms || 'none';
 
-  const existingFiles = collectCampTermsFiles(existing);
-  const files =
-    body.campTermsFiles !== undefined
-      ? collectCampTermsFiles(existing, body.campTermsFiles)
-      : existingFiles;
+  const existingDedicatedFiles = dedicatedCampTermsFiles(existing);
+  const filesResolved = resolveCampTermsFilesForPersist(
+    body.campTermsFiles,
+    existingDedicatedFiles
+  );
+  const files = filesResolved.files;
 
   payload.campTerms = campTerms;
-  payload.campTermsFiles = campTerms === 'none' ? [] : files;
+  // Never blank-wipe agreement/approval attachments; deletes use the file DELETE API.
+  payload.campTermsFiles = files;
 
   if (campTerms === 'po_based') {
     const existingById = new Map(
@@ -2236,18 +2379,27 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
 
     let orders;
     if (Array.isArray(body.purchaseOrders)) {
-      orders = body.purchaseOrders
-        .map((row, index) => normalizePurchaseOrderRow(row, index, existingById))
-        .filter(
-          (row) =>
-            row.poNumber
-            || row.poNetValue > 0
-            || row.poFile?.storedName
-            || (Array.isArray(row.files) && row.files.length)
-            || row.poIssueDate
-            || row.poExpiryDate
-        )
-        .map(({ _index, ...rest }) => rest);
+      orders = mapBodyPurchaseOrders(body.purchaseOrders, existing);
+      if (!orders.length) {
+        orders = (existing.purchaseOrders || []).filter(isMeaningfulPurchaseOrder);
+      }
+      if (!orders.length) {
+        orders = [
+          normalizePurchaseOrderRow(
+            {
+              id: 'po-primary',
+              poNumber: '',
+              poNetValue: 0,
+              poApplyGst18: false,
+              poIssueDate: '',
+              poExpiryDate: '',
+              files: [],
+            },
+            0,
+            existingById
+          ),
+        ].map(({ _index, ...rest }) => rest);
+      }
     } else {
       const apply =
         body.poApplyGst18 !== undefined
@@ -2282,9 +2434,9 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
         body.poExpiryDate !== undefined
           ? trimStr(body.poExpiryDate).slice(0, 10)
           : trimStr(existing.poExpiryDate).slice(0, 10);
-      const primaryFiles = files.length
-        ? files
-        : (existing.purchaseOrders?.[0]?.files || []).map((doc) => normalizeCampTermsFile(doc)).filter(Boolean);
+      const primaryFiles = (existing.purchaseOrders?.[0]?.files || [])
+        .map((doc) => normalizeCampTermsFile(doc))
+        .filter(Boolean);
       orders = [
         {
           id: existing.purchaseOrders?.[0]?.id || 'po-primary',
@@ -2296,28 +2448,13 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
           poFile: primaryFiles[0] || null,
         },
       ];
-    }
-
-    if (!orders.length) {
-      orders = [
-        normalizePurchaseOrderRow(
-          {
-            id: 'po-primary',
-            poNumber: '',
-            poNetValue: 0,
-            poApplyGst18: false,
-            poIssueDate: '',
-            poExpiryDate: '',
-            files: [],
-          },
-          0,
-          existingById
-        ),
-      ].map(({ _index, ...rest }) => rest);
+      if (!isMeaningfulPurchaseOrder(orders[0]) && (existing.purchaseOrders || []).some(isMeaningfulPurchaseOrder)) {
+        orders = (existing.purchaseOrders || []).filter(isMeaningfulPurchaseOrder);
+      }
     }
 
     const combined = combinePurchaseOrders(orders);
-    const primary = orders[0];
+    const primary = orders[0] || {};
     const flatFiles = orders.flatMap((row) =>
       (Array.isArray(row.files) && row.files.length
         ? row.files
@@ -2326,25 +2463,6 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
           : []
       ).map((doc) => normalizeCampTermsFile(doc)).filter(Boolean)
     );
-
-    const agreementStartDate =
-      body.agreementStartDate !== undefined
-        ? trimStr(body.agreementStartDate).slice(0, 10)
-        : trimStr(existing.agreementStartDate).slice(0, 10);
-    const agreementEffectiveDate =
-      body.agreementEffectiveDate !== undefined
-        ? trimStr(body.agreementEffectiveDate).slice(0, 10)
-        : trimStr(existing.agreementEffectiveDate).slice(0, 10);
-    const agreementEndDate =
-      body.agreementEndDate !== undefined
-        ? trimStr(body.agreementEndDate).slice(0, 10)
-        : trimStr(existing.agreementEndDate).slice(0, 10);
-    // Keep agreement uploads separate from PO row files when the client sends them.
-    const agreementFiles = body.campTermsFiles !== undefined
-      ? files
-      : collectCampTermsFiles({
-        campTermsFiles: existing.campTermsFiles,
-      });
 
     Object.assign(payload, {
       poNumber: primary.poNumber || '',
@@ -2357,49 +2475,24 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
       ...combined,
       poFile: primary.poFile || flatFiles[0] || null,
       purchaseOrders: orders,
-      campTermsFiles: agreementFiles.length ? agreementFiles : existingFiles,
-      agreementStartDate,
-      agreementEffectiveDate,
-      agreementEndDate,
+      campTermsFiles: files,
+      ...agreementDatesFromBody(body, existing),
     });
     return;
   }
 
   if (campTerms === 'agreement_based' || campTerms === 'approval_based') {
-    // Preserve PO rows/details when Agreement/Approval is the active type.
-    let orders = existing.purchaseOrders || [];
-    if (Array.isArray(body.purchaseOrders)) {
-      const existingById = new Map(
-        (existing.purchaseOrders || []).map((po) => [String(po.id), po])
-      );
-      orders = body.purchaseOrders
-        .map((row, index) => normalizePurchaseOrderRow(row, index, existingById))
-        .filter(
-          (row) =>
-            row.poNumber
-            || row.poNetValue > 0
-            || row.poFile?.storedName
-            || (Array.isArray(row.files) && row.files.length)
-            || row.poIssueDate
-            || row.poExpiryDate
-        )
-        .map(({ _index, ...rest }) => rest);
-    }
+    // Preserve PO rows when Agreement/Approval is active; empty placeholders must not wipe.
+    const orders = Array.isArray(body.purchaseOrders)
+      ? (() => {
+        const mapped = mapBodyPurchaseOrders(body.purchaseOrders, existing);
+        return mapped.length ? mapped : (existing.purchaseOrders || []);
+      })()
+      : (existing.purchaseOrders || []);
     const combined = combinePurchaseOrders(orders);
     const primary = orders[0] || null;
     Object.assign(payload, {
-      agreementStartDate:
-        body.agreementStartDate !== undefined
-          ? trimStr(body.agreementStartDate).slice(0, 10)
-          : trimStr(existing.agreementStartDate).slice(0, 10),
-      agreementEffectiveDate:
-        body.agreementEffectiveDate !== undefined
-          ? trimStr(body.agreementEffectiveDate).slice(0, 10)
-          : trimStr(existing.agreementEffectiveDate).slice(0, 10),
-      agreementEndDate:
-        body.agreementEndDate !== undefined
-          ? trimStr(body.agreementEndDate).slice(0, 10)
-          : trimStr(existing.agreementEndDate).slice(0, 10),
+      ...agreementDatesFromBody(body, existing),
       poNumber: primary?.poNumber || trimStr(existing.poNumber),
       poNetValue: primary?.poNetValue ?? (Number(existing.poNetValue) || 0),
       poApplyGst18: primary
@@ -2412,24 +2505,20 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
       ...combined,
       poFile: primary?.poFile || existing.poFile || null,
       purchaseOrders: orders,
+      campTermsFiles: files,
     });
     return;
   }
 
   // none — keep previously entered PO/Agreement details so users can switch back.
+  const orders = Array.isArray(body.purchaseOrders)
+    ? (() => {
+      const mapped = mapBodyPurchaseOrders(body.purchaseOrders, existing);
+      return mapped.length ? mapped : (existing.purchaseOrders || []);
+    })()
+    : (existing.purchaseOrders || []);
   Object.assign(payload, {
-    agreementStartDate:
-      body.agreementStartDate !== undefined
-        ? trimStr(body.agreementStartDate).slice(0, 10)
-        : trimStr(existing.agreementStartDate).slice(0, 10),
-    agreementEffectiveDate:
-      body.agreementEffectiveDate !== undefined
-        ? trimStr(body.agreementEffectiveDate).slice(0, 10)
-        : trimStr(existing.agreementEffectiveDate).slice(0, 10),
-    agreementEndDate:
-      body.agreementEndDate !== undefined
-        ? trimStr(body.agreementEndDate).slice(0, 10)
-        : trimStr(existing.agreementEndDate).slice(0, 10),
+    ...agreementDatesFromBody(body, existing),
     poNumber: trimStr(existing.poNumber),
     poNetValue: Number(existing.poNetValue) || 0,
     poApplyGst18: Boolean(existing.poApplyGst18),
@@ -2441,10 +2530,8 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
     poCombinedGst: Number(existing.poCombinedGst) || 0,
     poCombinedGross: Number(existing.poCombinedGross) || 0,
     poFile: existing.poFile || null,
-    purchaseOrders: Array.isArray(body.purchaseOrders)
-      ? body.purchaseOrders
-      : (existing.purchaseOrders || []),
-    campTermsFiles: body.campTermsFiles !== undefined ? files : existingFiles,
+    purchaseOrders: orders,
+    campTermsFiles: files,
   });
 }
 
@@ -2493,14 +2580,11 @@ function applyPurchaseOrdersToPayload(payload, body, existingRow = null) {
 
   const combined = combinePurchaseOrders(orders);
   const first = orders[0] || null;
-  const files = orders.flatMap((o) =>
-    (Array.isArray(o.files) && o.files.length ? o.files : o.poFile ? [o.poFile] : [])
-      .map((doc) => normalizeCampTermsFile(doc))
-      .filter(Boolean)
-  );
+  const existingDedicated = dedicatedCampTermsFiles(existing);
   Object.assign(payload, {
     campTerms: orders.length ? 'po_based' : existing.campTerms || 'none',
-    campTermsFiles: files,
+    // Legacy PO-only updates must not overwrite agreement/approval attachments.
+    campTermsFiles: existingDedicated,
     purchaseOrders: orders,
     ...combined,
     poNumber: first?.poNumber || '',
@@ -2761,20 +2845,8 @@ router.post(
           ...(existing?.toObject ? existing.toObject() : existing || {}),
           ...payload,
         });
-        const clearKeys =
-          payload.campTerms === 'none'
-            ? [
-                'poNumber',
-                'poIssueDate',
-                'poExpiryDate',
-                'agreementStartDate',
-                'agreementEffectiveDate',
-                'agreementEndDate',
-                'poFile',
-              ]
-            : [];
         if (existing) {
-          assignPreservingExisting(existing, payload, { clearKeys });
+          assignPreservingExisting(existing, payload);
           existing.updatedById = a.id;
           await existing.save();
           return { updated: true };
@@ -3016,19 +3088,9 @@ router.put(
       }
     }
     const payload = buildMasterPayload(req.body, client, row);
-    const clearKeys =
-      payload.campTerms === 'none' && req.body.campTerms !== undefined
-        ? [
-            'poNumber',
-            'poIssueDate',
-            'poExpiryDate',
-            'agreementStartDate',
-            'agreementEffectiveDate',
-            'agreementEndDate',
-            'poFile',
-          ]
-        : [];
-    assignPreservingExisting(row, payload, { clearKeys });
+    // Do not clearKeys Agreement/PO fields when switching Camp Terms — keep both sides
+    // so users can switch back without silent data loss.
+    assignPreservingExisting(row, payload);
     if (client) seedMasterBillingFromCompany(row, client);
     row.billingGstin = normalizeMasterBillingGstin(row.billingGstin);
     assertClientMasterPayload(row);
@@ -3111,14 +3173,6 @@ function getCampTermsFilesMutable(row) {
     row.campTermsFiles = ensured.campTermsFiles.map((file) => ({ ...file }));
   }
   return row.campTermsFiles;
-}
-
-function syncCampTermsFileMirror(row) {
-  const files = Array.isArray(row.campTermsFiles) ? row.campTermsFiles : [];
-  row.poFile = files[0] || null;
-  if (Array.isArray(row.purchaseOrders) && row.purchaseOrders[0]) {
-    row.purchaseOrders[0] = { ...row.purchaseOrders[0], poFile: files[0] || null };
-  }
 }
 
 router.post(
@@ -3223,12 +3277,26 @@ function syncLegacyPoMirror(row) {
   row.poIssueDate = first?.poIssueDate || '';
   row.poExpiryDate = first?.poExpiryDate || '';
   row.poFile = first?.poFile || first?.files?.[0] || null;
-  row.campTerms = orders.length ? 'po_based' : row.campTerms || 'none';
-  row.campTermsFiles = orders.flatMap((o) =>
-    (Array.isArray(o.files) && o.files.length ? o.files : o.poFile ? [o.poFile] : [])
-      .map((doc) => normalizeCampTermsFile(doc))
-      .filter(Boolean)
-  );
+  // Keep active Camp Terms + agreement/approval attachments intact.
+  // Only promote to po_based when terms were unset/none and meaningful POs exist.
+  const currentTerms = normalizeCampTermsValue(row.campTerms);
+  if (
+    (!currentTerms || currentTerms === 'none')
+    && orders.some(isMeaningfulPurchaseOrder)
+  ) {
+    row.campTerms = 'po_based';
+  }
+}
+
+function syncCampTermsFileMirror(row) {
+  // Agreement/approval uploads live on campTermsFiles only — never overwrite PO row files.
+  const terms = normalizeCampTermsValue(row.campTerms);
+  if (terms === 'agreement_based' || terms === 'approval_based') {
+    const files = Array.isArray(row.campTermsFiles) ? row.campTermsFiles : [];
+    if (files[0] && !row.poFile?.storedName) {
+      row.poFile = files[0];
+    }
+  }
 }
 
 function ensurePoFilesArray(entry) {

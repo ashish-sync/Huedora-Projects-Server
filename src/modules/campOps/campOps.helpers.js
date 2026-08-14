@@ -211,39 +211,55 @@ export function buildCampFilter(query = {}) {
 
   if (financialFilter === 'payment_completed' || financialFilter === 'payment_done') {
     filter.financePaymentStatus = 'paid';
-  } else if (financialFilter === 'pending_review' || financialFilter === 'payment_not_checked') {
+    filter.status = { $nin: ['cancelled', 'rejected'] };
+  } else if (
+    financialFilter === 'pending_review'
+    || financialFilter === 'payment_not_checked'
+  ) {
     filter.paymentSubmitStatus = 'payment_not_checked';
-  } else if (financialFilter === 'payment_verified') {
+    filter.financePaymentStatus = { $ne: 'paid' };
+  } else if (
+    financialFilter === 'payment_verified'
+    || financialFilter === 'payment_confirmed'
+  ) {
     filter.paymentSubmitStatus = 'payment_confirmed';
-  } else if (financialFilter === 'payment_on_hold') {
+    filter.financePaymentStatus = { $ne: 'paid' };
+  } else if (
+    financialFilter === 'payment_on_hold'
+    || financialFilter === 'payment_hold'
+  ) {
     filter.paymentSubmitStatus = 'payment_hold';
-  } else if (financialFilter === 'cancelled_by_tylo' || financialFilter === 'cancelled_by_tcpl') {
+    filter.financePaymentStatus = { $ne: 'paid' };
+  } else if (financialFilter === 'cancelled_by_tylo' || financialFilter === 'cancelled_by_tcpl'
+    || financialFilter === 'cancelled_by_client') {
+    // Cancellation is an Execution status — do not treat as Financial selectable status.
+    // Keep legacy query keys mapping to cancel rows for API compatibility only.
     filter.status = 'cancelled';
     filter.$and = [
       ...(filter.$and || []),
-      {
-        $or: [
-          { assignmentRefusalReason: 'Cancelled by Tylo' },
-          { assignmentRefusalReason: 'Cancelled by TCPL' },
-          { executionStatus: 'Cancelled by Tylo' },
-          { cancelledBy: 'khw' },
-        ],
-      },
-    ];
-  } else if (financialFilter === 'cancelled_by_client') {
-    filter.status = 'cancelled';
-    filter.$and = [
-      ...(filter.$and || []),
-      {
-        $or: [
-          { assignmentRefusalReason: 'Cancelled by Client' },
-          { executionStatus: 'Cancelled by Client' },
-          { cancelledBy: 'brand' },
-        ],
-      },
+      financialFilter === 'cancelled_by_client'
+        ? {
+          $or: [
+            { assignmentRefusalReason: 'Cancelled by Client' },
+            { executionStatus: 'Cancelled by Client' },
+            { cancelledBy: 'brand' },
+          ],
+        }
+        : {
+          $or: [
+            { assignmentRefusalReason: 'Cancelled by Tylo' },
+            { assignmentRefusalReason: 'Cancelled by TCPL' },
+            { executionStatus: 'Cancelled by Tylo' },
+            { cancelledBy: 'khw' },
+          ],
+        },
     ];
   } else if (financialFilter) {
-    filter.paymentSubmitStatus = financialFilter;
+    // Only allow canonical financial status codes.
+    if (['payment_not_checked', 'payment_confirmed', 'payment_hold'].includes(financialFilter)) {
+      filter.paymentSubmitStatus = financialFilter;
+      filter.financePaymentStatus = { $ne: 'paid' };
+    }
   }
 
   if (requestReviewStatus) {
@@ -439,6 +455,21 @@ export function captureSubmissionTracking(now = new Date()) {
     submittedOffHours: hour < 8 || hour >= 20,
     submittedWeekendAttention: day === 0 || day === 6,
   };
+}
+
+/**
+ * Preserve original review timer when returning from Info Requested or Refused reopen.
+ * Only seeds submittedAt when it was never set.
+ */
+export function preserveOrCaptureSubmissionTracking(camp = {}, now = new Date()) {
+  if (camp?.submittedAt) {
+    return {
+      submittedAt: camp.submittedAt,
+      submittedOffHours: Boolean(camp.submittedOffHours),
+      submittedWeekendAttention: Boolean(camp.submittedWeekendAttention),
+    };
+  }
+  return captureSubmissionTracking(now);
 }
 
 export function buildClientCode(name) {
