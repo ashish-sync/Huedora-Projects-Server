@@ -105,9 +105,12 @@ import {
   assertExecutionConsumablesComplete,
   assertCanMarkCampExecuted,
   isExecutionReadyForFinance,
+  isExecutionCancellationForFinance,
   normalizeLifecycleStage,
   promoteDueAssignedCampsToExecution,
   promoteAssignedCampToExecutionIfDue,
+  repairCancelledClosureCampsToFinancial,
+  resolveCancelledClosureExecutionStatus,
   EXECUTION_DOC_TYPES,
   EXECUTION_STATUS,
   resolveInTimeSelfieUrl,
@@ -751,6 +754,7 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     await promoteDueAssignedCampsToExecution();
+    await repairCancelledClosureCampsToFinancial();
     const { page, limit, skip } = parsePagination(req.query);
     const overdueOnly = req.query.overdue === '1' || req.query.overdue === 'true';
     const reactionRequired = req.query.reactionRequired === '1' || req.query.reactionRequired === 'true';
@@ -1033,7 +1037,24 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
+    let campChanged = false;
     if (promoteAssignedCampToExecutionIfDue(camp)) {
+      campChanged = true;
+    }
+    if (
+      camp.status === 'cancelled'
+      && isExecutionCancellationForFinance(camp)
+      && normalizeLifecycleStage(camp.lifecycleStage, 'request') !== 'financial'
+    ) {
+      const closureStatus = resolveCancelledClosureExecutionStatus(camp);
+      if (closureStatus && camp.executionStatus !== closureStatus) {
+        camp.executionStatus = closureStatus;
+        campChanged = true;
+      }
+      camp.lifecycleStage = 'financial';
+      campChanged = true;
+    }
+    if (campChanged) {
       await camp.save();
     }
     const overdue = await persistRequestReviewOverdue(camp);
@@ -1345,11 +1366,15 @@ router.put(
       });
       try {
         assertExecutionStageSave(camp);
-        assertExecutionConsumablesComplete(camp, mappedConsumables);
+        if (!isExecutionCancellationForFinance(camp)) {
+          assertExecutionConsumablesComplete(camp, mappedConsumables);
+        }
       } catch (err) {
         throw new AppError(err.message || 'Invalid execution stage', 400, 'VALIDATION_ERROR');
       }
-      if (isExecutionReadyForFinance(camp, mappedConsumables)) {
+      if (isExecutionCancellationForFinance(camp)) {
+        camp.lifecycleStage = 'financial';
+      } else if (isExecutionReadyForFinance(camp, mappedConsumables)) {
         camp.lifecycleStage = 'financial';
         if (camp.status === 'approved') {
           camp.status = 'executed';
@@ -1410,29 +1435,32 @@ router.post(
     }
 
     const hcwContactId = camp.hcwContactId || payload.hcwContactId;
-    if (!hcwContactId) {
-      throw new AppError('Assign a healthcare worker before submitting to Finance', 400, 'VALIDATION_ERROR');
-    }
-    const payeeResolved = await resolveCampPayoutPayeeContact(hcwContactId);
-    if (!payeeResolved.assignedContact && !String(hcwContactId).startsWith('spe:')) {
-      throw new AppError('Assigned healthcare worker was not found in Contact Directory', 400, 'VALIDATION_ERROR');
-    }
-    if (payeeResolved.payeeIsServiceProvider && !payeeResolved.payeeContact) {
-      throw new AppError(
-        'Service Provider profile is missing in Contact Directory for this assignment',
-        400,
-        'VALIDATION_ERROR',
-      );
-    }
-    const payeeContact = payeeResolved.payeeContact || payeeResolved.assignedContact;
-    const payeeLabel = payeeResolved.payeeIsServiceProvider ? 'Service Provider' : 'HCW';
-    const hcwBlockers = getHcwFinanceBlockers(payeeContact, { label: payeeLabel });
-    if (hcwBlockers.length) {
-      throw new AppError(
-        `Complete ${payeeLabel} profile before Finance submit: ${hcwBlockers.join('; ')}`,
-        400,
-        'VALIDATION_ERROR',
-      );
+    const skipHcwFinanceChecks = camp.status === 'cancelled' && isExecutionCancellationForFinance(camp);
+    if (!skipHcwFinanceChecks) {
+      if (!hcwContactId) {
+        throw new AppError('Assign a healthcare worker before submitting to Finance', 400, 'VALIDATION_ERROR');
+      }
+      const payeeResolved = await resolveCampPayoutPayeeContact(hcwContactId);
+      if (!payeeResolved.assignedContact && !String(hcwContactId).startsWith('spe:')) {
+        throw new AppError('Assigned healthcare worker was not found in Contact Directory', 400, 'VALIDATION_ERROR');
+      }
+      if (payeeResolved.payeeIsServiceProvider && !payeeResolved.payeeContact) {
+        throw new AppError(
+          'Service Provider profile is missing in Contact Directory for this assignment',
+          400,
+          'VALIDATION_ERROR',
+        );
+      }
+      const payeeContact = payeeResolved.payeeContact || payeeResolved.assignedContact;
+      const payeeLabel = payeeResolved.payeeIsServiceProvider ? 'Service Provider' : 'HCW';
+      const hcwBlockers = getHcwFinanceBlockers(payeeContact, { label: payeeLabel });
+      if (hcwBlockers.length) {
+        throw new AppError(
+          `Complete ${payeeLabel} profile before Finance submit: ${hcwBlockers.join('; ')}`,
+          400,
+          'VALIDATION_ERROR',
+        );
+      }
     }
 
     const a = actor(req);
