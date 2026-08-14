@@ -438,10 +438,11 @@ export function computeLifecycleDerived(camp = {}, { pricing = null } = {}) {
     ? computeCampRevenueFromPricing({ ...camp, totalHours, extraHours }, pricing)
     : null;
 
-  const campRevenue = autoRevenue ? autoRevenue.campRevenue : num(camp.campRevenue);
-  const travelRevenue = autoRevenue ? autoRevenue.travelRevenue : num(camp.travelRevenue);
-  const overtimeRevenue = autoRevenue ? autoRevenue.overtimeRevenue : num(camp.overtimeRevenue);
-  const otherRevenue = autoRevenue ? autoRevenue.otherRevenue : num(camp.otherRevenue);
+  // Editable persisted values win; Client Master formula is only a default/suggestion.
+  const campRevenue = num(camp.campRevenue);
+  const travelRevenue = num(camp.travelRevenue);
+  const overtimeRevenue = num(camp.overtimeRevenue);
+  const otherRevenue = num(camp.otherRevenue);
   const otherRevenuePatients = autoRevenue ? autoRevenue.otherRevenuePatients : 0;
   const otherRevenueDistance = autoRevenue ? autoRevenue.otherRevenueDistance : 0;
   const totalRevenue = Math.round((campRevenue + travelRevenue + overtimeRevenue + otherRevenue) * 100) / 100;
@@ -477,6 +478,11 @@ export function computeLifecycleDerived(camp = {}, { pricing = null } = {}) {
     kmRoundTrip,
     punctuality,
     revenueAutoCalculated: Boolean(autoRevenue),
+    formulaCampRevenue: autoRevenue ? autoRevenue.campRevenue : 0,
+    formulaTravelRevenue: autoRevenue ? autoRevenue.travelRevenue : 0,
+    formulaOvertimeRevenue: autoRevenue ? autoRevenue.overtimeRevenue : 0,
+    formulaOtherRevenue: autoRevenue ? autoRevenue.otherRevenue : 0,
+    formulaTotalRevenue: autoRevenue ? autoRevenue.totalRevenue : 0,
   };
 }
 
@@ -628,14 +634,29 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
 
   const derived = computeLifecycleDerived({ ...existing, ...body, ...payload }, { pricing });
   const next = { ...payload, ...derived };
-  if (pricing && derived.revenueAutoCalculated) {
-    next.campRevenue = derived.campRevenue;
-    next.travelRevenue = derived.travelRevenue;
-    next.overtimeRevenue = derived.overtimeRevenue;
-    next.otherRevenue = derived.otherRevenue;
-    next.totalRevenue = derived.totalRevenue;
-  } else if (body.totalRevenue !== undefined && body.totalRevenue !== '') {
+  // Never let formula-derived fields overwrite explicit revenue edits from the client.
+  next.campRevenue = payload.campRevenue;
+  next.travelRevenue = payload.travelRevenue;
+  next.overtimeRevenue = payload.overtimeRevenue;
+  next.otherRevenue = payload.otherRevenue;
+
+  const bodyTouchedRevenue = ['campRevenue', 'travelRevenue', 'overtimeRevenue', 'otherRevenue']
+    .some((key) => body[key] !== undefined && body[key] !== '');
+  const revenueEmpty = [next.campRevenue, next.travelRevenue, next.overtimeRevenue, next.otherRevenue]
+    .every((value) => num(value) === 0);
+  if (pricing && derived.revenueAutoCalculated && !bodyTouchedRevenue && revenueEmpty) {
+    next.campRevenue = derived.formulaCampRevenue;
+    next.travelRevenue = derived.formulaTravelRevenue;
+    next.overtimeRevenue = derived.formulaOvertimeRevenue;
+    next.otherRevenue = derived.formulaOtherRevenue;
+  }
+
+  if (body.totalRevenue !== undefined && body.totalRevenue !== '') {
     next.totalRevenue = Math.max(0, num(body.totalRevenue));
+  } else {
+    next.totalRevenue = Math.round((
+      num(next.campRevenue) + num(next.travelRevenue) + num(next.overtimeRevenue) + num(next.otherRevenue)
+    ) * 100) / 100;
   }
   if (body.totalPayout !== undefined && body.totalPayout !== '') {
     next.totalPayout = Math.max(0, num(body.totalPayout));
@@ -645,6 +666,11 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
   delete next.otherRevenuePatients;
   delete next.otherRevenueDistance;
   delete next.revenueAutoCalculated;
+  delete next.formulaCampRevenue;
+  delete next.formulaTravelRevenue;
+  delete next.formulaOvertimeRevenue;
+  delete next.formulaOtherRevenue;
+  delete next.formulaTotalRevenue;
   return next;
 }
 
@@ -656,6 +682,11 @@ export function withCampLifecycle(camp) {
   delete obj.otherRevenuePatients;
   delete obj.otherRevenueDistance;
   delete obj.revenueAutoCalculated;
+  delete obj.formulaCampRevenue;
+  delete obj.formulaTravelRevenue;
+  delete obj.formulaOvertimeRevenue;
+  delete obj.formulaOtherRevenue;
+  delete obj.formulaTotalRevenue;
   obj.patientsCount = obj.actualPatients ?? 0;
   obj.lifecycleStages = CAMP_LIFECYCLE_STAGES;
   obj.effectiveExecutionStatus = resolveEffectiveExecutionStatus(obj);

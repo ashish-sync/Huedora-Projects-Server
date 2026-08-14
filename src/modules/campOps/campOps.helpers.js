@@ -194,6 +194,7 @@ export function buildCampFilter(query = {}) {
   const state = trimStr(query.state);
   const campaignType = trimStr(query.campaignType);
   const lifecycleStage = trimStr(query.lifecycleStage || query.stage);
+  const boardStage = trimStr(query.boardStage);
   const assignmentFilter = trimStr(query.assignmentFilter);
   const financialFilter = trimStr(query.financialFilter);
   const hcwContactId = trimStr(query.hcwContactId);
@@ -347,6 +348,23 @@ export function buildCampFilter(query = {}) {
     if (lifecycleStage === 'assignment' || lifecycleStage === 'execution' || lifecycleStage === 'financial') {
       filter.lifecycleStage = 'financial';
     }
+  } else if (boardStage === 'execution') {
+    // Operations board: active execution camps + cancelled closures (even if lifecycle is Financial).
+    filter.$and = [
+      ...(filter.$and || []),
+      {
+        $or: [
+          { lifecycleStage: 'execution' },
+          { status: 'cancelled', assignmentRefusalReason: 'Cancelled by Tylo' },
+          { status: 'cancelled', assignmentRefusalReason: 'Cancelled by TCPL' },
+          { status: 'cancelled', assignmentRefusalReason: 'Cancelled by Client' },
+          { status: 'cancelled', executionStatus: 'Cancelled by Tylo' },
+          { status: 'cancelled', executionStatus: 'Cancelled by Client' },
+          { status: 'cancelled', cancelledBy: 'khw' },
+          { status: 'cancelled', cancelledBy: 'brand' },
+        ],
+      },
+    ];
   } else if (lifecycleStage && !assignmentFilter && !skipLifecycleForRequestReview) {
     if (lifecycleStage === 'request') {
       filter.$and = [

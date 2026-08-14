@@ -80,6 +80,7 @@ import {
   archiveCampRecord,
 } from './campOps.helpers.js';
 import { matchesExecutionFilter } from './campStageFilters.js';
+import { buildOperationsBoard } from './campOps.operationsBoard.js';
 import { resolveContactPersonFields } from './campContactPersons.js';
 import {
   extractManualPastePreview,
@@ -751,6 +752,33 @@ router.get(
         campNames: CAMP_NAME_OPTIONS,
         durationOptions: CAMP_OPS_DURATION_OPTIONS,
       },
+    });
+  })
+);
+
+router.get(
+  '/dashboard/operations',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const filter = await scopeCampFilter(req, buildCampFilter(req.query));
+    const { scanCollection } = await import('../../store/filedb.js');
+    const camps = [];
+    await scanCollection('camp_ops_camps', {
+      filter,
+      forEach: (camp) => {
+        camps.push(camp);
+      },
+    });
+    const board = buildOperationsBoard(camps);
+    res.json({
+      dateRange: {
+        from: req.query.dateFrom || null,
+        to: req.query.dateTo || null,
+      },
+      scope: {
+        designation: String(req.user?.designation || '').trim() || null,
+      },
+      ...board,
     });
   })
 );
