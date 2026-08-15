@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuid } from 'uuid';
 import { workbookBuffer } from '../../utils/excelExport.js';
-import { Notification } from '../notifications/notification.model.js';
+import { notifyUser } from '../notifications/notifyEvent.js';
 import { uploadDir } from '../../config/paths.js';
 
 /** Legacy disk location — new reports are not written here. */
@@ -65,14 +65,16 @@ export async function notifyImportFailures(opts) {
       ? `${errors.length} of ${totalRows} rows failed${successRows ? `; ${successRows} succeeded` : ''}. Download the error report for row-level reasons.`
       : `${errors.length} row${errors.length === 1 ? '' : 's'} failed. Download the error report for details.`;
 
-  const notification = await Notification.create({
-    userId: opts.userId,
+  const notification = await notifyUser(opts.userId, {
     type: 'IMPORT_ERRORS',
     title,
     body,
     entityType: opts.entityType || 'ImportErrorReport',
     entityId: opts.entityId || reportId,
     deliveredAt: new Date().toISOString(),
+    group: false,
+    includeWatchers: false,
+    module: 'system',
     meta: {
       reportId,
       fileName,

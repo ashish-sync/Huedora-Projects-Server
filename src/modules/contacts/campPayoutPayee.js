@@ -1,6 +1,6 @@
 import { Contact } from './contact.model.js';
 import { isServiceProviderContact } from './contact.constants.js';
-import { signUploadFileUrl } from '../files/file.routes.js';
+import { toSignedUploadUrl } from '../files/file.routes.js';
 
 /** Embedded roster employee ids look like `spe:<providerId>:<employeeId>`. */
 export function embeddedServiceProviderId(assignmentId = '') {
@@ -33,11 +33,7 @@ export function payeeBankFieldsFromContact(contact, { signUrls = false } = {}) {
 }
 
 function signContactUploadUrl(url = '') {
-  const raw = String(url || '').trim();
-  if (!raw) return '';
-  const match = raw.match(/\/uploads\/(.+)$/);
-  if (!match) return raw;
-  return signUploadFileUrl(match[1]);
+  return toSignedUploadUrl(url);
 }
 
 /**

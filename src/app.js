@@ -25,6 +25,7 @@ import movementRoutes from './modules/movements/movement.routes.js';
 import { repairRoutes, maintenanceRoutes } from './modules/repairs/repair.routes.js';
 import documentRoutes from './modules/documents/document.routes.js';
 import notificationRoutes from './modules/notifications/notification.routes.js';
+import entityWatchRoutes from './modules/notifications/entityWatch.routes.js';
 import dashboardRoutes from './modules/dashboards/dashboard.routes.js';
 import auditRoutes from './modules/audit/audit.routes.js';
 import importRoutes from './modules/imports/import.routes.js';
@@ -37,7 +38,7 @@ import logisticsRoutes from './modules/logistics/logistics.routes.js';
 import financeRoutes from './modules/finance/finance.routes.js';
 import geoRoutes from './modules/geo/geo.routes.js';
 import picklistRoutes from './modules/picklists/picklist.routes.js';
-import fileRoutes from './modules/files/file.routes.js';
+import fileRoutes, { toSignedUploadUrl } from './modules/files/file.routes.js';
 import retentionRoutes from './modules/retention/retention.routes.js';
 
 export function createApp() {
@@ -68,8 +69,22 @@ export function createApp() {
     res.status(404).json({ error: { code: 'NOT_FOUND', message: 'File not found' } });
   });
   if (env.isProd) {
-    app.use('/uploads', (_req, res) => {
-      res.status(404).json({ error: { code: 'NOT_FOUND', message: 'File not found' } });
+    // Production must not expose a public static tree. Existing DB rows still store
+    // `/uploads/...` paths — redirect those GETs to short-lived signed file URLs so
+    // View/preview links work globally without rewriting stored upload paths.
+    app.use('/uploads', (req, res) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return res.status(405).json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' } });
+      }
+      const relative = String(req.path || '').replace(/^\/+/, '');
+      if (!relative || relative.includes('..')) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'File not found' } });
+      }
+      const signed = toSignedUploadUrl(`/uploads/${relative}`);
+      if (!signed || signed === `/uploads/${relative}`) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'File not found' } });
+      }
+      return res.redirect(302, signed);
     });
   } else {
     app.use('/uploads', express.static(uploadsRoot));
@@ -174,6 +189,7 @@ export function createApp() {
   app.use('/api/v1/movements', movementRoutes);
   app.use('/api/v1/documents', documentRoutes);
   app.use('/api/v1/notifications', notificationRoutes);
+  app.use('/api/v1/entity-watches', entityWatchRoutes);
   app.use('/api/v1/dashboards', dashboardRoutes);
   app.use('/api/v1/audit-logs', auditRoutes);
   app.use('/api/v1/imports', importRoutes);

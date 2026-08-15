@@ -265,6 +265,23 @@ async function main() {
         if (typeof t.unref === 'function') t.unref();
       })
       .catch(() => {});
+    import('./modules/notifications/notificationArchive.js')
+      .then(({ archiveExpiredNotifications }) => {
+        const run = () =>
+          archiveExpiredNotifications({ limit: 1000 })
+            .then((r) => {
+              if (r.archived) {
+                console.warn(
+                  `[notifications] 7-day TTL archive: scanned=${r.scanned} archived=${r.archived}`,
+                );
+              }
+            })
+            .catch((err) => console.error('[notifications] 7-day TTL archive failed:', err.message));
+        run();
+        const t = setInterval(run, 6 * 60 * 60 * 1000);
+        if (typeof t.unref === 'function') t.unref();
+      })
+      .catch(() => {});
   });
 }
 

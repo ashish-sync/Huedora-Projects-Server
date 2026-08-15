@@ -8,7 +8,7 @@ import { nextSequence } from '../../utils/counters.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { uploadDir } from '../../config/paths.js';
-import { signUploadFileUrl } from '../files/file.routes.js';
+import { toSignedUploadUrl } from '../files/file.routes.js';
 import { Contact } from '../contacts/contact.model.js';
 import { FinanceInvoice } from './finance.model.js';
 import { PAYMENT_MODES } from './finance.constants.js';
@@ -70,11 +70,7 @@ function addDaysIso(dateText, days = 30) {
 }
 
 function signAttachmentUrl(url = '') {
-  const raw = String(url || '').trim();
-  if (!raw) return '';
-  const match = raw.match(/\/uploads\/(.+)$/);
-  if (!match) return raw;
-  return signUploadFileUrl(match[1]);
+  return toSignedUploadUrl(url);
 }
 
 function normalizeAttachment(doc = {}) {

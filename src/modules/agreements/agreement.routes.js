@@ -25,7 +25,7 @@ import { nextSequence } from '../../utils/counters.js';
 import { writeAudit } from '../../utils/audit.js';
 import { AssetEvent } from '../assets/assetEvent.model.js';
 import { syncAssetContactFromAgreement } from '../assets/assetContactSync.js';
-import { Notification } from '../notifications/notification.model.js';
+import { notifyUser } from '../notifications/notifyEvent.js';
 import { ensureRecipientShortCode, generateShortCode } from './recipientAccess.js';
 import { buildAgreementPdfBuffer, pdfOptionsFromAgreement } from './agreementPdf.js';
 import { persistSignedAgreementPdf } from './agreementSignedDocument.js';
@@ -722,8 +722,7 @@ router.post(
       requestId: req.requestId,
     });
 
-    await Notification.create({
-      userId: req.user._id,
+    await notifyUser(req.user._id, {
       type: 'AGREEMENT_SENT',
       title: `${agreement.agreementNumber} ${
         agreement.signingType === 'NON_SIGNING' ? 'sent for acknowledgment' : 'sent for signature'
@@ -731,6 +730,9 @@ router.post(
       body: agreement.title,
       entityType: 'Agreement',
       entityId: agreement._id,
+      includeWatchers: true,
+      actor: req.user,
+      module: 'documents',
     });
 
     res.json({ data: { ...redactAgreement(agreement), recipientAccessToken: token } });

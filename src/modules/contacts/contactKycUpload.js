@@ -3,7 +3,7 @@
  * Accept PDF and common image formats (field keys stay passbookCopyUrl / panCardCopyUrl).
  */
 
-import { signUploadFileUrl } from '../files/file.routes.js';
+import { toSignedUploadUrl } from '../files/file.routes.js';
 
 export const CONTACT_KYC_ACCEPT_EXTENSIONS = [
   '.pdf',
@@ -65,12 +65,7 @@ export const CONTACT_KYC_REJECT_MESSAGE =
 
 /** Production blocks direct /uploads — return a short-lived signed file URL for View links. */
 export function signContactKycUrl(url = '') {
-  const raw = String(url || '').trim();
-  if (!raw) return '';
-  if (raw.includes('/files/signed')) return raw;
-  const match = raw.match(/\/uploads\/(.+)$/);
-  if (!match) return raw;
-  return signUploadFileUrl(match[1]);
+  return toSignedUploadUrl(url);
 }
 
 export function withSignedContactKyc(contact) {

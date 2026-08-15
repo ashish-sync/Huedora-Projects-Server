@@ -1,5 +1,6 @@
 import { AuditLog } from '../modules/audit/audit.model.js';
 import { sanitizeAuditSnapshot } from './stripEmbeddedMedia.js';
+import { buildAuditChanges, summarizeChanges } from '../modules/notifications/fieldDiff.js';
 
 export async function writeAudit({
   actorId = null,
@@ -16,6 +17,13 @@ export async function writeAudit({
   result = 'SUCCESS',
   message = null,
 }) {
+  const beforeSnap = before == null ? null : sanitizeAuditSnapshot(before);
+  const afterSnap = after == null ? null : sanitizeAuditSnapshot(after);
+  let msg = message;
+  if (!msg && beforeSnap && afterSnap) {
+    const changes = buildAuditChanges(beforeSnap, afterSnap);
+    if (changes.length) msg = summarizeChanges(changes);
+  }
   await AuditLog.create({
     at: new Date(),
     actorId,
@@ -24,12 +32,15 @@ export async function writeAudit({
     action,
     entityType,
     entityId,
-    before: before == null ? null : sanitizeAuditSnapshot(before),
-    after: after == null ? null : sanitizeAuditSnapshot(after),
+    before: beforeSnap,
+    after: afterSnap,
     ip,
     userAgent,
     requestId,
     result,
-    message,
+    message: msg,
   });
 }
+
+export { buildAuditChanges, summarizeChanges };
+

@@ -36,7 +36,7 @@ import {
   IN_OUT_PRODUCT_TYPE_ALIASES,
 } from '../logistics/logistics.constants.js';
 import { nextSequence } from '../../utils/counters.js';
-import { Notification } from '../notifications/notification.model.js';
+import { notifyEvent, notifyUser } from '../notifications/notifyEvent.js';
 import { User } from '../users/user.model.js';
 import { Role } from '../users/role.model.js';
 import { sendExcel } from '../../utils/excelExport.js';
@@ -56,6 +56,10 @@ import {
   validateMasterAddPayload,
   MASTER_ENTITY_IDS,
 } from '../masters/masterCatalog.js';
+import {
+  assertCanApproveRequestType,
+  filterApproverUsers,
+} from './requestApproval.js';
 import fs from 'fs';
 
 const router = Router();
@@ -627,34 +631,31 @@ async function notifyApprovers({ request, actorId, reason }) {
   const roleById = new Map(roles.map((r) => [String(r._id), r]));
 
   const users = await User.find({ isDeleted: false, isActive: true });
-  const approvers = users.filter((u) => {
-    if (String(u._id) === String(actorId)) return false;
-    const roleIds = (u.roleIds || []).map((id) => String(id?._id || id));
-    return roleIds.some((rid) => {
-      const role = roleById.get(rid);
-      if (!role) return false;
-      const perms = role.permissions || [];
-      return (
-        perms.includes(PERMISSIONS.ASSET_REQUESTS_APPROVE) ||
-        perms.includes(PERMISSIONS.MOVEMENTS_APPROVE) ||
-        role.name === 'Approver'
-      );
+  const withRoles = users.map((u) => {
+    const roleIds = (u.roleIds || []).map((id) => {
+      const rid = String(id?._id || id);
+      return roleById.get(rid) || { _id: rid, name: '', permissions: [] };
     });
+    return { ...u, roleIds, roles: roleIds };
+  });
+
+  const approvers = filterApproverUsers(withRoles, request.requestType, {
+    excludeUserId: actorId,
   });
 
   const label = typeLabel(request.requestType);
   const subject = request.assetName || request.trainingTopic || request.payeeName || 'Request';
 
-  for (const a of approvers) {
-    await Notification.create({
-      userId: a._id,
-      type: 'ASSET_REQUEST_APPROVAL',
-      title: `${label} request ${request.requestNumber} needs approval`,
-      body: reason || `${subject} · ${request.custodianName || '-'}`,
-      entityType: 'AssetRequest',
-      entityId: request._id,
-    });
-  }
+  await notifyEvent({
+    type: 'ASSET_REQUEST_APPROVAL',
+    title: `${label} request ${request.requestNumber} needs approval`,
+    body: reason || `${subject} · ${request.custodianName || '-'}`,
+    entityType: 'AssetRequest',
+    entityId: request._id,
+    recipients: approvers.map((a) => a._id),
+    includeWatchers: true,
+    module: 'assets',
+  });
 }
 
 function isLogistics(type) {
@@ -1535,6 +1536,7 @@ router.post(
   asyncHandler(async (req, res) => {
     let row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
+    assertCanApproveRequestType(req.user, req.permissions, row.requestType, 'approve');
     if (row.requestType === 'HIRING') {
       throw new AppError(
         'Hiring requests are fulfilled directly. Use Fulfill with hiree details.',
@@ -1671,13 +1673,14 @@ router.post(
       });
 
       if (row.requestorId) {
-        await Notification.create({
-          userId: row.requestorId,
+        await notifyUser(row.requestorId, {
           type: 'ASSET_REQUEST_APPROVAL',
           title: `Request ${row.requestNumber} approved`,
           body: `Master created · ${created.code}`,
           entityType: 'AssetRequest',
           entityId: row._id,
+          includeWatchers: true,
+          module: 'assets',
         });
       }
 
@@ -1726,13 +1729,14 @@ router.post(
     });
 
     if (row.requestorId) {
-      await Notification.create({
-        userId: row.requestorId,
+      await notifyUser(row.requestorId, {
         type: 'ASSET_REQUEST_APPROVAL',
         title: `Request ${row.requestNumber} approved`,
         body: `${typeLabel(row.requestType)} · ${row.assetName || row.trainingTopic || ''}`.trim(),
         entityType: 'AssetRequest',
         entityId: row._id,
+        includeWatchers: true,
+        module: 'assets',
       });
     }
 
@@ -1746,6 +1750,7 @@ router.post(
   asyncHandler(async (req, res) => {
     let row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
+    assertCanApproveRequestType(req.user, req.permissions, row.requestType, 'reject');
     if (row.status !== 'REQUESTED') {
       throw new AppError('Only REQUESTED items can be rejected', 400, 'INVALID_STATUS');
     }
@@ -1780,13 +1785,15 @@ router.post(
     });
 
     if (row.requestorId) {
-      await Notification.create({
-        userId: row.requestorId,
+      await notifyUser(row.requestorId, {
         type: 'ASSET_REQUEST_APPROVAL',
         title: `Request ${row.requestNumber} rejected`,
         body: row.rejectionReason || `${typeLabel(row.requestType)} · ${row.assetName || ''}`.trim(),
         entityType: 'AssetRequest',
         entityId: row._id,
+        includeWatchers: true,
+        module: 'assets',
+        priority: 'critical',
       });
     }
 
@@ -2051,6 +2058,7 @@ router.post(
     if (row.requestType !== 'HIRING') {
       throw new AppError('Only hiring requests can be fulfilled', 400, 'INVALID_TYPE');
     }
+    assertCanApproveRequestType(req.user, req.permissions, row.requestType, 'fulfill');
     if (!['REQUESTED', 'APPROVED'].includes(row.status)) {
       throw new AppError(
         'Only REQUESTED or APPROVED hiring requests can be fulfilled',
@@ -2132,13 +2140,14 @@ router.post(
     });
 
     if (row.requestorId) {
-      await Notification.create({
-        userId: row.requestorId,
+      await notifyUser(row.requestorId, {
         type: 'ASSET_REQUEST_APPROVAL',
         title: `Request ${row.requestNumber} fulfilled`,
         body: `${hireeName} · ${hireeContact} · ₹${payableAmount}`,
         entityType: 'AssetRequest',
         entityId: row._id,
+        includeWatchers: true,
+        module: 'assets',
       });
     }
 

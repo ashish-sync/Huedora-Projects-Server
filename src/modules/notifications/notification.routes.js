@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import fs from 'fs';
-import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { Notification } from './notification.model.js';
 import { resolveImportErrorReport } from '../imports/importErrorReport.js';
 import { isArchived } from '../retention/archivePolicy.js';
+import { archiveExpiredForUser, archiveExpiredNotifications } from './notificationArchive.js';
 
 const router = Router();
 router.use(authenticate);
@@ -34,9 +35,34 @@ async function deliverDueForUser(userId) {
   }
 }
 
+function matchesFilters(n, query) {
+  if (query.priority) {
+    if (String(n.priority || 'informational').toLowerCase() !== String(query.priority).toLowerCase()) {
+      return false;
+    }
+  }
+  if (query.module) {
+    if (String(n.module || '').toLowerCase() !== String(query.module).toLowerCase()) {
+      return false;
+    }
+  }
+  if (query.type) {
+    if (String(n.type || '') !== String(query.type)) return false;
+  }
+  if (query.q) {
+    const q = String(query.q).trim().toLowerCase();
+    if (q) {
+      const hay = `${n.title || ''} ${n.body || ''} ${n.type || ''} ${n.actorEmail || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+  }
+  return true;
+}
+
 router.get(
   '/',
   asyncHandler(async (req, res) => {
+    await archiveExpiredForUser(req.user._id);
     await deliverDueForUser(req.user._id);
 
     const nowMs = Date.now();
@@ -47,14 +73,14 @@ router.get(
       req.query.archive === 'true' ||
       req.query.archived === '1';
 
-    const all = await Notification.find(filter).sort({ createdAt: -1 }).limit(300);
+    const all = await Notification.find(filter).sort({ createdAt: -1 }).limit(400);
     const data = all
       .filter((n) => isActive(n) && isDue(n, nowMs))
       .filter((n) => (showArchived ? isArchived(n) : !isArchived(n)))
+      .filter((n) => matchesFilters(n, req.query))
       .slice(0, 100)
       .map((n) => {
         const row = typeof n.toObject === 'function' ? n.toObject() : { ...n };
-        // Strip bulky import error arrays from list payloads (kept for download only).
         if (row.meta?.errors) {
           row.meta = { ...row.meta, errors: undefined, errorsOmitted: true };
         }
@@ -69,6 +95,7 @@ router.get(
 router.get(
   '/unread-count',
   asyncHandler(async (req, res) => {
+    await archiveExpiredForUser(req.user._id);
     await deliverDueForUser(req.user._id);
     const nowMs = Date.now();
     const pending = await Notification.find({
@@ -85,6 +112,15 @@ router.get(
       if (ids.length < 20) ids.push(String(n._id));
     }
     res.json({ data: { count, sampleIds: ids } });
+  })
+);
+
+router.post(
+  '/archive-due',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const result = await archiveExpiredNotifications({ limit: 1000 });
+    res.json({ data: result });
   })
 );
 
@@ -108,7 +144,6 @@ router.get(
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     res.send(report.buffer);
 
-    // Best-effort cleanup of legacy on-disk reports after first successful download.
     if (report.legacyPath) {
       try {
         fs.unlinkSync(report.legacyPath);

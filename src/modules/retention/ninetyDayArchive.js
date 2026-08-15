@@ -6,6 +6,7 @@ import { Movement } from '../movements/movement.model.js';
 import { FinanceCommercialDocument, FinanceInvoice } from '../finance/finance.model.js';
 import { Agreement } from '../agreements/agreement.model.js';
 import { Notification } from '../notifications/notification.model.js';
+import { notifyEvent } from '../notifications/notifyEvent.js';
 import { ImportJob } from '../imports/importJob.model.js';
 import { writeAudit } from '../../utils/audit.js';
 import {
@@ -61,18 +62,16 @@ function recipientIds(row) {
 
 async function notify(row, { type, title, body, entityType }) {
   const users = recipientIds(row);
-  await Promise.all(
-    users.map((userId) =>
-      Notification.create({
-        userId,
-        type,
-        title,
-        body,
-        entityType,
-        entityId: row._id,
-      }),
-    ),
-  );
+  await notifyEvent({
+    type,
+    title,
+    body,
+    entityType,
+    entityId: row._id,
+    recipients: users,
+    includeWatchers: true,
+    module: 'system',
+  });
 }
 
 /** Resolve closed-at for a camp (rejects/cancels/paid financial). */

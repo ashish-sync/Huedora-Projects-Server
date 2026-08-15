@@ -1,6 +1,6 @@
 import { CampOpsClientMaster } from './campOps.model.js';
 import { User } from '../users/user.model.js';
-import { Notification } from '../notifications/notification.model.js';
+import { notifyUser } from '../notifications/notifyEvent.js';
 import { parseAssignedUserEmails } from './campOps.clientAccess.js';
 import { sendCampStakeholderEmail } from './campOps.notificationEmail.js';
 
@@ -43,8 +43,7 @@ export async function resolveCoordinatorStakeholders(clientId) {
 }
 
 async function createStakeholderNotification(user, payload) {
-  return Notification.create({
-    userId: user._id,
+  return notifyUser(user._id, {
     type: payload.type,
     title: payload.title,
     body: payload.body,
@@ -52,6 +51,8 @@ async function createStakeholderNotification(user, payload) {
     entityId: payload.camp._id,
     channel: 'IN_APP',
     emailStatus: 'SKIPPED',
+    includeWatchers: false,
+    module: 'camp',
   });
 }
 

@@ -9,7 +9,7 @@ import {
   mergePicklistOptions,
   normalizePicklistValue,
 } from './picklist.registry.js';
-import { Notification } from '../notifications/notification.model.js';
+import { notifyEvent, notifyUser } from '../notifications/notifyEvent.js';
 import { User } from '../users/user.model.js';
 import { Role } from '../users/role.model.js';
 import { writeAudit } from '../../utils/audit.js';
@@ -186,16 +186,17 @@ router.post(
     });
 
     const writers = await findMasterWriters(req.user._id);
-    for (const w of writers) {
-      await Notification.create({
-        userId: w._id,
-        type: 'PICKLIST_SUGGESTION',
-        title: `New dropdown value needs approval`,
-        body: `${entry.label}: “${value}”`,
-        entityType: 'PicklistSuggestion',
-        entityId: row._id,
-      });
-    }
+    await notifyEvent({
+      type: 'PICKLIST_SUGGESTION',
+      title: `New dropdown value needs approval`,
+      body: `${entry.label}: “${value}”`,
+      entityType: 'PicklistSuggestion',
+      entityId: row._id,
+      recipients: writers.map((w) => w._id),
+      includeWatchers: false,
+      actor: req.user,
+      module: 'masters',
+    });
 
     await writeAudit({
       actorId: req.user._id,
@@ -232,13 +233,15 @@ router.post(
     await row.save();
 
     if (row.requestedBy && String(row.requestedBy) !== String(req.user._id)) {
-      await Notification.create({
-        userId: row.requestedBy,
+      await notifyUser(row.requestedBy, {
         type: 'PICKLIST_APPROVED',
         title: `Dropdown value approved`,
         body: `${entry.label}: “${row.value}” is now available`,
         entityType: 'PicklistSuggestion',
         entityId: row._id,
+        includeWatchers: false,
+        actor: req.user,
+        module: 'masters',
       });
     }
 
@@ -276,8 +279,7 @@ router.post(
     await row.save();
 
     if (row.requestedBy && String(row.requestedBy) !== String(req.user._id)) {
-      await Notification.create({
-        userId: row.requestedBy,
+      await notifyUser(row.requestedBy, {
         type: 'PICKLIST_REJECTED',
         title: `Dropdown value rejected`,
         body: `${entry?.label || row.picklistKey}: “${row.value}”${
@@ -285,6 +287,10 @@ router.post(
         }`,
         entityType: 'PicklistSuggestion',
         entityId: row._id,
+        includeWatchers: false,
+        actor: req.user,
+        module: 'masters',
+        priority: 'important',
       });
     }
 

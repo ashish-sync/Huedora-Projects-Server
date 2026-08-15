@@ -8,7 +8,7 @@ import { AssetEvent } from '../assets/assetEvent.model.js';
 import { Contact } from '../contacts/contact.model.js';
 import { nextSequence } from '../../utils/counters.js';
 import { writeAudit } from '../../utils/audit.js';
-import { Notification } from '../notifications/notification.model.js';
+import { notifyEvent, notifyUser } from '../notifications/notifyEvent.js';
 import { User } from '../users/user.model.js';
 import { Role } from '../users/role.model.js';
 import { sendExcel } from '../../utils/excelExport.js';
@@ -140,16 +140,18 @@ router.post(
         isActive: true,
         _id: { $ne: req.user._id },
       });
-      for (const a of approvers) {
-        await Notification.create({
-          userId: a._id,
-          type: 'MOVEMENT_APPROVAL',
-          title: `Movement ${movement.movementNumber} needs approval`,
-          body: reason,
-          entityType: 'Movement',
-          entityId: movement._id,
-        });
-      }
+      await notifyEvent({
+        type: 'MOVEMENT_APPROVAL',
+        title: `Movement ${movement.movementNumber} needs approval`,
+        body: reason,
+        entityType: 'Movement',
+        entityId: movement._id,
+        recipients: approvers.map((a) => a._id),
+        includeWatchers: true,
+        actor: req.user,
+        excludeActor: true,
+        module: 'assets',
+      });
     }
 
     await writeAudit({
@@ -190,12 +192,14 @@ router.post(
       entityId: movement._id,
       requestId: req.requestId,
     });
-    await Notification.create({
-      userId: movement.requestorId,
+    await notifyUser(movement.requestorId, {
       type: 'MOVEMENT_APPROVAL',
       title: `Movement ${movement.movementNumber} approved`,
       entityType: 'Movement',
       entityId: movement._id,
+      includeWatchers: true,
+      actor: req.user,
+      module: 'assets',
     });
     res.json({ data: movement });
   })

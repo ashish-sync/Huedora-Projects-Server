@@ -46,6 +46,7 @@ import {
   nextDeliveryChallanNumber,
   nextBillOfSupplyNumber,
   nextQuotationNumber,
+  resolveCommercialPaymentDisplayStatus,
   toAmount,
   todayIso,
   addDaysIso,
@@ -74,6 +75,9 @@ import {
   assertCommercialDocWithinPoBalance,
   computeClientMasterPoUtilization,
 } from './poUtilization.service.js';
+import { notifyEvent } from '../notifications/notifyEvent.js';
+import { buildAuditChanges } from '../notifications/fieldDiff.js';
+import { NOTIFICATION_PRIORITIES } from '../notifications/notificationCatalog.js';
 
 const uploadRoot = uploadDir('finance');
 
@@ -173,10 +177,26 @@ router.get(
   asyncHandler(async (req, res) => {
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = commercialListFilter(req);
+    const paymentStatus = trimStr(req.query.paymentStatus);
+    const sortSpec = sort || '-documentDate';
+
+    // Status (payment / ageing) is computed — filter in memory when requested.
+    if (paymentStatus) {
+      const all = await FinanceCommercialDocument.find(filter)
+        .select('-builderForm')
+        .sort(sortSpec);
+      const filtered = all.filter(
+        (row) => resolveCommercialPaymentDisplayStatus(row) === paymentStatus
+      );
+      const total = filtered.length;
+      const data = filtered.slice(skip, skip + limit);
+      return res.json(paginated(data, total, page, limit));
+    }
+
     const [data, total] = await Promise.all([
       FinanceCommercialDocument.find(filter)
         .select('-builderForm')
-        .sort(sort || '-documentDate')
+        .sort(sortSpec)
         .skip(skip)
         .limit(limit),
       FinanceCommercialDocument.countDocuments(filter),
@@ -358,6 +378,30 @@ router.post(
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.COMMERCIAL.PAYMENT', row, before);
+    const after = row.toObject ? row.toObject() : { ...row };
+    const changes = buildAuditChanges(before, after, {
+      paymentStatus: 'Status',
+      paidAmount: 'Paid amount',
+    });
+    const display = resolveCommercialPaymentDisplayStatus(row);
+    const recipients = [row.createdById, row.updatedById, row.submittedById].filter(Boolean);
+    await notifyEvent({
+      type: 'COMMERCIAL_PAYMENT',
+      title: `${row.documentNumber || 'Document'} · ${display || 'Payment recorded'}`,
+      body: `Payment of ₹${row.paidAmount} recorded`,
+      entityType: 'FinanceCommercialDocument',
+      entityId: row._id,
+      recipients,
+      includeWatchers: true,
+      actor: req.user,
+      excludeActor: true,
+      changes,
+      module: 'finance',
+      priority:
+        display === 'Paid'
+          ? NOTIFICATION_PRIORITIES.IMPORTANT
+          : NOTIFICATION_PRIORITIES.INFORMATIONAL,
+    });
     res.json({ data: row });
   })
 );

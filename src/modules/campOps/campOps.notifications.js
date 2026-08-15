@@ -1,5 +1,5 @@
 import { notifyCampCoordinatorStakeholders } from './campOps.coordinatorNotify.js';
-import { Notification } from '../notifications/notification.model.js';
+import { notifyEvent } from '../notifications/notifyEvent.js';
 import { User } from '../users/user.model.js';
 import { Role } from '../users/role.model.js';
 import { PERMISSIONS } from '../../config/constants.js';
@@ -37,26 +37,31 @@ function campSummary(camp = {}) {
 
 export async function notifyCampApprovers({ camp, actorId, type, title, body }) {
   const approvers = await findCampApprovers(actorId);
-  await Promise.all(approvers.map((user) => Notification.create({
-    userId: user._id,
+  await notifyEvent({
     type,
     title,
     body,
     entityType: 'camp_ops_camp',
     entityId: camp._id,
-  })));
+    recipients: approvers.map((user) => user._id),
+    includeWatchers: true,
+    excludeUserIds: actorId ? [actorId] : [],
+    module: 'camp',
+  });
 }
 
 export async function notifyCampRequester({ camp, type, title, body }) {
   const requesterId = camp.createdById || camp.submittedById;
   if (!requesterId) return;
-  await Notification.create({
-    userId: requesterId,
+  await notifyEvent({
     type,
     title,
     body,
     entityType: 'camp_ops_camp',
     entityId: camp._id,
+    recipients: [requesterId],
+    includeWatchers: true,
+    module: 'camp',
   });
 }
 

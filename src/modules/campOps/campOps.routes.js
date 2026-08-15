@@ -211,7 +211,7 @@ import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
 import { uploadDir } from '../../config/paths.js';
-import { signUploadFileUrl } from '../files/file.routes.js';
+import { toSignedUploadUrl } from '../files/file.routes.js';
 import { buildExecutionDocumentFileName } from './executionDocumentName.js';
 
 const campUploadRoot = uploadDir('camp-ops');
@@ -240,9 +240,7 @@ const campDocUpload = multer({
 });
 
 function signStoredUploadUrl(url) {
-  const match = String(url || '').match(/\/uploads\/(.+)$/);
-  if (!match) return url;
-  return signUploadFileUrl(match[1]);
+  return toSignedUploadUrl(url);
 }
 
 function withSignedCampFiles(camp) {

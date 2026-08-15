@@ -22,6 +22,7 @@ import {
   completeVerificationRound,
   createSelfVerifyInvite,
   logCallAttempt,
+  withSignedVerificationPhotos,
 } from './verification.service.js';
 import {
   isVerificationOneEligibleAsset,
@@ -327,7 +328,7 @@ router.get(
         .limit(limit),
       VerificationRecord.countDocuments(filter),
     ]);
-    res.json(paginated(data, total, page, limit));
+    res.json(paginated(data.map(withSignedVerificationPhotos), total, page, limit));
   })
 );
 
@@ -365,7 +366,7 @@ router.post(
       method: 'MANUAL',
     });
 
-    res.json({ data: result });
+    res.json({ data: withSignedVerificationPhotos(result) });
   })
 );
 
@@ -433,7 +434,7 @@ router.post(
       requestId: req.requestId,
     });
 
-    res.json({ data: result });
+    res.json({ data: withSignedVerificationPhotos(result) });
   })
 );
 
@@ -506,7 +507,7 @@ router.patch(
       if (!record.finalStatus) record.finalStatus = 'OK';
     }
     await record.save();
-    res.json({ data: record });
+    res.json({ data: withSignedVerificationPhotos(record) });
   })
 );
 

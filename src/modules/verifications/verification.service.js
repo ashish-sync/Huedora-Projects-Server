@@ -12,7 +12,8 @@ import { transitionAsset } from '../assets/asset.service.js';
 import { computeDeviceCondition } from './verification.condition.js';
 import { createUniqueInviteCodes } from './verificationAccess.js';
 import { PHYSICAL_CHECK, FUNCTIONALITY_CHECK } from '../../config/constants.js';
-import { Notification } from '../notifications/notification.model.js';
+import { notifyUser } from '../notifications/notifyEvent.js';
+import { toSignedUploadUrl } from '../files/file.routes.js';
 
 const INVITE_TTL_DAYS = 7;
 const INVITE_TTL_ALLOWED = [1, 3, 7, 14, 30];
@@ -51,7 +52,32 @@ export async function logVerificationActivity({
 }
 
 function photoUrl(filename) {
+  // Persist stable /uploads paths; production preview redirects/signs these.
   return filename ? `/uploads/verifications/${filename}` : null;
+}
+
+/** Sign photo URLs on API responses without rewriting stored filenames. */
+export function withSignedVerificationPhotos(row) {
+  if (!row) return row;
+  const obj = row.toObject ? row.toObject() : { ...row };
+  const signRound = (round) => {
+    if (!round || typeof round !== 'object') return round;
+    const photos = Array.isArray(round.photos)
+      ? round.photos.map((p) => (p?.url ? { ...p, url: toSignedUploadUrl(p.url) } : p))
+      : round.photos;
+    return {
+      ...round,
+      photos,
+      photoUrl: round.photoUrl ? toSignedUploadUrl(round.photoUrl) : round.photoUrl,
+    };
+  };
+  if (obj.round1) obj.round1 = signRound(obj.round1);
+  if (obj.round2) obj.round2 = signRound(obj.round2);
+  if (Array.isArray(obj.photos)) {
+    obj.photos = obj.photos.map((p) => (p?.url ? { ...p, url: toSignedUploadUrl(p.url) } : p));
+  }
+  if (obj.photoUrl) obj.photoUrl = toSignedUploadUrl(obj.photoUrl);
+  return obj;
 }
 
 export const PHOTO_KIND = {
@@ -351,8 +377,7 @@ export async function logCallAttempt({
     const assetLabel =
       asset?.serialNumber || asset?.deviceNameSnapshot || record.serialNumber || 'asset';
 
-    notification = await Notification.create({
-      userId: actorId,
+    notification = await notifyUser(actorId, {
       type: 'VERIFICATION_CALLBACK',
       title: `Callback: ${assetLabel}`,
       body: noteText
@@ -364,6 +389,9 @@ export async function logCallAttempt({
       deliveredAt: null,
       cancelledAt: null,
       readAt: null,
+      group: false,
+      includeWatchers: false,
+      module: 'assets',
       meta: {
         round: roundNum,
         periodKey: record.periodKey,

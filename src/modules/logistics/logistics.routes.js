@@ -12,6 +12,7 @@ import { env } from '../../config/env.js';
 import { throwIfIdentityClash, assertValidEmail, assertValidPhone } from '../../utils/identityNormalize.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { nextSequence } from '../../utils/counters.js';
+import { toSignedUploadUrl } from '../files/file.routes.js';
 import { AssetRequest } from '../assetRequests/assetRequest.model.js';
 import {
   LOCATION_LEVELS,
@@ -149,6 +150,40 @@ function fileRefFromMulter(file) {
     url: `/uploads/logistics/products/${file.filename}`,
     mimeType: file.mimetype,
   };
+}
+
+function signLogisticsFileRef(ref) {
+  if (!ref || typeof ref !== 'object') return ref;
+  const url = toSignedUploadUrl(ref.url);
+  return url ? { ...ref, url } : ref;
+}
+
+/** Sign outbound logistics attachment URLs for preview (DB keeps /uploads/... paths). */
+function withSignedLogisticsFiles(row) {
+  if (!row) return row;
+  const obj = row.toObject ? row.toObject() : { ...row };
+  if (obj.productPhoto) obj.productPhoto = signLogisticsFileRef(obj.productPhoto);
+  if (obj.invoiceDoc) obj.invoiceDoc = signLogisticsFileRef(obj.invoiceDoc);
+  if (obj.image) obj.image = signLogisticsFileRef(obj.image);
+  if (Array.isArray(obj.attachments)) {
+    obj.attachments = obj.attachments.map(signLogisticsFileRef);
+  }
+  if (Array.isArray(obj.images)) {
+    obj.images = obj.images.map(signLogisticsFileRef);
+  }
+  if (Array.isArray(obj.productImages)) {
+    obj.productImages = obj.productImages.map(signLogisticsFileRef);
+  }
+  if (obj.documents && typeof obj.documents === 'object') {
+    const docs = { ...obj.documents };
+    for (const key of Object.keys(docs)) {
+      const val = docs[key];
+      if (Array.isArray(val)) docs[key] = val.map(signLogisticsFileRef);
+      else if (val && typeof val === 'object') docs[key] = signLogisticsFileRef(val);
+    }
+    obj.documents = docs;
+  }
+  return obj;
 }
 
 function asBool(v, fallback = false) {
@@ -1147,7 +1182,7 @@ router.post(
       after: row.toObject ? row.toObject() : row,
       requestId: req.requestId,
     });
-    res.json({ data: row });
+    res.json({ data: withSignedLogisticsFiles(row) });
   })
 );
 
@@ -1178,7 +1213,7 @@ router.delete(
       entityId: row._id,
       requestId: req.requestId,
     });
-    res.json({ data: row });
+    res.json({ data: withSignedLogisticsFiles(row) });
   })
 );
 
@@ -2439,7 +2474,7 @@ router.get(
         .limit(limit),
       LogisticsInOutEntry.countDocuments(filter),
     ]);
-    res.json(paginated(data, total, page, limit));
+    res.json(paginated(data.map(withSignedLogisticsFiles), total, page, limit));
   })
 );
 
@@ -2467,7 +2502,7 @@ router.post(
     if (clash) {
       // Idempotent retry with the same Transaction ID — do not create a second stock movement.
       return res.status(200).json({
-        data: clash,
+        data: withSignedLogisticsFiles(clash),
         meta: { idempotentReplay: true },
       });
     }
@@ -2490,7 +2525,7 @@ router.post(
         requestId: req.requestId,
       });
 
-      res.status(201).json({ data: row, fulfillment });
+      res.status(201).json({ data: withSignedLogisticsFiles(row), fulfillment });
     } catch (error) {
       if (reserved) await releaseRequestFulfillmentReservation(prepared.context);
       if (row?._id) {
@@ -2564,7 +2599,7 @@ router.patch(
       requestId: req.requestId,
     });
 
-    res.json({ data: row });
+    res.json({ data: withSignedLogisticsFiles(row) });
   })
 );
 

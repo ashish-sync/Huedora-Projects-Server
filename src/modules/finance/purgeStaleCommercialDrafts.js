@@ -1,6 +1,6 @@
 import { FinanceCommercialDocument } from './finance.model.js';
 import { DOCUMENT_NUMBER_LABELS } from './documentNumbering.js';
-import { Notification } from '../notifications/notification.model.js';
+import { notifyEvent } from '../notifications/notifyEvent.js';
 import { writeAudit } from '../../utils/audit.js';
 
 /** Soft-delete drafts idle this many days (no edit / update). */
@@ -65,18 +65,16 @@ function recipientIds(doc) {
 
 async function notifyDraftStakeholders(doc, { type, title, body }) {
   const users = recipientIds(doc);
-  await Promise.all(
-    users.map((userId) =>
-      Notification.create({
-        userId,
-        type,
-        title,
-        body,
-        entityType: 'FinanceCommercialDocument',
-        entityId: doc._id,
-      }),
-    ),
-  );
+  await notifyEvent({
+    type,
+    title,
+    body,
+    entityType: 'FinanceCommercialDocument',
+    entityId: doc._id,
+    recipients: users,
+    includeWatchers: true,
+    module: 'finance',
+  });
 }
 
 async function softDeleteDraft(doc, nowIso) {
