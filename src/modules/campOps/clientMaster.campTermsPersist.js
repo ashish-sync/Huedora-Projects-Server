@@ -42,6 +42,7 @@ export function resolvePurchaseOrdersForPersist(bodyOrders, existingOrders = [],
 /**
  * Resolve dedicated agreement/approval attachments (campTermsFiles).
  * Empty body array must not erase stored files (deletes use the file DELETE endpoint).
+ * Never mix purchaseOrders[].files / poFile into this list.
  */
 export function resolveCampTermsFilesForPersist(bodyFiles, existingFiles = []) {
   const existing = Array.isArray(existingFiles)
@@ -53,4 +54,23 @@ export function resolveCampTermsFilesForPersist(bodyFiles, existingFiles = []) {
   const incoming = bodyFiles.filter((doc) => doc && (doc.storedName || doc.id || doc.fileName));
   if (incoming.length) return { changed: true, files: incoming };
   return { changed: false, files: existing };
+}
+
+/**
+ * Dedicated Agreement/Approval attachments only — never PO row uploads.
+ */
+export function dedicatedCampTermsFilesOnly(rowLike = {}) {
+  const plain = rowLike?.toObject ? rowLike.toObject() : rowLike;
+  const list = Array.isArray(plain?.campTermsFiles) ? plain.campTermsFiles : [];
+  return list.filter((doc) => doc && (doc.storedName || doc.id || doc.fileName));
+}
+
+/**
+ * Blank-safe scalar pick: blank incoming must not erase existing.
+ */
+export function pickPreservingString(incoming, existing, { maxLen } = {}) {
+  const next = incoming == null ? '' : String(incoming).trim();
+  const prev = existing == null ? '' : String(existing).trim();
+  const chosen = next || prev;
+  return maxLen ? chosen.slice(0, maxLen) : chosen;
 }

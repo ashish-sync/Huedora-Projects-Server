@@ -808,6 +808,9 @@ router.get(
         'Hiring Pin Code',
         'Budget Minimum (INR)',
         'Budget Maximum (INR)',
+        'Hiree Name',
+        'Hiree Contact',
+        'Payable Amount (INR)',
         'Preferred Vendor',
         'Raised For',
         'Client',
@@ -853,6 +856,9 @@ router.get(
         r.hiringPinCode || '',
         r.budgetMin ?? '',
         r.budgetMax ?? '',
+        r.hireeName || '',
+        r.hireeContact || '',
+        r.payableAmount ?? '',
         r.preferredVendor || '',
         r.requestType === 'REIMBURSEMENT'
           ? r.raisedFor === 'OTHER' || (r.payeeName && r.payeeName !== 'Self')
@@ -1529,6 +1535,13 @@ router.post(
   asyncHandler(async (req, res) => {
     let row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
+    if (row.requestType === 'HIRING') {
+      throw new AppError(
+        'Hiring requests are fulfilled directly. Use Fulfill with hiree details.',
+        400,
+        'USE_FULFILL'
+      );
+    }
     if (row.status !== 'REQUESTED') {
       throw new AppError('Only REQUESTED items can be approved', 400, 'INVALID_STATUS');
     }
@@ -1851,6 +1864,13 @@ router.post(
   asyncHandler(async (req, res) => {
     let row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
+    if (row.requestType === 'HIRING') {
+      throw new AppError(
+        'Hiring requests must be fulfilled with Name, Contact Number, and Payable Amount.',
+        400,
+        'USE_FULFILL'
+      );
+    }
     if (row.status !== 'APPROVED') {
       throw new AppError('Only APPROVED items can be completed', 400, 'INVALID_STATUS');
     }
@@ -2017,6 +2037,110 @@ router.post(
       after: { status: row.status, completedAt },
       requestId: req.requestId,
     });
+
+    res.json({ data: row });
+  })
+);
+
+router.post(
+  '/:id/fulfill',
+  canApprove,
+  asyncHandler(async (req, res) => {
+    let row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Request not found', 404);
+    if (row.requestType !== 'HIRING') {
+      throw new AppError('Only hiring requests can be fulfilled', 400, 'INVALID_TYPE');
+    }
+    if (!['REQUESTED', 'APPROVED'].includes(row.status)) {
+      throw new AppError(
+        'Only REQUESTED or APPROVED hiring requests can be fulfilled',
+        400,
+        'INVALID_STATUS'
+      );
+    }
+    if (String(row.requestorId) === String(req.user._id)) {
+      throw new AppError('Segregation of duties: requestor cannot fulfill', 403, 'SOD_VIOLATION');
+    }
+
+    const hireeName = String(req.body.hireeName || req.body.name || '').trim();
+    const hireeContact = String(
+      req.body.hireeContact || req.body.contactNumber || req.body.contact || ''
+    ).trim();
+    const payableRaw = req.body.payableAmount ?? req.body.amount;
+    const payableAmount =
+      payableRaw === '' || payableRaw == null ? null : Number(payableRaw);
+
+    if (!hireeName) {
+      throw new AppError('Name is required to fulfill a hiring request', 400, 'VALIDATION_ERROR');
+    }
+    if (!hireeContact) {
+      throw new AppError(
+        'Contact Number is required to fulfill a hiring request',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    if (!Number.isFinite(payableAmount) || payableAmount < 0) {
+      throw new AppError(
+        'Payable Amount is required and must be a non-negative number',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+
+    const fulfilledAt = new Date().toISOString();
+    row = await AssetRequest.findOneAndUpdate(
+      {
+        _id: row._id,
+        isDeleted: false,
+        requestType: 'HIRING',
+        status: { $in: ['REQUESTED', 'APPROVED'] },
+      },
+      {
+        $set: {
+          status: 'COMPLETED',
+          hireeName,
+          hireeContact,
+          payableAmount,
+          hiringName: hireeName,
+          fulfilledAt,
+          fulfilledById: req.user._id,
+          completedAt: fulfilledAt,
+          approverId: req.user._id,
+          approvedAt: fulfilledAt,
+        },
+      }
+    );
+    if (!row) throw new AppError('Request status changed', 409, 'INVALID_STATUS');
+
+    await revokePendingUploadInvites(row._id);
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'ASSET_REQUEST.FULFILL',
+      entityType: 'AssetRequest',
+      entityId: row._id,
+      after: {
+        status: row.status,
+        hireeName,
+        hireeContact,
+        payableAmount,
+        fulfilledAt,
+      },
+      requestId: req.requestId,
+    });
+
+    if (row.requestorId) {
+      await Notification.create({
+        userId: row.requestorId,
+        type: 'ASSET_REQUEST_APPROVAL',
+        title: `Request ${row.requestNumber} fulfilled`,
+        body: `${hireeName} · ${hireeContact} · ₹${payableAmount}`,
+        entityType: 'AssetRequest',
+        entityId: row._id,
+      });
+    }
 
     res.json({ data: row });
   })

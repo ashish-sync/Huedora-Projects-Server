@@ -1,22 +1,28 @@
 import { AppError } from '../../utils/helpers.js';
-import { nextSequence } from '../../utils/counters.js';
+import { nextSequence, releaseSequence } from '../../utils/counters.js';
 
 /**
- * Standard commercial document numbering:
- * TYLO/FY/SEQ — Tax Invoice, Quotation, Proforma, Credit/Debit Note, Bill of Supply
- * PO/FY/SEQ — Purchase Order
- * DC/FY/SEQ — Delivery Challan
- * Legacy monthly: PREFIX/FY/MM/SEQ (still accepted for older IN numbers)
+ * Standard commercial document numbering: PREFIX/FY/MM/SEQ
+ * e.g. TCIN/26-27/08/001 — Tax Invoice, FY 26-27, August, 1st of the month
+ *
+ * TCIN – Tax Invoice
+ * TCPO – Purchase Order
+ * TCPI – Proforma Invoice
+ * TCQT – Quotation
+ * TCCN – Credit Note
+ * TCDN – Debit Note
+ * TCDC – Delivery Challan
+ * TCBS – Bill of Supply
  */
 export const DOCUMENT_NUMBER_PREFIXES = {
-  client_invoice: 'TYLO',
-  purchase_order: 'PO',
-  proforma: 'TYLO',
-  quotation: 'TYLO',
-  credit_note: 'TYLO',
-  debit_note: 'TYLO',
-  delivery_challan: 'DC',
-  bill_of_supply: 'TYLO',
+  client_invoice: 'TCIN',
+  purchase_order: 'TCPO',
+  proforma: 'TCPI',
+  quotation: 'TCQT',
+  credit_note: 'TCCN',
+  debit_note: 'TCDN',
+  delivery_challan: 'TCDC',
+  bill_of_supply: 'TCBS',
 };
 
 export const DOCUMENT_NUMBER_LABELS = {
@@ -31,19 +37,20 @@ export const DOCUMENT_NUMBER_LABELS = {
 };
 
 /** Human-readable standards for UI / API meta */
-export const DOCUMENT_NUMBER_STANDARDS = [
-  { documentType: 'purchase_order', prefix: 'PO', label: 'Purchase Order', example: 'PO/26-27/0001' },
-  { documentType: 'quotation', prefix: 'TYLO', label: 'Quotation', example: 'TYLO/26-27/0001' },
-  { documentType: 'proforma', prefix: 'TYLO', label: 'Proforma Invoice', example: 'TYLO/26-27/0001' },
-  { documentType: 'client_invoice', prefix: 'TYLO', label: 'Tax Invoice', example: 'TYLO/26-27/0001' },
-  { documentType: 'credit_note', prefix: 'TYLO', label: 'Credit Note', example: 'TYLO/26-27/0001' },
-  { documentType: 'debit_note', prefix: 'TYLO', label: 'Debit Note', example: 'TYLO/26-27/0001' },
-  { documentType: 'delivery_challan', prefix: 'DC', label: 'Delivery Challan', example: 'DC/26-27/0001' },
-  { documentType: 'bill_of_supply', prefix: 'TYLO', label: 'Bill of Supply', example: 'TYLO/26-27/0001' },
-];
+export const DOCUMENT_NUMBER_STANDARDS = Object.entries(DOCUMENT_NUMBER_PREFIXES).map(
+  ([documentType, prefix]) => ({
+    documentType,
+    prefix,
+    label: DOCUMENT_NUMBER_LABELS[documentType] || documentType,
+    example: `${prefix}/26-27/08/001`,
+  })
+);
 
-const NUMBER_PATTERN = /^(IN|PO|PI|CN|DN|DC|BS|TYLO)\/(\d{2}-\d{2})(?:\/(\d{2}))?\/(\d{3,})$/i;
-const LEGACY_NUMBER_PATTERN = /^(TCIN|TCPO|TCPI|TCCN)-(\d{2})-(\d{2})-(\d{3,})$/i;
+const NUMBER_PATTERN =
+  /^(TCIN|TCPO|TCPI|TCQT|TCCN|TCDN|TCDC|TCBS|IN|PO|PI|CN|DN|DC|BS|TYLO|QT)\/(\d{2}-\d{2})(?:\/(\d{2}))?\/(\d{3,})$/i;
+const LEGACY_DASH_PATTERN = /^(TCIN|TCPO|TCPI|TCCN)-(\d{2})-(\d{2})-(\d{3,})$/i;
+
+const SEQ_DIGITS = 3;
 
 /** Indian FY label e.g. 26-27 for dates in Apr 2026 – Mar 2027 */
 export function fiscalYearLabel(dateIso) {
@@ -55,8 +62,15 @@ export function fiscalYearLabel(dateIso) {
   return `${String(startYear).slice(-2)}-${endShort}`;
 }
 
+function toLocalYmd(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function parseDate(dateIso) {
   if (!dateIso) return new Date();
+  if (dateIso instanceof Date) {
+    return Number.isNaN(dateIso.getTime()) ? new Date() : dateIso;
+  }
   const raw = String(dateIso).slice(0, 10);
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
   if (m) {
@@ -69,7 +83,7 @@ function parseDate(dateIso) {
 
 export function documentNumberPeriod(dateIso) {
   const d = parseDate(dateIso);
-  const fy = fiscalYearLabel(d.toISOString().slice(0, 10));
+  const fy = fiscalYearLabel(toLocalYmd(d));
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   return {
     fy,
@@ -81,9 +95,23 @@ export function documentNumberPeriod(dateIso) {
 
 export function documentTypeFromPrefix(prefix) {
   const key = String(prefix || '').trim().toUpperCase();
-  // TYLO / BS are shared brand prefixes used by multiple document types.
-  if (key === 'BS' || key === 'TYLO') return '';
+  const legacyMap = {
+    IN: 'client_invoice',
+    PO: 'purchase_order',
+    PI: 'proforma',
+    QT: 'quotation',
+    CN: 'credit_note',
+    DN: 'debit_note',
+    DC: 'delivery_challan',
+    BS: 'bill_of_supply',
+  };
+  if (legacyMap[key]) return legacyMap[key];
+  if (key === 'TYLO') return '';
   return Object.entries(DOCUMENT_NUMBER_PREFIXES).find(([, p]) => p === key)?.[0] || '';
+}
+
+function formatCanonical(prefix, fy, mm, sequence) {
+  return `${prefix}/${fy}/${mm}/${String(sequence).padStart(SEQ_DIGITS, '0')}`;
 }
 
 export function parseDocumentNumber(value) {
@@ -94,33 +122,44 @@ export function parseDocumentNumber(value) {
     const fy = match[2];
     const mm = match[3] || '';
     const sequence = Number(match[4]);
-    const isFyOnly =
-      !mm &&
-      (prefix === 'TYLO' || prefix === 'BS' || prefix === 'CN' || prefix === 'DN' || prefix === 'DC' || prefix === 'PO');
+    if (!mm) {
+      return {
+        prefix,
+        documentType: documentTypeFromPrefix(prefix),
+        fy,
+        mm: '',
+        sequence,
+        periodKey: fy,
+        normalized: `${prefix}/${fy}/${String(sequence).padStart(4, '0')}`,
+        fyOnly: true,
+      };
+    }
+    const canonicalPrefix = DOCUMENT_NUMBER_PREFIXES[documentTypeFromPrefix(prefix)] || prefix;
+    return {
+      prefix: canonicalPrefix,
+      documentType: documentTypeFromPrefix(prefix),
+      fy,
+      mm,
+      sequence,
+      periodKey: `${fy}_${mm}`,
+      normalized: formatCanonical(canonicalPrefix, fy, mm, sequence),
+    };
+  }
+  const legacy = LEGACY_DASH_PATTERN.exec(text);
+  if (legacy) {
+    const prefix = legacy[1];
+    const yy = legacy[2];
+    const mm = legacy[3];
+    const sequence = Number(legacy[4]);
+    const fy = `${yy}-${String(Number(yy) + 1).padStart(2, '0')}`;
     return {
       prefix,
       documentType: documentTypeFromPrefix(prefix),
       fy,
       mm,
       sequence,
-      periodKey: isFyOnly ? fy : `${fy}_${mm}`,
-      normalized: isFyOnly
-        ? `${prefix}/${fy}/${String(sequence).padStart(4, '0')}`
-        : `${prefix}/${fy}/${mm}/${String(sequence).padStart(4, '0')}`,
-    };
-  }
-  const legacy = LEGACY_NUMBER_PATTERN.exec(text);
-  if (legacy) {
-    const legacyMap = { TCIN: 'IN', TCPO: 'PO', TCPI: 'PI', TCCN: 'CN' };
-    const prefix = legacyMap[legacy[1]] || legacy[1];
-    return {
-      prefix,
-      documentType: documentTypeFromPrefix(prefix),
-      fy: '',
-      mm: legacy[3],
-      sequence: Number(legacy[4]),
-      periodKey: `${legacy[2]}-${legacy[3]}`,
-      normalized: text,
+      periodKey: `${fy}_${mm}`,
+      normalized: formatCanonical(prefix, fy, mm, sequence),
       legacy: true,
     };
   }
@@ -131,24 +170,11 @@ export function formatDocumentNumberExample(documentType, dateIso) {
   const prefix = DOCUMENT_NUMBER_PREFIXES[documentType];
   if (!prefix) return '';
   const { fy, mm } = documentNumberPeriod(dateIso);
-  if (
-    documentType === 'bill_of_supply' ||
-    documentType === 'credit_note' ||
-    documentType === 'debit_note' ||
-    documentType === 'proforma' ||
-    documentType === 'quotation' ||
-    documentType === 'client_invoice' ||
-    documentType === 'delivery_challan' ||
-    documentType === 'purchase_order'
-  ) {
-    return `${prefix}/${fy}/0001`;
-  }
-  return `${prefix}/${fy}/${mm}/0001`;
+  return formatCanonical(prefix, fy, mm, 1);
 }
 
 /**
- * Assign next number for a document type.
- * Shared TYLO/FY/SEQ for Tax Invoice, Quotation, Proforma, Credit/Debit Note, Bill of Supply.
+ * Assign next number for a document type: PREFIX/FY/MM/SEQ (monthly sequence).
  */
 export async function nextCommercialDocumentNumber(documentType, documentDate) {
   const prefix = DOCUMENT_NUMBER_PREFIXES[documentType];
@@ -156,87 +182,49 @@ export async function nextCommercialDocumentNumber(documentType, documentDate) {
     throw new AppError(`Unknown document type for numbering: ${documentType}`, 400, 'VALIDATION_ERROR');
   }
   const { fy, mm, periodKey } = documentNumberPeriod(documentDate);
-  if (
-    documentType === 'bill_of_supply' ||
-    documentType === 'credit_note' ||
-    documentType === 'debit_note' ||
-    documentType === 'proforma' ||
-    documentType === 'quotation' ||
-    documentType === 'client_invoice'
-  ) {
-    const counterName = `financeDoc_tylo_${fy}`;
-    return nextSequence(counterName, `TYLO/${fy}`, { separator: '/', digits: 4 });
-  }
-  if (documentType === 'delivery_challan') {
-    const counterName = `financeDoc_delivery_challan_${fy}`;
-    return nextSequence(counterName, `DC/${fy}`, { separator: '/', digits: 4 });
-  }
-  if (documentType === 'purchase_order') {
-    const counterName = `financeDoc_purchase_order_${fy}`;
-    return nextSequence(counterName, `PO/${fy}`, { separator: '/', digits: 4 });
-  }
   const counterName = `financeDoc_${documentType}_${periodKey}`;
   const numberPrefix = `${prefix}/${fy}/${mm}`;
-  return nextSequence(counterName, numberPrefix, { separator: '/', digits: 4 });
+  return nextSequence(counterName, numberPrefix, { separator: '/', digits: SEQ_DIGITS });
+}
+
+/**
+ * Release an official document number so its monthly sequence can be reused.
+ */
+export async function releaseCommercialDocumentNumber(documentNumber, documentType) {
+  const parsed = parseDocumentNumber(documentNumber);
+  if (!parsed || parsed.fyOnly || !parsed.mm || !(parsed.sequence > 0)) return false;
+  const type = documentType || parsed.documentType;
+  if (!type || !DOCUMENT_NUMBER_PREFIXES[type]) return false;
+  const periodKey = parsed.periodKey || `${parsed.fy}_${parsed.mm}`;
+  const counterName = `financeDoc_${type}_${periodKey}`;
+  return releaseSequence(counterName, parsed.sequence);
 }
 
 export function validateManualDocumentNumber(value, documentType) {
   const parsed = parseDocumentNumber(value);
-  const fyOnlyStyle =
-    documentType === 'bill_of_supply' ||
-    documentType === 'credit_note' ||
-    documentType === 'debit_note' ||
-    documentType === 'proforma' ||
-    documentType === 'quotation' ||
-    documentType === 'client_invoice' ||
-    documentType === 'delivery_challan' ||
-    documentType === 'purchase_order';
-  const fyOnlyMessage =
-    documentType === 'delivery_challan'
-      ? 'Document number must match DC/FY/0001 (e.g. DC/26-27/0001)'
-      : documentType === 'purchase_order'
-        ? 'Document number must match PO/FY/0001 (e.g. PO/26-27/0001)'
-        : 'Document number must match TYLO/FY/0001 (e.g. TYLO/26-27/0001)';
-  if (!parsed || parsed.legacy) {
-    throw new AppError(
-      fyOnlyStyle ? fyOnlyMessage : 'Document number must match PREFIX/FY/MM/0001 (e.g. IN/26-27/08/0002)',
-      400,
-      'VALIDATION_ERROR'
-    );
-  }
-  if (fyOnlyStyle && parsed.mm) {
-    throw new AppError(fyOnlyMessage, 400, 'VALIDATION_ERROR');
-  }
-  if (!fyOnlyStyle && !parsed.mm) {
-    throw new AppError(
-      'Document number must match PREFIX/FY/MM/0001 (e.g. IN/26-27/08/0002)',
-      400,
-      'VALIDATION_ERROR'
-    );
-  }
   const expectedPrefix = DOCUMENT_NUMBER_PREFIXES[documentType];
-  const prefixOk =
-    expectedPrefix &&
-    (parsed.prefix === expectedPrefix ||
-      ((documentType === 'bill_of_supply' ||
-        documentType === 'credit_note' ||
-        documentType === 'debit_note' ||
-        documentType === 'proforma' ||
-        documentType === 'quotation' ||
-        documentType === 'client_invoice') &&
-        (parsed.prefix === 'TYLO' ||
-          parsed.prefix === 'BS' ||
-          parsed.prefix === 'CN' ||
-          parsed.prefix === 'DN' ||
-          parsed.prefix === 'PI' ||
-          parsed.prefix === 'QT' ||
-          parsed.prefix === 'IN')));
-  if (expectedPrefix && !prefixOk) {
+  const example = formatDocumentNumberExample(documentType) || 'TCIN/26-27/08/001';
+  if (!parsed || parsed.fyOnly || !parsed.mm) {
+    throw new AppError(
+      `Document number must match PREFIX/FY/MM/SEQ (e.g. ${example})`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+  const typeFromParsed = parsed.documentType || documentTypeFromPrefix(parsed.prefix);
+  if (expectedPrefix && typeFromParsed && typeFromParsed !== documentType) {
     throw new AppError(
       `Document number prefix must be ${expectedPrefix} for ${DOCUMENT_NUMBER_LABELS[documentType] || documentType}`,
       400,
       'VALIDATION_ERROR'
     );
   }
-  return parsed.normalized;
+  if (expectedPrefix && !typeFromParsed && parsed.prefix !== expectedPrefix) {
+    throw new AppError(
+      `Document number prefix must be ${expectedPrefix} for ${DOCUMENT_NUMBER_LABELS[documentType] || documentType}`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+  return formatCanonical(expectedPrefix || parsed.prefix, parsed.fy, parsed.mm, parsed.sequence);
 }

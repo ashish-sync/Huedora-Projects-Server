@@ -155,6 +155,12 @@ export const AssetRequest = defineCollection('asset_requests', {
   campOpsCampId: '',
   budgetMin: null,
   budgetMax: null,
+  /** Populated when an approver fulfills a hiring request */
+  hireeName: '',
+  hireeContact: '',
+  payableAmount: null,
+  fulfilledAt: null,
+  fulfilledById: null,
   fulfilledLineIds: [],
   fulfillmentPendingLineIds: [],
   fromContactId: null,

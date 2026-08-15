@@ -1,5 +1,6 @@
 import { AppError } from '../../utils/helpers.js';
 import { stripBuilderFormMedia } from '../../utils/stripEmbeddedMedia.js';
+import { PERMISSIONS } from '../../config/constants.js';
 import {
   COMMERCIAL_DOC_STATUSES,
   DEFAULT_ORG_PROFILE,
@@ -902,9 +903,15 @@ export function validateProformaPayload(payload, { requireLines = true } = {}) {
   }
 }
 
-export function assertEditableStatus(status) {
+export function assertEditableStatus(status, permissions) {
+  const isAdmin = Boolean(permissions?.has?.(PERMISSIONS.ALL));
+  if (isAdmin) return;
   if (!['Draft', 'Uploaded'].includes(status)) {
-    throw new AppError('Only draft or uploaded documents can be edited', 400, 'VALIDATION_ERROR');
+    throw new AppError(
+      'This billing document is locked. Only Admin can edit it.',
+      403,
+      'DOCUMENT_LOCKED'
+    );
   }
 }
 
@@ -979,9 +986,65 @@ export function assertOrgMasterEditor(user, permissions) {
   );
 }
 
+/** Pre-GST (subtotal) minus 10% → Net Receivable. ₹100 → ₹90. */
+export function netReceivableFromPreGst(subtotal) {
+  const preGst = toAmount(subtotal);
+  if (!(preGst > 0)) return 0;
+  return toAmount(preGst * 0.9);
+}
+
+/** Calendar days from approvedAt (or issuedAt) to `now`. */
+export function daysSinceDocumentApproved(row, now = new Date()) {
+  const raw = row?.approvedAt || row?.issuedAt;
+  if (!raw) return null;
+  const start = new Date(raw);
+  if (Number.isNaN(start.getTime())) return null;
+  const end = now instanceof Date ? now : new Date(now);
+  if (Number.isNaN(end.getTime())) return null;
+  const a = Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate());
+  const b = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+  return Math.floor((b - a) / 86400000);
+}
+
+/**
+ * Ageing-based Status while unpaid after approval.
+ * 0–10 Invoice Sent · 11–30 Invoice Due · 31–45 Invoice Overdue · 46+ MSME Breach
+ */
+export function paymentStatusFromAgeingDays(days) {
+  if (days == null || !Number.isFinite(days) || days < 0) return 'Invoice Sent';
+  if (days <= 10) return 'Invoice Sent';
+  if (days <= 30) return 'Invoice Due';
+  if (days <= 45) return 'Invoice Overdue';
+  return 'MSME Breach';
+}
+
+/**
+ * Billing Center Status (payment / ageing). Empty before approval/issue.
+ * Paid / Partially Paid always win; otherwise Status follows approval ageing.
+ */
+export function resolveCommercialPaymentDisplayStatus(row, now = new Date()) {
+  if (!['Issued', 'Approved'].includes(row?.status)) return '';
+  const stored = normalizeStoredPaymentStatus(row?.paymentStatus);
+  if (stored === 'Paid') return 'Paid';
+  if (stored === 'Partially Paid') return 'Partially Paid';
+  const days = daysSinceDocumentApproved(row, now);
+  return paymentStatusFromAgeingDays(days == null ? 0 : days);
+}
+
+/** Normalize legacy + current stored paymentStatus values. */
+export function normalizeStoredPaymentStatus(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw || raw === 'unpaid') return 'Unpaid';
+  if (raw === 'fully paid' || raw === 'paid' || raw === 'fully_paid') return 'Paid';
+  if (raw === 'partially paid' || raw === 'partially_paid' || raw === 'partial') {
+    return 'Partially Paid';
+  }
+  return String(value || '').trim() || 'Unpaid';
+}
+
 /**
  * Record a payment against an issued commercial document.
- * Same amount as grand total → Fully paid; otherwise Partially paid.
+ * Same amount as Net Receivable → Paid; otherwise Partially Paid.
  */
 export function applyCommercialPayment(row, amountInput) {
   if (!['Issued', 'Approved'].includes(row.status)) {
@@ -991,16 +1054,16 @@ export function applyCommercialPayment(row, amountInput) {
   if (!(amount > 0)) {
     throw new AppError('Enter a payment amount greater than zero', 400, 'VALIDATION_ERROR');
   }
-  const invoiceAmount = toAmount(row.grandTotal);
-  if (!(invoiceAmount > 0)) {
-    throw new AppError('Document has no invoice amount to pay against', 400, 'VALIDATION_ERROR');
+  const netReceivable = netReceivableFromPreGst(row.subtotal);
+  if (!(netReceivable > 0)) {
+    throw new AppError('Document has no Net Receivable amount to pay against', 400, 'VALIDATION_ERROR');
   }
-  if (amount > invoiceAmount + 0.009) {
-    throw new AppError('Payment cannot exceed the invoice amount', 400, 'VALIDATION_ERROR');
+  if (amount > netReceivable + 0.009) {
+    throw new AppError('Payment cannot exceed Net Receivable', 400, 'VALIDATION_ERROR');
   }
-  const fullyPaid = Math.abs(amount - invoiceAmount) < 0.01;
+  const fullyPaid = Math.abs(amount - netReceivable) < 0.01;
   row.paidAmount = amount;
-  row.paymentStatus = fullyPaid ? 'Fully paid' : 'Partially paid';
+  row.paymentStatus = fullyPaid ? 'Paid' : 'Partially Paid';
   row.paidAt = new Date().toISOString();
   return row;
 }

@@ -14,7 +14,7 @@ import { nextSequence } from '../../utils/counters.js';
 import { FinanceCommercialDocument } from './finance.model.js';
 import { COMMERCIAL_DOC_STATUSES } from './finance.constants.js';
 import { applyArchiveListFilter } from '../retention/archivePolicy.js';
-import { DOCUMENT_NUMBER_STANDARDS, documentNumberPeriod, validateManualDocumentNumber } from './documentNumbering.js';
+import { DOCUMENT_NUMBER_STANDARDS, documentNumberPeriod, releaseCommercialDocumentNumber, validateManualDocumentNumber } from './documentNumbering.js';
 import {
   assertApprovable,
   assertCancellable,
@@ -364,18 +364,23 @@ router.post(
 
 router.delete(
   '/commercial-documents/:id',
-  canWrite,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await loadCommercialById(req.params.id);
-    if (!['Draft', 'Uploaded', 'Cancelled'].includes(row.status)) {
-      throw new AppError('Only draft, uploaded, or cancelled documents can be deleted', 400);
-    }
     const before = row.toObject ? row.toObject() : { ...row };
+    const documentNumber = String(row.documentNumber || '').trim();
+    const documentType = row.documentType;
+
     row.isDeleted = true;
     row.deletedAt = new Date().toISOString();
     row.deletedBy = req.user._id;
     stampUpdater(row, req.user);
     await row.save();
+
+    if (documentNumber) {
+      await releaseCommercialDocumentNumber(documentNumber, documentType);
+    }
+
     await auditCommercial(req, 'FINANCE.COMMERCIAL.DELETE', row, before);
     res.json({ data: { ok: true } });
   })
@@ -490,7 +495,7 @@ router.patch(
       documentType: 'proforma',
     });
     if (!row) throw new AppError('Proforma not found', 404);
-    assertEditableStatus(row.status);
+    assertEditableStatus(row.status, req.permissions);
 
     const orgProfile = await getOrCreateOrgProfile();
     const merged = {
@@ -504,7 +509,9 @@ router.patch(
 
     const before = row.toObject ? row.toObject() : { ...row };
     assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
-    row.documentNumber = '';
+    if (['Draft', 'Uploaded'].includes(row.status)) {
+      row.documentNumber = '';
+    }
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.PROFORMA.UPDATE', row, before);
@@ -664,9 +671,14 @@ router.delete(
       documentType: 'proforma',
     });
     if (!row) throw new AppError('Proforma not found', 404);
+    const documentNumber = String(row.documentNumber || '').trim();
     row.isDeleted = true;
     row.deletedAt = new Date().toISOString();
+    row.deletedBy = req.user._id;
     await row.save();
+    if (documentNumber) {
+      await releaseCommercialDocumentNumber(documentNumber, 'proforma');
+    }
     res.json({ data: { ok: true } });
   })
 );
@@ -762,7 +774,7 @@ router.patch(
       documentType: 'purchase_order',
     });
     if (!row) throw new AppError('Purchase order not found', 404);
-    assertEditableStatus(row.status);
+    assertEditableStatus(row.status, req.permissions);
 
     const orgProfile = await getOrCreateOrgProfile();
     const merged = {
@@ -780,7 +792,9 @@ router.patch(
 
     const before = row.toObject ? row.toObject() : { ...row };
     assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
-    row.documentNumber = '';
+    if (['Draft', 'Uploaded'].includes(row.status)) {
+      row.documentNumber = '';
+    }
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.PO.UPDATE', row, before);
@@ -935,9 +949,14 @@ router.delete(
       documentType: 'purchase_order',
     });
     if (!row) throw new AppError('Purchase order not found', 404);
+    const documentNumber = String(row.documentNumber || '').trim();
     row.isDeleted = true;
     row.deletedAt = new Date().toISOString();
+    row.deletedBy = req.user._id;
     await row.save();
+    if (documentNumber) {
+      await releaseCommercialDocumentNumber(documentNumber, 'purchase_order');
+    }
     res.json({ data: { ok: true } });
   })
 );
@@ -1056,7 +1075,7 @@ router.patch(
       documentType: 'client_invoice',
     });
     if (!row) throw new AppError('Invoice not found', 404);
-    assertEditableStatus(row.status);
+    assertEditableStatus(row.status, req.permissions);
 
     const orgProfile = await getOrCreateOrgProfile();
     const merged = {
@@ -1070,7 +1089,9 @@ router.patch(
 
     const before = row.toObject ? row.toObject() : { ...row };
     assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
-    row.documentNumber = '';
+    if (['Draft', 'Uploaded'].includes(row.status)) {
+      row.documentNumber = '';
+    }
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.CLIENT_INVOICE.UPDATE', row, before);
@@ -1261,7 +1282,7 @@ router.patch(
       documentType: 'credit_note',
     });
     if (!row) throw new AppError('Credit note not found', 404);
-    assertEditableStatus(row.status);
+    assertEditableStatus(row.status, req.permissions);
 
     const orgProfile = await getOrCreateOrgProfile();
     const merged = {
@@ -1275,7 +1296,9 @@ router.patch(
 
     const before = row.toObject ? row.toObject() : { ...row };
     assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
-    row.documentNumber = '';
+    if (['Draft', 'Uploaded'].includes(row.status)) {
+      row.documentNumber = '';
+    }
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.CREDIT_NOTE.UPDATE', row, before);
@@ -1481,7 +1504,7 @@ function registerInvoiceLikeDocRoutes({
         documentType,
       });
       if (!row) throw new AppError(`${notFoundLabel} not found`, 404);
-      assertEditableStatus(row.status);
+      assertEditableStatus(row.status, req.permissions);
 
       const orgProfile = await getOrCreateOrgProfile();
       const merged = {
@@ -1495,7 +1518,9 @@ function registerInvoiceLikeDocRoutes({
 
       const before = row.toObject ? row.toObject() : { ...row };
       assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
-      row.documentNumber = '';
+      if (['Draft', 'Uploaded'].includes(row.status)) {
+        row.documentNumber = '';
+      }
       stampUpdater(row, req.user);
       await row.save();
       await auditCommercial(req, `FINANCE.${auditVerb}.UPDATE`, row, before);

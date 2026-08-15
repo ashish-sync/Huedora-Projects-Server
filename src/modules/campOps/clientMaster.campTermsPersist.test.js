@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import {
+  dedicatedCampTermsFilesOnly,
   isMeaningfulPurchaseOrder,
+  pickPreservingString,
   resolveCampTermsFilesForPersist,
   resolvePurchaseOrdersForPersist,
 } from './clientMaster.campTermsPersist.js';
@@ -35,6 +37,27 @@ test('empty campTermsFiles body preserves agreement attachments', () => {
   const resolved = resolveCampTermsFilesForPersist([], existing);
   assert.equal(resolved.changed, false);
   assert.equal(resolved.files[0].storedName, 'a.pdf');
+});
+
+test('dedicatedCampTermsFilesOnly ignores PO row uploads', () => {
+  const row = {
+    campTermsFiles: [{ id: 'a1', storedName: 'agree.pdf', fileName: 'agree.pdf' }],
+    purchaseOrders: [
+      {
+        id: 'po-1',
+        files: [{ id: 'p1', storedName: 'po.pdf', fileName: 'po.pdf' }],
+      },
+    ],
+    poFile: { id: 'p1', storedName: 'po.pdf', fileName: 'po.pdf' },
+  };
+  const dedicated = dedicatedCampTermsFilesOnly(row);
+  assert.equal(dedicated.length, 1);
+  assert.equal(dedicated[0].storedName, 'agree.pdf');
+});
+
+test('pickPreservingString keeps existing when incoming blank', () => {
+  assert.equal(pickPreservingString('', 'PO-100', { maxLen: 80 }), 'PO-100');
+  assert.equal(pickPreservingString('PO-200', 'PO-100', { maxLen: 80 }), 'PO-200');
 });
 
 test('agreement save with empty PO placeholders does not wipe stored POs or dates', () => {

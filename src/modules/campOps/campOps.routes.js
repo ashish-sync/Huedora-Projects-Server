@@ -2121,14 +2121,25 @@ function normalizeCampTermsFile(doc, fallbackId) {
   };
 }
 
-function collectCampTermsFiles(rowLike, bodyFiles) {
+/** Dedicated Agreement/Approval uploads only — never fold PO attachments in. */
+function collectDedicatedCampTermsFiles(rowLike, bodyFiles) {
   if (Array.isArray(bodyFiles)) {
     return bodyFiles.map((doc, i) => normalizeCampTermsFile(doc, `ctf-${i + 1}`)).filter(Boolean);
   }
   const plain = rowLike?.toObject ? rowLike.toObject() : { ...rowLike };
-  if (Array.isArray(plain.campTermsFiles) && plain.campTermsFiles.length) {
-    return plain.campTermsFiles.map((doc, i) => normalizeCampTermsFile(doc, `ctf-${i + 1}`)).filter(Boolean);
-  }
+  if (!Array.isArray(plain.campTermsFiles)) return [];
+  return plain.campTermsFiles.map((doc, i) => normalizeCampTermsFile(doc, `ctf-${i + 1}`)).filter(Boolean);
+}
+
+/**
+ * Legacy helper used by older download paths. Prefer collectDedicatedCampTermsFiles
+ * for Agreement data; PO files live on purchaseOrders[].files.
+ */
+function collectCampTermsFiles(rowLike, bodyFiles) {
+  const dedicated = collectDedicatedCampTermsFiles(rowLike, bodyFiles);
+  if (dedicated.length) return dedicated;
+  if (Array.isArray(bodyFiles)) return dedicated;
+  const plain = rowLike?.toObject ? rowLike.toObject() : { ...rowLike };
   const fromOrders = [];
   if (Array.isArray(plain.purchaseOrders)) {
     for (const po of plain.purchaseOrders) {
@@ -2205,7 +2216,26 @@ function normalizePurchaseOrderRow(row, index, existingById = new Map()) {
     entered = Number.isFinite(net) ? net : Number(existing?.poNetValue) || 0;
   }
 
-  const tax = computePoTaxFields(entered, apply);
+  // Blank-safe amounts: do not zero out an existing PO when the body omitted values.
+  let effectiveEntered = entered;
+  let effectiveApply = apply;
+  if (!(effectiveEntered > 0) && existing) {
+    const existingApply = existing.poApplyGst18 !== false;
+    const eg = Number(existing.poGrossValue);
+    const en = Number(existing.poNetValue);
+    const existingEntered =
+      existingApply && Number.isFinite(eg) && eg > 0
+        ? eg
+        : Number.isFinite(en) && en > 0
+          ? en
+          : 0;
+    if (existingEntered > 0) {
+      effectiveEntered = existingEntered;
+      if (row?.poApplyGst18 === undefined) effectiveApply = existingApply;
+    }
+  }
+
+  const tax = computePoTaxFields(effectiveEntered, effectiveApply);
 
   let files = [];
   if (Array.isArray(row?.files) && row.files.length > 0) {
@@ -2220,18 +2250,13 @@ function normalizePurchaseOrderRow(row, index, existingById = new Map()) {
     if (single) files = [single];
   }
 
-  const poIssueDate =
-    row?.poIssueDate !== undefined
-      ? trimStr(row.poIssueDate).slice(0, 10)
-      : trimStr(existing?.poIssueDate).slice(0, 10);
-  const poExpiryDate =
-    row?.poExpiryDate !== undefined
-      ? trimStr(row.poExpiryDate).slice(0, 10)
-      : trimStr(existing?.poExpiryDate).slice(0, 10);
+  const poIssueDate = pickPreservingDate(row?.poIssueDate, existing?.poIssueDate);
+  const poExpiryDate = pickPreservingDate(row?.poExpiryDate, existing?.poExpiryDate);
+  const poNumber = pickPreservingPoNumber(row?.poNumber, existing?.poNumber);
 
   return {
     id,
-    poNumber: trimStr(row?.poNumber).slice(0, 80),
+    poNumber,
     ...tax,
     poIssueDate,
     poExpiryDate,
@@ -2239,6 +2264,22 @@ function normalizePurchaseOrderRow(row, index, existingById = new Map()) {
     poFile: files[0] || null,
     _index: index,
   };
+}
+
+function pickPreservingPoNumber(incoming, existing) {
+  const next = trimStr(incoming).slice(0, 80);
+  const prev = trimStr(existing).slice(0, 80);
+  return next || prev;
+}
+
+function pickPreservingDate(incoming, existing) {
+  if (incoming !== undefined) {
+    const next = trimStr(incoming).slice(0, 10);
+    if (next) return next;
+    const prev = trimStr(existing).slice(0, 10);
+    return prev;
+  }
+  return trimStr(existing).slice(0, 10);
 }
 
 function combinePurchaseOrders(orders = []) {
@@ -2261,13 +2302,16 @@ function combinePurchaseOrders(orders = []) {
 function ensurePurchaseOrders(rowLike) {
   const plain = rowLike?.toObject ? rowLike.toObject() : { ...rowLike };
   const campTerms = inferCampTerms(plain);
-  const campTermsFiles = collectCampTermsFiles(plain);
+  // Agreement attachments stay on campTermsFiles only — never copy PO uploads here.
+  const campTermsFiles = collectDedicatedCampTermsFiles(plain);
   let orders = Array.isArray(plain.purchaseOrders) ? plain.purchaseOrders.filter(Boolean) : [];
   if (!orders.length && (plain.poNumber || plain.poNetValue || plain.poFile?.storedName || plain.poApplyGst18)) {
     const tax = computePoTaxFields(Number(plain.poNetValue) || 0, Boolean(plain.poApplyGst18));
-    const files = campTermsFiles.length
-      ? campTermsFiles
-      : (plain.poFile ? [normalizeCampTermsFile(plain.poFile)].filter(Boolean) : []);
+    // Legacy flat poFile belongs to PO Based only — never treat agreement files as PO.
+    const files =
+      plain.poFile && campTerms === 'po_based'
+        ? [normalizeCampTermsFile(plain.poFile)].filter(Boolean)
+        : [];
     orders = [
       {
         id: 'po-legacy-0',
@@ -2276,7 +2320,7 @@ function ensurePurchaseOrders(rowLike) {
         poIssueDate: trimStr(plain.poIssueDate).slice(0, 10),
         poExpiryDate: trimStr(plain.poExpiryDate).slice(0, 10),
         files,
-        poFile: files[0] || plain.poFile || null,
+        poFile: files[0] || (campTerms === 'po_based' ? plain.poFile || null : null),
       },
     ];
   }
@@ -2285,9 +2329,7 @@ function ensurePurchaseOrders(rowLike) {
   return {
     ...plain,
     campTerms,
-    campTermsFiles: campTerms === 'po_based'
-      ? (Array.isArray(plain.campTermsFiles) && plain.campTermsFiles.length ? campTermsFiles : collectCampTermsFiles({ purchaseOrders: orders }))
-      : campTermsFiles,
+    campTermsFiles,
     purchaseOrders: orders.map((po, index) => {
       const files = Array.isArray(po.files) && po.files.length
         ? po.files.map((doc, i) => normalizeCampTermsFile(doc, `${po.id || index}-f-${i + 1}`)).filter(Boolean)
@@ -2308,7 +2350,7 @@ function ensurePurchaseOrders(rowLike) {
     poGrossValue: plain.poGrossValue ?? first?.poGrossValue ?? 0,
     poIssueDate: plain.poIssueDate || first?.poIssueDate || '',
     poExpiryDate: plain.poExpiryDate || first?.poExpiryDate || '',
-    poFile: plain.poFile || first?.poFile || campTermsFiles[0] || null,
+    poFile: plain.poFile || first?.poFile || null,
     agreementStartDate: plain.agreementStartDate || '',
     agreementEffectiveDate: plain.agreementEffectiveDate || '',
     agreementEndDate: plain.agreementEndDate || '',
@@ -2351,8 +2393,7 @@ function withSignedPoFile(row) {
 }
 
 function dedicatedCampTermsFiles(rowLike = {}) {
-  const list = Array.isArray(rowLike.campTermsFiles) ? rowLike.campTermsFiles : [];
-  return list.map((doc, i) => normalizeCampTermsFile(doc, `ctf-${i + 1}`)).filter(Boolean);
+  return collectDedicatedCampTermsFiles(rowLike);
 }
 
 function mapBodyPurchaseOrders(bodyOrders, existing) {
@@ -2367,18 +2408,12 @@ function mapBodyPurchaseOrders(bodyOrders, existing) {
 
 function agreementDatesFromBody(body, existing) {
   return {
-    agreementStartDate:
-      body.agreementStartDate !== undefined
-        ? trimStr(body.agreementStartDate).slice(0, 10)
-        : trimStr(existing.agreementStartDate).slice(0, 10),
-    agreementEffectiveDate:
-      body.agreementEffectiveDate !== undefined
-        ? trimStr(body.agreementEffectiveDate).slice(0, 10)
-        : trimStr(existing.agreementEffectiveDate).slice(0, 10),
-    agreementEndDate:
-      body.agreementEndDate !== undefined
-        ? trimStr(body.agreementEndDate).slice(0, 10)
-        : trimStr(existing.agreementEndDate).slice(0, 10),
+    agreementStartDate: pickPreservingDate(body.agreementStartDate, existing.agreementStartDate),
+    agreementEffectiveDate: pickPreservingDate(
+      body.agreementEffectiveDate,
+      existing.agreementEffectiveDate
+    ),
+    agreementEndDate: pickPreservingDate(body.agreementEndDate, existing.agreementEndDate),
   };
 }
 
@@ -2389,7 +2424,8 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
       ? normalizeCampTermsValue(body.campTerms)
       : existing.campTerms || 'none';
 
-  const existingDedicatedFiles = dedicatedCampTermsFiles(existing);
+  // Use RAW row files — never PO-derived lists from ensurePurchaseOrders.
+  const existingDedicatedFiles = dedicatedCampTermsFiles(existingRow || {});
   const filesResolved = resolveCampTermsFilesForPersist(
     body.campTermsFiles,
     existingDedicatedFiles
@@ -3196,9 +3232,9 @@ function unlinkPoFile(storedName) {
 }
 
 function getCampTermsFilesMutable(row) {
-  const ensured = ensurePurchaseOrders(row);
+  // Dedicated Agreement/Approval list only — never seed from PO uploads.
   if (!Array.isArray(row.campTermsFiles)) {
-    row.campTermsFiles = ensured.campTermsFiles.map((file) => ({ ...file }));
+    row.campTermsFiles = collectDedicatedCampTermsFiles(row);
   }
   return row.campTermsFiles;
 }
@@ -3317,14 +3353,9 @@ function syncLegacyPoMirror(row) {
 }
 
 function syncCampTermsFileMirror(row) {
-  // Agreement/approval uploads live on campTermsFiles only — never overwrite PO row files.
-  const terms = normalizeCampTermsValue(row.campTerms);
-  if (terms === 'agreement_based' || terms === 'approval_based') {
-    const files = Array.isArray(row.campTermsFiles) ? row.campTermsFiles : [];
-    if (files[0] && !row.poFile?.storedName) {
-      row.poFile = files[0];
-    }
-  }
+  // Agreement/approval uploads live on campTermsFiles only.
+  // Never copy them onto poFile / purchaseOrders — that merges Agreement into PO Based.
+  void row;
 }
 
 function ensurePoFilesArray(entry) {
@@ -3369,6 +3400,17 @@ function findPoEntry(row, poId) {
     if (hit) {
       ensurePoFilesArray(hit);
       return { orders, entry: hit };
+    }
+    // Prefer re-id of a sole / empty placeholder PO so uploading a file
+    // never creates a blank sibling that wipes No./Value on the form refresh.
+    const sole =
+      orders.length === 1
+        ? orders[0]
+        : orders.find((po) => !isMeaningfulPurchaseOrder(po));
+    if (sole) {
+      sole.id = String(poId);
+      ensurePoFilesArray(sole);
+      return { orders, entry: sole };
     }
     const entry = {
       id: String(poId),
