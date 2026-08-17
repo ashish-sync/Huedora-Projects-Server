@@ -60,6 +60,10 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function financeIdempotencyKey(req) {
+  return trimStr(req.body?.uniqueKey || req.get('Idempotency-Key') || req.get('X-Idempotency-Key'));
+}
+
 router.get(
   '/meta',
   canRead,
@@ -395,7 +399,7 @@ async function campPayoutSummaryWithPayeeBank(camp) {
   return enriched;
 }
 
-function applyCampPayoutFields(camp, body = {}, actor = {}) {
+function applyCampPayoutFields(camp, body = {}, actor = {}, options = {}) {
   const status = normalizeFinancePaymentStatus(body.financePaymentStatus || camp.financePaymentStatus);
   if (!status || !FINANCE_PAYMENT_STATUSES.includes(status)) {
     throw new AppError(
@@ -406,11 +410,19 @@ function applyCampPayoutFields(camp, body = {}, actor = {}) {
   }
 
   const alreadyPaid = normalizeFinancePaymentStatus(camp.financePaymentStatus) === 'paid';
+  const idempotencyKey = trimStr(options.idempotencyKey);
   if (status === 'paid' && alreadyPaid) {
     // Idempotent: same UTR/payment update must not re-mutate or spam audits upstream.
     const transactionId = trimStr(body.transactionId ?? camp.transactionId);
     if (transactionId && camp.transactionId && transactionId !== camp.transactionId) {
       throw new AppError('Payment Done already recorded with a different UTR', 409, 'CONFLICT');
+    }
+    if (
+      idempotencyKey
+      && camp.financePaymentIdempotencyKey
+      && camp.financePaymentIdempotencyKey !== idempotencyKey
+    ) {
+      throw new AppError('Payment Done already recorded with a different idempotency key', 409, 'CONFLICT');
     }
     return { camp, changed: false };
   }
@@ -436,12 +448,16 @@ function applyCampPayoutFields(camp, body = {}, actor = {}) {
     if (!transactionId) {
       throw new AppError('Transaction ID / UTR is required when status is Paid', 400, 'VALIDATION_ERROR');
     }
+    const paymentDate = trimStr(body.paymentDate || body.financeProcessedAt);
+    if (!paymentDate) {
+      throw new AppError('Payment Date is required when status is Paid', 400, 'VALIDATION_ERROR');
+    }
     camp.paidAmount = paidAmount;
     camp.transactionId = transactionId;
     camp.paymentRemark = trimStr(body.paymentRemark ?? camp.paymentRemark);
     camp.financePaymentStatus = 'paid';
-    camp.financeProcessedAt = trimStr(body.paymentDate || body.financeProcessedAt)
-      || new Date().toISOString();
+    camp.financeProcessedAt = paymentDate;
+    if (idempotencyKey) camp.financePaymentIdempotencyKey = idempotencyKey;
   } else {
     if (alreadyPaid) {
       throw new AppError('Payment Done cannot be reversed from Finance One', 400, 'INVALID_TRANSITION');
@@ -451,6 +467,7 @@ function applyCampPayoutFields(camp, body = {}, actor = {}) {
     if (body.transactionId !== undefined) camp.transactionId = trimStr(body.transactionId);
     if (body.paymentRemark !== undefined) camp.paymentRemark = trimStr(body.paymentRemark);
     camp.financeProcessedAt = new Date().toISOString();
+    if (idempotencyKey) camp.financePaymentIdempotencyKey = idempotencyKey;
   }
 
   const derived = computeLifecycleDerived(camp);
@@ -543,8 +560,10 @@ const bulkUpdateCampPayouts = asyncHandler(async (req, res) => {
   }
 
   const a = req.user;
+  const idempotencyKey = financeIdempotencyKey(req);
   const updated = [];
   for (const camp of camps) {
+    const before = camp.toObject ? camp.toObject() : { ...camp };
     const derived = computeLifecycleDerived(camp);
     const paidAmount = status === 'paid'
       ? (sharedPaidAmount != null && camps.length === 1
@@ -565,8 +584,22 @@ const bulkUpdateCampPayouts = asyncHandler(async (req, res) => {
       paidAmount,
       transactionId: status === 'paid' ? transactionId : (req.body?.transactionId ?? camp.transactionId),
       paymentRemark: paymentRemark || camp.paymentRemark,
-    }, a);
-    if (changed) await camp.save();
+      paymentDate: req.body?.paymentDate,
+      financeProcessedAt: req.body?.financeProcessedAt,
+    }, a, { idempotencyKey });
+    if (changed) {
+      await camp.save();
+      await writeAudit({
+        actorId: a?._id || null,
+        actorEmail: a?.email || null,
+        action: 'FINANCE.CAMP_PAYOUT_UPDATE',
+        entityType: 'camp_ops_camp',
+        entityId: camp._id,
+        before,
+        after: camp.toObject ? camp.toObject() : { ...camp },
+        requestId: req.requestId,
+      });
+    }
     updated.push(await campPayoutSummaryWithPayeeBank(camp));
   }
 
@@ -617,7 +650,10 @@ const updateCampPayoutById = asyncHandler(async (req, res) => {
   if (!camp) throw new AppError('Camp payout not found', 404);
 
   const a = req.user;
-  const { changed } = applyCampPayoutFields(camp, req.body, a);
+  const before = camp.toObject ? camp.toObject() : { ...camp };
+  const { changed } = applyCampPayoutFields(camp, req.body, a, {
+    idempotencyKey: financeIdempotencyKey(req),
+  });
   if (changed) {
     await camp.save();
     await writeAudit({
@@ -626,12 +662,8 @@ const updateCampPayoutById = asyncHandler(async (req, res) => {
       action: 'FINANCE.CAMP_PAYOUT_UPDATE',
       entityType: 'camp_ops_camp',
       entityId: camp._id,
-      after: {
-        financePaymentStatus: camp.financePaymentStatus,
-        paidAmount: camp.paidAmount,
-        transactionId: camp.transactionId,
-        balance: camp.balance,
-      },
+      before,
+      after: camp.toObject ? camp.toObject() : { ...camp },
       requestId: req.requestId,
     });
   }

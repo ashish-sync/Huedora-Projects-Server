@@ -5,19 +5,13 @@ import {
   getCampStartDateTime,
   getCampEndDateTime,
 } from './campOps.helpers.js';
-import { daysFromToday, localTodayIso } from './campDatePolicy.js';
+import { localTodayIso } from './campDatePolicy.js';
 import { computeCampRevenueFromPricing } from './campOps.clientMasterPricing.js';
 import { clearCampHcwAssignment } from './hcwAssignmentGap.js';
 
 function localTrim(v) {
   return v == null ? '' : String(v).trim();
 }
-
-/**
- * Legacy D-1 constant retained for date helpers/tests.
- * Workflow now promotes Assigned → Execution immediately (no D-1 stage gate).
- */
-export const EXECUTION_ADVANCE_DAYS_BEFORE = 1;
 
 export const CAMP_LIFECYCLE_STAGES = [
   { id: 'request', label: 'Request Stage', short: 'Request' },
@@ -147,14 +141,9 @@ export function resolveCancelledClosureExecutionStatus(camp = {}) {
 }
 
 export function resolveScheduledExecutionStatus(camp = {}, now = new Date()) {
-  const start = getCampStartDateTime(camp);
-  const end = getCampEndDateTime(camp);
-  if (!start || !end) return EXECUTION_STATUS.CAMP_SCHEDULED;
-
-  const ts = now.getTime();
-  if (ts < start.getTime()) return EXECUTION_STATUS.CAMP_SCHEDULED;
-  if (ts <= end.getTime()) return EXECUTION_STATUS.CAMP_ONGOING;
-  return EXECUTION_STATUS.MARKED_EXECUTED;
+  void camp;
+  void now;
+  return EXECUTION_STATUS.CAMP_SCHEDULED;
 }
 
 export function resolveEffectiveExecutionStatus(camp = {}, now = new Date()) {
@@ -163,6 +152,13 @@ export function resolveEffectiveExecutionStatus(camp = {}, now = new Date()) {
   const normalized = normalizeExecutionStatus(camp.executionStatus);
   if (normalized === EXECUTION_STATUS.CAMP_COMPLETED) return EXECUTION_STATUS.CAMP_COMPLETED;
   if (isExecutionClosedOut(normalized)) return normalized;
+  if (
+    normalized === EXECUTION_STATUS.MARKED_EXECUTED
+    || normalized === EXECUTION_STATUS.CAMP_ONGOING
+    || normalized === EXECUTION_STATUS.CAMP_SCHEDULED
+  ) {
+    return normalized;
+  }
   return resolveScheduledExecutionStatus(camp, now);
 }
 
@@ -185,28 +181,12 @@ function hasExecutionDocType(docs, targetType) {
   return (docs || []).some((doc) => normalizeExecutionDocType(doc?.docType) === targetType);
 }
 
-export const MARK_EXECUTED_MINUTES_AFTER_START = 30;
-
 export function getMarkExecutedFieldBlockers(camp = {}) {
   const blockers = [];
   if (!localTrim(camp.chargeableStatus)) blockers.push('Select Chargeable Status');
   if (!localTrim(camp.inTime)) blockers.push('Enter In Time');
   if (!localTrim(camp.attire)) blockers.push('Select Attire');
   return blockers;
-}
-
-export function isMarkExecutedTimingOpen(camp = {}, now = new Date()) {
-  const start = getCampStartDateTime(camp);
-  if (!start) return false;
-  const earliest = start.getTime() + MARK_EXECUTED_MINUTES_AFTER_START * 60 * 1000;
-  return now.getTime() >= earliest;
-}
-
-export function getMarkExecutedTimingBlockers(camp = {}, now = new Date()) {
-  if (isMarkExecutedTimingOpen(camp, now)) return [];
-  return [
-    `Camp can be marked executed only after ${MARK_EXECUTED_MINUTES_AFTER_START} minutes from start time`,
-  ];
 }
 
 export function assertCanMarkCampExecuted(camp = {}, now = new Date()) {
@@ -308,7 +288,16 @@ export const QUALITY_RATINGS = ['Good', 'Average', 'Poor'];
 
 export const ATTIRE_CHECK_OPTIONS = ['No Issues', 'Issues'];
 
-export const HCW_CATEGORIES = ['Technician', 'Phlebotomist', 'Dietician', 'Other'];
+export const HCW_CATEGORIES = [
+  'Doctor',
+  'Nurse',
+  'Phlebotomist',
+  'Technician',
+  'Dietician',
+  'Physio',
+  'Biomedical Engineer',
+  'Other',
+];
 
 export const EXECUTION_DOC_TYPES = ['doctor_form', 'patient_form', 'other', 'gps_selfie'];
 
@@ -762,16 +751,6 @@ export function applyAssignmentStageOutcome(camp, body = {}, now = new Date()) {
     // Cancellation from Assignment is no longer a valid workflow path.
     throw new Error('Cancellation is only permitted during Execution; use Refuse during Assignment');
   }
-}
-
-/**
- * True when camp date is tomorrow or earlier (D-1 window for Execution).
- * Missing camp dates are treated as not ready.
- */
-export function isCampDateDueForExecution(camp = {}, now = new Date()) {
-  const campDate = localTrim(camp?.campDate);
-  if (!campDate) return false;
-  return daysFromToday(campDate, now) <= EXECUTION_ADVANCE_DAYS_BEFORE;
 }
 
 export function isAssignedForExecutionAdvance(camp = {}) {

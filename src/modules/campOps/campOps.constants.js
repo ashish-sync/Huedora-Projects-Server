@@ -8,14 +8,6 @@ export const CAMP_OPS_STATUSES = [
   'executed',
 ];
 
-export const CAMP_OPS_STATUS_TRANSITIONS = {
-  pending_review: ['approved', 'rejected', 'cancelled'],
-  approved: ['executed', 'cancelled', 'rejected'],
-  rejected: ['pending_review'],
-  cancelled: [],
-  executed: ['cancelled'],
-};
-
 export const CAMP_OPS_SOURCES = [
   'whatsapp',
   'email',
@@ -73,8 +65,6 @@ const LEGACY_CAMP_NAME_ALIASES = {
   uroflowmetry: 'Uroflowmetery',
   uroflowmetery: 'Uroflowmetery',
 };
-
-export const EDITABLE_CAMP_STATUSES = ['pending_review', 'approved', 'rejected'];
 
 import { getCampImportFields } from './import/campRequestFieldSchema.js';
 
@@ -147,11 +137,3 @@ export function normalizeCampName(value) {
   return trimmed;
 }
 
-export function canTransition(currentStatus, nextStatus) {
-  const allowed = CAMP_OPS_STATUS_TRANSITIONS[currentStatus] || [];
-  return allowed.includes(nextStatus);
-}
-
-export function isCampEditable(status) {
-  return EDITABLE_CAMP_STATUSES.includes(status);
-}

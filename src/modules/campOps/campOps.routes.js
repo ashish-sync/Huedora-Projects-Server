@@ -21,8 +21,6 @@ import {
   CAMP_IMPORT_FIELDS,
   STANDARD_IMPORT_MAPPING,
   CAMP_OPS_ROLE_CATALOG,
-  canTransition,
-  isCampEditable,
   normalizeCampName,
 } from './campOps.constants.js';
 import {
@@ -110,7 +108,6 @@ import {
   assertExecutionStageSave,
   assertExecutionConsumablesComplete,
   assertCanMarkCampExecuted,
-  isExecutionReadyForFinance,
   isExecutionCancellationForFinance,
   normalizeLifecycleStage,
   promoteDueAssignedCampsToExecution,
@@ -127,6 +124,7 @@ import {
   WORKFLOW_ACTIONS,
   assertWorkflowAction,
   applyAutoPlannedToExecuted,
+  applyConfirmTransition,
   applyMarkCompleteTransition,
   applyConfirmPaymentTransition,
   applyHoldTransition,
@@ -137,7 +135,10 @@ import {
   normalizeMappedConsumables,
   resolveMappedConsumablesForCamp,
 } from './clientMasterConsumables.js';
-import { resolveClientMasterPricingForCamp } from './campOps.clientMasterPricing.js';
+import {
+  parseCampDurationToHours,
+  resolveClientMasterPricingForCamp,
+} from './campOps.clientMasterPricing.js';
 import {
   assertCampSubmittedToFinance,
   buildCampFinanceExportRow,
@@ -162,6 +163,9 @@ import { assertHcwAssignmentGap } from './hcwAssignmentGap.js';
 import {
   findExistingDuplicateCamp,
   formatDuplicateCampMessage,
+  createCampEnsuringNoDuplicate,
+  assertNoDuplicateOnCampSave,
+  CampDuplicateError,
 } from './campDuplicate.js';
 import {
   resolveCampClientScope,
@@ -369,6 +373,7 @@ const canReadClientMaster = requirePermission(
 );
 const canRequest = requirePermission(PERMISSIONS.CAMPS_REQUEST, PERMISSIONS.CAMPS_APPROVE);
 const canApprove = requirePermission(PERMISSIONS.CAMPS_APPROVE);
+const canFinanceWrite = requirePermission(PERMISSIONS.FINANCE_WRITE);
 
 function actor(req) {
   return {
@@ -394,6 +399,87 @@ async function audit(req, action, entityType, entityId, before = null, after = n
     ip: req.ip,
     requestId: req.correlationId,
   });
+}
+
+const EXECUTION_CAPTURE_FIELDS = [
+  'chargeableStatus',
+  'inTime',
+  'outTime',
+  'kmRoundTrip',
+  'actualPatients',
+  'rxCount',
+  'attire',
+  'labCoat',
+];
+
+function cloneExecutionDocuments(docs = []) {
+  return (Array.isArray(docs) ? docs : []).map((doc) => ({ ...doc }));
+}
+
+function snapshotExecutionCapture(camp = {}, actorInfo = {}) {
+  return {
+    chargeableStatus: trimStr(camp.chargeableStatus),
+    inTime: trimStr(camp.inTime),
+    outTime: trimStr(camp.outTime),
+    kmRoundTrip: camp.kmRoundTrip === '' || camp.kmRoundTrip == null ? null : Number(camp.kmRoundTrip),
+    actualPatients: camp.actualPatients === '' || camp.actualPatients == null ? null : Number(camp.actualPatients),
+    rxCount: camp.rxCount === '' || camp.rxCount == null ? null : Number(camp.rxCount),
+    attire: trimStr(camp.attire),
+    labCoat: trimStr(camp.labCoat),
+    executionDocuments: cloneExecutionDocuments(camp.executionDocuments),
+    capturedAt: new Date().toISOString(),
+    capturedById: actorInfo.id || null,
+    capturedByEmail: actorInfo.email || '',
+  };
+}
+
+function hasExecutionCaptureValue(capture = {}) {
+  if (!capture || typeof capture !== 'object') return false;
+  return EXECUTION_CAPTURE_FIELDS.some((field) => {
+    const value = capture[field];
+    return value !== '' && value != null;
+  }) || (Array.isArray(capture.executionDocuments) && capture.executionDocuments.length > 0);
+}
+
+function executionCaptureDiff(before = {}, after = {}) {
+  const changes = {};
+  for (const field of EXECUTION_CAPTURE_FIELDS) {
+    const prev = before?.[field] ?? null;
+    const next = after?.[field] ?? null;
+    if (JSON.stringify(prev) !== JSON.stringify(next)) {
+      changes[field] = { before: prev, after: next };
+    }
+  }
+  const prevDocs = cloneExecutionDocuments(before?.executionDocuments);
+  const nextDocs = cloneExecutionDocuments(after?.executionDocuments);
+  if (JSON.stringify(prevDocs) !== JSON.stringify(nextDocs)) {
+    changes.executionDocuments = { before: prevDocs, after: nextDocs };
+  }
+  return changes;
+}
+
+function syncExecutionCaptureProvenance(camp, before, actorInfo = {}) {
+  const previousCapture = before?.executionCaptured || {};
+  if (!hasExecutionCaptureValue(previousCapture)) {
+    const seeded = snapshotExecutionCapture(camp, actorInfo);
+    if (hasExecutionCaptureValue(seeded)) {
+      camp.executionCaptured = seeded;
+    }
+    return;
+  }
+
+  camp.executionCaptured = previousCapture;
+  const currentSnapshot = snapshotExecutionCapture(camp, actorInfo);
+  const changes = executionCaptureDiff(previousCapture, currentSnapshot);
+  if (!Object.keys(changes).length) return;
+  const history = Array.isArray(before?.executionCorrections) ? before.executionCorrections.slice() : [];
+  history.push({
+    correctedAt: new Date().toISOString(),
+    correctedById: actorInfo.id || null,
+    correctedByEmail: actorInfo.email || '',
+    changes,
+  });
+  camp.executionCorrections = history;
 }
 
 async function ensureUniqueClientCode(baseCode) {
@@ -521,10 +607,11 @@ async function resolveClientFromBody(body, { allowCreate = false, syncBilling = 
 
 function campPayloadFromBody(body, existing = null, client = null, options = {}) {
   const allowPartial = options.allowPartial === true;
+  const clientMasterDurationHours = parseCampDurationToHours(options.pricing?.campDuration);
   const schedule = resolveCampSchedule({
     startTime: body.startTime ?? existing?.startTime ?? '09:00',
     endTime: body.endTime ?? existing?.endTime ?? '',
-    durationHours: body.durationHours ?? existing?.durationHours ?? 3,
+    durationHours: body.durationHours ?? existing?.durationHours ?? (clientMasterDurationHours || 4),
   });
 
   const campDateRaw = body.campDate ?? existing?.campDate;
@@ -977,9 +1064,9 @@ router.post(
     }
 
     const configs = {
-      approve: { nextStatus: 'approved', from: ['pending_review'], needApprove: true },
-      reject: { nextStatus: 'rejected', from: ['pending_review'], needApprove: true },
-      execute: { nextStatus: 'executed', from: ['approved'], needApprove: true },
+      approve: { action: 'approve', needApprove: true },
+      reject: { action: 'reject', needApprove: true },
+      execute: { action: 'execute', needApprove: true },
       delete: { archive: true, needAdmin: true },
     };
     const config = configs[action];
@@ -1012,42 +1099,46 @@ router.post(
           continue;
         }
 
-        if (config.from && !config.from.includes(camp.status)) {
-          throw new Error(`Camp ${camp.campId} is ${camp.status} and cannot be ${action}d`);
-        }
-        if (!canTransition(camp.status, config.nextStatus)) {
-          throw new Error(`Camp ${camp.campId} cannot move to ${config.nextStatus}`);
-        }
-
-        camp.status = config.nextStatus;
         camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
-        if (config.nextStatus === 'approved') {
+        if (config.action === 'approve') {
           const blockers = getRequestStageBlockers(camp);
           if (blockers.length) throw new Error(blockers[0]);
           camp.approvedById = a.id;
           camp.approvedByEmail = a.email;
-          applyRequestReviewTransition(camp, 'approve');
-          if (camp.lifecycleStage === 'request') {
-            camp.lifecycleStage = 'assignment';
-          }
+          applyConfirmTransition(camp);
         }
-        if (config.nextStatus === 'rejected') {
+        if (config.action === 'reject') {
+          assertWorkflowAction(camp, WORKFLOW_ACTIONS.REFUSE);
           const rejectionReason = trimStr(req.body?.rejectionReason || req.body?.remarks);
           if (!rejectionReason) throw new Error('Refusal reason is required');
+          camp.status = 'rejected';
           applyRequestReviewTransition(camp, 'reject', { reason: rejectionReason });
+          clearCampHcwAssignment(camp);
+          camp.lifecycleStage = 'request';
         }
-        if (config.nextStatus === 'executed') {
-          try {
-            assertCanMarkCampExecuted(camp);
-          } catch (err) {
-            throw new Error(err.message || 'Cannot mark camp executed');
+        if (config.action === 'execute') {
+          applyAutoPlannedToExecuted(camp);
+          const mappedConsumables = await resolveMappedConsumablesForCamp(camp.clientId, {
+            campaignType: camp.campaignType,
+            campaignName: camp.campaignName,
+          });
+          const blockers = getMarkCompleteBlockers(camp, mappedConsumables);
+          if (blockers.length) {
+            try {
+              assertCanMarkCampExecuted(camp);
+            } catch (err) {
+              throw new Error(err.message || 'Cannot mark camp executed');
+            }
+            camp.executionStatus = EXECUTION_STATUS.MARKED_EXECUTED;
+            camp.status = 'approved';
+          } else {
+            applyMarkCompleteTransition(camp, mappedConsumables);
+            camp.executedById = a.id;
+            camp.executedByEmail = a.email;
+            camp.executedAt = new Date().toISOString();
           }
-          camp.executedById = a.id;
-          camp.executedByEmail = a.email;
-          camp.executedAt = new Date().toISOString();
-          camp.executionStatus = EXECUTION_STATUS.CAMP_COMPLETED;
-          camp.lifecycleStage = 'financial';
         }
+        syncExecutionCaptureProvenance(camp, before, a);
         await camp.save();
         await audit(req, `camp_ops.bulk_${action}`, 'camp_ops_camp', camp._id, before, camp.toObject());
         if (action === 'approve') {
@@ -1244,37 +1335,36 @@ router.post(
     });
     await assertClientIdAccess(req.user, resolved._id);
 
-    const duplicate = await findExistingDuplicateCamp({
-      client: resolved,
-      row: {
-        clientName: resolved.name,
-        doctorName: payload.doctorName,
-        campaignType: payload.campaignType,
-        campDate: payload.campDate,
-        startTime: payload.startTime,
-      },
-    });
-    if (duplicate) {
-      throw new AppError(
-        formatDuplicateCampMessage(duplicate),
-        409,
-        'DUPLICATE_CAMP',
-      );
-    }
-
     const tracking = captureSubmissionTracking();
     const a = actor(req);
-    const camp = await CampOpsCamp.create({
-      ...payload,
-      campId: await generateCampId(payload.campDate),
-      status: 'pending_review',
-      lifecycleStage: 'request',
-      requestDate: payload.requestDate || new Date().toISOString().slice(0, 10),
-      createdById: a.id,
-      createdByEmail: a.email,
-      requestReviewStatus: 'review_pending',
-      ...tracking,
-    });
+    let camp;
+    try {
+      camp = await createCampEnsuringNoDuplicate(CampOpsCamp, {
+        ...payload,
+        campId: await generateCampId(payload.campDate),
+        status: 'pending_review',
+        lifecycleStage: 'request',
+        requestDate: payload.requestDate || new Date().toISOString().slice(0, 10),
+        createdById: a.id,
+        createdByEmail: a.email,
+        requestReviewStatus: 'review_pending',
+        ...tracking,
+      }, {
+        client: resolved,
+        row: {
+          clientName: resolved.name,
+          doctorName: payload.doctorName,
+          campaignType: payload.campaignType,
+          campDate: payload.campDate,
+          startTime: payload.startTime,
+        },
+      });
+    } catch (err) {
+      if (err instanceof CampDuplicateError) {
+        throw new AppError(err.message, 409, 'DUPLICATE_CAMP');
+      }
+      throw err;
+    }
 
     await audit(req, 'camp_ops.create', 'camp_ops_camp', camp._id, null, camp.toObject());
     await notifyCampWorkflow({ camp, action: 'create', actorId: a.id });
@@ -1334,6 +1424,12 @@ router.put(
     delete payload.submittedToFinanceAt;
     delete payload.submittedToFinanceById;
     delete payload.submittedToFinanceByEmail;
+    delete payload.paidAmount;
+    delete payload.transactionId;
+    delete payload.financeProcessedAt;
+    delete payload.financeProcessedById;
+    delete payload.financeProcessedByEmail;
+    delete payload.financePaymentIdempotencyKey;
     if (stage !== 'financial') {
       delete payload.paymentRemark;
     }
@@ -1446,9 +1542,6 @@ router.put(
             throw new AppError(blockers[0] || err.message, 400, 'VALIDATION_ERROR');
           }
         }
-      } else if (isExecutionReadyForFinance(camp, mappedConsumables)) {
-        // Backward-compatible auto Mark Complete when all required fields are present.
-        applyMarkCompleteTransition(camp, mappedConsumables);
       }
     }
 
@@ -1462,6 +1555,17 @@ router.put(
       camp.lifecycleStage = 'financial';
     }
 
+    syncExecutionCaptureProvenance(camp, before, actor(req));
+    try {
+      await assertNoDuplicateOnCampSave(camp, {
+        client: client || { _id: camp.clientId, name: camp.clientName },
+      });
+    } catch (err) {
+      if (err instanceof CampDuplicateError) {
+        throw new AppError(err.message, 409, 'DUPLICATE_CAMP');
+      }
+      throw err;
+    }
     await camp.save();
     await audit(req, 'camp_ops.update', 'camp_ops_camp', camp._id, before, camp.toObject());
     res.json({ data: enrichCamp(camp) });
@@ -1573,43 +1677,35 @@ router.get(
 async function transitionCamp(req, res, nextStatus, action) {
   const camp = await loadCampForUser(req, req.params.id);
   camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
-  if (!canTransition(camp.status, nextStatus)) {
-    throw new AppError(
-      `Cannot transition from ${camp.status} to ${nextStatus}`,
-      400,
-      'VALIDATION_ERROR'
-    );
-  }
 
   const before = camp.toObject();
   const a = actor(req);
-  camp.status = nextStatus;
 
   if (nextStatus === 'pending_review') {
-    assertWorkflowAction(before, WORKFLOW_ACTIONS.REOPEN);
+    assertWorkflowAction(camp, WORKFLOW_ACTIONS.REOPEN);
+    camp.status = 'pending_review';
     applyRequestReviewTransition(camp, 'submit');
     // Refused → Review Pending must not restart the review timer.
     Object.assign(camp, preserveOrCaptureSubmissionTracking(before));
     camp.lifecycleStage = 'request';
   }
   if (nextStatus === 'approved') {
-    assertWorkflowAction({ ...before, status: 'pending_review', lifecycleStage: 'request' }, WORKFLOW_ACTIONS.CONFIRM);
+    assertWorkflowAction(camp, WORKFLOW_ACTIONS.CONFIRM);
     const blockers = getRequestStageBlockers(camp);
     if (blockers.length) {
       throw new AppError(blockers[0], 400, 'VALIDATION_ERROR');
     }
     camp.approvedById = a.id;
     camp.approvedByEmail = a.email;
-    applyRequestReviewTransition(camp, 'approve');
-    camp.lifecycleStage = 'assignment';
-    camp.assignmentStatus = 'Unassigned';
+    applyConfirmTransition(camp);
   }
   if (nextStatus === 'rejected') {
-    assertWorkflowAction(before, WORKFLOW_ACTIONS.REFUSE);
+    assertWorkflowAction(camp, WORKFLOW_ACTIONS.REFUSE);
     const rejectionReason = trimStr(req.body?.rejectionReason || req.body?.remarks);
     if (!rejectionReason) {
       throw new AppError('Refusal reason is required', 400, 'VALIDATION_ERROR');
     }
+    camp.status = 'rejected';
     applyRequestReviewTransition(camp, 'reject', { reason: rejectionReason });
     clearCampHcwAssignment(camp);
     camp.lifecycleStage = 'request';
@@ -1631,6 +1727,7 @@ async function transitionCamp(req, res, nextStatus, action) {
       }
       camp.executionStatus = EXECUTION_STATUS.MARKED_EXECUTED;
       camp.status = 'approved';
+      syncExecutionCaptureProvenance(camp, before, a);
       await camp.save();
       await audit(req, 'camp_ops.execute', 'camp_ops_camp', camp._id, before, camp.toObject());
       return res.json({ data: enrichCamp(camp) });
@@ -1653,6 +1750,7 @@ async function transitionCamp(req, res, nextStatus, action) {
     camp.remarks = trimStr(req.body.remarks);
   }
 
+  syncExecutionCaptureProvenance(camp, before, a);
   await camp.save();
   await audit(req, `camp_ops.${action}`, 'camp_ops_camp', camp._id, before, camp.toObject());
   if (nextStatus === 'pending_review') {
@@ -1780,7 +1878,7 @@ router.post(
 
 router.post(
   '/camps/:id/confirm-payment',
-  canRequest,
+  canFinanceWrite,
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
     const before = camp.toObject();
@@ -1797,7 +1895,7 @@ router.post(
 
 router.post(
   '/camps/:id/hold',
-  canRequest,
+  canFinanceWrite,
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
     const remark = trimStr(req.body?.paymentRemark || req.body?.holdRemark || req.body?.remarks);
@@ -1815,7 +1913,7 @@ router.post(
 
 router.post(
   '/camps/:id/release-hold',
-  canRequest,
+  canFinanceWrite,
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
     const before = camp.toObject();
@@ -3869,40 +3967,84 @@ router.post(
         requestDate: row.requestDate,
       });
       await assertClientIdAccess(req.user, client._id);
+
+      const duplicate = await findExistingDuplicateCamp({
+        client,
+        row: {
+          clientName: client.name,
+          doctorName: row.doctorName,
+          campaignType: row.campaignType || 'Screening',
+          campDate: row.campDate,
+          startTime: row.startTime,
+        },
+      });
+      if (duplicate) {
+        skipped.push({
+          rowNumber: row.rowNumber,
+          clientName: row.clientName,
+          campId: duplicate.campId,
+          reason: formatDuplicateCampMessage(duplicate),
+        });
+        continue;
+      }
+
       const tracking = captureSubmissionTracking();
       const contactFields = resolveContactPersonFields(row);
-      const camp = await CampOpsCamp.create(formatCampTextPayload({
-        campId: await generateCampId(row.campDate),
-        clientId: client._id,
-        clientName: client.name,
-        campaignName: normalizeCampName(row.campaignName),
-        campaignType: row.campaignType || 'Screening',
-        doctorName: row.doctorName,
-        doctorCode: row.doctorCode,
-        speciality: row.speciality || '',
-        hospitalName: row.hospitalName || '',
-        campAddress: row.campAddress,
-        city: row.city,
-        district: row.district || row.city || '',
-        state: row.state,
-        pincode: row.pincode,
-        hq: row.hq || row.city || '',
-        zone: row.zone || '',
-        campDate: row.campDate,
-        requestDate: row.requestDate || new Date().toISOString().slice(0, 10),
-        lifecycleStage: 'request',
-        ...schedule,
-        expectedPatients: row.expectedPatients || 0,
-        ...contactFields,
-        fieldPersonName: row.fieldPersonName,
-        fieldPersonPhone: row.fieldPersonPhone,
-        remarks: row.remarks || '',
-        source: normalizeImportSource(row.source, 'excel'),
-        status: 'pending_review',
-        createdById: a.id,
-        createdByEmail: a.email,
-        ...tracking,
-      }));
+      let camp;
+      try {
+        camp = await createCampEnsuringNoDuplicate(CampOpsCamp, formatCampTextPayload({
+          campId: await generateCampId(row.campDate),
+          clientId: client._id,
+          clientName: client.name,
+          campaignName: normalizeCampName(row.campaignName),
+          campaignType: row.campaignType || 'Screening',
+          doctorName: row.doctorName,
+          doctorCode: row.doctorCode,
+          speciality: row.speciality || '',
+          hospitalName: row.hospitalName || '',
+          campAddress: row.campAddress,
+          city: row.city,
+          district: row.district || row.city || '',
+          state: row.state,
+          pincode: row.pincode,
+          hq: row.hq || row.city || '',
+          zone: row.zone || '',
+          campDate: row.campDate,
+          requestDate: row.requestDate || new Date().toISOString().slice(0, 10),
+          lifecycleStage: 'request',
+          ...schedule,
+          expectedPatients: row.expectedPatients || 0,
+          ...contactFields,
+          fieldPersonName: row.fieldPersonName,
+          fieldPersonPhone: row.fieldPersonPhone,
+          remarks: row.remarks || '',
+          source: normalizeImportSource(row.source, 'excel'),
+          status: 'pending_review',
+          createdById: a.id,
+          createdByEmail: a.email,
+          ...tracking,
+        }), {
+          client,
+          row: {
+            clientName: client.name,
+            doctorName: row.doctorName,
+            campaignType: row.campaignType || 'Screening',
+            campDate: row.campDate,
+            startTime: schedule.startTime,
+          },
+        });
+      } catch (err) {
+        if (err instanceof CampDuplicateError) {
+          skipped.push({
+            rowNumber: row.rowNumber,
+            clientName: row.clientName,
+            campId: err.existingCamp?.campId,
+            reason: err.message,
+          });
+          continue;
+        }
+        throw err;
+      }
       created.push(enrichCamp(camp));
     }
 
@@ -4177,17 +4319,35 @@ router.post(
       requestDate: payload.requestDate,
     });
     await assertClientIdAccess(req.user, client?._id || payload.clientId);
+
     const tracking = captureSubmissionTracking();
-    const camp = await CampOpsCamp.create({
-      ...payload,
-      campId: await generateCampId(payload.campDate),
-      status: 'pending_review',
-      lifecycleStage: 'request',
-      source: 'parser',
-      createdById: actor(req).id,
-      createdByEmail: actor(req).email,
-      ...tracking,
-    });
+    let camp;
+    try {
+      camp = await createCampEnsuringNoDuplicate(CampOpsCamp, {
+        ...payload,
+        campId: await generateCampId(payload.campDate),
+        status: 'pending_review',
+        lifecycleStage: 'request',
+        source: 'parser',
+        createdById: actor(req).id,
+        createdByEmail: actor(req).email,
+        ...tracking,
+      }, {
+        client,
+        row: {
+          clientName: client.name,
+          doctorName: payload.doctorName,
+          campaignType: payload.campaignType,
+          campDate: payload.campDate,
+          startTime: payload.startTime,
+        },
+      });
+    } catch (err) {
+      if (err instanceof CampDuplicateError) {
+        throw new AppError(err.message, 409, 'DUPLICATE_CAMP');
+      }
+      throw err;
+    }
     await audit(req, 'camp_ops.create', 'camp_ops_camp', camp._id, null, camp.toObject());
     res.status(201).json({
       data: withCampSchedule(camp),

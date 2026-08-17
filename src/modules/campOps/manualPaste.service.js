@@ -31,6 +31,8 @@ import { normalizePasteStartTime } from './pasteTimeNormalize.js';
 import {
   buildCampDuplicateKey,
   buildDuplicatePreviewFlag,
+  CampDuplicateError,
+  createCampEnsuringNoDuplicate,
   findExistingDuplicateCamp,
   formatDuplicateCampMessage,
 } from './campDuplicate.js';
@@ -113,6 +115,12 @@ async function enrichExtractedPasteFields(extracted) {
     },
     pasteFormatted: formatManualPasteOutput(nextDisplay),
   };
+}
+
+async function assistPasteBlockWithLlm() {
+  // Camp One currently relies on deterministic/manual review extraction only.
+  // Keep the hook stable so preview/import does not crash when no LLM assist is wired.
+  return { rowPatch: null, meta: null };
 }
 
 function applyHistoricalDatePreviewFlags(entry, user) {
@@ -503,19 +511,42 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
       }
 
       const incomplete = getRequestStageBlockers(payload).length > 0;
-      const camp = await CampOpsCamp.create({
-        ...payload,
-        campId: payload.campDate ? await generateCampId(payload.campDate) : await generateCampId(),
-        status: 'pending_review',
-        lifecycleStage: 'request',
-        requestReviewStatus: 'review_pending',
-        source: 'paste',
-        requestIncomplete: incomplete,
-        requestDate,
-        createdById: actor.id,
-        createdByEmail: actor.email,
-        ...tracking,
-      });
+      let camp;
+      try {
+        camp = await createCampEnsuringNoDuplicate(CampOpsCamp, {
+          ...payload,
+          campId: payload.campDate ? await generateCampId(payload.campDate) : await generateCampId(),
+          status: 'pending_review',
+          lifecycleStage: 'request',
+          requestReviewStatus: 'review_pending',
+          source: 'paste',
+          requestIncomplete: incomplete,
+          requestDate,
+          createdById: actor.id,
+          createdByEmail: actor.email,
+          ...tracking,
+        }, {
+          client,
+          row: {
+            clientName: client.name || entry.row.clientName,
+            doctorName: payload.doctorName,
+            campaignType: payload.campaignType,
+            campDate: payload.campDate,
+            startTime: payload.startTime,
+          },
+        });
+      } catch (error) {
+        if (error instanceof CampDuplicateError) {
+          results.push({
+            status: 'duplicate',
+            rowNumber: entry.rowNumber,
+            campId: error.existingCamp?.campId,
+            id: error.existingCamp?._id,
+          });
+          continue;
+        }
+        throw error;
+      }
 
       results.push({
         status: incomplete ? 'created_partial' : 'created',
@@ -544,7 +575,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
   if (!created.length) {
     if (duplicates.length) {
       throw new AppError(
-        `No new camps created. ${duplicates.length} row(s) matched existing camps for the same client, doctor, division, date, and start time.`,
+        formatDuplicateCampMessage(),
         409,
         'DUPLICATE_CAMP',
       );

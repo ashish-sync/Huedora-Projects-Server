@@ -337,7 +337,7 @@ export function normalizeCampRow(raw = {}, { from = '', knownClients = [] } = {}
 
   const startTime = normalizeTimeString(fields.startTime) || '09:00';
   let endTime = normalizeTimeString(fields.endTime) || '';
-  const durationHours = Number(fields.durationHours) || 3;
+  const durationHours = Number(fields.durationHours) || 4;
   if (!endTime) endTime = computeEndTime(startTime, durationHours);
 
   const expectedPatients = Number(String(fields.expectedPatients || '').replace(/[^\d]/g, '')) || 0;

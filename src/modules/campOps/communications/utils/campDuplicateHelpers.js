@@ -4,6 +4,7 @@
  */
 export {
   DUPLICATE_BLOCKING_STATUSES,
+  DUPLICATE_CAMP_MESSAGE,
   CampDuplicateError,
   normalizeCampaignType,
   normalizeDoctorName,
@@ -11,6 +12,11 @@ export {
   startTimesMatch,
   doctorsMatch,
   findExistingDuplicateCamp,
+  assertNoDuplicateCamp,
+  createCampEnsuringNoDuplicate,
+  assertNoDuplicateOnCampSave,
+  attachDuplicateKey,
+  duplicateRowFromCamp,
   buildDuplicatePreviewFlag,
   formatDuplicateCampMessage,
   buildCampDuplicateKey,

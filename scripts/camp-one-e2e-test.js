@@ -14,6 +14,10 @@ const base = (process.env.API_BASE || 'http://localhost:5000/api/v1').replace(/\
 
 const results = [];
 let token = '';
+let stamp = '';
+let assignSlot = 0;
+let createSlot = 0;
+let hcwContactId = '';
 
 function pass(name) {
   results.push({ name, ok: true });
@@ -66,18 +70,25 @@ function addDaysIso(isoDate, days) {
 
 function campPayload(overrides = {}) {
   const today = isoToday();
-  const campDate = overrides.campDate || addDaysIso(today, 21);
+  createSlot += 1;
+  const uniq = `${stamp}-${createSlot}-${Date.now().toString(36).slice(-5)}`;
+  const dayOffset = (createSlot % 25) + 1;
+  const hour = 6 + (createSlot % 8);
+  const minute = (createSlot * 11) % 60;
+  const startTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  const endTime = `${String(Math.min(hour + 3, 23)).padStart(2, '0')}:00`;
+  const label = overrides.doctorName || 'E2E Test Doctor';
   return {
     clientName: CAMP_ONE_DEMO.clientName,
-    campaignType: CAMP_ONE_DEMO.division,
+    campaignType: CAMP_ONE_DEMO.campaignType,
     campaignName: CAMP_ONE_DEMO.method,
     source: 'dashboard',
-    campDate,
+    campDate: addDaysIso(today, dayOffset),
     requestDate: today,
-    startTime: '10:00',
-    endTime: '13:00',
-    doctorName: 'E2E Test Doctor',
-    doctorCode: `E2E-${Date.now()}`,
+    startTime,
+    endTime,
+    doctorName: `${label} ${uniq}`,
+    doctorCode: (overrides.doctorCode || `E2E-${uniq}`).slice(0, 28),
     campAddress: '45 FC Road, Pune, Maharashtra 411004',
     city: 'Pune',
     district: 'Pune',
@@ -93,7 +104,144 @@ function campPayload(overrides = {}) {
     ],
     lifecycleStage: 'request',
     ...overrides,
+    doctorName: `${label} ${uniq}`,
+    doctorCode: (overrides.doctorCode || `E2E-${uniq}`).slice(0, 28),
+    campDate: overrides.campDate || addDaysIso(today, dayOffset),
+    startTime: overrides.startTime || startTime,
+    endTime: overrides.endTime || endTime,
+    campaignType: overrides.campaignType || CAMP_ONE_DEMO.campaignType,
   };
+}
+
+async function getCamp(id) {
+  const res = await api(`/camp-ops/camps/${id}`);
+  if (!res.data?._id) throw new Error('Camp detail missing');
+  return res.data;
+}
+
+function nextAssignWindow() {
+  const hour = 6 + (assignSlot % 10);
+  assignSlot += 1;
+  const start = `${String(hour).padStart(2, '0')}:00`;
+  const endHour = Math.min(hour + 3, 23);
+  const end = `${String(endHour).padStart(2, '0')}:00`;
+  return {
+    start,
+    end,
+    campDate: addDaysIso(isoToday(), 30 + assignSlot),
+    inTime: `${String(hour).padStart(2, '0')}:05`,
+    outTime: `${String(Math.max(hour + 1, endHour - 1)).padStart(2, '0')}:50`,
+  };
+}
+
+async function assignHcw(campId) {
+  const window = nextAssignWindow();
+  await api(`/camp-ops/camps/${campId}`, {
+    method: 'PUT',
+    body: {
+      editingStage: 'assignment',
+      lifecycleStage: 'assignment',
+      lifecycleOnly: false,
+      assignmentDecision: 'assign',
+      hcwContactId,
+      hcwCategory: 'Technician',
+      hcwName: CAMP_ONE_DEMO.hcwName,
+      hcwContact: '9123456780',
+      campDate: window.campDate,
+      startTime: window.start,
+      endTime: window.end,
+      hcwGapOverrideAcknowledged: true,
+    },
+  });
+  return getCamp(campId);
+}
+
+async function fillExecutionPlannedToExecuted(campId) {
+  const current = await getCamp(campId);
+  await api(`/camp-ops/camps/${campId}`, {
+    method: 'PUT',
+    body: {
+      editingStage: 'execution',
+      lifecycleStage: 'execution',
+      lifecycleOnly: false,
+      campDate: current.campDate,
+      startTime: current.startTime,
+      endTime: current.endTime,
+      chargeableStatus: 'Chargeable',
+      inTime: `${String(current.startTime || '06:00').slice(0, 2)}:05`,
+      attire: 'No Issues',
+      labCoat: 'No Issues',
+      hcwGapOverrideAcknowledged: true,
+    },
+  });
+  return getCamp(campId);
+}
+
+async function fillExecutionReady(campId) {
+  const current = await getCamp(campId);
+  const start = current.startTime || '06:00';
+  const end = current.endTime || '12:00';
+  const inTime = `${start.slice(0, 2)}:05`;
+  const outHour = Math.max(0, Number(end.slice(0, 2)) - 1);
+  const outTime = `${String(outHour).padStart(2, '0')}:50`;
+  await api(`/camp-ops/camps/${campId}`, {
+    method: 'PUT',
+    body: {
+      editingStage: 'execution',
+      lifecycleStage: 'execution',
+      lifecycleOnly: false,
+      campDate: current.campDate || isoToday(),
+      startTime: start,
+      endTime: end,
+      chargeableStatus: 'Chargeable',
+      inTime,
+      attire: 'No Issues',
+      labCoat: 'No Issues',
+      outTime,
+      kmRoundTrip: 42,
+      patientsCount: 38,
+      actualPatients: 38,
+      rxCount: 10,
+      hcwGapOverrideAcknowledged: true,
+      executionDocuments: [
+        { docType: 'doctor_form', fileName: 'df-e2e.pdf', url: 'https://example.local/df-e2e.pdf' },
+        { docType: 'patient_form', fileName: 'pf-e2e.pdf', url: 'https://example.local/pf-e2e.pdf' },
+      ],
+    },
+  });
+  return getCamp(campId);
+}
+
+async function markComplete(campId) {
+  const current = await getCamp(campId);
+  if (current.lifecycleStage === 'financial' && current.executionStatus === 'Camp Completed') {
+    return current;
+  }
+  await api(`/camp-ops/camps/${campId}`, {
+    method: 'PUT',
+    body: {
+      editingStage: 'execution',
+      lifecycleStage: 'execution',
+      markComplete: true,
+      lifecycleOnly: false,
+      chargeableStatus: current.chargeableStatus || 'Chargeable',
+      inTime: current.inTime || '06:05',
+      attire: current.attire || 'No Issues',
+      outTime: current.outTime || '11:50',
+      kmRoundTrip: current.kmRoundTrip ?? 42,
+      patientsCount: current.patientsCount ?? 38,
+      actualPatients: current.actualPatients ?? 38,
+      rxCount: current.rxCount ?? 10,
+      hcwGapOverrideAcknowledged: true,
+      executionDocuments: current.executionDocuments?.length
+        ? current.executionDocuments
+        : [
+          { docType: 'doctor_form', fileName: 'df-e2e.pdf', url: 'https://example.local/df-e2e.pdf' },
+          { docType: 'patient_form', fileName: 'pf-e2e.pdf', url: 'https://example.local/pf-e2e.pdf' },
+        ],
+    },
+  });
+  return getCamp(campId);
 }
 
 async function runStep(name, fn) {
@@ -106,6 +254,7 @@ async function runStep(name, fn) {
 }
 
 async function main() {
+  stamp = Date.now().toString(36).slice(-6);
   console.log('\nCamp One E2E — seeding database…');
   await connectDb();
   await ensureSeed();
@@ -129,7 +278,6 @@ async function main() {
   let createdCampId = '';
   let createdCampMongoId = '';
   let assignmentCampId = '';
-  let hcwContactId = '';
 
   await runStep('Dashboard stats load', async () => {
     const stats = await api('/camp-ops/dashboard/stats');
@@ -171,13 +319,31 @@ async function main() {
   });
 
   await runStep('Update camp after information request', async () => {
+    const before = await getCamp(createdCampMongoId);
     await api(`/camp-ops/camps/${createdCampMongoId}`, {
       method: 'PUT',
       body: {
-        ...campPayload({ doctorCode: `E2E-UPD-${Date.now()}` }),
-        fieldPersonPhone: '9876512345',
         editingStage: 'request',
         lifecycleOnly: false,
+        fieldPersonPhone: '9876512345',
+        doctorName: before.doctorName,
+        doctorCode: before.doctorCode,
+        campAddress: before.campAddress,
+        city: before.city,
+        district: before.district,
+        state: before.state,
+        pincode: before.pincode,
+        hq: before.hq,
+        zone: before.zone,
+        expectedPatients: before.expectedPatients,
+        startTime: before.startTime,
+        endTime: before.endTime,
+        campDate: before.campDate,
+        requestDate: before.requestDate || isoToday(),
+        campaignType: before.campaignType,
+        campaignName: before.campaignName,
+        clientName: before.clientName,
+        contactPersons: before.contactPersons,
       },
     });
   });
@@ -196,113 +362,48 @@ async function main() {
     hcwContactId = hcw._id;
   });
 
-  await runStep('Assign HCW — assignment stage (far camp date stays Assignment)', async () => {
-    await api(`/camp-ops/camps/${createdCampMongoId}`, {
-      method: 'PUT',
-      body: {
-        editingStage: 'assignment',
-        lifecycleStage: 'assignment',
-        lifecycleOnly: true,
-        assignmentDecision: 'assign',
-        hcwContactId,
-        hcwCategory: 'Technician',
-        hcwName: CAMP_ONE_DEMO.hcwName,
-        hcwContact: '9123456780',
-      },
-    });
-    const res = await api(`/camp-ops/camps/${createdCampMongoId}`);
-    if (res.data.assignmentDecision !== 'assign') throw new Error('Assignment not saved');
-    // Camp date is +21 days — Execution opens only from D-1.
-    if (res.data.lifecycleStage !== 'assignment') {
-      throw new Error(`Expected assignment (far date), got ${res.data.lifecycleStage}`);
+  await runStep('Assign HCW — immediate promotion to Execution', async () => {
+    const camp = await assignHcw(createdCampMongoId);
+    if (camp.assignmentDecision !== 'assign') throw new Error('Assignment not saved');
+    if (camp.lifecycleStage !== 'execution') {
+      throw new Error(`Expected execution immediately after assign, got ${camp.lifecycleStage}`);
     }
-    if (String(res.data.hcwContactId) !== String(hcwContactId)) {
+    if (String(camp.hcwContactId) !== String(hcwContactId)) {
       throw new Error('HCW contact id not linked on camp');
     }
   });
 
-  await runStep('Promote to Execution when camp date is within D-1', async () => {
-    const dueDate = addDaysIso(isoToday(), 1);
-    await api(`/camp-ops/camps/${createdCampMongoId}`, {
-      method: 'PUT',
-      body: {
-        editingStage: 'assignment',
-        lifecycleStage: 'assignment',
-        lifecycleOnly: false,
-        campDate: dueDate,
-        assignmentDecision: 'assign',
-        hcwContactId,
-        hcwCategory: 'Technician',
-        hcwName: CAMP_ONE_DEMO.hcwName,
-        hcwContact: '9123456780',
-      },
-    });
-    // List endpoint also runs promoteDueAssignedCampsToExecution
-    await api('/camp-ops/camps?lifecycleStage=execution&limit=5');
-    const res = await api(`/camp-ops/camps/${createdCampMongoId}`);
-    if (res.data.lifecycleStage !== 'execution') {
-      throw new Error(`Expected execution after D-1 promote, got ${res.data.lifecycleStage}`);
+  await runStep('Planned → Executed then Mark Complete', async () => {
+    let camp = await fillExecutionPlannedToExecuted(createdCampMongoId);
+    if (camp.executionStatus !== 'Marked Executed') {
+      throw new Error(`Expected Marked Executed, got ${camp.executionStatus}`);
     }
+    camp = await fillExecutionReady(createdCampMongoId);
+    if (camp.lifecycleStage !== 'financial') {
+      camp = await markComplete(createdCampMongoId);
+    }
+    if (camp.lifecycleStage !== 'financial') {
+      throw new Error(`Expected financial after Mark Complete, got ${camp.lifecycleStage}`);
+    }
+    if (camp.status !== 'executed') throw new Error(`Expected executed, got ${camp.status}`);
   });
 
-  await runStep('Update execution stage fields', async () => {
-    // Use today's date + early start so the 30-minute mark-executed gate is open.
-    await api(`/camp-ops/camps/${createdCampMongoId}`, {
-      method: 'PUT',
-      body: {
-        editingStage: 'execution',
-        lifecycleStage: 'execution',
-        lifecycleOnly: false,
-        campDate: isoToday(),
-        startTime: '06:00',
-        endTime: '12:00',
-        executionStatus: 'Ongoing',
-        inTime: '06:05',
-        outTime: '11:50',
-        patientsCount: 38,
-        chargeableStatus: 'Chargeable',
-        attire: 'No Issues',
-        labCoat: 'No Issues',
-      },
-    });
-  });
+  await runStep('Confirm payment and submit to Finance One', async () => {
+    await api(`/camp-ops/camps/${createdCampMongoId}/confirm-payment`, { method: 'POST' });
+    let camp = await getCamp(createdCampMongoId);
+    if (camp.paymentSubmitStatus !== 'payment_confirmed') {
+      throw new Error(`Expected payment_confirmed, got ${camp.paymentSubmitStatus}`);
+    }
 
-  await runStep('Mark camp executed', async () => {
-    await api(`/camp-ops/camps/${createdCampMongoId}/execute`, {
-      method: 'POST',
-      body: { actualPatients: 38 },
-    });
-    const res = await api(`/camp-ops/camps/${createdCampMongoId}`);
-    if (res.data.status !== 'executed') throw new Error(`Expected executed, got ${res.data.status}`);
-  });
-
-  await runStep('Update financial stage', async () => {
-    await api(`/camp-ops/camps/${createdCampMongoId}`, {
-      method: 'PUT',
-      body: {
-        editingStage: 'financial',
-        lifecycleStage: 'financial',
-        maxLifecycleStage: 'financial',
-        lifecycleOnly: true,
-        campAmount: 15000,
-        travelling: 500,
-        campRevenue: 20000,
-        paidAmount: 10000,
-        paymentSubmitStatus: 'payment_confirmed',
-      },
-    });
-  });
-
-  await runStep('Submit camp to Finance One', async () => {
     await api(`/camp-ops/camps/${createdCampMongoId}/submit-to-finance`, {
       method: 'POST',
       body: { paymentSubmitStatus: 'payment_confirmed' },
     });
-    const res = await api(`/camp-ops/camps/${createdCampMongoId}`);
-    if (res.data.financePaymentStatus !== 'under_review') {
-      throw new Error(`Expected under_review, got ${res.data.financePaymentStatus}`);
+    camp = await getCamp(createdCampMongoId);
+    if (camp.financePaymentStatus !== 'under_review') {
+      throw new Error(`Expected under_review, got ${camp.financePaymentStatus}`);
     }
-    if (!res.data.submittedToFinanceAt) throw new Error('submittedToFinanceAt missing');
+    if (!camp.submittedToFinanceAt) throw new Error('submittedToFinanceAt missing');
   });
 
   await runStep('Finance payouts list includes submitted camp', async () => {
@@ -317,7 +418,7 @@ async function main() {
   await runStep('Reject execute without HCW assignment', async () => {
     const res = await api('/camp-ops/camps', {
       method: 'POST',
-      body: campPayload({ doctorCode: `NOHCW-${Date.now()}` }),
+      body: campPayload({ doctorName: 'No HCW Doctor' }),
     });
     const id = res.data._id;
     await api(`/camp-ops/camps/${id}/approve`, { method: 'POST' });
@@ -364,7 +465,7 @@ async function main() {
   await runStep('Create camp for refusal flow', async () => {
     const res = await api('/camp-ops/camps', {
       method: 'POST',
-      body: campPayload({ doctorCode: `REF-${Date.now()}`, campDate: '2026-09-10' }),
+      body: campPayload({ doctorName: 'Refusal Flow Doctor' }),
     });
     assignmentCampId = res.data._id;
     await api(`/camp-ops/camps/${assignmentCampId}/approve`, { method: 'POST' });
@@ -384,28 +485,34 @@ async function main() {
     if (res.data.closureReasonCode !== 'duplicate_request') throw new Error('Closure sub-reason not saved');
   });
 
-  await runStep('Create camp for Tylo cancellation', async () => {
+  await runStep('Create camp for Tylo cancellation (Execution stage)', async () => {
     const res = await api('/camp-ops/camps', {
       method: 'POST',
-      body: campPayload({ doctorCode: `TYLO-${Date.now()}`, campDate: '2026-09-12' }),
+      body: campPayload({ doctorName: 'Tylo Cancel Doctor' }),
     });
     const id = res.data._id;
     await api(`/camp-ops/camps/${id}/approve`, { method: 'POST' });
+    await assignHcw(id);
     await api(`/camp-ops/camps/${id}/close`, {
       method: 'POST',
       body: {
         closureType: 'Cancelled by Tylo',
         reasonCategory: 'Device & Inventory',
         subReason: 'device_failure',
+        chargeableStatus: 'Non-Chargeable',
       },
     });
     const closed = await api(`/camp-ops/camps/${id}`);
     if (closed.data.status !== 'cancelled') throw new Error('Expected cancelled');
+    if (closed.data.lifecycleStage !== 'financial') {
+      throw new Error(`Expected financial after Tylo cancel, got ${closed.data.lifecycleStage}`);
+    }
   });
 
   await runStep('Manual paste extract preview', async () => {
+    const pasteDate = addDaysIso(isoToday(), 40);
     const text = `
-Date: 20/08/2026
+Date: ${pasteDate.split('-').reverse().join('/')}
 Doctor Name: Paste Demo
 Doctor Code: PASTE01
 Camp Address: 1 Demo Street, Pune, Maharashtra 411001
@@ -420,7 +527,7 @@ SE Mobile: 9000000001
       body: {
         text,
         clientName: CAMP_ONE_DEMO.clientName,
-        campaignType: CAMP_ONE_DEMO.division,
+        campaignType: CAMP_ONE_DEMO.campaignType,
         campaignName: CAMP_ONE_DEMO.method,
       },
     });
@@ -430,6 +537,9 @@ SE Mobile: 9000000001
     if (!row.campDate) throw new Error('Paste extract lost campDate (newlines may be collapsed)');
     if (!row.doctorName) throw new Error('Paste extract lost doctorName');
     if (!row.doctorCode) throw new Error('Paste extract lost doctorCode');
+    if (preview[0].valid === false) {
+      throw new Error(`Paste row failed Client Master validation: ${(preview[0].errors || []).join('; ')}`);
+    }
   });
 
   await runStep('Geo zones resolve for Maharashtra', async () => {

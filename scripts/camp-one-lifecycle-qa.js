@@ -15,6 +15,9 @@ const base = (process.env.API_BASE || 'http://localhost:5000/api/v1').replace(/\
 const results = [];
 let token = '';
 let hcwContactId = '';
+let stamp = '';
+let assignSlot = 0;
+let createSlot = 0;
 
 function pass(name) {
   results.push({ name, ok: true });
@@ -87,6 +90,17 @@ function assertStage(camp, expected) {
   }
 }
 
+function nextCreateSlot() {
+  createSlot += 1;
+  const uniq = `${stamp}-${createSlot}-${Date.now().toString(36).slice(-5)}`;
+  const dayOffset = 30 + createSlot * 2;
+  const hour = 6 + (createSlot % 8);
+  const minute = (createSlot * 13) % 60;
+  const startTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  const endTime = `${String(Math.min(hour + 3, 23)).padStart(2, '0')}:00`;
+  return { uniq, dayOffset, startTime, endTime, campDate: addDaysIso(isoToday(), dayOffset) };
+}
+
 async function getCamp(id) {
   const res = await api(`/camp-ops/camps/${id}`);
   if (!res.data?._id) throw new Error('Camp detail missing');
@@ -102,6 +116,131 @@ async function findAudits(entityId, actionIncludes = '') {
   return rows.filter((row) => String(row.action || '').includes(actionIncludes));
 }
 
+function nextAssignWindow() {
+  const hour = 6 + (assignSlot % 10);
+  assignSlot += 1;
+  const start = `${String(hour).padStart(2, '0')}:00`;
+  const endHour = Math.min(hour + 3, 23);
+  const end = `${String(endHour).padStart(2, '0')}:00`;
+  return {
+    start,
+    end,
+    campDate: addDaysIso(isoToday(), 100 + assignSlot * 7),
+    inTime: `${String(hour).padStart(2, '0')}:05`,
+    outTime: `${String(Math.max(hour + 1, endHour - 1)).padStart(2, '0')}:50`,
+  };
+}
+
+async function assignHcw(campMongoId) {
+  const window = nextAssignWindow();
+  await api(`/camp-ops/camps/${campMongoId}`, {
+    method: 'PUT',
+    body: {
+      editingStage: 'assignment',
+      lifecycleStage: 'assignment',
+      lifecycleOnly: false,
+      assignmentDecision: 'assign',
+      hcwContactId,
+      hcwCategory: 'Technician',
+      hcwName: CAMP_ONE_DEMO.hcwName,
+      hcwContact: '9123456780',
+      campDate: window.campDate,
+      startTime: window.start,
+      endTime: window.end,
+      hcwGapOverrideAcknowledged: true,
+    },
+  });
+  return getCamp(campMongoId);
+}
+
+async function fillExecutionPlannedToExecuted(campMongoId) {
+  const current = await getCamp(campMongoId);
+  await api(`/camp-ops/camps/${campMongoId}`, {
+    method: 'PUT',
+    body: {
+      editingStage: 'execution',
+      lifecycleStage: 'execution',
+      lifecycleOnly: false,
+      campDate: current.campDate,
+      startTime: current.startTime,
+      endTime: current.endTime,
+      chargeableStatus: 'Chargeable',
+      inTime: `${String(current.startTime || '06:00').slice(0, 2)}:05`,
+      attire: 'No Issues',
+      labCoat: 'No Issues',
+      hcwGapOverrideAcknowledged: true,
+    },
+  });
+  return getCamp(campMongoId);
+}
+
+async function fillExecutionReady(campMongoId) {
+  const current = await getCamp(campMongoId);
+  const start = current.startTime || '06:00';
+  const end = current.endTime || '12:00';
+  const inTime = `${start.slice(0, 2)}:05`;
+  const outHour = Math.max(0, Number(end.slice(0, 2)) - 1);
+  const outTime = `${String(outHour).padStart(2, '0')}:50`;
+  await api(`/camp-ops/camps/${campMongoId}`, {
+    method: 'PUT',
+    body: {
+      editingStage: 'execution',
+      lifecycleStage: 'execution',
+      lifecycleOnly: false,
+      campDate: current.campDate || isoToday(),
+      startTime: start,
+      endTime: end,
+      chargeableStatus: 'Chargeable',
+      inTime,
+      attire: 'No Issues',
+      labCoat: 'No Issues',
+      outTime,
+      kmRoundTrip: 42,
+      patientsCount: 36,
+      actualPatients: 36,
+      rxCount: 10,
+      hcwGapOverrideAcknowledged: true,
+      executionDocuments: [
+        { docType: 'doctor_form', fileName: 'df-qa.pdf', url: 'https://example.local/df-qa.pdf' },
+        { docType: 'patient_form', fileName: 'pf-qa.pdf', url: 'https://example.local/pf-qa.pdf' },
+      ],
+    },
+  });
+  return getCamp(campMongoId);
+}
+
+async function markComplete(campMongoId) {
+  const current = await getCamp(campMongoId);
+  if (current.lifecycleStage === 'financial' && current.executionStatus === 'Camp Completed') {
+    return current;
+  }
+  await api(`/camp-ops/camps/${campMongoId}`, {
+    method: 'PUT',
+    body: {
+      editingStage: 'execution',
+      lifecycleStage: 'execution',
+      markComplete: true,
+      lifecycleOnly: false,
+      chargeableStatus: current.chargeableStatus || 'Chargeable',
+      inTime: current.inTime || '06:05',
+      attire: current.attire || 'No Issues',
+      outTime: current.outTime || '11:50',
+      kmRoundTrip: current.kmRoundTrip ?? 42,
+      patientsCount: current.patientsCount ?? 36,
+      actualPatients: current.actualPatients ?? 36,
+      rxCount: current.rxCount ?? 10,
+      hcwGapOverrideAcknowledged: true,
+      executionDocuments: current.executionDocuments?.length
+        ? current.executionDocuments
+        : [
+          { docType: 'doctor_form', fileName: 'df-qa.pdf', url: 'https://example.local/df-qa.pdf' },
+          { docType: 'patient_form', fileName: 'pf-qa.pdf', url: 'https://example.local/pf-qa.pdf' },
+        ],
+    },
+  });
+  return getCamp(campMongoId);
+}
+
 async function processLifecycle(label, campMongoId, { markPaid = true } = {}) {
   await runStep(`${label}: approve`, async () => {
     await api(`/camp-ops/camps/${campMongoId}/approve`, { method: 'POST' });
@@ -110,80 +249,30 @@ async function processLifecycle(label, campMongoId, { markPaid = true } = {}) {
     assertStage(camp, 'assignment');
   });
 
-  await runStep(`${label}: assign HCW`, async () => {
-    await api(`/camp-ops/camps/${campMongoId}`, {
-      method: 'PUT',
-      body: {
-        editingStage: 'assignment',
-        lifecycleStage: 'assignment',
-        lifecycleOnly: true,
-        assignmentDecision: 'assign',
-        hcwContactId,
-        hcwCategory: 'Technician',
-        hcwName: CAMP_ONE_DEMO.hcwName,
-        hcwContact: '9123456780',
-      },
-    });
-    const camp = await getCamp(campMongoId);
+  await runStep(`${label}: assign HCW → Execution immediately`, async () => {
+    const camp = await assignHcw(campMongoId);
     if (camp.assignmentDecision !== 'assign') throw new Error('Assignment not saved');
-    // Far-future demo dates stay in Assignment until D-1.
-    assertStage(camp, 'assignment');
-  });
-
-  await runStep(`${label}: promote to Execution (D-1)`, async () => {
-    await api(`/camp-ops/camps/${campMongoId}`, {
-      method: 'PUT',
-      body: {
-        editingStage: 'assignment',
-        lifecycleStage: 'assignment',
-        lifecycleOnly: false,
-        campDate: isoToday(),
-        startTime: '06:00',
-        endTime: '12:00',
-        assignmentDecision: 'assign',
-        hcwContactId,
-        hcwCategory: 'Technician',
-        hcwName: CAMP_ONE_DEMO.hcwName,
-        hcwContact: '9123456780',
-      },
-    });
-    await api('/camp-ops/camps?lifecycleStage=execution&limit=5');
-    const camp = await getCamp(campMongoId);
     assertStage(camp, 'execution');
   });
 
-  await runStep(`${label}: execution update`, async () => {
-    await api(`/camp-ops/camps/${campMongoId}`, {
-      method: 'PUT',
-      body: {
-        editingStage: 'execution',
-        lifecycleStage: 'execution',
-        lifecycleOnly: false,
-        campDate: isoToday(),
-        startTime: '06:00',
-        endTime: '12:00',
-        executionStatus: 'Ongoing',
-        inTime: '06:05',
-        outTime: '11:50',
-        patientsCount: 36,
-        chargeableStatus: 'Chargeable',
-        attire: 'No Issues',
-        labCoat: 'No Issues',
-      },
-    });
+  await runStep(`${label}: Planned → Executed`, async () => {
+    const camp = await fillExecutionPlannedToExecuted(campMongoId);
+    assertStage(camp, 'execution');
+    if (camp.executionStatus !== 'Marked Executed') {
+      throw new Error(`Expected Marked Executed, got ${camp.executionStatus}`);
+    }
   });
 
-  await runStep(`${label}: mark executed`, async () => {
-    await api(`/camp-ops/camps/${campMongoId}/execute`, {
-      method: 'POST',
-      body: { actualPatients: 36 },
-    });
-    const camp = await getCamp(campMongoId);
+  await runStep(`${label}: Mark Complete → Financial`, async () => {
+    let camp = await fillExecutionReady(campMongoId);
+    if (camp.lifecycleStage !== 'financial') {
+      camp = await markComplete(campMongoId);
+    }
     assertStatus(camp, 'executed');
     assertStage(camp, 'financial');
   });
 
-  await runStep(`${label}: financial fields`, async () => {
+  await runStep(`${label}: financial amounts`, async () => {
     await api(`/camp-ops/camps/${campMongoId}`, {
       method: 'PUT',
       body: {
@@ -194,9 +283,21 @@ async function processLifecycle(label, campMongoId, { markPaid = true } = {}) {
         campAmount: 15000,
         travelling: 500,
         campRevenue: 20000,
-        paymentSubmitStatus: 'payment_confirmed',
+        hcwGapOverrideAcknowledged: true,
       },
     });
+    const camp = await getCamp(campMongoId);
+    if (Number(camp.totalPayout) !== 15500) {
+      throw new Error(`Expected totalPayout 15500, got ${camp.totalPayout}`);
+    }
+  });
+
+  await runStep(`${label}: Confirm Payment`, async () => {
+    await api(`/camp-ops/camps/${campMongoId}/confirm-payment`, { method: 'POST' });
+    const camp = await getCamp(campMongoId);
+    if (camp.paymentSubmitStatus !== 'payment_confirmed') {
+      throw new Error(`Expected payment_confirmed, got ${camp.paymentSubmitStatus}`);
+    }
   });
 
   await runStep(`${label}: submit to Finance One`, async () => {
@@ -225,7 +326,8 @@ async function processLifecycle(label, campMongoId, { markPaid = true } = {}) {
         body: {
           financePaymentStatus: 'paid',
           paidAmount: 15500,
-          transactionId: `UTR-QA-${Date.now()}`,
+          transactionId: `UTR-QA-${label}-${stamp}`,
+          paymentDate: isoToday(),
           paymentRemark: `${label} payout settled`,
         },
       });
@@ -252,22 +354,21 @@ async function processLifecycle(label, campMongoId, { markPaid = true } = {}) {
   });
 }
 
-async function createViaDashboard(stamp) {
-  const today = isoToday();
-  const campDate = addDaysIso(today, 30);
+async function createViaDashboard() {
+  const slot = nextCreateSlot();
   const res = await api('/camp-ops/camps', {
     method: 'POST',
     body: {
       clientName: CAMP_ONE_DEMO.clientName,
-      campaignType: CAMP_ONE_DEMO.division,
+      campaignType: CAMP_ONE_DEMO.campaignType,
       campaignName: CAMP_ONE_DEMO.method,
       source: 'dashboard',
-      campDate,
-      requestDate: today,
-      startTime: '10:00',
-      endTime: '13:00',
-      doctorName: 'Dashboard Qa Doctor',
-      doctorCode: `QA-DASH-${stamp}`,
+      campDate: slot.campDate,
+      requestDate: isoToday(),
+      startTime: slot.startTime,
+      endTime: slot.endTime,
+      doctorName: `Dashboard Qa Doctor ${slot.uniq}`,
+      doctorCode: `QA-DASH-${slot.uniq}`.slice(0, 28),
       campAddress: '10 Dashboard Road, Pune, Maharashtra 411001',
       city: 'Pune',
       district: 'Pune',
@@ -290,21 +391,21 @@ async function createViaDashboard(stamp) {
   return res.data;
 }
 
-async function createViaPaste(stamp) {
-  const campDate = addDaysIso(isoToday(), 32);
+async function createViaPaste() {
+  const slot = nextCreateSlot();
   const text = `
 Client: ${CAMP_ONE_DEMO.clientName}
-Campaign Type: ${CAMP_ONE_DEMO.division}
+Campaign Type: ${CAMP_ONE_DEMO.campaignType}
 Campaign Name: ${CAMP_ONE_DEMO.method}
-Date: ${formatDdMmYyyy(campDate)}
-Doctor Name: Paste Qa Doctor
-Doctor Code: QA-PASTE-${stamp}
+Date: ${formatDdMmYyyy(slot.campDate)}
+Doctor Name: Paste Qa Doctor ${slot.uniq}
+Doctor Code: QA-PASTE-${slot.uniq}
 Camp Address: 22 Paste Lane, Pune, Maharashtra 411004
 Expected Patients: 35
 SE Name: Paste Contact
 SE Mobile: 9000000002
-09:30
-12:30
+${slot.startTime}
+${slot.endTime}
 `.trim();
 
   const extract = await api('/camp-ops/communications/paste/extract', {
@@ -312,19 +413,23 @@ SE Mobile: 9000000002
     body: {
       text,
       clientName: CAMP_ONE_DEMO.clientName,
-      campaignType: CAMP_ONE_DEMO.division,
+      campaignType: CAMP_ONE_DEMO.campaignType,
       campaignName: CAMP_ONE_DEMO.method,
     },
   });
   const preview = extract.data;
   if (!preview?.bodyPreview?.length) throw new Error('Paste extract returned no rows');
+  const firstRow = preview.bodyPreview[0];
+  if (firstRow.valid === false) {
+    throw new Error(`Paste extract invalid: ${(firstRow.errors || []).join('; ')}`);
+  }
 
   const processed = await api('/camp-ops/communications/paste/process', {
     method: 'POST',
     body: {
       previewData: preview,
       clientName: CAMP_ONE_DEMO.clientName,
-      campaignType: CAMP_ONE_DEMO.division,
+      campaignType: CAMP_ONE_DEMO.campaignType,
       campaignName: CAMP_ONE_DEMO.method,
     },
   });
@@ -338,14 +443,13 @@ SE Mobile: 9000000002
   if (camp.source !== 'paste') throw new Error(`Expected source paste, got ${camp.source}`);
   assertStatus(camp, 'pending_review');
   if (camp.requestIncomplete) {
-    // Complete missing request fields so approve can proceed.
     await api(`/camp-ops/camps/${camp._id}`, {
       method: 'PUT',
       body: {
         editingStage: 'request',
         lifecycleOnly: false,
-        doctorName: camp.doctorName || 'Paste Qa Doctor',
-        doctorCode: camp.doctorCode || `QA-PASTE-${stamp}`,
+        doctorName: camp.doctorName || `Paste Qa Doctor ${slot.uniq}`,
+        doctorCode: camp.doctorCode || `QA-PASTE-${slot.uniq}`.slice(0, 28),
         campAddress: camp.campAddress || '22 Paste Lane, Pune, Maharashtra 411004',
         city: camp.city || 'Pune',
         district: camp.district || 'Pune',
@@ -359,11 +463,11 @@ SE Mobile: 9000000002
           ? camp.contactPersons
           : [{ level: 'Territory Manager', name: 'Paste Contact', phone: '9000000002' }],
         expectedPatients: camp.expectedPatients || 35,
-        startTime: camp.startTime || '09:30',
-        endTime: camp.endTime || '12:30',
-        campDate: camp.campDate || campDate,
+        startTime: camp.startTime || slot.startTime,
+        endTime: camp.endTime || slot.endTime,
+        campDate: camp.campDate || slot.campDate,
         requestDate: camp.requestDate || isoToday(),
-        campaignType: camp.campaignType || CAMP_ONE_DEMO.division,
+        campaignType: camp.campaignType || CAMP_ONE_DEMO.campaignType,
         campaignName: camp.campaignName || CAMP_ONE_DEMO.method,
         clientName: camp.clientName || CAMP_ONE_DEMO.clientName,
         source: 'paste',
@@ -373,8 +477,8 @@ SE Mobile: 9000000002
   return await getCamp(created.id);
 }
 
-async function createViaExcelImport(stamp) {
-  const campDate = addDaysIso(isoToday(), 34);
+async function createViaExcelImport() {
+  const slot = nextCreateSlot();
   const headers = [
     'Client',
     'Campaign Type',
@@ -396,13 +500,13 @@ async function createViaExcelImport(stamp) {
   const rows = [
     {
       Client: CAMP_ONE_DEMO.clientName,
-      'Campaign Type': CAMP_ONE_DEMO.division,
+      'Campaign Type': CAMP_ONE_DEMO.campaignType,
       'Campaign Name': CAMP_ONE_DEMO.method,
-      'Camp Date': campDate,
-      'Start Time': '10:00',
-      'End Time': '13:00',
-      'Doctor Name': 'Excel Qa Doctor',
-      'Doctor Code': `QA-XLS-${stamp}`,
+      'Camp Date': slot.campDate,
+      'Start Time': slot.startTime,
+      'End Time': slot.endTime,
+      'Doctor Name': `Excel Qa Doctor ${slot.uniq}`,
+      'Doctor Code': `QA-XLS-${slot.uniq}`.slice(0, 28),
       'Camp Address': '33 Excel Avenue, Pune, Maharashtra 411005',
       City: 'Pune',
       District: 'Pune',
@@ -450,18 +554,17 @@ async function createViaExcelImport(stamp) {
   if (camp.source !== 'excel') throw new Error(`Expected source excel, got ${camp.source}`);
   assertStatus(camp, 'pending_review');
 
-  // Excel import historically omits district/hq/zone — complete before approve.
   await api(`/camp-ops/camps/${camp._id}`, {
     method: 'PUT',
     body: {
       editingStage: 'request',
       lifecycleOnly: false,
       clientName: CAMP_ONE_DEMO.clientName,
-      campaignType: CAMP_ONE_DEMO.division,
+      campaignType: CAMP_ONE_DEMO.campaignType,
       campaignName: CAMP_ONE_DEMO.method,
       source: 'excel',
-      doctorName: camp.doctorName || 'Excel Qa Doctor',
-      doctorCode: camp.doctorCode || `QA-XLS-${stamp}`,
+      doctorName: camp.doctorName || `Excel Qa Doctor ${slot.uniq}`,
+      doctorCode: camp.doctorCode || `QA-XLS-${slot.uniq}`.slice(0, 28),
       campAddress: camp.campAddress || '33 Excel Avenue, Pune, Maharashtra 411005',
       city: camp.city || 'Pune',
       district: camp.district || 'Pune',
@@ -472,9 +575,9 @@ async function createViaExcelImport(stamp) {
       fieldPersonName: camp.fieldPersonName || 'Excel Contact',
       fieldPersonPhone: camp.fieldPersonPhone || '9000000003',
       expectedPatients: camp.expectedPatients || 42,
-      startTime: camp.startTime || '10:00',
-      endTime: camp.endTime || '13:00',
-      campDate: camp.campDate || campDate,
+      startTime: camp.startTime || slot.startTime,
+      endTime: camp.endTime || slot.endTime,
+      campDate: camp.campDate || slot.campDate,
       requestDate: camp.requestDate || isoToday(),
     },
   });
@@ -482,16 +585,16 @@ async function createViaExcelImport(stamp) {
   return camp;
 }
 
-async function createViaParser(stamp) {
-  const campDate = addDaysIso(isoToday(), 36);
+async function createViaParser() {
+  const slot = nextCreateSlot();
   const text = `
-Date : ${formatDdMmYyyy(campDate)}
-Dr Name : Parser Qa Doctor
-Doctor Code : QA-PARSE-${stamp}
+Date : ${formatDdMmYyyy(slot.campDate)}
+Dr Name : Parser Qa Doctor ${slot.uniq}
+Doctor Code : QA-PARSE-${slot.uniq}
 Camp Address : 44 Parser Street, Pune, Maharashtra 411006
 Expected Patients : 38
-Start Time : 10:00 AM
-End Time : 01:00 PM
+Start Time : ${slot.startTime}
+End Time : ${slot.endTime}
 SE Name : Parser Contact
 SE Mobile : 9000000004
 `.trim();
@@ -517,7 +620,7 @@ SE Mobile : 9000000004
       parsedFields,
       pinMaster: parsed.data?.pin_master || null,
       clientName: CAMP_ONE_DEMO.clientName,
-      campaignType: CAMP_ONE_DEMO.division,
+      campaignType: CAMP_ONE_DEMO.campaignType,
       campaignName: CAMP_ONE_DEMO.method,
     },
   });
@@ -531,6 +634,7 @@ SE Mobile : 9000000004
 }
 
 async function main() {
+  stamp = Date.now().toString(36).slice(-6);
   console.log('\nCamp One Lifecycle QA — seeding…');
   await connectDb();
   await ensureSeed();
@@ -558,26 +662,25 @@ async function main() {
     hcwContactId = hcw._id;
   });
 
-  const stamp = Date.now().toString(36).slice(-6);
   const camps = {};
 
   await runStep('Create #1 — Dashboard form', async () => {
-    camps.dashboard = await createViaDashboard(stamp);
+    camps.dashboard = await createViaDashboard();
     console.log(`      campId=${camps.dashboard.campId} source=${camps.dashboard.source}`);
   });
 
   await runStep('Create #2 — Manual paste', async () => {
-    camps.paste = await createViaPaste(stamp);
+    camps.paste = await createViaPaste();
     console.log(`      campId=${camps.paste.campId} source=${camps.paste.source}`);
   });
 
   await runStep('Create #3 — Excel import', async () => {
-    camps.excel = await createViaExcelImport(stamp);
+    camps.excel = await createViaExcelImport();
     console.log(`      campId=${camps.excel.campId} source=${camps.excel.source}`);
   });
 
   await runStep('Create #4 — Client request parser', async () => {
-    camps.parser = await createViaParser(stamp);
+    camps.parser = await createViaParser();
     console.log(`      campId=${camps.parser.campId} source=${camps.parser.source}`);
   });
 
@@ -595,7 +698,6 @@ async function main() {
   await runStep('Ops overview dashboard loads', async () => {
     const overview = await api('/dashboards/overview');
     if (!overview.data?.kpis && !overview.kpis && !overview.data?.generatedAt && !overview.generatedAt) {
-      // accept either wrapped or flat
       if (!overview.data && !overview.generatedAt) throw new Error('Overview payload empty');
     }
   });

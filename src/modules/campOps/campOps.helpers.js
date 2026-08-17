@@ -87,11 +87,11 @@ export function resolveCampSchedule({
     return {
       startTime: start,
       endTime: end,
-      durationHours: computedDuration ?? (Number(durationHours) || 3),
+      durationHours: computedDuration ?? (Number(durationHours) || 4),
     };
   }
 
-  const duration = Number(durationHours) || 3;
+  const duration = Number(durationHours) || 4;
   return {
     startTime: start,
     endTime: computeEndTime(start, duration),

@@ -8,9 +8,12 @@ import {
 } from '../campOps.helpers.js';
 import { normalizeCampName } from '../campOps.constants.js';
 import { assertHistoricalCampDatesAllowed } from '../campDatePolicy.js';
-import { CampDuplicateError, findExistingDuplicateCamp } from './utils/campDuplicateHelpers.js';
+import {
+  CampDuplicateError,
+  createCampEnsuringNoDuplicate,
+} from './utils/campDuplicateHelpers.js';
 
-export { CampDuplicateError, findExistingDuplicateCamp };
+export { CampDuplicateError, createCampEnsuringNoDuplicate };
 
 export async function createCampFromRow({
   row,
@@ -21,11 +24,6 @@ export async function createCampFromRow({
   extras = {},
   permissions = null,
 }) {
-  const duplicate = await findExistingDuplicateCamp({ client, row });
-  if (duplicate) {
-    throw new CampDuplicateError(duplicate);
-  }
-
   assertHistoricalCampDatesAllowed(createdBy, permissions, {
     campDate: row.campDate,
     requestDate: row.requestDate,
@@ -83,5 +81,5 @@ export async function createCampFromRow({
     }
   }
 
-  return Camp.create(payload);
+  return createCampEnsuringNoDuplicate(Camp, payload, { client, row });
 }

@@ -18,7 +18,10 @@ export const CAMP_ONE_DEMO = {
   adminPassword: 'CampDemoPass123!',
   clientName: 'Demo Pharma Ltd',
   clientCode: 'DEMOPHAR',
+  /** drugTherapyName on Client Master rows */
   division: 'Screening',
+  /** programName label — use as campaignType for import/paste/API creates */
+  campaignType: 'Demo Screening Program',
   method: 'BMD',
   hcwName: 'Ravi Technician',
 };
@@ -96,7 +99,7 @@ function baseCampFields({ client, campDate, label }) {
   return {
     clientId: client._id,
     clientName: client.name,
-    campaignType: CAMP_ONE_DEMO.division,
+    campaignType: CAMP_ONE_DEMO.campaignType,
     campaignName: CAMP_ONE_DEMO.method,
     source: 'dashboard',
     campDate,
@@ -313,7 +316,7 @@ function buildFinancePayoutDemoCamps({ clients, hcws, today }) {
       key: 'PQ01',
       clientCode: 'DEMOPHAR',
       hcwKey: 'tech',
-      division: 'Screening',
+      division: CAMP_ONE_DEMO.campaignType,
       method: 'BMD',
       campDate: addDays(today, -3),
       total: 15500,
@@ -324,7 +327,7 @@ function buildFinancePayoutDemoCamps({ clients, hcws, today }) {
       key: 'PQ02',
       clientCode: 'DEMOPHAR',
       hcwKey: 'phleb',
-      division: 'Screening',
+      division: CAMP_ONE_DEMO.campaignType,
       method: 'BMD',
       campDate: addDays(today, -4),
       total: 9800,
@@ -484,8 +487,23 @@ async function ensureDemoCamp({ key, client, overrides = {} }) {
     deletedAt: null,
   };
 
+  // Reset stale closure/cancellation fields when a fixture override does not set them.
+  const resetUnlessOverridden = (field, emptyValue = '') => {
+    if (!Object.prototype.hasOwnProperty.call(overrides, field)) {
+      payload[field] = emptyValue;
+    }
+  };
+  resetUnlessOverridden('cancelledBy');
+  resetUnlessOverridden('assignmentRefusalReason');
+  resetUnlessOverridden('cancellationReason');
+  resetUnlessOverridden('closureReasonCode');
+  resetUnlessOverridden('closureType');
+  resetUnlessOverridden('subReason');
+
   if (existing) {
-    Object.assign(existing, payload);
+    for (const [key, value] of Object.entries(payload)) {
+      existing[key] = value;
+    }
     await existing.save();
     return { created: false, updated: true, camp: existing };
   }
@@ -597,10 +615,11 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
       label: 'Demo Asgd Assigned',
       overrides: {
         status: 'approved',
-        lifecycleStage: 'assignment',
+        lifecycleStage: 'execution',
         requestReviewStatus: 'request_approved',
+        executionStatus: 'Camp Scheduled',
         campDate: addDays(today, 16),
-        remarks: 'Demo — Assigned filter',
+        remarks: 'Demo — Assigned filter (promoted to Execution on assign)',
         ...hcwFields,
       },
     },
@@ -643,6 +662,8 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
         lifecycleStage: 'execution',
         requestReviewStatus: 'request_approved',
         executionStatus: 'Camp Scheduled',
+        cancelledBy: '',
+        assignmentRefusalReason: '',
         campDate: addDays(today, 18),
         remarks: 'Demo — Scheduled filter',
         ...hcwFields,
@@ -656,6 +677,8 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
         lifecycleStage: 'execution',
         requestReviewStatus: 'request_approved',
         executionStatus: 'Camp Ongoing',
+        cancelledBy: '',
+        assignmentRefusalReason: '',
         campDate: today,
         startTime: '08:00',
         endTime: '20:00',
@@ -672,6 +695,8 @@ function buildDemoCampDefinitions({ client, hcw, today }) {
         lifecycleStage: 'execution',
         requestReviewStatus: 'request_approved',
         executionStatus: 'Marked Executed',
+        cancelledBy: '',
+        assignmentRefusalReason: '',
         campDate: addDays(today, -1),
         startTime: '09:00',
         endTime: '11:00',

@@ -52,6 +52,12 @@ export async function connectDb() {
     }
     configurePersistence({ backend: 'mongo', dataDirectory: dataDir, db: mongoose.connection.db });
     await hydratePersistence();
+    try {
+      const { ensureCampDuplicateIndex } = await import('../modules/campOps/campDuplicate.js');
+      await ensureCampDuplicateIndex(mongoose.connection.db);
+    } catch (err) {
+      console.warn('[db] Camp duplicate index ensure skipped:', err?.message || err);
+    }
     console.log(`[db] Connected to MongoDB (${getPersistenceMode()} persistence, database: ${mongoose.connection.name})`);
     return;
   }

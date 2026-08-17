@@ -215,7 +215,7 @@ async function main() {
         method: 'POST',
         body: {
           clientName: CAMP_ONE_DEMO.clientName,
-          campaignType: CAMP_ONE_DEMO.division,
+          campaignType: CAMP_ONE_DEMO.campaignType,
           campaignName: CAMP_ONE_DEMO.method,
           source: 'dashboard',
           campDate: '2026-09-01',
@@ -248,7 +248,7 @@ async function main() {
         method: 'POST',
         body: {
           clientName: CAMP_ONE_DEMO.clientName,
-          campaignType: CAMP_ONE_DEMO.division,
+          campaignType: CAMP_ONE_DEMO.campaignType,
           campaignName: CAMP_ONE_DEMO.method,
           source: 'dashboard',
           campDate: '2026-09-02',
@@ -276,18 +276,22 @@ async function main() {
   });
 
   await runStep('Hiring submit marks camp as Hiring Requested', async () => {
+    const campDate = new Date();
+    campDate.setDate(campDate.getDate() + 45);
+    const campDateIso = campDate.toISOString().slice(0, 10);
+    const uniq = Date.now().toString(36).slice(-5);
     const createdCamp = await api('/camp-ops/camps', {
       method: 'POST',
       body: {
         clientName: CAMP_ONE_DEMO.clientName,
-        campaignType: CAMP_ONE_DEMO.division,
+        campaignType: CAMP_ONE_DEMO.campaignType,
         campaignName: CAMP_ONE_DEMO.method,
         source: 'dashboard',
-        campDate: '2026-09-20',
-        startTime: '09:00',
-        endTime: '12:00',
-        doctorName: 'Hard Test Hiring',
-        doctorCode: `HIRE-${Date.now()}`,
+        campDate: campDateIso,
+        startTime: '14:30',
+        endTime: '17:30',
+        doctorName: `Hard Test Hiring ${uniq}`,
+        doctorCode: `HIRE-${uniq}`.slice(0, 28),
         campAddress: '12 MG Road, Pune',
         city: 'Pune',
         district: 'Pune',
@@ -356,7 +360,7 @@ async function main() {
       method: 'POST',
       body: {
         clientName: CAMP_ONE_DEMO.clientName,
-        campaignType: CAMP_ONE_DEMO.division,
+        campaignType: CAMP_ONE_DEMO.campaignType,
         campaignName: CAMP_ONE_DEMO.method,
         source: 'dashboard',
         campDate: '2026-09-15',

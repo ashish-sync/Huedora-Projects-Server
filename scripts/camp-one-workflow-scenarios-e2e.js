@@ -114,7 +114,7 @@ function campCreateBody(overrides = {}) {
   const label = overrides.doctorName || 'Scenario Doctor';
   return {
     clientName: CAMP_ONE_DEMO.clientName,
-    campaignType: CAMP_ONE_DEMO.division,
+    campaignType: CAMP_ONE_DEMO.campaignType,
     campaignName: CAMP_ONE_DEMO.method,
     source: 'dashboard',
     campDate: addDaysIso(today, dayOffset),

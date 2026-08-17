@@ -3,17 +3,19 @@ import { escapeRegex, parseLocalDateInput, trimStr } from './campOps.helpers.js'
 import { normalizePasteStartTime } from './pasteTimeNormalize.js';
 import { stripDoctorNamePrefix } from '../../utils/textFormat.js';
 
+export const DUPLICATE_CAMP_MESSAGE =
+  'Duplicate Entry — A camp already exists with the same Client, Doctor, Division/Campaign Type, Camp Date and Start Time.';
+
+/** @deprecated Status is not part of duplicate detection — all non-deleted camps block duplicates. */
 export const DUPLICATE_BLOCKING_STATUSES = ['pending_review', 'approved', 'executed'];
 
 export const DUPLICATE_KEY_LABEL = 'client, doctor, division, date, and start time';
 
 export class CampDuplicateError extends Error {
   constructor(existingCamp) {
-    const label = existingCamp?.campId || 'existing camp';
-    super(
-      `Duplicate camp already exists (${label}) for the same ${DUPLICATE_KEY_LABEL}`,
-    );
+    super(DUPLICATE_CAMP_MESSAGE);
     this.name = 'CampDuplicateError';
+    this.code = 'DUPLICATE_CAMP';
     this.existingCamp = existingCamp;
   }
 }
@@ -90,9 +92,46 @@ export function clientsMatch(client = {}, camp = {}) {
   return Boolean(clientName && campName && clientName === campName);
 }
 
+export function duplicateRowFromCamp(camp = {}, client = null) {
+  return {
+    clientName: client?.name || camp.clientName,
+    doctorName: camp.doctorName,
+    campaignType: camp.campaignType,
+    campDate: camp.campDate,
+    startTime: camp.startTime,
+  };
+}
+
+export function attachDuplicateKey(doc = {}, { client = null } = {}) {
+  const key = buildCampDuplicateKey({
+    clientId: doc.clientId || client?._id || client?.id,
+    clientName: doc.clientName || client?.name,
+    doctorName: doc.doctorName,
+    campaignType: doc.campaignType,
+    campDate: doc.campDate,
+    startTime: doc.startTime,
+  });
+  if (key) doc.duplicateKey = key;
+  return doc;
+}
+
+function isExcludedCamp(camp, { excludeCampId = null, excludeId = null } = {}) {
+  if (excludeId && String(camp._id) === String(excludeId)) return true;
+  if (excludeCampId && String(camp.campId) === String(excludeCampId)) return true;
+  return false;
+}
+
+function campMatchesDuplicateRow(row, camp) {
+  return (
+    campaignTypesMatch(row, camp)
+    && startTimesMatch(row, camp)
+    && doctorsMatch(row, camp)
+  );
+}
+
 /**
  * Duplicate = Client + Doctor Name + Division/Therapy + Camp Date + Camp Start Time
- * against non-deleted camps in pending_review / approved / executed.
+ * against all non-deleted camps regardless of stage or status.
  */
 export async function findExistingDuplicateCamp({
   client,
@@ -112,9 +151,25 @@ export async function findExistingDuplicateCamp({
   const doctorName = trimStr(row?.doctorName);
   if (!doctorName) return null;
 
+  const duplicateKey = buildCampDuplicateKey({
+    clientId: client?._id || client?.id,
+    clientName: client?.name || row?.clientName,
+    doctorName,
+    campaignType,
+    campDate,
+    startTime,
+  });
+
+  if (duplicateKey) {
+    const keyed = await CampOpsCamp.find({ isDeleted: false, duplicateKey });
+    const keyedHit = keyed.find(
+      (camp) => !isExcludedCamp(camp, { excludeCampId, excludeId }),
+    );
+    if (keyedHit) return keyedHit;
+  }
+
   const filter = {
     isDeleted: false,
-    status: { $in: DUPLICATE_BLOCKING_STATUSES },
     campDate,
   };
 
@@ -128,21 +183,83 @@ export async function findExistingDuplicateCamp({
   }
 
   const candidates = await CampOpsCamp.find(filter);
-  const filtered = candidates.filter((camp) => {
-    if (excludeId && String(camp._id) === String(excludeId)) return false;
-    if (excludeCampId && String(camp.campId) === String(excludeCampId)) return false;
-    return true;
-  });
-
   return (
-    filtered.find(
+    candidates.find(
       (camp) => (
-        campaignTypesMatch(row, camp)
-        && startTimesMatch(row, camp)
-        && doctorsMatch(row, camp)
+        !isExcludedCamp(camp, { excludeCampId, excludeId })
+        && campMatchesDuplicateRow(row, camp)
       ),
     ) || null
   );
+}
+
+export async function assertNoDuplicateCamp({
+  client,
+  row,
+  excludeCampId = null,
+  excludeId = null,
+} = {}) {
+  const duplicate = await findExistingDuplicateCamp({
+    client,
+    row,
+    excludeCampId,
+    excludeId,
+  });
+  if (duplicate) throw new CampDuplicateError(duplicate);
+}
+
+const duplicateKeyLocks = new Map();
+
+export async function withDuplicateKeyLock(key, fn) {
+  if (!key) return fn();
+  const prev = duplicateKeyLocks.get(key) || Promise.resolve();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  duplicateKeyLocks.set(key, prev.then(() => gate));
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (duplicateKeyLocks.get(key) === gate) duplicateKeyLocks.delete(key);
+  }
+}
+
+export function isMongoDuplicateKeyError(err) {
+  return err?.code === 11000 && /duplicateKey|camp_duplicate_key_unique/i.test(String(err?.message || ''));
+}
+
+export async function createCampEnsuringNoDuplicate(CampModel, doc, { client = null, row = null } = {}) {
+  const checkRow = row || duplicateRowFromCamp(doc, client);
+  attachDuplicateKey(doc, { client });
+  const key = doc.duplicateKey;
+
+  return withDuplicateKeyLock(key, async () => {
+    await assertNoDuplicateCamp({ client, row: checkRow });
+    try {
+      return await CampModel.create(doc);
+    } catch (err) {
+      if (isMongoDuplicateKeyError(err)) {
+        const existing = await findExistingDuplicateCamp({ client, row: checkRow });
+        throw new CampDuplicateError(existing || { campId: 'existing camp' });
+      }
+      throw err;
+    }
+  });
+}
+
+export async function assertNoDuplicateOnCampSave(camp, { client = null } = {}) {
+  const resolvedClient = client || { _id: camp.clientId, name: camp.clientName };
+  const row = duplicateRowFromCamp(camp, resolvedClient);
+  await assertNoDuplicateCamp({
+    client: resolvedClient,
+    row,
+    excludeId: camp._id,
+    excludeCampId: camp.campId,
+  });
+  attachDuplicateKey(camp, { client: resolvedClient });
 }
 
 export function buildDuplicatePreviewFlag(existingCamp) {
@@ -154,7 +271,22 @@ export function buildDuplicatePreviewFlag(existingCamp) {
   };
 }
 
-export function formatDuplicateCampMessage(existingCamp) {
-  const label = existingCamp?.campId || 'existing camp';
-  return `Duplicate of existing camp ${label} for same ${DUPLICATE_KEY_LABEL}`;
+export function formatDuplicateCampMessage(_existingCamp) {
+  return DUPLICATE_CAMP_MESSAGE;
+}
+
+export async function ensureCampDuplicateIndex(mongoDb) {
+  if (!mongoDb) return;
+  const col = mongoDb.collection('tylo_camp_ops_camps');
+  await col.createIndex(
+    { duplicateKey: 1 },
+    {
+      unique: true,
+      partialFilterExpression: {
+        isDeleted: false,
+        duplicateKey: { $type: 'string', $ne: '' },
+      },
+      name: 'camp_duplicate_key_unique',
+    },
+  );
 }

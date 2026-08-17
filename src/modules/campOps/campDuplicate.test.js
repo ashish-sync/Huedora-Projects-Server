@@ -5,6 +5,7 @@ import {
   campaignTypesMatch,
   clientsMatch,
   doctorsMatch,
+  DUPLICATE_CAMP_MESSAGE,
   formatDuplicateCampMessage,
   normalizeCampStartTime,
   normalizeDoctorName,
@@ -129,9 +130,9 @@ test('clientsMatch prefers id then name', () => {
   );
 });
 
-test('formatDuplicateCampMessage mentions doctor in duplicate key', () => {
-  const message = formatDuplicateCampMessage({ campId: 'CAMP-1' });
-  assert.match(message, /CAMP-1/);
-  assert.match(message, /doctor/i);
-  assert.match(message, /start time/i);
+test('formatDuplicateCampMessage uses canonical duplicate entry text', () => {
+  assert.equal(
+    formatDuplicateCampMessage({ campId: 'CAMP-1' }),
+    DUPLICATE_CAMP_MESSAGE,
+  );
 });
