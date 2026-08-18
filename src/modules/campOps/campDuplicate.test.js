@@ -90,6 +90,24 @@ test('different start times are not the same duplicate key', () => {
   assert.notEqual(morning, noon);
 });
 
+test('different camp dates are not the same duplicate key', () => {
+  const dayOne = buildCampDuplicateKey({
+    clientId: 'c1',
+    doctorName: 'Rajesh Kumar',
+    campaignType: 'Oncology',
+    campDate: '2026-08-15',
+    startTime: '09:00',
+  });
+  const dayTwo = buildCampDuplicateKey({
+    clientId: 'c1',
+    doctorName: 'Rajesh Kumar',
+    campaignType: 'Oncology',
+    campDate: '2026-08-16',
+    startTime: '09:00',
+  });
+  assert.notEqual(dayOne, dayTwo);
+});
+
 test('normalizeDoctorName only trims exact doctor value', () => {
   assert.equal(normalizeDoctorName('  Dr. Rajesh Kumar  '), 'Dr. Rajesh Kumar');
   assert.equal(normalizeDoctorName('Doctor Anita Desai'), 'Doctor Anita Desai');

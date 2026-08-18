@@ -1,5 +1,6 @@
 import { CampOpsCamp } from './campOps.model.js';
 import { escapeRegex, parseLocalDateInput, trimStr } from './campOps.helpers.js';
+import { idsEqual } from '../../utils/entityIds.js';
 
 export const DUPLICATE_CAMP_MESSAGE =
   'Duplicate Entry — A camp already exists with the same Client, Doctor, Division/Campaign Type, Camp Date and Start Time.';
@@ -8,6 +9,18 @@ export const DUPLICATE_CAMP_MESSAGE =
 export const DUPLICATE_BLOCKING_STATUSES = ['pending_review', 'approved', 'executed'];
 
 export const DUPLICATE_KEY_LABEL = 'client, doctor, division, date, and start time';
+
+/** Unit separator — Mongo-safe (NUL bytes can truncate index keys / stored values). */
+export const DUPLICATE_KEY_SEPARATOR = '\u001f';
+
+export const DUPLICATE_IDENTITY_FIELDS = [
+  'clientId',
+  'clientName',
+  'doctorName',
+  'campaignType',
+  'campDate',
+  'startTime',
+];
 
 export class CampDuplicateError extends Error {
   constructor(existingCamp) {
@@ -49,7 +62,7 @@ export function buildCampDuplicateKey({
   const clientKey = String(clientId || '').trim().toLowerCase()
     || normalizeClientName(clientName);
   if (!clientKey || !doctor || !division || !date || !time) return '';
-  return [clientKey, doctor, division, date, time].join('\0');
+  return [clientKey, doctor, division, date, time].join(DUPLICATE_KEY_SEPARATOR);
 }
 
 export function campaignTypesMatch(row = {}, camp = {}) {
@@ -84,6 +97,13 @@ export function clientsMatch(client = {}, camp = {}) {
   return Boolean(clientName && campName && clientName === campName);
 }
 
+export function campDatesMatch(row = {}, camp = {}) {
+  const rowDate = parseLocalDateInput(row?.campDate);
+  const campDate = parseLocalDateInput(camp?.campDate);
+  if (!rowDate || !campDate) return false;
+  return rowDate === campDate;
+}
+
 export function duplicateRowFromCamp(camp = {}, client = null) {
   return {
     clientName: client?.name || camp.clientName,
@@ -107,15 +127,24 @@ export function attachDuplicateKey(doc = {}, { client = null } = {}) {
   return doc;
 }
 
+function identityId(value) {
+  if (value && typeof value === 'object') {
+    return value._id || value.$oid || value.id || value;
+  }
+  return value;
+}
+
 function isExcludedCamp(camp, { excludeCampId = null, excludeId = null } = {}) {
-  if (excludeId && String(camp._id) === String(excludeId)) return true;
-  if (excludeCampId && String(camp.campId) === String(excludeCampId)) return true;
+  if (excludeId && idsEqual(identityId(camp._id), identityId(excludeId))) return true;
+  if (excludeCampId && String(camp.campId || '') === String(excludeCampId)) return true;
   return false;
 }
 
-function campMatchesDuplicateRow(row, camp) {
+function campMatchesDuplicateRow(row, camp, client = null) {
   return (
-    campaignTypesMatch(row, camp)
+    clientsMatch(client || { name: row?.clientName, clientName: row?.clientName }, camp)
+    && campDatesMatch(row, camp)
+    && campaignTypesMatch(row, camp)
     && startTimesMatch(row, camp)
     && doctorsMatch(row, camp)
   );
@@ -155,7 +184,10 @@ export async function findExistingDuplicateCamp({
   if (duplicateKey) {
     const keyed = await CampOpsCamp.find({ isDeleted: false, duplicateKey });
     const keyedHit = keyed.find(
-      (camp) => !isExcludedCamp(camp, { excludeCampId, excludeId }),
+      (camp) => (
+        !isExcludedCamp(camp, { excludeCampId, excludeId })
+        && campMatchesDuplicateRow(row, camp, client)
+      ),
     );
     if (keyedHit) return keyedHit;
   }
@@ -179,7 +211,7 @@ export async function findExistingDuplicateCamp({
     candidates.find(
       (camp) => (
         !isExcludedCamp(camp, { excludeCampId, excludeId })
-        && campMatchesDuplicateRow(row, camp)
+        && campMatchesDuplicateRow(row, camp, client)
       ),
     ) || null
   );

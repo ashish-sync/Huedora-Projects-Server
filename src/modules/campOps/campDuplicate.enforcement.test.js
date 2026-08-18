@@ -350,6 +350,40 @@ test('manual paste flow duplicate semantics allow create when any one duplicate 
   }
 });
 
+test('assignment save allows the same doctor on a different camp date', async () => {
+  const first = seedCamp({ _id: 'assign-a', campId: '26-09-assign-a', campDate: '2026-09-15' });
+  const second = seedCamp({ _id: 'assign-b', campId: '26-09-assign-b', campDate: '2026-09-16' });
+  await resetCamps([first, second]);
+
+  await assertNoDuplicateOnCampSave(second, { client: CLIENT });
+  const duplicate = await findExistingDuplicateCamp({
+    client: CLIENT,
+    row: { ...BASE_ROW, campDate: '2026-09-16' },
+    excludeId: 'assign-b',
+    excludeCampId: '26-09-assign-b',
+  });
+  assert.equal(duplicate, null);
+});
+
+test('stale duplicateKey with a different camp date is not a duplicate', async () => {
+  const first = seedCamp({ _id: 'key-a', campId: '26-09-key-a', campDate: '2026-09-15' });
+  const second = seedCamp({
+    _id: 'key-b',
+    campId: '26-09-key-b',
+    campDate: '2026-09-16',
+  });
+  second.duplicateKey = first.duplicateKey;
+  await resetCamps([first, second]);
+
+  await assertNoDuplicateOnCampSave(second, { client: CLIENT });
+  const duplicate = await findExistingDuplicateCamp({
+    client: CLIENT,
+    row: { ...BASE_ROW, campDate: '2026-09-16' },
+    excludeId: 'key-b',
+  });
+  assert.equal(duplicate, null);
+});
+
 test('soft-deleted camps do not block duplicates', async () => {
   await resetCamps([seedCamp({ campId: '26-09-deleted', isDeleted: true })]);
 

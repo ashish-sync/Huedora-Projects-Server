@@ -167,6 +167,7 @@ import {
   createCampEnsuringNoDuplicate,
   assertNoDuplicateOnCampSave,
   CampDuplicateError,
+  DUPLICATE_IDENTITY_FIELDS,
 } from './campDuplicate.js';
 import {
   resolveCampClientScope,
@@ -1424,6 +1425,12 @@ router.put(
     ];
     if (stage === 'request' || stage === 'assignment') {
       executionOnlyKeys.forEach((key) => { delete payload[key]; });
+    }
+    // Assignment / execution / finance saves must not rewrite the duplicate identity.
+    // The full form still posts request fields, which can default start time / campaign type
+    // or shift campDate and then false-positive the duplicate check.
+    if (lifecycleOnly) {
+      DUPLICATE_IDENTITY_FIELDS.forEach((key) => { delete payload[key]; });
     }
     // paymentSubmitStatus / financePaymentStatus are never free-select via Camp PUT:
     // Confirm Payment / Hold / Release Hold endpoints + Finance One Payment Done only.
