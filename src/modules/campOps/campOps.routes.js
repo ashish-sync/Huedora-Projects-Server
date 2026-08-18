@@ -110,6 +110,7 @@ import {
   assertCanMarkCampExecuted,
   isExecutionCancellationForFinance,
   normalizeLifecycleStage,
+  normalizeExecutionStatus,
   promoteDueAssignedCampsToExecution,
   promoteAssignedCampToExecutionIfDue,
   repairCancelledClosureCampsToFinancial,
@@ -1446,6 +1447,20 @@ router.put(
       );
     }
 
+    // Client may send lifecycleStage=financial + markComplete while still editing Execution.
+    // Apply Mark Complete from execution context — do not pre-advance lifecycle on merge.
+    const markCompleteIntent = stage === 'execution' && (
+      req.body?.markComplete === true
+      || req.body?.markComplete === 'true'
+      || normalizeLifecycleStage(trimStr(req.body.lifecycleStage), '') === 'financial'
+    );
+    if (markCompleteIntent) {
+      delete payload.lifecycleStage;
+      if (normalizeExecutionStatus(payload.executionStatus) === EXECUTION_STATUS.CAMP_COMPLETED) {
+        delete payload.executionStatus;
+      }
+    }
+
     assignPreservingExisting(camp, payload);
 
     if (!lifecycleOnly || stage === 'request') {
@@ -1521,9 +1536,7 @@ router.put(
       }
 
       const wantsMarkComplete =
-        req.body?.markComplete === true
-        || req.body?.markComplete === 'true'
-        || normalizeLifecycleStage(req.body?.lifecycleStage, '') === 'financial'
+        markCompleteIntent
         || camp.executionStatus === EXECUTION_STATUS.CAMP_COMPLETED;
 
       if (isExecutionCancellationForFinance(camp)) {
