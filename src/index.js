@@ -153,6 +153,69 @@ async function maybeDedupeAssetSerialsOnBoot() {
 }
 
 /**
+ * One-shot normalization of every active Asset One lifecycle stage to Available.
+ * Force once: SET_ALL_ASSETS_AVAILABLE_ON_BOOT=true
+ * Preview only: SET_ALL_ASSETS_AVAILABLE_ON_BOOT_DRY_RUN=true
+ */
+async function maybeSetAllAssetsAvailableOnBoot() {
+  const flag = String(process.env.SET_ALL_ASSETS_AVAILABLE_ON_BOOT || '').trim().toLowerCase();
+  if (!flag || flag === 'false' || flag === '0' || flag === 'off') return;
+
+  const dryRun = String(process.env.SET_ALL_ASSETS_AVAILABLE_ON_BOOT_DRY_RUN || '').toLowerCase() === 'true';
+  const lockId = 'set_all_assets_available:v1';
+
+  const { loadCollection, upsertDocument } = await import('./store/persistence.js');
+  const locks = await loadCollection('system_boot_locks');
+  const existing = locks.find((row) => String(row._id) === lockId) || null;
+  if (!dryRun && existing?.status === 'completed') return;
+
+  if (!dryRun) {
+    await upsertDocument('system_boot_locks', {
+      _id: lockId,
+      ...(existing || {}),
+      job: 'set_all_assets_available',
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  try {
+    const { setAllAssetsAvailable } = await import('./utils/setAllAssetsAvailable.js');
+    const result = await setAllAssetsAvailable({
+      actorId: 'boot:SET_ALL_ASSETS_AVAILABLE_ON_BOOT',
+      dryRun,
+    });
+    console.warn(`[assets] set-all-available ${dryRun ? 'dry-run' : 'complete'}:`, result);
+
+    if (!dryRun) {
+      await upsertDocument('system_boot_locks', {
+        _id: lockId,
+        job: 'set_all_assets_available',
+        status: 'completed',
+        completedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ...result,
+      });
+      console.warn('[assets] Clear SET_ALL_ASSETS_AVAILABLE_ON_BOOT after this deploy');
+    } else {
+      console.warn('[assets] Dry-run only — no asset lifecycle stages changed');
+    }
+  } catch (err) {
+    if (!dryRun) {
+      await upsertDocument('system_boot_locks', {
+        _id: lockId,
+        job: 'set_all_assets_available',
+        status: 'failed',
+        error: String(err?.message || err),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    console.error('[assets] set-all-available failed:', err.message);
+  }
+}
+
+/**
  * One-shot permanent delete of Camp One camps by Division/Therapy (campaignType).
  * Exact match only (trim + case fold) — e.g. MOM matches "MOM"/" mom " but not "MOM Camp".
  * Example: PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT=MOM
@@ -185,6 +248,7 @@ async function main() {
   console.log(`[api] Persistence: ${db.mode}${db.useMongoose ? ' (MongoDB)' : ' (local JSON — not for production)'}`);
   await maybeHardDeleteCampsByCampaignTypeOnBoot();
   await maybeDedupeAssetSerialsOnBoot();
+  await maybeSetAllAssetsAvailableOnBoot();
   try {
     const { maybeCanonicalizeDieticianSpellingOnBoot } = await import(
       './utils/canonicalizeDieticianSpelling.js'

@@ -137,6 +137,47 @@ router.post(
 );
 
 router.post(
+  '/system/set-all-assets-available',
+  requirePermission(PERMISSIONS.ALL),
+  asyncHandler(async (req, res) => {
+    if (String(req.body?.confirm || '').trim() !== 'SET_ALL_ASSETS_AVAILABLE') {
+      throw new AppError(
+        'Confirmation required. Send { "confirm": "SET_ALL_ASSETS_AVAILABLE", "dryRun": true|false }',
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
+
+    const dryRun = req.body?.dryRun === true || String(req.body?.dryRun || '').toLowerCase() === 'true';
+    const { setAllAssetsAvailable } = await import('../../utils/setAllAssetsAvailable.js');
+    const result = await setAllAssetsAvailable({
+      actorId: req.user._id,
+      dryRun,
+    });
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'SYSTEM.SET_ALL_ASSETS_AVAILABLE',
+      entityType: 'asset',
+      entityId: null,
+      after: result,
+      requestId: req.requestId,
+    });
+
+    res.json({
+      data: {
+        ok: true,
+        message: dryRun
+          ? 'Dry-run complete — no asset lifecycle stages were changed.'
+          : 'All active Asset One rows were moved to lifecycle stage Available.',
+        ...result,
+      },
+    });
+  })
+);
+
+router.post(
   '/system/purge-all-camps',
   requirePermission(PERMISSIONS.CAMPS_APPROVE, PERMISSIONS.ALL),
   asyncHandler(async (req, res) => {

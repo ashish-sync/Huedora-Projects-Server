@@ -162,7 +162,7 @@ async function processInventory(rows, mode, user) {
             deviceNameSnapshot: deviceName,
             serialNumber: serial || undefined,
             quantity: qty,
-            status: 'Purchased',
+            status: 'Available',
             contactId: contact._id,
             location: { city: city || contact.city || undefined },
             agreementStatus,

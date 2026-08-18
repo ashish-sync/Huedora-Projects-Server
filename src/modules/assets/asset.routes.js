@@ -536,7 +536,7 @@ router.post(
       {
         ...req.body,
         deviceNameSnapshot: req.body.deviceNameSnapshot || device.name,
-        status: req.body.status || 'Purchased',
+        status: req.body.status || 'Available',
       },
       req.user
     );

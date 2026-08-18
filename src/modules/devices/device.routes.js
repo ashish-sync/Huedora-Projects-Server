@@ -289,7 +289,7 @@ async function createDeviceRecord(input, user, requestId) {
       deviceNameSnapshot: withContact.name,
       serialNumber: withContact.serialNumber,
       quantity: 1,
-      status: 'Purchased',
+      status: 'Available',
       deviceValue: withContact.cost,
       purchaseDate,
       addedMonth: withContact.purchaseMonth,
