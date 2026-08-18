@@ -494,10 +494,10 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
         client,
         row: {
           clientName: client.name || entry.row.clientName,
-          doctorName: payload.doctorName,
-          campaignType: payload.campaignType,
-          campDate: payload.campDate,
-          startTime: payload.startTime,
+          doctorName: entry.row.doctorName,
+          campaignType: entry.row.campaignType,
+          campDate: entry.row.campDate,
+          startTime: entry.row.startTime,
         },
       });
       if (liveDuplicate) {
@@ -529,10 +529,10 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
           client,
           row: {
             clientName: client.name || entry.row.clientName,
-            doctorName: payload.doctorName,
-            campaignType: payload.campaignType,
-            campDate: payload.campDate,
-            startTime: payload.startTime,
+            doctorName: entry.row.doctorName,
+            campaignType: entry.row.campaignType,
+            campDate: entry.row.campDate,
+            startTime: entry.row.startTime,
           },
         });
       } catch (error) {

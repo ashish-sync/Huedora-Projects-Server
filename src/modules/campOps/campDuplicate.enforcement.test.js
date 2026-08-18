@@ -25,6 +25,7 @@ const CLIENT = { _id: 'client-1', name: 'Acme Pharma' };
 const BASE_ROW = {
   clientName: 'Acme Pharma',
   doctorName: 'Dr. Rajesh Kumar',
+  campaignName: 'BMD',
   campaignType: 'Screening',
   campDate: '2026-09-15',
   startTime: '09:00',
@@ -46,6 +47,8 @@ test.after(async () => {
 async function resetCamps(rows = []) {
   clearPersistenceCache();
   await saveCollection('camp_ops_camps', rows, { allowDestructiveSync: true });
+  await saveCollection('camp_ops_clients', [], { allowDestructiveSync: true });
+  await saveCollection('camp_ops_client_masters', [], { allowDestructiveSync: true });
 }
 
 function seedCamp(overrides = {}) {
@@ -55,6 +58,7 @@ function seedCamp(overrides = {}) {
     clientId: CLIENT._id,
     clientName: CLIENT.name,
     doctorName: BASE_ROW.doctorName,
+    campaignName: BASE_ROW.campaignName,
     campaignType: BASE_ROW.campaignType,
     campDate: BASE_ROW.campDate,
     startTime: BASE_ROW.startTime,
@@ -217,6 +221,133 @@ test('different doctor or start time is not a duplicate', async () => {
 
   assert.equal(otherDoctor, null);
   assert.equal(otherTime, null);
+});
+
+test('duplicate detection requires exact doctor, campaign, and start time values', async () => {
+  await resetCamps([seedCamp({ campId: '26-09-exact' })]);
+
+  const changedDoctorFormat = await findExistingDuplicateCamp({
+    client: CLIENT,
+    row: { ...BASE_ROW, doctorName: 'rajesh kumar' },
+  });
+  const changedCampaignCase = await findExistingDuplicateCamp({
+    client: CLIENT,
+    row: { ...BASE_ROW, campaignType: 'screening' },
+  });
+  const changedTimeFormat = await findExistingDuplicateCamp({
+    client: CLIENT,
+    row: { ...BASE_ROW, startTime: '9:00 AM' },
+  });
+
+  assert.equal(changedDoctorFormat, null);
+  assert.equal(changedCampaignCase, null);
+  assert.equal(changedTimeFormat, null);
+});
+
+test('form flow allows create when any one duplicate field changes', async () => {
+  await resetCamps([seedCamp({ campId: '26-09-form-base' })]);
+
+  const variants = [
+    { label: 'client', client: { _id: 'client-2', name: 'Other Pharma' }, row: { ...BASE_ROW, clientName: 'Other Pharma' } },
+    { label: 'doctor', client: CLIENT, row: { ...BASE_ROW, doctorName: 'Dr. Anita Desai' } },
+    { label: 'campaign', client: CLIENT, row: { ...BASE_ROW, campaignType: 'Cardio' } },
+    { label: 'date', client: CLIENT, row: { ...BASE_ROW, campDate: '2026-09-16' } },
+    { label: 'time', client: CLIENT, row: { ...BASE_ROW, startTime: '14:00' } },
+  ];
+
+  for (const [index, variant] of variants.entries()) {
+    const created = await createCampEnsuringNoDuplicate(
+      CampOpsCamp,
+      {
+        campId: `26-09-form-${index}`,
+        clientId: variant.client._id,
+        clientName: variant.client.name,
+        doctorName: variant.row.doctorName,
+        campaignType: variant.row.campaignType,
+        campDate: variant.row.campDate,
+        startTime: variant.row.startTime,
+        endTime: '12:00',
+        lifecycleStage: 'request',
+        status: 'pending_review',
+        source: 'dashboard',
+      },
+      { client: variant.client, row: variant.row },
+    );
+    assert.equal(created.campId, `26-09-form-${index}`, `expected ${variant.label} change to allow create`);
+  }
+});
+
+test('excel import flow allows create when any one duplicate field changes', async () => {
+  await resetCamps([seedCamp({ campId: '26-09-excel-base' })]);
+
+  const variants = [
+    { label: 'client', client: { _id: 'client-2', name: 'Other Pharma' }, row: { ...BASE_ROW, clientName: 'Other Pharma' } },
+    { label: 'doctor', client: CLIENT, row: { ...BASE_ROW, doctorName: 'Dr. Anita Desai' } },
+    { label: 'campaign', client: CLIENT, row: { ...BASE_ROW, campaignType: 'Cardio' } },
+    { label: 'date', client: CLIENT, row: { ...BASE_ROW, campDate: '2026-09-16' } },
+    { label: 'time', client: CLIENT, row: { ...BASE_ROW, startTime: '14:00' } },
+  ];
+
+  for (const [index, variant] of variants.entries()) {
+    const duplicate = await findExistingDuplicateCamp({ client: variant.client, row: variant.row });
+    assert.equal(duplicate, null, `expected ${variant.label} change to avoid import duplicate`);
+
+    const created = await createCampEnsuringNoDuplicate(
+      CampOpsCamp,
+      {
+        campId: `26-09-excel-${index}`,
+        clientId: variant.client._id,
+        clientName: variant.client.name,
+        doctorName: variant.row.doctorName,
+        campaignType: variant.row.campaignType,
+        campDate: variant.row.campDate,
+        startTime: variant.row.startTime,
+        endTime: '12:00',
+        lifecycleStage: 'request',
+        status: 'pending_review',
+        source: 'excel',
+      },
+      { client: variant.client, row: variant.row },
+    );
+    assert.equal(created.campId, `26-09-excel-${index}`);
+  }
+});
+
+test('manual paste flow duplicate semantics allow create when any one duplicate field changes', async () => {
+  await resetCamps([seedCamp({ campId: '26-09-paste-base' })]);
+
+  const variants = [
+    { label: 'client', client: { _id: 'client-2', name: 'Other Pharma' }, row: { ...BASE_ROW, clientName: 'Other Pharma' } },
+    { label: 'doctor', client: CLIENT, row: { ...BASE_ROW, doctorName: 'Rajesh Kumar' } },
+    { label: 'campaign', client: CLIENT, row: { ...BASE_ROW, campaignType: 'Cardio' } },
+    { label: 'date', client: CLIENT, row: { ...BASE_ROW, campDate: '2026-09-16' } },
+    { label: 'time', client: CLIENT, row: { ...BASE_ROW, startTime: '14:00' } },
+  ];
+
+  for (const [index, variant] of variants.entries()) {
+    const duplicate = await findExistingDuplicateCamp({ client: variant.client, row: variant.row });
+    assert.equal(duplicate, null, `expected ${variant.label} change to avoid paste duplicate`);
+
+    const created = await createCampEnsuringNoDuplicate(
+      CampOpsCamp,
+      {
+        campId: `26-09-paste-${index}`,
+        clientId: variant.client._id,
+        clientName: variant.client.name,
+        doctorName: variant.row.doctorName,
+        campaignName: variant.row.campaignName,
+        campaignType: variant.row.campaignType,
+        campDate: variant.row.campDate,
+        startTime: variant.row.startTime,
+        endTime: '12:00',
+        lifecycleStage: 'request',
+        status: 'pending_review',
+        source: 'paste',
+      },
+      { client: variant.client, row: variant.row },
+    );
+    assert.equal(created.campId, `26-09-paste-${index}`, `expected ${variant.label} change to allow paste create`);
+  }
 });
 
 test('soft-deleted camps do not block duplicates', async () => {

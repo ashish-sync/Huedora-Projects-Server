@@ -1,7 +1,5 @@
 import { CampOpsCamp } from './campOps.model.js';
 import { escapeRegex, parseLocalDateInput, trimStr } from './campOps.helpers.js';
-import { normalizePasteStartTime } from './pasteTimeNormalize.js';
-import { stripDoctorNamePrefix } from '../../utils/textFormat.js';
 
 export const DUPLICATE_CAMP_MESSAGE =
   'Duplicate Entry — A camp already exists with the same Client, Doctor, Division/Campaign Type, Camp Date and Start Time.';
@@ -21,25 +19,19 @@ export class CampDuplicateError extends Error {
 }
 
 export function normalizeCampaignType(value = '') {
-  return String(trimStr(value) || '').toLowerCase();
+  return String(trimStr(value) || '');
 }
 
 export function normalizeCampStartTime(value = '') {
-  const raw = trimStr(value);
-  if (!raw) return '';
-  return normalizePasteStartTime(raw) || raw.replace(/\./g, ':').toLowerCase();
+  return String(trimStr(value) || '');
 }
 
 export function normalizeClientName(value = '') {
-  return String(trimStr(value) || '').toLowerCase();
+  return String(trimStr(value) || '');
 }
 
 export function normalizeDoctorName(value = '') {
-  return String(stripDoctorNamePrefix(value) || trimStr(value) || '')
-    .replace(/\./g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+  return String(trimStr(value) || '');
 }
 
 export function buildCampDuplicateKey({
@@ -233,8 +225,15 @@ export function isMongoDuplicateKeyError(err) {
 
 export async function createCampEnsuringNoDuplicate(CampModel, doc, { client = null, row = null } = {}) {
   const checkRow = row || duplicateRowFromCamp(doc, client);
-  attachDuplicateKey(doc, { client });
-  const key = doc.duplicateKey;
+  const key = buildCampDuplicateKey({
+    clientId: client?._id || client?.id || doc.clientId,
+    clientName: client?.name || checkRow?.clientName || doc.clientName,
+    doctorName: checkRow?.doctorName,
+    campaignType: checkRow?.campaignType,
+    campDate: checkRow?.campDate,
+    startTime: checkRow?.startTime,
+  });
+  if (key) doc.duplicateKey = key;
 
   return withDuplicateKeyLock(key, async () => {
     await assertNoDuplicateCamp({ client, row: checkRow });

@@ -18,15 +18,15 @@ test('buildCampDuplicateKey uses client + doctor + division + date + start time'
     doctorName: 'Dr. Rajesh Kumar',
     campaignType: 'Screening',
     campDate: '2026-08-15',
-    startTime: '9:00 AM',
+    startTime: '09:00',
   });
   assert.ok(key);
   assert.equal(
     key,
     buildCampDuplicateKey({
-      clientName: 'acme pharma',
-      doctorName: 'rajesh kumar',
-      campaignType: 'screening',
+      clientName: 'Acme Pharma',
+      doctorName: 'Dr. Rajesh Kumar',
+      campaignType: 'Screening',
       campDate: '2026-08-15',
       startTime: '09:00',
     }),
@@ -90,28 +90,28 @@ test('different start times are not the same duplicate key', () => {
   assert.notEqual(morning, noon);
 });
 
-test('normalizeDoctorName strips Dr prefix and normalizes spacing', () => {
-  assert.equal(normalizeDoctorName('Dr. Rajesh Kumar'), 'rajesh kumar');
-  assert.equal(normalizeDoctorName('Doctor Anita Desai'), 'anita desai');
+test('normalizeDoctorName only trims exact doctor value', () => {
+  assert.equal(normalizeDoctorName('  Dr. Rajesh Kumar  '), 'Dr. Rajesh Kumar');
+  assert.equal(normalizeDoctorName('Doctor Anita Desai'), 'Doctor Anita Desai');
 });
 
-test('normalizeCampStartTime normalizes AM/PM and dots', () => {
-  assert.equal(normalizeCampStartTime('9.00 AM'), normalizeCampStartTime('09:00'));
-  assert.equal(normalizeCampStartTime('2:30 pm'), normalizeCampStartTime('14:30'));
+test('normalizeCampStartTime only trims exact time value', () => {
+  assert.equal(normalizeCampStartTime(' 09:00 '), '09:00');
+  assert.equal(normalizeCampStartTime('9.00 AM'), '9.00 AM');
 });
 
-test('campaignTypesMatch, startTimesMatch, and doctorsMatch are case-insensitive', () => {
+test('campaignTypesMatch, startTimesMatch, and doctorsMatch require exact values after trim', () => {
   assert.equal(
     campaignTypesMatch({ campaignType: 'Screening' }, { campaignType: 'screening' }),
-    true,
+    false,
   );
   assert.equal(
     startTimesMatch({ startTime: '9:00 AM' }, { startTime: '09:00' }),
-    true,
+    false,
   );
   assert.equal(
     doctorsMatch({ doctorName: 'Dr. Rajesh Kumar' }, { doctorName: 'rajesh kumar' }),
-    true,
+    false,
   );
 });
 
@@ -122,7 +122,7 @@ test('clientsMatch prefers id then name', () => {
   );
   assert.equal(
     clientsMatch({ name: 'Acme Pharma' }, { clientName: 'acme pharma' }),
-    true,
+    false,
   );
   assert.equal(
     clientsMatch({ name: 'Acme' }, { clientName: 'Other' }),

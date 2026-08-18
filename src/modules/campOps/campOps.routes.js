@@ -1361,10 +1361,10 @@ router.post(
         client: resolved,
         row: {
           clientName: resolved.name,
-          doctorName: payload.doctorName,
-          campaignType: payload.campaignType,
-          campDate: payload.campDate,
-          startTime: payload.startTime,
+          doctorName: req.body.doctorName,
+          campaignType: req.body.campaignType,
+          campDate: req.body.campDate,
+          startTime: req.body.startTime,
         },
       });
     } catch (err) {
@@ -3993,7 +3993,7 @@ router.post(
         row: {
           clientName: client.name,
           doctorName: row.doctorName,
-          campaignType: row.campaignType || 'Screening',
+          campaignType: row.campaignType,
           campDate: row.campDate,
           startTime: row.startTime,
         },
@@ -4048,9 +4048,9 @@ router.post(
           row: {
             clientName: client.name,
             doctorName: row.doctorName,
-            campaignType: row.campaignType || 'Screening',
+            campaignType: row.campaignType,
             campDate: row.campDate,
-            startTime: schedule.startTime,
+            startTime: row.startTime,
           },
         });
       } catch (err) {
