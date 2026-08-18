@@ -159,7 +159,7 @@ import {
   parseExportFormat,
 } from './campOps.export.js';
 import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.requestValidation.js';
-import { assertHistoricalCampDatesAllowed } from './campDatePolicy.js';
+import { assertHistoricalCampDatesAllowed, localTodayIso } from './campDatePolicy.js';
 import { assertHcwAssignmentGap } from './hcwAssignmentGap.js';
 import {
   findExistingDuplicateCamp,
@@ -277,6 +277,19 @@ function enrichCamp(camp) {
   return withSignedCampFiles(obj);
 }
 
+function compareCampListOrder(a, b, today = localTodayIso()) {
+  const ad = String(a.campDate || '');
+  const bd = String(b.campDate || '');
+  const aUpcoming = Boolean(ad && ad >= today);
+  const bUpcoming = Boolean(bd && bd >= today);
+  if (aUpcoming !== bUpcoming) return aUpcoming ? -1 : 1;
+  if (ad !== bd) return ad.localeCompare(bd);
+  const at = String(a.startTime || '');
+  const bt = String(b.startTime || '');
+  if (at !== bt) return at.localeCompare(bt);
+  return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+}
+
 /** Sort + page camps without filedb cloning the full match set. */
 async function paginateCampsInMemory(filter, { page, limit, skip }, predicate = null) {
   const { loadCollection, matchDocument } = await import('../../store/filedb.js');
@@ -286,12 +299,7 @@ async function paginateCampsInMemory(filter, { page, limit, skip }, predicate = 
     if (!matchDocument(camp, filter)) continue;
     matched.push(camp);
   }
-  matched.sort((a, b) => {
-    const ad = String(a.campDate || '');
-    const bd = String(b.campDate || '');
-    if (ad !== bd) return bd.localeCompare(ad);
-    return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
-  });
+  matched.sort((a, b) => compareCampListOrder(a, b));
 
   if (!predicate) {
     const total = matched.length;
@@ -944,11 +952,10 @@ router.get(
       );
     }
 
-    const [rows, total] = await Promise.all([
-      CampOpsCamp.find(filter).sort('-campDate -createdAt').skip(skip).limit(limit),
-      CampOpsCamp.countDocuments(filter),
-    ]);
-    res.json(paginated(rows.map(enrichCamp), total, page, limit));
+    const rows = await CampOpsCamp.find(filter).sort('campDate startTime createdAt');
+    rows.sort((a, b) => compareCampListOrder(a, b));
+    const total = rows.length;
+    res.json(paginated(rows.slice(skip, skip + limit).map(enrichCamp), total, page, limit));
   })
 );
 
