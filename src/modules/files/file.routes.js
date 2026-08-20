@@ -107,17 +107,22 @@ router.get(
       throw new AppError('Invalid file token', 400, 'VALIDATION_ERROR');
     }
     const full = resolveUploadPath(payload.path);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, no-store');
     res.sendFile(full);
   }),
 );
 
+/** Path-based file serving is disabled — use entity download routes or signed URLs. */
 router.get(
   '/*',
   authenticate,
-  asyncHandler(async (req, res) => {
-    const relative = String(req.path || '').replace(/^\/+/, '');
-    const full = resolveUploadPath(relative);
-    res.sendFile(full);
+  asyncHandler(async (_req, _res) => {
+    throw new AppError(
+      'Direct file path access is disabled. Use a signed file link or the module download API.',
+      403,
+      'FORBIDDEN'
+    );
   }),
 );
 

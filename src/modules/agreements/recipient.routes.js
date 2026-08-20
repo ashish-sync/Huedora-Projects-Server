@@ -7,6 +7,7 @@ import { Agreement, AgreementActivity } from './agreement.model.js';
 import { writeAudit } from '../../utils/audit.js';
 import { findAgreementByAccessKey } from './recipientAccess.js';
 import { syncLinkedAssetsFromAgreement } from '../assets/assetContactSync.js';
+import { freezeAgreementAssetSnapshots } from './agreementAssetSnapshot.js';
 import { buildAgreementPdfBuffer, pdfOptionsFromAgreement } from './agreementPdf.js';
 
 const router = Router();
@@ -193,6 +194,7 @@ router.post(
     if (agreement.status === 'COMPLETED') agreement.completedAt = new Date().toISOString();
     await agreement.save();
     if (agreement.status === 'COMPLETED') {
+      await freezeAgreementAssetSnapshots(agreement._id, { source: 'sign' });
       await syncLinkedAssetsFromAgreement(agreement);
     }
 
@@ -256,6 +258,7 @@ router.post(
     if (agreement.status === 'COMPLETED') agreement.completedAt = acknowledgedAt;
     await agreement.save();
     if (agreement.status === 'COMPLETED') {
+      await freezeAgreementAssetSnapshots(agreement._id, { source: 'sign' });
       await syncLinkedAssetsFromAgreement(agreement);
     }
 

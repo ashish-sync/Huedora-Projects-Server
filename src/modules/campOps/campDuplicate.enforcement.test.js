@@ -223,7 +223,7 @@ test('different doctor or start time is not a duplicate', async () => {
   assert.equal(otherTime, null);
 });
 
-test('duplicate detection requires exact doctor, campaign, and start time values', async () => {
+test('duplicate detection canonicalizes doctor, campaign, and start time formats', async () => {
   await resetCamps([seedCamp({ campId: '26-09-exact' })]);
 
   const changedDoctorFormat = await findExistingDuplicateCamp({
@@ -239,9 +239,9 @@ test('duplicate detection requires exact doctor, campaign, and start time values
     row: { ...BASE_ROW, startTime: '9:00 AM' },
   });
 
-  assert.equal(changedDoctorFormat, null);
-  assert.equal(changedCampaignCase, null);
-  assert.equal(changedTimeFormat, null);
+  assert.equal(changedDoctorFormat?.campId, '26-09-exact');
+  assert.equal(changedCampaignCase?.campId, '26-09-exact');
+  assert.equal(changedTimeFormat?.campId, '26-09-exact');
 });
 
 test('form flow allows create when any one duplicate field changes', async () => {
@@ -318,7 +318,7 @@ test('manual paste flow duplicate semantics allow create when any one duplicate 
 
   const variants = [
     { label: 'client', client: { _id: 'client-2', name: 'Other Pharma' }, row: { ...BASE_ROW, clientName: 'Other Pharma' } },
-    { label: 'doctor', client: CLIENT, row: { ...BASE_ROW, doctorName: 'Rajesh Kumar' } },
+    { label: 'doctor', client: CLIENT, row: { ...BASE_ROW, doctorName: 'Dr. Anita Desai' } },
     { label: 'campaign', client: CLIENT, row: { ...BASE_ROW, campaignType: 'Cardio' } },
     { label: 'date', client: CLIENT, row: { ...BASE_ROW, campDate: '2026-09-16' } },
     { label: 'time', client: CLIENT, row: { ...BASE_ROW, startTime: '14:00' } },
@@ -382,6 +382,24 @@ test('stale duplicateKey with a different camp date is not a duplicate', async (
     excludeId: 'key-b',
   });
   assert.equal(duplicate, null);
+});
+
+test('start time 9:00 matches existing 09:00 as duplicate', async () => {
+  await resetCamps([seedCamp({ campId: '26-09-time', startTime: '09:00' })]);
+  const duplicate = await findExistingDuplicateCamp({
+    client: CLIENT,
+    row: { ...BASE_ROW, startTime: '9:00' },
+  });
+  assert.equal(duplicate?.campId, '26-09-time');
+});
+
+test('Dr. prefix matches doctor without title as duplicate', async () => {
+  await resetCamps([seedCamp({ campId: '26-09-dr', doctorName: 'Rajesh Kumar' })]);
+  const duplicate = await findExistingDuplicateCamp({
+    client: CLIENT,
+    row: { ...BASE_ROW, doctorName: 'Dr. Rajesh Kumar' },
+  });
+  assert.equal(duplicate?.campId, '26-09-dr');
 });
 
 test('soft-deleted camps do not block duplicates', async () => {

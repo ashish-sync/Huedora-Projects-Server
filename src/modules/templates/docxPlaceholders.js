@@ -3,8 +3,16 @@ import path from 'path';
 import JSZip from 'jszip';
 import PDFDocument from 'pdfkit';
 import { formatDate } from '../../utils/dateFormat.js';
+import {
+  remapLineRowsToLiveTables,
+  rewriteServiceAgreementLineTableXml,
+  normalizeDetectedLineColumns,
+} from './serviceAgreementLineTable.js';
+import { repackDocxDocumentXml } from './repackDocx.js';
 
-/** Any [content] bracket is a merge field. Types: name | number | alphanumeric | text */
+export { repackDocxDocumentXml } from './repackDocx.js';
+
+/** Any [content] bracket is a merge field. Types: name | number | alphanumeric | date | text */
 export const PLACEHOLDER_REGEX = /\[([^\]]+)\]/g;
 
 const TYPE_ALIASES = {
@@ -15,7 +23,25 @@ const TYPE_ALIASES = {
   alphanum: 'alphanumeric',
   'alpha-numeric': 'alphanumeric',
   'alpha numeric': 'alphanumeric',
+  date: 'date',
 };
+
+/** Field tokens whose label implies a calendar date (Todays Date, Effective Date, …). */
+export function isDateFieldToken(inner = '') {
+  const cleaned = String(inner)
+    .trim()
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/\s+/g, ' ');
+  if (!cleaned) return false;
+  if (TYPE_ALIASES[cleaned] === 'date' || /^date(\s*\d+)?$/.test(cleaned)) return true;
+  if (/\btodays?\s*date\b/.test(cleaned)) return true;
+  if (/\beffective\s*date\b/.test(cleaned)) return true;
+  if (/\b(start|end|issue|expiry|expiration|camp|agreement|po|wo)\s*date\b/.test(cleaned)) {
+    return true;
+  }
+  return /\bdates?\b/.test(cleaned) || /\bdated\b/.test(cleaned);
+}
 
 export function normalizePlaceholderType(inner = '') {
   const cleaned = String(inner).trim().toLowerCase().replace(/\s+/g, ' ');
@@ -23,6 +49,7 @@ export function normalizePlaceholderType(inner = '') {
   if (/^name(\s*\d+)?$/.test(cleaned)) return 'name';
   if (/^number(\s*\d+)?$/.test(cleaned)) return 'number';
   if (/^alpha[\s-]?num(eric)?(\s*\d+)?$/.test(cleaned)) return 'alphanumeric';
+  if (isDateFieldToken(inner)) return 'date';
   return 'text';
 }
 
@@ -34,7 +61,9 @@ export function placeholderLabel(inner, type, occurrence) {
         ? 'Number'
         : type === 'alphanumeric'
           ? 'Alphanumeric'
-          : String(inner).trim().replace(/\s+/g, ' ') || 'Field';
+          : type === 'date'
+            ? (String(inner).trim().replace(/\s+/g, ' ') || 'Date')
+            : String(inner).trim().replace(/\s+/g, ' ') || 'Field';
   return occurrence > 1 ? `${base} (${occurrence})` : base;
 }
 
@@ -50,7 +79,21 @@ export function validatePlaceholderValue(type, value) {
   if (type === 'alphanumeric' && !/^[A-Za-z0-9][A-Za-z0-9 ._-]*$/.test(v)) {
     return 'Enter letters and numbers only';
   }
+  if (type === 'date') {
+    const formatted = formatDate(v);
+    if (!formatted || formatted === '-') return 'Enter a valid date';
+  }
   return null;
+}
+
+function formatMergeValue(ph, value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (ph?.type === 'date' || isDateFieldToken(ph?.inner || ph?.label || '')) {
+    const formatted = formatDate(raw);
+    return formatted && formatted !== '-' ? formatted : raw;
+  }
+  return raw;
 }
 
 export function extractPlaceholdersFromText(text = '') {
@@ -63,12 +106,15 @@ export function extractPlaceholdersFromText(text = '') {
     if (!inner) continue;
     const type = normalizePlaceholderType(inner);
     const token = `[${inner}]`;
-    const countKey = type === 'text' ? `text:${inner.toLowerCase()}` : type;
+    const countKey =
+      type === 'text' || type === 'date'
+        ? `${type}:${inner.toLowerCase()}`
+        : type;
     counts[countKey] = (counts[countKey] || 0) + 1;
     const occurrence = counts[countKey];
 
     let key;
-    if (type === 'text') {
+    if (type === 'text' || type === 'date') {
       const base =
         inner.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') ||
         `field_${found.length + 1}`;
@@ -97,13 +143,14 @@ export function fillTextPlaceholders(text = '', values = {}, placeholders = null
   for (const ph of list) {
     const value = values[ph.key] ?? values[ph.token] ?? values[ph.inner];
     if (value == null || String(value).trim() === '') continue;
+    const display = formatMergeValue(ph, value);
     const idx = out.indexOf(ph.token);
     if (idx === -1) {
       // Case-insensitive fallback for token
       const soft = new RegExp(escapeRegex(ph.token), 'i');
-      out = out.replace(soft, String(value));
+      out = out.replace(soft, display);
     } else {
-      out = out.slice(0, idx) + String(value) + out.slice(idx + ph.token.length);
+      out = out.slice(0, idx) + display + out.slice(idx + ph.token.length);
     }
   }
 
@@ -172,12 +219,15 @@ function cellPlain(tcXml = '') {
 
 export async function parseDocxBufferBlocks(buffer) {
   const { xml, plain, zip } = await readDocxBuffer(buffer);
-  const blocks = parseDocxBlocks(xml);
+  const images = await loadDocxImageMap(zip);
+  const blocks = parseDocxBlocks(xml, images);
   return { zip, xml, plain, blocks: blocks.length ? blocks : [{ type: 'p', text: plain }] };
 }
 
 export async function analyzeDocx(buffer) {
-  const { xml, plain } = await readDocxBuffer(buffer);
+  const read = await readDocxBuffer(buffer);
+  const xml = rewriteServiceAgreementLineTableXml(read.xml);
+  const plain = xml === read.xml ? read.plain : xmlFragmentToPlain(xml);
   const repeatableTables = detectRepeatableTables(xml);
   const rowTokens = new Set();
   for (const table of repeatableTables) {
@@ -234,7 +284,7 @@ export function detectRepeatableTables(xml = '') {
 
     const prototypeRowIndex = placeholderBodyIndexes[0];
     const protoPlain = xmlFragmentToPlain(rows[prototypeRowIndex]);
-    const columns = extractPlaceholdersFromText(protoPlain);
+    const columns = normalizeDetectedLineColumns(extractPlaceholdersFromText(protoPlain));
     if (!columns.length) continue;
 
     // Prefer rows that are mostly merge fields (not prose with one embedded token).
@@ -314,9 +364,24 @@ export function expandRepeatableTables(xml = '', repeatableTables = [], lineRows
 }
 
 export async function fillDocxBuffer(buffer, values = {}, options = {}) {
-  const repeatableTables = Array.isArray(options.repeatableTables) ? options.repeatableTables : [];
-  const lineRows = options.lineRows && typeof options.lineRows === 'object' ? options.lineRows : {};
-  const { zip, xml, plain } = await readDocxBuffer(buffer);
+  const storedTables = Array.isArray(options.repeatableTables) ? options.repeatableTables : [];
+  const incomingRows = options.lineRows && typeof options.lineRows === 'object' ? options.lineRows : {};
+  const { zip, xml: rawXml, plain: rawPlain } = await readDocxBuffer(buffer);
+  const xml = rewriteServiceAgreementLineTableXml(rawXml);
+  const plain = xml === rawXml ? rawPlain : xmlFragmentToPlain(xml);
+  const detected = detectRepeatableTables(xml);
+  const repeatableTables = (detected.length ? detected : storedTables).map((table) => {
+    const stored = storedTables.find(
+      (s) => s.id === table.id || Number(s.tableIndex) === Number(table.tableIndex)
+    );
+    return {
+      ...table,
+      id: stored?.id || table.id,
+      minRows: stored?.minRows ?? table.minRows,
+      maxRows: stored?.maxRows ?? table.maxRows,
+    };
+  });
+  const lineRows = remapLineRowsToLiveTables(incomingRows, storedTables, repeatableTables);
 
   let nextXml = expandRepeatableTables(xml, repeatableTables, lineRows);
 
@@ -343,18 +408,19 @@ export async function fillDocxBuffer(buffer, values = {}, options = {}) {
       values[ph.label] ??
       '';
     if (value === '' || value == null) continue;
+    const display = formatMergeValue(ph, value);
     const pattern = new RegExp(xmlSoftPattern(ph.token));
-    nextXml = nextXml.replace(pattern, escapeXml(String(value)));
+    nextXml = nextXml.replace(pattern, escapeXml(display));
   }
 
-  zip.file('word/document.xml', nextXml);
-  const filledBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+  const filledBuffer = await repackDocxDocumentXml(buffer, nextXml);
   const filledText = fillTextPlaceholders(
     xmlFragmentToPlain(nextXml),
     values,
     documentPlaceholders
   );
-  const blocks = parseDocxBlocks(nextXml);
+  const images = await loadDocxImageMap(zip);
+  const blocks = parseDocxBlocks(nextXml, images);
   return {
     filledBuffer,
     filledText,
@@ -609,15 +675,80 @@ function cellRich(tcXml = '') {
   return {
     text: rich.text.replace(/\n+/g, ' ').trim(),
     bold: rich.bold || rich.heading,
+    image: null,
   };
+}
+
+export async function loadDocxImageMap(zip) {
+  const images = {};
+  if (!zip?.file) return images;
+  const relsFile = zip.file('word/_rels/document.xml.rels');
+  if (!relsFile) return images;
+  const relsXml = await relsFile.async('string');
+  const tagRe = /<Relationship\b[^>]*>/gi;
+  let m;
+  while ((m = tagRe.exec(relsXml)) !== null) {
+    const tag = m[0];
+    if (!/\/image"/i.test(tag) && !/relationships\/image/i.test(tag)) continue;
+    const id = (tag.match(/\bId="([^"]+)"/i) || [])[1];
+    const target = (tag.match(/\bTarget="([^"]+)"/i) || [])[1];
+    if (!id || !target) continue;
+    const cleaned = String(target).replace(/^\.\//, '').replace(/^\//, '');
+    const pathInZip = cleaned.startsWith('word/') ? cleaned : `word/${cleaned}`;
+    const file = zip.file(pathInZip);
+    if (!file) continue;
+    try {
+      images[id] = await file.async('nodebuffer');
+    } catch {
+      /* skip unreadable media */
+    }
+  }
+  return images;
+}
+
+function firstEmbeddedImage(xml = '', images = {}) {
+  const id = (String(xml).match(/a:blip[^>]*r:embed="([^"]+)"/i) || [])[1];
+  if (!id) return null;
+  return images[id] || null;
+}
+
+export function paragraphAlign(pXml = '') {
+  const raw = (String(pXml).match(/<w:jc\b[^>]*w:val="([^"]+)"/i) || [])[1];
+  const v = String(raw || '').toLowerCase();
+  if (v === 'center') return 'center';
+  if (v === 'right' || v === 'end') return 'right';
+  return 'left';
+}
+
+export function paragraphIsUnderlined(pXml = '') {
+  return /<w:u\b(?![^>]*w:val="(?:none|0)")/i.test(String(pXml));
+}
+
+export function isLetterheadTable(rows = []) {
+  if (!Array.isArray(rows) || rows.length < 1 || rows.length > 3) return false;
+  if ((rows[0] || []).length !== 2) return false;
+  const left = rows[0][0] || {};
+  const right = rows[0][1] || {};
+  if (left.image || right.image) return true;
+  const lt = cellText(left);
+  const rt = cellText(right);
+  if (/tylo|logo/i.test(lt) && rt.length > 12) return true;
+  return lt.length < 48 && /limited|mumbai|address|tower/i.test(rt);
+}
+
+export function isDocumentTitleText(text = '') {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!t || t.length > 48) return false;
+  const upper = t.toUpperCase();
+  return upper === t && /AGREEMENT|LETTER|NDA|ANNEXURE/.test(upper);
 }
 
 /**
  * Parse DOCX body into blocks so tables survive into PDF.
- * Paragraphs: { type:'p', text, bold, heading }
- * Tables: { type:'table', rows: [{ text, bold }][] }
+ * Paragraphs: { type:'p', text, bold, heading, align, underline, image }
+ * Tables: { type:'table', rows, letterhead }
  */
-export function parseDocxBlocks(xml = '') {
+export function parseDocxBlocks(xml = '', images = {}) {
   const bodyMatch = String(xml).match(/<w:body[^>]*>([\s\S]*?)<\/w:body>/i);
   let body = bodyMatch ? bodyMatch[1] : String(xml);
   body = body.replace(/<w:sectPr[\s\S]*$/i, '');
@@ -636,7 +767,9 @@ export function parseDocxBlocks(xml = '') {
         const tcRe = /<w:tc\b[\s\S]*?<\/w:tc>/gi;
         let tc;
         while ((tc = tcRe.exec(tr[0])) !== null) {
-          cells.push(cellRich(tc[0]));
+          const cell = cellRich(tc[0]);
+          cell.image = firstEmbeddedImage(tc[0], images);
+          cells.push(cell);
         }
         if (cells.length) {
           const isTblHeader = /<w:tblHeader\b/i.test(tr[0]);
@@ -644,22 +777,24 @@ export function parseDocxBlocks(xml = '') {
         }
       }
       if (rows.length) {
-        // If first row has any bold cell, treat as header row (boost remaining plain header cells)
         const first = rows[0];
         const firstHasBold = first.some((c) => c.bold);
         if (firstHasBold) {
           rows[0] = first.map((c) => ({ ...c, bold: true }));
         }
-        blocks.push({ type: 'table', rows });
+        blocks.push({ type: 'table', rows, letterhead: isLetterheadTable(rows) });
       }
     } else {
       const rich = extractRichText(chunk);
-      if (rich.text) {
+      if (rich.text || firstEmbeddedImage(chunk, images)) {
         blocks.push({
           type: 'p',
           text: rich.text,
           bold: rich.bold,
           heading: rich.heading,
+          align: paragraphAlign(chunk),
+          underline: paragraphIsUnderlined(chunk),
+          image: firstEmbeddedImage(chunk, images),
           runs: rich.runs,
         });
       }
@@ -688,6 +823,62 @@ function measureWrappedHeight(doc, text, width, fontSize) {
     lineGap: 2,
   });
   return Math.max(22, h + 12);
+}
+
+function drawHairline(doc) {
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  doc
+    .strokeColor('#111111')
+    .lineWidth(0.8)
+    .moveTo(left, doc.y)
+    .lineTo(right, doc.y)
+    .stroke();
+  doc.moveDown(0.55);
+}
+
+function drawLetterheadBand(doc, { image, text, extra, regularFont, boldFont }) {
+  const left = doc.page.margins.left;
+  const usable = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const startY = doc.y;
+  let logoW = 0;
+  let logoH = 0;
+  if (image) {
+    try {
+      logoH = 38;
+      doc.image(image, left, startY, { height: logoH, fit: [96, 42] });
+      logoW = 102;
+    } catch {
+      logoW = 0;
+      logoH = 0;
+    }
+  }
+  const textX = left + logoW;
+  const textW = Math.max(120, usable - logoW);
+  const lines = [text, extra].map((t) => normalizePdfText(t || '').trim()).filter(Boolean);
+  doc.fillColor('#0e1a22').font(boldFont).fontSize(11);
+  let y = startY;
+  lines.forEach((line, idx) => {
+    const useBold = idx === 0;
+    doc.font(useBold ? boldFont : regularFont).fontSize(idx === 0 ? 11 : 8.5);
+    const h = doc.heightOfString(line, { width: textW, lineGap: 1.5 });
+    doc.text(line, textX, y, { width: textW, align: 'right', lineGap: 1.5 });
+    y += h + 2;
+  });
+  doc.x = left;
+  doc.y = Math.max(startY + logoH, y) + 8;
+  drawHairline(doc);
+}
+
+function drawLetterheadTable(doc, rows, fonts) {
+  const left = rows[0]?.[0] || {};
+  const right = rows[0]?.[1] || {};
+  drawLetterheadBand(doc, {
+    image: left.image || right.image || null,
+    text: cellText(right.image && !left.image ? left : right) || cellText(left),
+    extra: rows[1] ? `${cellText(rows[1][0])} ${cellText(rows[1][1])}`.trim() : '',
+    ...fonts,
+  });
 }
 
 function drawPdfTable(doc, rows, { regularFont, boldFont } = {}) {
@@ -814,54 +1005,74 @@ export function blocksToPdfBuffer(title, blocks = [], options = {}) {
       }
     };
 
-    doc
-      .fillColor('#0a5650')
-      .font(boldFont)
-      .fontSize(16)
-      .text(title || 'Agreement', { align: 'left' });
-    doc.moveDown(0.35);
-    doc
-      .fillColor('#5a6d79')
-      .font(regularFont)
-      .fontSize(9)
-      .text(
-        showSignatures
-          ? hasLiveMarks
-            ? 'Executed document · Signature footer on every page (Sender left · Receiver right)'
-            : 'Non-editable PDF preview · Signature footer on every page (Sender left · Receiver right)'
-          : 'Non-editable PDF preview · Generated by TYLO One',
-        { align: 'left' }
-      );
-    doc.moveDown(0.7);
-    doc
-      .strokeColor('#d4dde4')
-      .lineWidth(1)
-      .moveTo(doc.page.margins.left, doc.y)
-      .lineTo(doc.page.width - doc.page.margins.right, doc.y)
-      .stroke();
-    doc.moveDown(0.7);
+    const omitChrome = options.omitAppChrome === true;
+    if (!omitChrome) {
+      doc
+        .fillColor('#0a5650')
+        .font(boldFont)
+        .fontSize(16)
+        .text(title || 'Agreement', { align: 'left' });
+      doc.moveDown(0.35);
+      doc
+        .fillColor('#5a6d79')
+        .font(regularFont)
+        .fontSize(9)
+        .text(
+          showSignatures
+            ? hasLiveMarks
+              ? 'Executed document · Signature footer on every page (Sender left · Receiver right)'
+              : 'Non-editable PDF preview · Signature footer on every page (Sender left · Receiver right)'
+            : 'Non-editable PDF preview · Generated by TYLO One',
+          { align: 'left' }
+        );
+      doc.moveDown(0.7);
+      doc
+        .strokeColor('#d4dde4')
+        .lineWidth(1)
+        .moveTo(doc.page.margins.left, doc.y)
+        .lineTo(doc.page.width - doc.page.margins.right, doc.y)
+        .stroke();
+      doc.moveDown(0.7);
+    }
 
     const list = Array.isArray(blocks) && blocks.length ? blocks : [{ type: 'p', text: '(Empty document)' }];
     const contentWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    const fonts = { regularFont, boldFont };
 
-    for (const block of list) {
+    for (let i = 0; i < list.length; i += 1) {
+      const block = list[i];
       if (block.type === 'table') {
-        drawPdfTable(doc, block.rows, { regularFont, boldFont });
+        if (block.letterhead || isLetterheadTable(block.rows)) {
+          drawLetterheadTable(doc, block.rows, fonts);
+        } else {
+          drawPdfTable(doc, block.rows, fonts);
+        }
         continue;
       }
       const text = normalizePdfText(block.text || '').trim();
+      const next = list[i + 1];
+      const nextText = normalizePdfText(next?.text || '').trim();
+      if (block.image || (i === 0 && /tylo care/i.test(text))) {
+        const extra = /GSTIN|CIN:/i.test(nextText) ? nextText : '';
+        if (extra) i += 1;
+        drawLetterheadBand(doc, { image: block.image, text, extra, ...fonts });
+        continue;
+      }
       if (!text) continue;
-      const isHeading = Boolean(block.heading || block.bold);
+      const titleLike = Boolean(block.heading) || isDocumentTitleText(text);
+      const align = titleLike ? 'center' : block.align || 'left';
+      const isHeading = Boolean(titleLike || block.bold);
       doc
         .fillColor('#0e1a22')
         .font(isHeading ? boldFont : regularFont)
-        .fontSize(isHeading ? (block.heading ? 13 : 11) : 11)
+        .fontSize(titleLike ? 13 : isHeading ? 11 : 11)
         .text(text, {
-          align: 'left',
+          align,
+          underline: Boolean(block.underline || titleLike),
           lineGap: 4,
           width: contentWidth,
         });
-      doc.moveDown(isHeading ? 0.45 : 0.35);
+      doc.moveDown(titleLike ? 0.55 : isHeading ? 0.45 : 0.35);
     }
 
     stampAllPages();

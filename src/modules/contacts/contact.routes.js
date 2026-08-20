@@ -37,11 +37,13 @@ import {
 import { importRateLimiter } from '../../middleware/importRateLimit.js';
 import { loadCappedRowsFromUpload } from '../imports/streaming/loadCappedRows.js';
 import {
+  CONTACT_KYC_ACCEPT_EXTENSIONS,
   CONTACT_KYC_MAX_BYTES,
   CONTACT_KYC_REJECT_MESSAGE,
   isAllowedContactKycFile,
   withSignedContactKyc,
 } from './contactKycUpload.js';
+import { requireSafeUploads } from '../../utils/rejectUnsafeUpload.js';
 
 const contactUploadRoot = uploadDir('contacts');
 
@@ -400,6 +402,7 @@ router.post(
   '/:id/kyc-document',
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
   kycUpload.single('file'),
+  requireSafeUploads({ allowedExt: CONTACT_KYC_ACCEPT_EXTENSIONS }),
   asyncHandler(async (req, res) => {
     const docType = String(req.body?.docType || '').trim();
     const field = KYC_DOC_TYPES[docType];

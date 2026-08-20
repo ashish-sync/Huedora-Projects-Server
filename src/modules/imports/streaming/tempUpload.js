@@ -8,6 +8,7 @@ import {
   IMPORT_ACCEPT_EXTENSIONS,
 } from '../../../utils/spreadsheetLimits.js';
 import { importAppError, describeImportFileProblem } from '../../../utils/importErrors.js';
+import { assertSafeUpload } from '../../../utils/uploadSafety.js';
 
 export const importTempRoot = uploadDir('import-temp');
 
@@ -68,6 +69,25 @@ export function validateUploadedImportFile(file) {
   if (size <= 0) {
     safeUnlink(file.path);
     throw importAppError('EMPTY_FILE');
+  }
+  let head = Buffer.alloc(0);
+  try {
+    const fd = fs.openSync(file.path, 'r');
+    head = Buffer.alloc(16);
+    fs.readSync(fd, head, 0, 16, 0);
+    fs.closeSync(fd);
+  } catch {
+    head = Buffer.alloc(0);
+  }
+  const check = assertSafeUpload(
+    { originalname: file.originalname, mimetype: file.mimetype, size, buffer: head },
+    { allowedExt: [...IMPORT_ACCEPT_EXTENSIONS], maxBytes: MAX_SPREADSHEET_UPLOAD_BYTES }
+  );
+  if (!check.ok) {
+    safeUnlink(file.path);
+    const err = importAppError('BAD_EXTENSION');
+    err.message = check.message || err.message;
+    throw err;
   }
   return { ...file, ext, size };
 }

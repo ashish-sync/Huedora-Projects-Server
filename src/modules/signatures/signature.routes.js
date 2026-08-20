@@ -18,6 +18,7 @@ import {
 } from '../../utils/masterExcel.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { assignPreservingExisting } from '../../store/dataIntegrity.js';
+import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 
 const router = Router();
 router.use(authenticate);
@@ -109,6 +110,7 @@ router.post(
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
   importRateLimiter,
   excelUpload.single('file'),
+  requireSafeUploads(UPLOAD_RULES.spreadsheet),
   asyncHandler(async (req, res) => {
     const { job, summary } = await executeUploadedImport({
       file: req.file,

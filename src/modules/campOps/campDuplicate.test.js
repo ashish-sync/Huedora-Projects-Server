@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildCampDuplicateKey,
   campaignTypesMatch,
+  campIdentityFingerprint,
   clientsMatch,
   doctorsMatch,
   DUPLICATE_CAMP_MESSAGE,
@@ -108,39 +109,78 @@ test('different camp dates are not the same duplicate key', () => {
   assert.notEqual(dayOne, dayTwo);
 });
 
-test('normalizeDoctorName only trims exact doctor value', () => {
-  assert.equal(normalizeDoctorName('  Dr. Rajesh Kumar  '), 'Dr. Rajesh Kumar');
-  assert.equal(normalizeDoctorName('Doctor Anita Desai'), 'Doctor Anita Desai');
+test('normalizeDoctorName strips Dr./Doctor prefix and lowercases', () => {
+  assert.equal(normalizeDoctorName('  Dr. Rajesh Kumar  '), 'rajesh kumar');
+  assert.equal(normalizeDoctorName('Doctor Anita Desai'), 'anita desai');
 });
 
-test('normalizeCampStartTime only trims exact time value', () => {
+test('normalizeCampStartTime canonicalizes HH:mm variants', () => {
   assert.equal(normalizeCampStartTime(' 09:00 '), '09:00');
-  assert.equal(normalizeCampStartTime('9.00 AM'), '9.00 AM');
+  assert.equal(normalizeCampStartTime('9:00'), '09:00');
+  assert.equal(normalizeCampStartTime('9:00 AM'), '09:00');
+  assert.equal(normalizeCampStartTime('9.00 AM'), '09:00');
 });
 
-test('campaignTypesMatch, startTimesMatch, and doctorsMatch require exact values after trim', () => {
+test('9:00 and 09:00 share the same duplicate key', () => {
+  const a = buildCampDuplicateKey({
+    clientId: 'c1',
+    doctorName: 'Rajesh Kumar',
+    campaignType: 'Oncology',
+    campDate: '2026-08-15',
+    startTime: '9:00',
+  });
+  const b = buildCampDuplicateKey({
+    clientId: 'c1',
+    doctorName: 'Rajesh Kumar',
+    campaignType: 'Oncology',
+    campDate: '2026-08-15',
+    startTime: '09:00',
+  });
+  assert.equal(a, b);
+});
+
+test('Dr. prefix does not change doctor identity fingerprint', () => {
+  assert.equal(
+    campIdentityFingerprint({
+      clientId: 'c1',
+      doctorName: 'Dr. Rajesh Kumar',
+      campaignType: 'Screening',
+      campDate: '2026-08-15',
+      startTime: '09:00',
+    }),
+    campIdentityFingerprint({
+      clientId: 'c1',
+      doctorName: 'Rajesh Kumar',
+      campaignType: 'Screening',
+      campDate: '2026-08-15',
+      startTime: '09:00',
+    }),
+  );
+});
+
+test('campaignTypesMatch, startTimesMatch, and doctorsMatch use canonical forms', () => {
   assert.equal(
     campaignTypesMatch({ campaignType: 'Screening' }, { campaignType: 'screening' }),
-    false,
+    true,
   );
   assert.equal(
     startTimesMatch({ startTime: '9:00 AM' }, { startTime: '09:00' }),
-    false,
+    true,
   );
   assert.equal(
     doctorsMatch({ doctorName: 'Dr. Rajesh Kumar' }, { doctorName: 'rajesh kumar' }),
-    false,
+    true,
   );
 });
 
-test('clientsMatch prefers id then name', () => {
+test('clientsMatch prefers id then case-insensitive name', () => {
   assert.equal(
     clientsMatch({ _id: 'abc' }, { clientId: 'abc', clientName: 'Other' }),
     true,
   );
   assert.equal(
     clientsMatch({ name: 'Acme Pharma' }, { clientName: 'acme pharma' }),
-    false,
+    true,
   );
   assert.equal(
     clientsMatch({ name: 'Acme' }, { clientName: 'Other' }),
@@ -153,4 +193,5 @@ test('formatDuplicateCampMessage uses canonical duplicate entry text', () => {
     formatDuplicateCampMessage({ campId: 'CAMP-1' }),
     DUPLICATE_CAMP_MESSAGE,
   );
+  assert.match(DUPLICATE_CAMP_MESSAGE, /Client, Doctor, Division\/Campaign Type, Camp Date, and Start Time/);
 });

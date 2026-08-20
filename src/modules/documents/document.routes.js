@@ -11,6 +11,7 @@ import { env } from '../../config/env.js';
 import { writeAudit } from '../../utils/audit.js';
 import { v4 as uuid } from 'uuid';
 import { uploadDir } from '../../config/paths.js';
+import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
 
 const uploadRoot = uploadDir();
 
@@ -72,6 +73,10 @@ router.post(
   upload.single('file'),
   asyncHandler(async (req, res) => {
     if (!req.file) throw new AppError('file required', 400, 'VALIDATION_ERROR');
+    await rejectUnsafeUploadedFiles(req.file, {
+      allowedExt: ['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.xlsx', '.xls', '.csv'],
+      maxBytes: env.uploadMaxBytes,
+    });
     const { entityType, entityId, docType } = req.body;
     if (!entityType || !entityId) throw new AppError('entityType and entityId required', 400);
 

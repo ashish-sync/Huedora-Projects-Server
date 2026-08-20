@@ -107,7 +107,7 @@ router.get(
         FinanceCommercialDocument.find({ isDeleted: false, documentType: 'bill_of_supply' }).select(
           'status grandTotal'
         ),
-      ]);
+    ]);
 
     const expenseTotal = expenses.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     const expenseOpen = expenses.filter((r) =>
@@ -485,16 +485,16 @@ function buildCampPayoutFilter(query = {}) {
   }
   if (query.q) {
     const re = new RegExp(escapeRegex(String(query.q)), 'i');
-    filter.$or = [
-      { campId: re },
-      { clientName: re },
-      { hcwName: re },
+      filter.$or = [
+        { campId: re },
+        { clientName: re },
+        { hcwName: re },
       { hcwCategory: re },
       { campaignName: re },
       { campaignType: re },
-      { transactionId: re },
-    ];
-  }
+        { transactionId: re },
+      ];
+    }
   return filter;
 }
 
@@ -513,14 +513,14 @@ const listCampPayouts = asyncHandler(async (req, res) => {
 
 const exportCampPayouts = asyncHandler(async (req, res) => {
   const filter = buildCampPayoutFilter(req.query);
-  const camps = await CampOpsCamp.find(filter).sort('-submittedToFinanceAt');
-  sendExcel(
-    res,
-    campFinanceBulkExportFilename(),
-    campFinanceExportHeaders(),
-    campFinanceExportRows(camps),
-    { sheetName: 'Camp Payouts' },
-  );
+    const camps = await CampOpsCamp.find(filter).sort('-submittedToFinanceAt');
+    sendExcel(
+      res,
+      campFinanceBulkExportFilename(),
+      campFinanceExportHeaders(),
+      campFinanceExportRows(camps),
+      { sheetName: 'Camp Payouts' },
+    );
 });
 
 const bulkUpdateCampPayouts = asyncHandler(async (req, res) => {
@@ -625,31 +625,31 @@ const bulkUpdateCampPayouts = asyncHandler(async (req, res) => {
 });
 
 const exportCampPayoutById = asyncHandler(async (req, res) => {
-  const camp = await CampOpsCamp.findOne({
-    _id: req.params.campId,
-    isDeleted: false,
-    submittedToFinanceAt: { $ne: null },
-  });
-  if (!camp) throw new AppError('Camp payout not found', 404);
-  assertCampSubmittedToFinance(camp);
-  sendExcel(
-    res,
-    campFinanceExportFilename(camp),
-    campFinanceExportHeaders(),
-    [buildCampFinanceExportRow(camp)],
-    { sheetName: 'Camp Payout' },
-  );
+    const camp = await CampOpsCamp.findOne({
+      _id: req.params.campId,
+      isDeleted: false,
+      submittedToFinanceAt: { $ne: null },
+    });
+    if (!camp) throw new AppError('Camp payout not found', 404);
+    assertCampSubmittedToFinance(camp);
+    sendExcel(
+      res,
+      campFinanceExportFilename(camp),
+      campFinanceExportHeaders(),
+      [buildCampFinanceExportRow(camp)],
+      { sheetName: 'Camp Payout' },
+    );
 });
 
 const updateCampPayoutById = asyncHandler(async (req, res) => {
-  const camp = await CampOpsCamp.findOne({
-    _id: req.params.campId,
-    isDeleted: false,
-    submittedToFinanceAt: { $ne: null },
-  });
-  if (!camp) throw new AppError('Camp payout not found', 404);
+    const camp = await CampOpsCamp.findOne({
+      _id: req.params.campId,
+      isDeleted: false,
+      submittedToFinanceAt: { $ne: null },
+    });
+    if (!camp) throw new AppError('Camp payout not found', 404);
 
-  const a = req.user;
+    const a = req.user;
   const before = camp.toObject ? camp.toObject() : { ...camp };
   const { changed } = applyCampPayoutFields(camp, req.body, a, {
     idempotencyKey: financeIdempotencyKey(req),

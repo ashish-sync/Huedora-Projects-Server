@@ -30,6 +30,7 @@ import {
   verificationOneAgreementStatus,
 } from '../devices/device.constants.js';
 import { uploadDir } from '../../config/paths.js';
+import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
 
 const uploadRoot = uploadDir('verifications');
 
@@ -340,6 +341,17 @@ router.post(
     const roundNum = Number(req.params.round);
     const record = await VerificationRecord.findOne({ _id: req.params.id, isDeleted: false });
     if (!record) throw new AppError('Verification record not found', 404);
+
+    const uploaded = [
+      ...(req.files?.photoFull || []),
+      ...(req.files?.photoSerial || []),
+      ...(req.files?.photosExtra || []),
+      ...(req.file ? [req.file] : []),
+    ];
+    await rejectUnsafeUploadedFiles(uploaded, {
+      allowedExt: ['.png', '.jpg', '.jpeg', '.gif', '.webp'],
+      maxBytes: env.uploadMaxBytes,
+    });
 
     const lat = req.body.latitude != null && req.body.latitude !== '' ? Number(req.body.latitude) : null;
     const lng =

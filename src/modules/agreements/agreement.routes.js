@@ -29,12 +29,14 @@ import { notifyUser } from '../notifications/notifyEvent.js';
 import { ensureRecipientShortCode, generateShortCode } from './recipientAccess.js';
 import { buildAgreementPdfBuffer, pdfOptionsFromAgreement } from './agreementPdf.js';
 import { persistSignedAgreementPdf } from './agreementSignedDocument.js';
+import { captureAgreementAssetSnapshot, freezeAgreementAssetSnapshots } from './agreementAssetSnapshot.js';
 import { sendExcel } from '../../utils/excelExport.js';
 import { uploadDir } from '../../config/paths.js';
 import { redactAgreement, redactAgreementList } from '../../utils/redactAgreement.js';
 import { sanitizeHtml } from '../../utils/sanitizeHtml.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { applyArchiveListFilter } from '../retention/archivePolicy.js';
+import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 
 const uploadRoot = uploadDir('agreements');
 const previewRoot = uploadDir('previews');
@@ -295,6 +297,7 @@ router.post(
   '/',
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
   upload.single('file'),
+  requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const body = req.body || {};
     let contact = null;
@@ -836,6 +839,9 @@ router.post(
     agreement.status = agreement.sentAt ? computeStatus(agreement) : 'DRAFT';
     if (agreement.status === 'COMPLETED') agreement.completedAt = new Date().toISOString();
     await agreement.save();
+    if (agreement.status === 'COMPLETED') {
+      await freezeAgreementAssetSnapshots(agreement._id, { source: 'sign' });
+    }
 
     await logActivity(
       agreement._id,
@@ -898,6 +904,7 @@ router.post(
   '/:id/documents',
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
   upload.single('file'),
+  requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const agreement = await Agreement.findOne({ _id: req.params.id, isDeleted: false });
     if (!agreement) throw new AppError('Agreement not found', 404);
@@ -1003,6 +1010,8 @@ router.post(
       /* activation succeeds even if PDF persistence fails */
     }
 
+    await freezeAgreementAssetSnapshots(agreement._id, { source: 'activate' });
+
     const links = await AgreementAsset.find({ agreementId: agreement._id, isActive: true });
     for (const link of links) {
       const asset = await Asset.findOne({ _id: link.assetId, isDeleted: false });
@@ -1075,6 +1084,7 @@ router.post(
       }
       if (!existing) {
         const link = await AgreementAsset.create({ agreementId: agreement._id, assetId });
+        await captureAgreementAssetSnapshot(link, asset, { source: 'link' });
         linked.push(link);
         if (agreement.status === 'ACTIVE') {
           asset.activeAgreementId = agreement._id;

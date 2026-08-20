@@ -42,6 +42,7 @@
     "test:bulk-users": "node --test scripts/bulk-import-users.test.js scripts/teamAccessProfiles.test.js",
     "test:legacy-migration": "node --test src/utils/legacyMigration.test.js",
     "purge:test-users": "node scripts/purge-test-users.js",
+    "test:document-pdf": "node --test src/modules/templates/serviceAgreementPdfFidelity.test.js src/modules/templates/docxToPdf.test.js src/modules/templates/docxPlaceholders.letterhead.test.js",
     "check:rebrand": "node scripts/check-rebrand.js"
   },
   "dependencies": {

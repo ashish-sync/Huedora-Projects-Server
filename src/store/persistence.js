@@ -77,6 +77,10 @@ export function getPersistenceMode() {
   return mode;
 }
 
+export function getMongoDb() {
+  return mongoDb;
+}
+
 export function getDataDirectory() {
   return dataDir;
 }
@@ -99,19 +103,40 @@ export function configurePersistence({ backend = 'file', dataDirectory, db } = {
   mongoDb = db || null;
   if (dataDirectory) dataDir = path.resolve(dataDirectory);
   fs.mkdirSync(dataDir, { recursive: true });
+  cache.clear();
+  fileMtime.clear();
+  cacheLoadedAt.clear();
 }
 
 /**
  * Persistence model (production assumptions)
  * ------------------------------------------
- * - Mongo mode: each collection is lazy-loaded into a process-local Map cache and kept
- *   resident. Safe topology is a single API replica + Atlas (+ shared/persistent disk
- *   for uploads). Multi-instance without cache invalidation or shared file storage will
- *   serve stale reads and missing files. Native Mongo filter/limit pushdown is the
- *   long-term escape hatch for horizontal scale.
- * - File mode: local JSON under data/ — development only. Collections are lazy-loaded;
- *   loadCollection returns the live cache array (clone matched rows in Query.exec).
+ * - Mongo mode: each collection is lazy-loaded into a process-local Map cache.
+ *   Critical writes (upsertDocument) merge against a fresh Mongo findOne before
+ *   replaceOne. List/find still use the in-process cache until TTL expiry or
+ *   clearPersistenceCache().
+ * - Safe topology: single API replica + Atlas (+ shared/persistent disk for uploads).
+ * - Multi-instance: set MONGO_COLLECTION_CACHE_TTL_MS (e.g. 5000) so each replica
+ *   reloads collections periodically. Without a shared cache bus, short TTL is the
+ *   supported mitigation — not full linearizability across replicas.
+ * - File mode: local JSON under data/ — development only.
+ * - Native Mongo filter/limit pushdown remains the long-term escape hatch for scale.
  */
+
+/** @type {Map<string, number>} */
+const cacheLoadedAt = new Map();
+
+function mongoCacheTtlMs() {
+  const raw = process.env.MONGO_COLLECTION_CACHE_TTL_MS;
+  if (raw === undefined || raw === '') return 0; // 0 = hold until explicit clear (single-replica default)
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+/** Exported for unit tests / ops diagnostics */
+export function getMongoCollectionCacheTtlMs() {
+  return mongoCacheTtlMs();
+}
 
 /**
  * Mongo: lazy-load collections on first access (do NOT hydrate entire DB into RAM at boot).
@@ -120,6 +145,7 @@ export function configurePersistence({ backend = 'file', dataDirectory, db } = {
 export async function hydratePersistence() {
   cache.clear();
   fileMtime.clear();
+  cacheLoadedAt.clear();
   if (mode === 'mongo') {
     if (!mongoDb) throw new Error('MongoDB persistence is not configured');
     const collections = await mongoDb.listCollections().toArray();
@@ -148,10 +174,14 @@ export async function hydratePersistence() {
  */
 export async function loadCollection(name) {
   if (mode === 'mongo') {
-    if (cache.has(name)) return cache.get(name);
+    const ttl = mongoCacheTtlMs();
+    const loadedAt = cacheLoadedAt.get(name) || 0;
+    const freshEnough = cache.has(name) && (ttl <= 0 || Date.now() - loadedAt < ttl);
+    if (freshEnough) return cache.get(name);
     if (!mongoDb) throw new Error('MongoDB persistence is not configured');
     const rows = await mongoDb.collection(collectionKey(name)).find({}).toArray();
     cache.set(name, rows);
+    cacheLoadedAt.set(name, Date.now());
     return rows;
   }
 
@@ -166,23 +196,25 @@ export async function loadCollection(name) {
 }
 
 /** Upsert a single document — avoids rewriting the entire collection to Mongo. */
-export async function upsertDocument(name, doc) {
+export async function upsertDocument(name, doc, { session = null } = {}) {
   if (!doc?._id) throw new Error('upsertDocument requires _id');
   const incoming = normalizeDocumentEntityIds(clone(doc));
 
   if (mode === 'mongo') {
     if (!mongoDb) throw new Error('MongoDB persistence is not configured');
     const col = mongoDb.collection(collectionKey(name));
-    let existing = await col.findOne({ _id: incoming._id });
+    const findOpts = session ? { session } : {};
+    const writeOpts = session ? { upsert: true, session } : { upsert: true };
+    let existing = await col.findOne({ _id: incoming._id }, findOpts);
     if (!existing && isHexObjectId(incoming._id)) {
       const raw = String(doc._id || '');
-      if (raw && raw !== incoming._id) existing = await col.findOne({ _id: raw });
+      if (raw && raw !== incoming._id) existing = await col.findOne({ _id: raw }, findOpts);
     }
     const plain = mergeDocumentFields(existing || {}, incoming);
     plain._id = normalizeEntityId(plain._id) || plain._id;
-    await col.replaceOne({ _id: plain._id }, plain, { upsert: true });
+    await col.replaceOne({ _id: plain._id }, plain, writeOpts);
     if (existing && String(existing._id) !== String(plain._id)) {
-      await col.deleteOne({ _id: existing._id });
+      await col.deleteOne({ _id: existing._id }, session ? { session } : {});
     }
     const rows = await loadCollection(name);
     const idx = rows.findIndex((r) => idsEqual(r._id, plain._id));
@@ -202,7 +234,7 @@ export async function upsertDocument(name, doc) {
 }
 
 /** Batch upsert — merge each doc with the latest cached/persisted row (no silent field wipe). */
-export async function bulkUpsertDocuments(name, docs = []) {
+export async function bulkUpsertDocuments(name, docs = [], { session = null, replace = false } = {}) {
   if (!docs.length) return 0;
   const rows = await loadCollection(name);
   const byId = new Map(rows.map((r, i) => [normalizeEntityId(r._id) || String(r._id), i]));
@@ -213,7 +245,9 @@ export async function bulkUpsertDocuments(name, docs = []) {
     const incoming = normalizeDocumentEntityIds(clone(doc));
     const key = normalizeEntityId(incoming._id) || String(incoming._id);
     const existing = byId.has(key) ? rows[byId.get(key)] : {};
-    const plain = mergeDocumentFields(existing || {}, incoming);
+    const plain = replace
+      ? { ...(incoming || {}), _id: key }
+      : mergeDocumentFields(existing || {}, incoming);
     plain._id = key;
     if (byId.has(key)) rows[byId.get(key)] = plain;
     else {
@@ -234,10 +268,9 @@ export async function bulkUpsertDocuments(name, docs = []) {
   if (mode === 'mongo') {
     if (!mongoDb) throw new Error('MongoDB persistence is not configured');
     const CHUNK = 500;
+    const writeOpts = session ? { ordered: true, session } : { ordered: false };
     for (let i = 0; i < ops.length; i += CHUNK) {
-      await mongoDb.collection(collectionKey(name)).bulkWrite(ops.slice(i, i + CHUNK), {
-        ordered: false,
-      });
+      await mongoDb.collection(collectionKey(name)).bulkWrite(ops.slice(i, i + CHUNK), writeOpts);
     }
     return ops.length;
   }
@@ -333,12 +366,14 @@ export function clearPersistenceCache({ keep = [] } = {}) {
   if (!retain.size) {
     cache.clear();
     fileMtime.clear();
+    cacheLoadedAt.clear();
     return;
   }
   for (const name of [...cache.keys()]) {
     if (!retain.has(name)) {
       cache.delete(name);
       fileMtime.delete(name);
+      cacheLoadedAt.delete(name);
     }
   }
 }

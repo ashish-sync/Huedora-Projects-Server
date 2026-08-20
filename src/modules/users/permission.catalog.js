@@ -8,7 +8,9 @@ export const ACCESS_ACTIONS = [
   { id: 'delete', label: 'Delete' },
   { id: 'upload', label: 'Upload' },
   { id: 'request', label: 'Request' },
+  { id: 'verify', label: 'Verify' },
   { id: 'approve', label: 'Approve' },
+  { id: 'pay', label: 'Pay' },
 ];
 
 function withAll(actions) {
@@ -126,6 +128,9 @@ export const MODULE_ACCESS_CATALOG = [
       view: [PERMISSIONS.FINANCE_READ],
       add: [PERMISSIONS.FINANCE_WRITE],
       delete: [PERMISSIONS.FINANCE_WRITE],
+      verify: [PERMISSIONS.FINANCE_VERIFY],
+      approve: [PERMISSIONS.FINANCE_APPROVE],
+      pay: [PERMISSIONS.FINANCE_PAY],
     }),
   },
   {

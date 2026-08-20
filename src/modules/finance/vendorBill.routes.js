@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { requirePermission, requireAdmin } from '../../middleware/auth.js';
+import { requirePermission, requireAdmin, hasPermission, authenticate } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
@@ -21,10 +21,31 @@ import {
   vendorBillStatusLabel,
   assertVendorBillTransition,
 } from './vendorBill.constants.js';
+import {
+  assertVendorBillSegregationOfDuties,
+  assertVendorBillPaySegregationOfDuties,
+  permissionForVendorBillTransition,
+} from './vendorBill.sod.js';
+import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
+import { assertEntityNotStale, beginIdempotentCreate, readIdempotencyKey } from '../../utils/mutationGuards.js';
 
 const router = Router();
-const canRead = requirePermission(PERMISSIONS.FINANCE_READ, PERMISSIONS.FINANCE_WRITE);
+router.use(authenticate);
+
+const canRead = requirePermission(
+  PERMISSIONS.FINANCE_READ,
+  PERMISSIONS.FINANCE_WRITE,
+  PERMISSIONS.FINANCE_VERIFY,
+  PERMISSIONS.FINANCE_APPROVE,
+  PERMISSIONS.FINANCE_PAY
+);
 const canWrite = requirePermission(PERMISSIONS.FINANCE_WRITE);
+const canPay = requirePermission(PERMISSIONS.FINANCE_PAY);
+const canTransition = requirePermission(
+  PERMISSIONS.FINANCE_WRITE,
+  PERMISSIONS.FINANCE_VERIFY,
+  PERMISSIONS.FINANCE_APPROVE
+);
 
 const vendorBillUploadRoot = uploadDir('finance-vendor-bills');
 const vendorBillUpload = multer({
@@ -371,6 +392,17 @@ async function transitionVendorBill(req, res) {
     throw new AppError(err.message, err.status || 400, err.code || 'VALIDATION_ERROR');
   }
 
+  const needed = permissionForVendorBillTransition(from, to);
+  if (!hasPermission(req, needed)) {
+    throw new AppError(
+      `Forbidden: ${needed} is required for this vendor bill transition`,
+      403,
+      'FORBIDDEN'
+    );
+  }
+
+  assertVendorBillSegregationOfDuties(row, to === 'submitted' ? 'under_verification' : to, req.user._id);
+
   if (to === 'submitted' || to === 'under_verification') {
     if (!trimStr(row.billNumber || row.invoiceNumber)) {
       throw new AppError('Bill number is required before submit', 400, 'VALIDATION_ERROR');
@@ -449,14 +481,35 @@ async function transitionVendorBill(req, res) {
 async function payVendorBill(req, res) {
   const row = await FinanceInvoice.findOne({ _id: req.params.id, isDeleted: false });
   if (!row) throw new AppError('Vendor bill not found', 404);
+  assertEntityNotStale(row, req.body, 'Vendor bill');
   const before = row.toObject ? row.toObject() : { ...row };
   const current = normalizeVendorBillStatus(row.status);
   if (!VENDOR_BILL_PAYABLE_STATUSES.has(current)) {
     throw new AppError('Only approved vendor bills can be paid', 400, 'VALIDATION_ERROR');
   }
+  assertVendorBillPaySegregationOfDuties(row, req.user._id);
+
+  const transactionId = trimStr(req.body.transactionId);
+  const idemKey = readIdempotencyKey(req) || transactionId;
+  if (idemKey) {
+    const replay = await beginIdempotentCreate(idemKey, async (key) => {
+      if (row.paymentIdempotencyKey && row.paymentIdempotencyKey === key) return row;
+      if (
+        row.transactionId &&
+        String(row.transactionId) === key &&
+        ['paid', 'partially_paid'].includes(current)
+      ) {
+        return row;
+      }
+      return null;
+    });
+    if (replay.replay) {
+      const [enriched] = await enrichVendorBills([replay.row]);
+      return res.json({ data: enriched, meta: { idempotentReplay: true } });
+    }
+  }
 
   const paidNow = toAmount(req.body.paidAmount ?? Math.max(0, toAmount(row.totalAmount) - toAmount(row.paidAmount)));
-  const transactionId = trimStr(req.body.transactionId);
   if (!(paidNow > 0)) throw new AppError('Paid amount must be greater than zero', 400, 'VALIDATION_ERROR');
   if (!transactionId) throw new AppError('Transaction ID / UTR is required', 400, 'VALIDATION_ERROR');
 
@@ -465,6 +518,7 @@ async function payVendorBill(req, res) {
   const paidAmount = Math.min(total, Math.round((alreadyPaid + paidNow) * 100) / 100);
   row.paidAmount = paidAmount;
   row.transactionId = transactionId;
+  if (idemKey) row.paymentIdempotencyKey = idemKey;
   row.paymentRemark = trimStr(req.body.paymentRemark ?? row.paymentRemark);
   row.paymentMode = trimStr(req.body.paymentMode || row.paymentMode || 'Bank transfer');
   row.paidAt = new Date().toISOString();
@@ -505,6 +559,11 @@ async function uploadVendorBillAttachment(req, res) {
     ...(req.file ? [req.file] : []),
   ];
   if (!files.length) throw new AppError('Select at least one bill file to upload', 400, 'VALIDATION_ERROR');
+
+  await rejectUnsafeUploadedFiles(files, {
+    allowedExt: ['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.doc', '.docx'],
+    maxBytes: 12 * 1024 * 1024,
+  });
 
   const existing = Array.isArray(row.attachments) ? row.attachments.filter(Boolean) : [];
   const legacy = normalizeAttachment(row);
@@ -581,8 +640,8 @@ router.get('/vendor-bills/export', canRead, asyncHandler(exportVendorBills));
 router.post('/vendor-bills', canWrite, asyncHandler(createVendorBill));
 router.get('/vendor-bills/:id', canRead, asyncHandler(getVendorBill));
 router.patch('/vendor-bills/:id', canWrite, asyncHandler(updateVendorBill));
-router.post('/vendor-bills/:id/transition', canWrite, asyncHandler(transitionVendorBill));
-router.post('/vendor-bills/:id/pay', canWrite, asyncHandler(payVendorBill));
+router.post('/vendor-bills/:id/transition', canTransition, asyncHandler(transitionVendorBill));
+router.post('/vendor-bills/:id/pay', canPay, asyncHandler(payVendorBill));
 router.post(
   '/vendor-bills/:id/attachment',
   canWrite,

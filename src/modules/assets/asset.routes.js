@@ -35,9 +35,14 @@ import {
   normalizeAssetType,
   formatOwnershipType,
   normalizeCustodianState,
+  custodyRequiresCustodianContact,
+  contactMatchesCustody,
+  custodyContactTypeError,
 } from '../devices/device.constants.js';
+import { findContactForCustodian } from '../contacts/contactIdentity.js';
 import { buildAssetPlaceholderSnapshot } from './assetPlaceholderSnapshot.js';
 import { uploadDir } from '../../config/paths.js';
+import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 
 const agreementUploadRoot = uploadDir('agreements');
 
@@ -312,6 +317,7 @@ router.post(
   '/:id/documents',
   canManageDocs,
   agreementUpload.single('file'),
+  requireSafeUploads(UPLOAD_RULES.office),
   asyncHandler(async (req, res) => {
     const asset = await Asset.findOne({ _id: req.params.id, isDeleted: false });
     if (!asset) throw new AppError('Asset not found', 404);
@@ -406,6 +412,7 @@ router.post(
   '/:id/documents/:agreementId/replace',
   canManageDocs,
   agreementUpload.single('file'),
+  requireSafeUploads(UPLOAD_RULES.office),
   asyncHandler(async (req, res) => {
     const asset = await Asset.findOne({ _id: req.params.id, isDeleted: false });
     if (!asset) throw new AppError('Asset not found', 404);
@@ -550,6 +557,8 @@ router.patch(
   asyncHandler(async (req, res) => {
     const asset = await Asset.findOne({ _id: req.params.id, isDeleted: false });
     if (!asset) throw new AppError('Asset not found', 404);
+    const previousCustody = asset.custody;
+    const previousContactId = asset.contactId ? String(asset.contactId) : '';
 
     const masterPatch = {};
 
@@ -699,12 +708,21 @@ router.patch(
 
     if (req.body.custodianContact != null) {
       const custodianContact = String(req.body.custodianContact).trim();
-      if (!custodianContact) {
-        throw new AppError('Custodian Contact is required', 400, 'VALIDATION_ERROR');
+      if (custodyRequiresCustodianContact(asset.custody)) {
+        const contact = await findContactForCustodian(custodianContact, { requireMatch: true });
+        asset.contactId = contact._id;
+        asset.custodianName = contact.name || asset.custodianName;
+        asset.custodianContact = contact.contact || contact.mobile || contact.email || custodianContact;
+        masterPatch.custodianName = asset.custodianName;
+        masterPatch.custodianContact = asset.custodianContact;
+      } else {
+        if (!custodianContact) {
+          throw new AppError('Custodian Contact is required', 400, 'VALIDATION_ERROR');
+        }
+        assertValidPhoneOrEmail(custodianContact, 'Custodian Contact');
+        asset.custodianContact = custodianContact;
+        masterPatch.custodianContact = custodianContact;
       }
-      assertValidPhoneOrEmail(custodianContact, 'Custodian Contact');
-      asset.custodianContact = custodianContact;
-      masterPatch.custodianContact = custodianContact;
     }
 
     let loc = { ...(asset.location || {}) };
@@ -765,6 +783,38 @@ router.patch(
           const cc = contact.contact || contact.email;
           asset.custodianContact = cc;
           masterPatch.custodianContact = cc;
+        }
+      }
+    }
+
+    const custodyTouched = (
+      req.body.custody != null
+      || req.body.assetCustody != null
+      || req.body.deviceCustody != null
+    );
+    const contactTouched = req.body.contactId !== undefined || req.body.custodianContact != null;
+    const custodyChanged =
+      custodyTouched && String(asset.custody || '') !== String(previousCustody || '');
+    const nextContactId = asset.contactId ? String(asset.contactId) : '';
+    const contactChanged = contactTouched && nextContactId !== previousContactId;
+    if (
+      custodyRequiresCustodianContact(asset.custody)
+      && (custodyTouched || contactTouched)
+    ) {
+      if (!asset.contactId) {
+        throw new AppError(
+          'Custodian Contact is required when Asset Custody is Individual or Service Provider, and must match an existing Contact Directory record.',
+          400,
+          'VALIDATION_ERROR',
+        );
+      }
+      if (custodyChanged || contactChanged) {
+        const linked = await Contact.findOne({ _id: asset.contactId, isDeleted: false });
+        if (!linked) {
+          throw new AppError('Custodian contact not found in Contact Directory', 400, 'VALIDATION_ERROR');
+        }
+        if (!contactMatchesCustody(linked, asset.custody)) {
+          throw new AppError(custodyContactTypeError(asset.custody), 400, 'VALIDATION_ERROR');
         }
       }
     }

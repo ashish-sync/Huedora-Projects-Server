@@ -41,6 +41,43 @@ export const DEVICE_CUSTODY_OPTIONS = [
 
 export const ASSET_CUSTODY_OPTIONS = DEVICE_CUSTODY_OPTIONS;
 
+export const CUSTODY_REQUIRES_DIRECTORY_CONTACT = ['Individual', 'Service Provider'];
+
+export function custodyRequiresCustodianContact(custody) {
+  return CUSTODY_REQUIRES_DIRECTORY_CONTACT.includes(String(custody || '').trim());
+}
+
+/**
+ * Individual custody → Healthcare Worker / Individual.
+ * Service Provider custody → Healthcare Worker / Service Provider.
+ * Full-Time HCW staff does not satisfy Individual custody.
+ */
+export function contactMatchesCustody(contact, custody) {
+  if (!custodyRequiresCustodianContact(custody)) return true;
+  if (!contact) return false;
+  const c = String(custody).trim();
+  const category = String(contact.contactCategory || '').trim();
+  const resourceType = String(contact.resourceType || '').trim();
+  if (c === 'Service Provider') {
+    return category === 'Healthcare Worker' && resourceType === 'Service Provider';
+  }
+  if (c === 'Individual') {
+    return category === 'Healthcare Worker' && resourceType === 'Individual';
+  }
+  return true;
+}
+
+export function custodyContactTypeError(custody) {
+  const c = String(custody).trim();
+  if (c === 'Service Provider') {
+    return 'Custodian Contact must be a Healthcare Worker with Type “Service Provider”.';
+  }
+  if (c === 'Individual') {
+    return 'Custodian Contact must be a Healthcare Worker with Type “Individual”.';
+  }
+  return 'Custodian Contact type does not match Asset Custody.';
+}
+
 export const INDIAN_STATES_AND_UTS = INDIAN_STATE_NAMES;
 
 /** Legacy / workflow aliases → picklist values */

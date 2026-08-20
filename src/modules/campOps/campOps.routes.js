@@ -166,7 +166,11 @@ import {
   formatDuplicateCampMessage,
   createCampEnsuringNoDuplicate,
   assertNoDuplicateOnCampSave,
+  attachDuplicateKey,
+  campIdentityFingerprint,
+  isMongoDuplicateKeyError,
   CampDuplicateError,
+  DUPLICATE_CAMP_MESSAGE,
   DUPLICATE_IDENTITY_FIELDS,
 } from './campDuplicate.js';
 import {
@@ -198,7 +202,7 @@ import {
   resolveClosureSelection,
   normalizeClosureType,
 } from './campOps.closure.js';
-import { notifyCampWorkflow } from './campOps.notifications.js';
+import { notifyCampWorkflow, notifyCampBulkSummary } from './campOps.notifications.js';
 import { computeClientMasterPoBalanceMap } from '../finance/poUtilization.service.js';
 import {
   handleEmailArchive,
@@ -219,6 +223,7 @@ import path from 'path';
 import { uploadDir } from '../../config/paths.js';
 import { toSignedUploadUrl } from '../files/file.routes.js';
 import { buildExecutionDocumentFileName } from './executionDocumentName.js';
+import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 
 const campUploadRoot = uploadDir('camp-ops');
 
@@ -1150,20 +1155,20 @@ router.post(
         syncExecutionCaptureProvenance(camp, before, a);
         await camp.save();
         await audit(req, `camp_ops.bulk_${action}`, 'camp_ops_camp', camp._id, before, camp.toObject());
-        if (action === 'approve') {
-          await notifyCampWorkflow({ camp, action: 'approve', actorId: a.id });
-        } else if (action === 'reject') {
-          await notifyCampWorkflow({
-            camp,
-            action: 'reject',
-            actorId: a.id,
-            note: trimStr(req.body?.rejectionReason || req.body?.remarks),
-          });
-        }
         results.success.push({ id: camp._id, campId: camp.campId });
       } catch (err) {
         results.failed.push({ id, reason: err.message });
       }
+    }
+
+    // One inbox summary for the bulk run — per-camp detail stays in Audit Trail.
+    if (action === 'approve' || action === 'reject') {
+      await notifyCampBulkSummary({
+        action,
+        actorId: a.id,
+        success: results.success,
+        failed: results.failed,
+      });
     }
 
     res.json({
@@ -1221,6 +1226,7 @@ router.post(
   '/camps/:id/execution-documents',
   canRequest,
   campDocUpload.array('documents', 10),
+  requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
     if (!canEditLifecycleStage(camp, 'execution', { isAdmin: isCampAdmin(req) })) {
@@ -1426,10 +1432,10 @@ router.put(
     if (stage === 'request' || stage === 'assignment') {
       executionOnlyKeys.forEach((key) => { delete payload[key]; });
     }
-    // Assignment / execution / finance saves must not rewrite the duplicate identity.
-    // The full form still posts request fields, which can default start time / campaign type
-    // or shift campDate and then false-positive the duplicate check.
-    if (lifecycleOnly) {
+    // Non-request stages must never rewrite duplicate identity fields.
+    // The full form may still post request fields with defaulted start time / shifted dates
+    // and false-positive the duplicate check (c9b9993 + follow-up).
+    if (lifecycleOnly || stage !== 'request') {
       DUPLICATE_IDENTITY_FIELDS.forEach((key) => { delete payload[key]; });
     }
     // paymentSubmitStatus / financePaymentStatus are never free-select via Camp PUT:
@@ -1583,17 +1589,32 @@ router.put(
     }
 
     syncExecutionCaptureProvenance(camp, before, actor(req));
+    // Duplicate check only when the five-field identity fingerprint actually changes.
+    // Cosmetic re-posts (9:00 vs 09:00) and locked non-request stages share the same fingerprint.
+    const resolvedClient = client || { _id: camp.clientId, name: camp.clientName };
+    const beforeFp = campIdentityFingerprint(before, resolvedClient);
+    const afterFp = campIdentityFingerprint(camp, resolvedClient);
+    const identityChanged = beforeFp !== afterFp;
+    if (identityChanged) {
+      try {
+        await assertNoDuplicateOnCampSave(camp, { client: resolvedClient });
+      } catch (err) {
+        if (err instanceof CampDuplicateError) {
+          throw new AppError(err.message, 409, 'DUPLICATE_CAMP');
+        }
+        throw err;
+      }
+    } else {
+      attachDuplicateKey(camp, { client: resolvedClient });
+    }
     try {
-      await assertNoDuplicateOnCampSave(camp, {
-        client: client || { _id: camp.clientId, name: camp.clientName },
-      });
+      await camp.save();
     } catch (err) {
-      if (err instanceof CampDuplicateError) {
-        throw new AppError(err.message, 409, 'DUPLICATE_CAMP');
+      if (isMongoDuplicateKeyError(err)) {
+        throw new AppError(DUPLICATE_CAMP_MESSAGE, 409, 'DUPLICATE_CAMP');
       }
       throw err;
     }
-    await camp.save();
     await audit(req, 'camp_ops.update', 'camp_ops_camp', camp._id, before, camp.toObject());
     res.json({ data: enrichCamp(camp) });
   })
@@ -3366,6 +3387,7 @@ router.post(
   '/client-masters/:id/camp-terms-files',
   canRequest,
   clientMasterPoUpload.array('files', 10),
+  requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
@@ -3403,6 +3425,8 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, row.clientId);
+    await assertClientMasterAccess(req.user, row);
     const files = collectCampTermsFiles(row);
     const doc =
       files.find((f) => String(f.id) === String(req.params.fileId) || String(f.storedName) === String(req.params.fileId));
@@ -3410,6 +3434,7 @@ router.get(
     const full = path.join(campUploadRoot, doc.storedName);
     if (!fs.existsSync(full)) throw new AppError('File missing on server', 404, 'NOT_FOUND');
     res.setHeader('Content-Type', doc.mimeType || 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader(
       'Content-Disposition',
       `inline; filename="${String(doc.fileName || doc.storedName).replace(/"/g, '')}"`
@@ -3575,6 +3600,7 @@ function sendPoFileResponse(res, doc) {
   const full = path.join(campUploadRoot, doc.storedName);
   if (!fs.existsSync(full)) throw new AppError('PO file missing on server', 404, 'NOT_FOUND');
   res.setHeader('Content-Type', doc.mimeType || 'application/octet-stream');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader(
     'Content-Disposition',
     `inline; filename="${String(doc.fileName || doc.storedName).replace(/"/g, '')}"`
@@ -3588,6 +3614,8 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, row.clientId);
+    await assertClientMasterAccess(req.user, row);
     const { entry } = findPoEntry(row, req.params.poId);
     const files = ensurePoFilesArray(entry);
     sendPoFileResponse(res, files[0] || entry?.poFile);
@@ -3600,6 +3628,8 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, row.clientId);
+    await assertClientMasterAccess(req.user, row);
     const { entry } = findPoEntry(row, req.params.poId);
     const doc = findPoFileOnEntry(entry, req.params.fileId);
     sendPoFileResponse(res, doc);
@@ -3612,6 +3642,8 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, row.clientId);
+    await assertClientMasterAccess(req.user, row);
     const ensured = ensurePurchaseOrders(row);
     const doc = ensured.purchaseOrders[0]?.poFile || row.poFile;
     sendPoFileResponse(res, doc);
@@ -3625,6 +3657,7 @@ router.post(
     { name: 'files', maxCount: 10 },
     { name: 'poFile', maxCount: 1 },
   ]),
+  requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
@@ -3654,6 +3687,7 @@ router.post(
     { name: 'files', maxCount: 10 },
     { name: 'poFile', maxCount: 1 },
   ]),
+  requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
@@ -4079,6 +4113,17 @@ router.post(
       created: created.length,
       skipped: skipped.length,
       invalid: invalidRows.length,
+    });
+
+    await notifyCampBulkSummary({
+      action: 'import',
+      actorId: a.id,
+      success: created.map((c) => ({ id: c._id || c.id, campId: c.campId })),
+      skipped,
+      failed: invalidRows.map((row) => ({
+        id: row.rowNumber,
+        reason: row.errors?.[0] || row.reason || 'Invalid row',
+      })),
     });
 
     res.status(201).json({

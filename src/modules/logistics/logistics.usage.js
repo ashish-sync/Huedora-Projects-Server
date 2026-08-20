@@ -1,5 +1,6 @@
 import { CampRequest } from '../camps/camp.model.js';
 import { LogisticsUsageEntry } from './logistics.model.js';
+import { applyUsageInventoryEffect } from './logistics.usageInventory.js';
 
 /** Map camp process → default inventory type label for usage rollups */
 const PROCESS_INVENTORY = {
@@ -73,8 +74,16 @@ export async function syncUsageFromCamps() {
         source: 'camp',
       });
       await existing.save();
+      // Ledger-only (no warehouse double-debit after Goods Issue)
+      await applyUsageInventoryEffect(existing, null);
     } else {
-      await LogisticsUsageEntry.create(payload);
+      const created = await LogisticsUsageEntry.create({
+        ...payload,
+        appliedUsedQty: 0,
+        appliedWastageQty: 0,
+        consumeFromWarehouse: false,
+      });
+      await applyUsageInventoryEffect(created, null);
       upserted += 1;
     }
   }

@@ -45,6 +45,9 @@ export const AgreementAsset = defineCollection('agreement_assets', {
   isActive: true,
   linkedAt: undefined,
   unlinkedAt: null,
+  /** Frozen Asset One identity at link/sign — never overwritten. */
+  assetSnapshot: null,
+  snapshotCapturedAt: null,
 });
 
 export const AgreementDocument = defineCollection('agreement_documents', {

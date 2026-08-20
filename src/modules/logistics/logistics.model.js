@@ -414,5 +414,14 @@ export const LogisticsUsageEntry = defineCollection('logistics_usage_entries', {
   campRequestId: null,
   source: 'manual',
   remark: '',
+  /** Optional stock linkage for direct warehouse consumption */
+  productId: null,
+  warehouseId: null,
+  batchNumber: '',
+  expiryDate: '',
+  consumeFromWarehouse: false,
+  /** Last quantities posted to inventory ledger (idempotency) */
+  appliedUsedQty: 0,
+  appliedWastageQty: 0,
   isActive: true,
 });

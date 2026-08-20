@@ -7,6 +7,7 @@ import { PERMISSIONS } from '../../config/constants.js';
 import { DeviceMaster } from './device.model.js';
 import { Asset } from '../assets/asset.model.js';
 import { Contact } from '../contacts/contact.model.js';
+import { findContactForCustodian } from '../contacts/contactIdentity.js';
 import { LogisticsProduct } from '../logistics/logistics.model.js';
 import { productMasterAssetName, productPurchaseCost } from '../logistics/productMasterLabel.js';
 import { createAsset } from '../assets/asset.service.js';
@@ -21,6 +22,9 @@ import {
   normalizeAssetType,
   formatOwnershipType,
   normalizeCustodianState,
+  custodyRequiresCustodianContact,
+  contactMatchesCustody,
+  custodyContactTypeError,
 } from './device.constants.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { formatTextValue, cleanSpaces } from '../../utils/textFormat.js';
@@ -36,6 +40,7 @@ import { importRateLimiter } from '../../middleware/importRateLimit.js';
 import { loadCappedRowsFromUpload } from '../imports/streaming/loadCappedRows.js';
 import { sendExcel, sendCsv } from '../../utils/excelExport.js';
 import { notifyImportFailures } from '../imports/importErrorReport.js';
+import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 
 const canWriteDevicesOrAssets = requirePermission(
   PERMISSIONS.DEVICES_WRITE,
@@ -51,6 +56,7 @@ const ASSET_MASTER_HEADERS = [
   'Ownership Type',
   'Asset Status',
   'Asset Custody',
+  'Custodian Contact',
   'Asset & Peripheral Remarks',
 ];
 
@@ -160,16 +166,11 @@ function parseMasterFields(input) {
   }
 
   const custodianName = formatTextValue(String(input.custodianName || ''), 'custodianName') || '';
-  const custodianContact =
-    formatTextValue(String(input.custodianContact || ''), 'custodianContact') || '';
-  if (custodianContact) {
-    assertValidPhoneOrEmail(custodianContact, 'Custodian Contact');
-  }
-
+  const custodianContact = cleanSpaces(String(input.custodianContact || '')) || '';
   const custodianCity =
     formatTextValue(String(input.custodianCity || input.city || ''), 'city') || '';
   const custodianState = normalizeCustodianState(input.custodianState) || '';
-  // Custodian is optional on Add Asset; Contact Directory link remains available when provided.
+  // Individual / Service Provider custody requires a Contact Directory match in resolveCustodianForFields.
 
   const description = formatTextValue(String(input.description || ''), 'peripheralRemarks') || null;
 
@@ -209,6 +210,9 @@ async function applyContactToFields(fields, contactId) {
   if (!contact) {
     throw new AppError('Custodian contact not found in Contact Directory', 400, 'VALIDATION_ERROR');
   }
+  if (!contactMatchesCustody(contact, fields.custody)) {
+    throw new AppError(custodyContactTypeError(fields.custody), 400, 'VALIDATION_ERROR');
+  }
   return {
     ...fields,
     contactId: contact._id,
@@ -218,6 +222,28 @@ async function applyContactToFields(fields, contactId) {
     custodianCity: contact.city || fields.custodianCity,
     custodianState: contact.state || fields.custodianState,
   };
+}
+
+async function resolveCustodianForFields(fields, contactId) {
+  const explicitId = String(contactId || fields.contactId || '').trim();
+  const required = custodyRequiresCustodianContact(fields.custody);
+
+  if (explicitId) {
+    return applyContactToFields(fields, explicitId);
+  }
+
+  if (required) {
+    const contact = await findContactForCustodian(fields.custodianContact, { requireMatch: true });
+    return applyContactToFields(fields, contact._id);
+  }
+
+  if (fields.custodianContact) {
+    const contact = await findContactForCustodian(fields.custodianContact, { requireMatch: false });
+    if (contact) return applyContactToFields(fields, contact._id);
+    assertValidPhoneOrEmail(fields.custodianContact, 'Custodian Contact');
+  }
+
+  return { ...fields, contactId: fields.contactId || null };
 }
 
 async function resolveInputFromProduct(input = {}) {
@@ -259,7 +285,7 @@ async function createDeviceRecord(input, user, requestId) {
     throw new AppError('Product Master selection is required', 400, 'VALIDATION_ERROR');
   }
   const fields = parseMasterFields(await resolveInputFromProduct(resolved));
-  const withContact = await applyContactToFields(fields, resolved.contactId);
+  const withContact = await resolveCustodianForFields(fields, resolved.contactId);
 
   await assertSerialNumberAvailable(withContact.serialNumber);
 
@@ -376,6 +402,7 @@ router.get(
         d.assetType ? formatOwnershipType(d.assetType) : '',
         d.agreementStatus,
         d.custody,
+        d.custodianContact || '',
         d.description || '',
       ]),
       { sheetName: 'Asset Registry' }
@@ -401,6 +428,7 @@ router.get(
           'Tylo Owned',
           'Not Initiated',
           'Tylo Office',
+          '',
           'Includes cuff kit',
         ],
         [
@@ -410,8 +438,9 @@ router.get(
           '06/2026',
           85000,
           'Tylo Owned',
+          'Not Initiated',
           'Tylo Office',
-          'Tylo Office',
+          '',
           '',
         ],
       ]
@@ -454,6 +483,7 @@ router.post(
   canWriteDevicesOrAssets,
   importRateLimiter,
   excelUpload.single('file'),
+  requireSafeUploads(UPLOAD_RULES.spreadsheet),
   asyncHandler(async (req, res) => {
     const { rows, fileName } = await loadCappedRowsFromUpload(req.file);
     if (!rows.length) throw importAppError('NO_DATA_ROWS');

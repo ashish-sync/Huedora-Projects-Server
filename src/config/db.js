@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { env } from './env.js';
 import { dataDir } from './paths.js';
 import {
@@ -93,4 +94,54 @@ export function getDbInfo() {
     mongoConfigured: Boolean(env.mongoUriRaw || env.mongoUri),
     mongoHost,
   };
+}
+
+/**
+ * Readiness probe: persistence must be usable.
+ * - mongo: ping the server (fails when Atlas is down / disconnected)
+ * - file: data directory must be writable
+ */
+export async function checkPersistenceReady() {
+  const info = getDbInfo();
+  if (env.isProd && info.mode !== 'mongo') {
+    return {
+      ready: false,
+      reason: 'MongoDB persistence required in production',
+      persistence: info.mode,
+    };
+  }
+  if (info.mode === 'mongo') {
+    if (!env.useMongoose) {
+      return { ready: false, reason: 'MongoDB not configured', persistence: info.mode };
+    }
+    try {
+      const mongoose = (await import('mongoose')).default;
+      if (mongoose.connection.readyState !== 1) {
+        return {
+          ready: false,
+          reason: 'MongoDB connection is not ready',
+          persistence: info.mode,
+          mongoState: mongoose.connection.readyState,
+        };
+      }
+      await mongoose.connection.db.admin().command({ ping: 1 });
+      return { ready: true, persistence: info.mode, mongoHost: info.mongoHost };
+    } catch (err) {
+      return {
+        ready: false,
+        reason: err?.message || 'MongoDB ping failed',
+        persistence: info.mode,
+      };
+    }
+  }
+  try {
+    fs.accessSync(dataDir, fs.constants.R_OK | fs.constants.W_OK);
+    return { ready: true, persistence: info.mode };
+  } catch (err) {
+    return {
+      ready: false,
+      reason: err?.message || 'Data directory not writable',
+      persistence: info.mode,
+    };
+  }
 }

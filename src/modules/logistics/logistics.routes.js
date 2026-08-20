@@ -79,6 +79,9 @@ import {
 } from './logistics.model.js';
 import { buildDashboard } from './logistics.dashboard.js';
 import { listUsageMerged, syncUsageFromCamps } from './logistics.usage.js';
+import { applyUsageInventoryEffect } from './logistics.usageInventory.js';
+import { assertActiveMasterRef } from '../../utils/masterIntegrity.js';
+import { assertEntityNotStale, readIdempotencyKey, beginIdempotentCreate } from '../../utils/mutationGuards.js';
 import { attachMasterExcelRoutes } from '../../utils/masterExcel.js';
 import {
   PARTY_HEADERS,
@@ -100,6 +103,7 @@ import {
 } from './expenseCategories.excel.js';
 import { productMasterAssetName } from './productMasterLabel.js';
 import { uploadDir } from '../../config/paths.js';
+import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 
 const inwardUploadRoot = uploadDir('logistics');
 
@@ -1143,6 +1147,7 @@ router.post(
   '/products/:id/files',
   canMaster,
   productFiles,
+  requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const row = await LogisticsProduct.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Product not found', 404);
@@ -1841,8 +1846,11 @@ function normalizeInOutBody(body, existing = null, actor = null) {
 
 async function enrichBodyFromProduct(body) {
   if (!body?.productId) return body;
-  const product = await LogisticsProduct.findOne({ _id: body.productId, isDeleted: false });
-  if (!product) return body;
+  const product = await assertActiveMasterRef({
+    Model: LogisticsProduct,
+    id: body.productId,
+    label: 'Logistics product',
+  });
   return {
     ...body,
     productName: trimStr(body.productName) || productMasterAssetName(product) || product.name,
@@ -2487,6 +2495,7 @@ router.post(
       next();
     });
   },
+  requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const filesMeta = attachmentsFromUpload(req, null);
     const prepared = await prepareRequestFulfillment({
@@ -2554,6 +2563,7 @@ router.patch(
       next();
     });
   },
+  requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const row = await LogisticsInOutEntry.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Transaction not found', 404);
@@ -2808,8 +2818,16 @@ router.post(
       campRequestId: body.campRequestId || null,
       source: body.campRequestId ? 'camp' : 'manual',
       remark: trimStr(body.remark),
+      productId: body.productId || null,
+      warehouseId: body.warehouseId || null,
+      batchNumber: trimStr(body.batchNumber),
+      expiryDate: trimStr(body.expiryDate),
+      consumeFromWarehouse: Boolean(body.consumeFromWarehouse),
+      appliedUsedQty: 0,
+      appliedWastageQty: 0,
       isActive: true,
     });
+    await applyUsageInventoryEffect(row, req.user);
     res.status(201).json({ data: row });
   })
 );
@@ -2845,7 +2863,15 @@ router.patch(
       row.wastage = Number(body.wastage ?? body.wastageQty) || 0;
     }
     if (body.perUnitCost != null) row.perUnitCost = Number(body.perUnitCost) || 0;
+    if (body.productId !== undefined) row.productId = body.productId || null;
+    if (body.warehouseId !== undefined) row.warehouseId = body.warehouseId || null;
+    if (body.batchNumber != null) row.batchNumber = trimStr(body.batchNumber);
+    if (body.expiryDate != null) row.expiryDate = trimStr(body.expiryDate);
+    if (body.consumeFromWarehouse != null) {
+      row.consumeFromWarehouse = Boolean(body.consumeFromWarehouse);
+    }
     await row.save();
+    await applyUsageInventoryEffect(row, req.user);
     res.json({ data: row });
   })
 );

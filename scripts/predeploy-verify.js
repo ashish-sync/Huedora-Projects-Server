@@ -90,13 +90,20 @@ async function verifyLiveApi() {
   }
   const base = String(process.env.API_BASE || 'http://localhost:5000/api/v1').replace(/\/$/, '');
   try {
-    const health = await fetch(`${base}/health`);
-    if (!health.ok) {
-      record('live API smoke', true, `skipped — ${base}/health returned ${health.status}`);
+    const ready = await fetch(`${base}/ready`);
+    if (ready.status === 503) {
+      record('live API readiness', false, `${base}/ready returned 503 (persistence not ready)`);
       return;
     }
+    if (!ready.ok) {
+      record('live API smoke', true, `skipped — ${base}/ready returned ${ready.status}`);
+      return;
+    }
+    const body = await ready.json().catch(() => ({}));
+    const isReady = body?.data?.ready === true;
+    record('live API readiness', isReady, `status ${ready.status}; ready=${body?.data?.ready}`);
     const live = await fetch(`${base}/live`);
-    record('live API probe', live.ok, `status ${live.status}`);
+    record('live API liveness', live.ok, `status ${live.status}`);
   } catch (err) {
     record('live API smoke', true, `skipped — ${err.message}`);
   }

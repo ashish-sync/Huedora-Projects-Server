@@ -18,14 +18,20 @@ import {
   validatePlaceholderValue,
   writeBuffer,
   ensureDir,
+  readDocxBuffer,
+  repackDocxDocumentXml,
 } from './docxPlaceholders.js';
+import { rewriteServiceAgreementLineTableXml } from './serviceAgreementLineTable.js';
 import { buildTemplatePdf } from './buildTemplatePdf.js';
+import { convertDocxBufferToPdf } from './docxToPdf.js';
+import { PdfEngineUnavailableError } from './pdfEngineErrors.js';
 import { previewStore } from './previewStore.js';
 import { sendExcel, sendCsv } from '../../utils/excelExport.js';
 import { cellValue, excelUpload, sampleCsvFilename } from '../../utils/masterExcel.js';
 import { importRateLimiter } from '../../middleware/importRateLimit.js';
 import { executeUploadedImport } from '../imports/streaming/runStreamingImport.js';
 import { uploadDir } from '../../config/paths.js';
+import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
 
 const templateRoot = uploadDir('templates');
 const previewRoot = uploadDir('previews');
@@ -36,6 +42,28 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: env.uploadMaxBytes },
 });
+
+function sendNativePdf(res, converted, filename = 'preview.pdf') {
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+  res.setHeader('X-PDF-Engine', converted.engine);
+  res.send(converted.buffer);
+}
+
+function invalidatePrintPreviewCache(docxPath) {
+  try {
+    fs.unlinkSync(`${docxPath}.print.pdf`);
+  } catch {
+    /* no cache */
+  }
+}
+
+async function docxBufferForNativePdf(buffer) {
+  const { xml } = await readDocxBuffer(buffer);
+  const nextXml = rewriteServiceAgreementLineTableXml(xml);
+  if (nextXml === xml) return buffer;
+  return repackDocxDocumentXml(buffer, nextXml);
+}
 
 const router = Router();
 router.use(authenticate);
@@ -178,6 +206,7 @@ router.get(
     if (!fs.existsSync(entry.pdfPath)) throw new AppError('Preview file missing', 404);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="preview.pdf"');
+    if (entry.pdfEngine) res.setHeader('X-PDF-Engine', entry.pdfEngine);
     fs.createReadStream(entry.pdfPath).pipe(res);
   })
 );
@@ -222,6 +251,76 @@ router.get(
         pdfEngine: entry.pdfEngine || 'pdfkit',
       },
     });
+  })
+);
+
+router.post(
+  '/render-pdf',
+  requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  upload.single('file'),
+  asyncHandler(async (req, res) => {
+    if (!req.file) throw new AppError('Word file required (.docx)', 400, 'VALIDATION_ERROR');
+    await rejectUnsafeUploadedFiles(req.file, {
+      allowedExt: ['.docx'],
+      maxBytes: env.uploadMaxBytes,
+    });
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    const isDocx =
+      ext === '.docx' ||
+      req.file.mimetype ===
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    if (!isDocx) {
+      throw new AppError('Please upload a Word (.docx) file only', 400, 'INVALID_FILE');
+    }
+    const converted = await convertDocxBufferToPdf(await docxBufferForNativePdf(req.file.buffer));
+    if (!converted?.buffer) {
+      throw new AppError(
+        'Word-faithful PDF preview needs Microsoft Word or LibreOffice on this computer.',
+        503,
+        'PDF_ENGINE_UNAVAILABLE'
+      );
+    }
+    sendNativePdf(res, converted, 'upload-preview.pdf');
+  })
+);
+
+router.get(
+  '/:id/print-preview.pdf',
+  asyncHandler(async (req, res) => {
+    const tpl = await DocumentTemplate.findOne({ _id: req.params.id, isDeleted: false });
+    if (!tpl?.storageKey) throw new AppError('No Word file on this template', 404);
+    const full = path.join(templateRoot, tpl.storageKey);
+    if (!fs.existsSync(full)) throw new AppError('File missing', 404);
+
+    const cachePath = `${full}.print.pdf`;
+    try {
+      const src = fs.statSync(full);
+      const cache = fs.statSync(cachePath);
+      if (cache.mtimeMs >= src.mtimeMs && cache.size > 64) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'inline; filename="template-preview.pdf"');
+        res.setHeader('X-PDF-Engine', 'cached');
+        fs.createReadStream(cachePath).pipe(res);
+        return;
+      }
+    } catch {
+      /* rebuild */
+    }
+
+    const converted = await convertDocxBufferToPdf(await docxBufferForNativePdf(fs.readFileSync(full)));
+    if (!converted?.buffer) {
+      throw new AppError(
+        'Word-faithful PDF preview needs Microsoft Word or LibreOffice on this computer.',
+        503,
+        'PDF_ENGINE_UNAVAILABLE'
+      );
+    }
+    try {
+      fs.writeFileSync(cachePath, converted.buffer);
+    } catch {
+      /* cache is optional */
+    }
+    sendNativePdf(res, converted, 'template-preview.pdf');
   })
 );
 
@@ -292,6 +391,10 @@ router.post(
   upload.single('file'),
   asyncHandler(async (req, res) => {
     if (!req.file) throw new AppError('Word file required (.docx)', 400, 'VALIDATION_ERROR');
+    await rejectUnsafeUploadedFiles(req.file, {
+      allowedExt: ['.docx'],
+      maxBytes: env.uploadMaxBytes,
+    });
     const ext = path.extname(req.file.originalname).toLowerCase();
     const isDocx =
       ext === '.docx' ||
@@ -321,6 +424,10 @@ router.post(
   upload.single('file'),
   asyncHandler(async (req, res) => {
     if (!req.file) throw new AppError('Word file required (.docx)', 400, 'VALIDATION_ERROR');
+    await rejectUnsafeUploadedFiles(req.file, {
+      allowedExt: ['.docx'],
+      maxBytes: env.uploadMaxBytes,
+    });
     const ext = path.extname(req.file.originalname).toLowerCase();
     const isDocx =
       ext === '.docx' ||
@@ -362,7 +469,9 @@ router.post(
 
     const analysis = await analyzeDocx(req.file.buffer);
     const storageKey = `${uuid()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    writeBuffer(path.join(templateRoot, storageKey), req.file.buffer);
+    const storedPath = path.join(templateRoot, storageKey);
+    writeBuffer(storedPath, req.file.buffer);
+    invalidatePrintPreviewCache(storedPath);
 
     const tpl = await DocumentTemplate.create({
       name,
@@ -517,17 +626,27 @@ router.post(
       req.body.signingType === 'NON_SIGNING' || tpl.signingType === 'NON_SIGNING'
         ? 'NON_SIGNING'
         : 'SIGNING';
-    const { buffer: pdfBuffer, engine: pdfEngine } = await buildTemplatePdf({
-      title,
-      filledDocxBuffer,
-      filledText,
-      blocks,
-      pdfOptions: {
-        signingType,
-        showSignatures: signingType === 'SIGNING',
-        senderSample: tpl.defaultSenderSignature?.name || 'Sender',
-      },
-    });
+    let pdfBuffer;
+    let pdfEngine;
+    try {
+      ({ buffer: pdfBuffer, engine: pdfEngine } = await buildTemplatePdf({
+        title,
+        filledDocxBuffer,
+        filledText,
+        blocks,
+        pdfOptions: {
+          signingType,
+          showSignatures: signingType === 'SIGNING',
+          senderSample: tpl.defaultSenderSignature?.name || 'Sender',
+        },
+        allowPdfKitFallback: !(tpl.sourceType === 'DOCX' && filledDocxBuffer),
+      }));
+    } catch (err) {
+      if (err instanceof PdfEngineUnavailableError) {
+        throw new AppError(err.message, err.status, err.code);
+      }
+      throw err;
+    }
     const token = uuid();
     const pdfName = `${token}.pdf`;
     const pdfPath = path.join(previewRoot, pdfName);

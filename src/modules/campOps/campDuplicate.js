@@ -1,9 +1,15 @@
 import { CampOpsCamp } from './campOps.model.js';
-import { escapeRegex, parseLocalDateInput, trimStr } from './campOps.helpers.js';
-import { idsEqual } from '../../utils/entityIds.js';
+import {
+  escapeRegex,
+  formatMinutes,
+  parseLocalDateInput,
+  parseTimeToMinutes,
+  trimStr,
+} from './campOps.helpers.js';
+import { idsEqual, normalizeEntityId } from '../../utils/entityIds.js';
 
 export const DUPLICATE_CAMP_MESSAGE =
-  'Duplicate Entry — A camp already exists with the same Client, Doctor, Division/Campaign Type, Camp Date and Start Time.';
+  'Duplicate Entry — A camp already exists with the same Client, Doctor, Division/Campaign Type, Camp Date, and Start Time.';
 
 /** @deprecated Status is not part of duplicate detection — all non-deleted camps block duplicates. */
 export const DUPLICATE_BLOCKING_STATUSES = ['pending_review', 'approved', 'executed'];
@@ -32,19 +38,52 @@ export class CampDuplicateError extends Error {
 }
 
 export function normalizeCampaignType(value = '') {
-  return String(trimStr(value) || '');
+  return String(trimStr(value) || '').replace(/\s+/g, ' ').toLowerCase();
 }
 
+/** Canonical HH:mm — "9:00", "09:00:00", "9:00 AM", "9.00 AM" → comparable form. */
 export function normalizeCampStartTime(value = '') {
-  return String(trimStr(value) || '');
+  const raw = String(trimStr(value) || '');
+  if (!raw) return '';
+  const ampm = raw.match(/^(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)$/i);
+  if (ampm) {
+    let hours = Number(ampm[1]);
+    const minutes = Number(ampm[2] || 0);
+    const period = ampm[3].toLowerCase();
+    if (period === 'pm' && hours < 12) hours += 12;
+    if (period === 'am' && hours === 12) hours = 0;
+    return formatMinutes(hours * 60 + minutes);
+  }
+  const dotted = raw.match(/^(\d{1,2})\.(\d{2})(?::(\d{2}))?$/);
+  if (dotted) {
+    return formatMinutes(Number(dotted[1]) * 60 + Number(dotted[2]));
+  }
+  const mins = parseTimeToMinutes(raw);
+  if (mins == null) return raw;
+  return formatMinutes(mins);
+}
+
+/** Stable identity fingerprint for save-path skip / compare (same rules as duplicateKey). */
+export function campIdentityFingerprint(camp = {}, client = null) {
+  return buildCampDuplicateKey({
+    clientId: camp.clientId || client?._id || client?.id,
+    clientName: camp.clientName || client?.name,
+    doctorName: camp.doctorName,
+    campaignType: camp.campaignType,
+    campDate: camp.campDate,
+    startTime: camp.startTime,
+  });
 }
 
 export function normalizeClientName(value = '') {
-  return String(trimStr(value) || '');
+  return String(trimStr(value) || '').replace(/\s+/g, ' ').toLowerCase();
 }
 
 export function normalizeDoctorName(value = '') {
-  return String(trimStr(value) || '');
+  return String(trimStr(value) || '')
+    .replace(/^\s*(dr\.?|doctor)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
 }
 
 export function buildCampDuplicateKey({
@@ -59,8 +98,7 @@ export function buildCampDuplicateKey({
   const time = normalizeCampStartTime(startTime);
   const division = normalizeCampaignType(campaignType);
   const doctor = normalizeDoctorName(doctorName);
-  const clientKey = String(clientId || '').trim().toLowerCase()
-    || normalizeClientName(clientName);
+  const clientKey = normalizeEntityId(clientId) || normalizeClientName(clientName);
   if (!clientKey || !doctor || !division || !date || !time) return '';
   return [clientKey, doctor, division, date, time].join(DUPLICATE_KEY_SEPARATOR);
 }
@@ -87,9 +125,9 @@ export function doctorsMatch(row = {}, camp = {}) {
 }
 
 export function clientsMatch(client = {}, camp = {}) {
-  const clientId = String(client?._id || client?.id || '').trim();
-  const campClientId = String(camp?.clientId || '').trim();
-  if (clientId && campClientId && clientId.toLowerCase() === campClientId.toLowerCase()) {
+  const clientId = normalizeEntityId(client?._id || client?.id || '');
+  const campClientId = normalizeEntityId(camp?.clientId || '');
+  if (clientId && campClientId && clientId === campClientId) {
     return true;
   }
   const clientName = normalizeClientName(client?.name || client?.clientName);
@@ -124,14 +162,15 @@ export function attachDuplicateKey(doc = {}, { client = null } = {}) {
     startTime: doc.startTime,
   });
   if (key) doc.duplicateKey = key;
+  else if ('duplicateKey' in doc) delete doc.duplicateKey;
   return doc;
 }
 
 function identityId(value) {
   if (value && typeof value === 'object') {
-    return value._id || value.$oid || value.id || value;
+    return normalizeEntityId(value._id || value.$oid || value.id || '');
   }
-  return value;
+  return normalizeEntityId(value);
 }
 
 function isExcludedCamp(camp, { excludeCampId = null, excludeId = null } = {}) {
@@ -198,7 +237,7 @@ export async function findExistingDuplicateCamp({
   };
 
   if (client?._id) {
-    filter.clientId = String(client._id);
+    filter.clientId = normalizeEntityId(client._id) || String(client._id);
   } else if (client?.name || row?.clientName) {
     const name = trimStr(client?.name || row?.clientName);
     filter.clientName = new RegExp(`^${escapeRegex(name)}$`, 'i');

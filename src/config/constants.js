@@ -66,6 +66,9 @@ export const PERMISSIONS = {
   /** Finance One */
   FINANCE_READ: 'finance:read',
   FINANCE_WRITE: 'finance:write',
+  FINANCE_VERIFY: 'finance:verify',
+  FINANCE_APPROVE: 'finance:approve',
+  FINANCE_PAY: 'finance:pay',
 };
 
 /** Read-only access across TYLO One modules. */
@@ -113,6 +116,7 @@ export const ROLE_PERMISSIONS = {
     PERMISSIONS.LOGISTICS_WRITE,
     PERMISSIONS.LOGISTICS_MASTER,
     PERMISSIONS.FINANCE_WRITE,
+    PERMISSIONS.FINANCE_PAY,
   ],
   Approver: [
     ...VIEW_ALL_MODULES,
@@ -122,6 +126,9 @@ export const ROLE_PERMISSIONS = {
     PERMISSIONS.ASSET_REQUESTS_APPROVE,
     PERMISSIONS.MOVEMENTS_REQUEST,
     PERMISSIONS.MOVEMENTS_APPROVE,
+    PERMISSIONS.FINANCE_READ,
+    PERMISSIONS.FINANCE_VERIFY,
+    PERMISSIONS.FINANCE_APPROVE,
   ],
   /** Healthcare Camp Coordinator — five applications only (see designationAccess.js). */
   'Camp Coordinator': [

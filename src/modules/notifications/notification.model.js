@@ -5,6 +5,8 @@ export const Notification = defineCollection('notifications', {
   ...archiveFields,
   channel: 'IN_APP',
   emailStatus: 'SKIPPED',
+  deliveryAttempts: 0,
+  deliveryError: '',
   readAt: null,
   scheduledFor: null,
   deliveredAt: null,

@@ -234,12 +234,22 @@ class Query {
     // Match/sort on cache refs — clone only after skip/limit (avoids OOM on paginated finds).
     let rows = (await this.model._all()).filter((d) => match(d, this.filter));
     if (this._sort) {
-      const fields = String(this._sort).split(/\s+/).filter(Boolean);
+      const fields = [];
+      if (typeof this._sort === 'object' && !Array.isArray(this._sort)) {
+        for (const [key, dirVal] of Object.entries(this._sort)) {
+          fields.push({ key, dir: Number(dirVal) < 0 ? -1 : 1 });
+        }
+      } else {
+        for (const f of String(this._sort).split(/\s+/).filter(Boolean)) {
+          fields.push({
+            key: f.replace(/^-/, ''),
+            dir: f.startsWith('-') ? -1 : 1,
+          });
+        }
+      }
       rows = rows.slice();
       rows.sort((a, b) => {
-        for (const f of fields) {
-          const dir = f.startsWith('-') ? -1 : 1;
-          const key = f.replace(/^-/, '');
+        for (const { key, dir } of fields) {
           const av = get(a, key);
           const bv = get(b, key);
           if (av < bv) return -1 * dir;

@@ -257,6 +257,16 @@ async function main() {
   } catch (err) {
     console.error('[spelling] Dietician boot canonicalize failed:', err.message);
   }
+  try {
+    const {
+      maybeRecomputeCampDuplicateKeysOnBoot,
+      maybeRefreshDocumentTemplateDatePlaceholdersOnBoot,
+    } = await import('./utils/applyRulesToExistingDataOnBoot.js');
+    await maybeRecomputeCampDuplicateKeysOnBoot();
+    await maybeRefreshDocumentTemplateDatePlaceholdersOnBoot();
+  } catch (err) {
+    console.error('[rules-boot] existing-data rules apply failed:', err.message);
+  }
   ensureUploadDirs();
   await hydrateEmailIngestState();
   await maybeFreshStart();

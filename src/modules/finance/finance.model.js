@@ -54,6 +54,7 @@ export const FinanceInvoice = defineCollection('finance_invoices', {
   rejectionReason: '',
   paidAmount: 0,
   transactionId: '',
+  paymentIdempotencyKey: '',
   paymentRemark: '',
   paidAt: null,
   archivedAt: null,

@@ -15,6 +15,7 @@ import {
 } from './verification.service.js';
 import { env } from '../../config/env.js';
 import { uploadDir } from '../../config/paths.js';
+import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 
 const uploadRoot = uploadDir('verifications');
 
@@ -136,6 +137,7 @@ router.get(
 router.post(
   '/:token',
   photoUpload,
+  requireSafeUploads(UPLOAD_RULES.images),
   asyncHandler(async (req, res) => {
     const { invite, record, asset } = await resolveInvite(req.params.token);
 

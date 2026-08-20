@@ -14,8 +14,67 @@ export async function listActiveContacts(limit = 20000) {
 }
 
 /**
- * Find an existing contact by email or normalized phone.
+ * Resolve a Custodian Contact Excel/form value to an existing Contact Directory row.
+ * Matches _id, email, mobile/phone, or exact name (case-insensitive).
+ * Does not create contacts. The same contact may be linked to many assets.
  */
+export async function findContactForCustodian(raw, { requireMatch = false } = {}) {
+  const value = String(raw || '').trim();
+  if (!value) {
+    if (requireMatch) {
+      throw new AppError(
+        'Custodian Contact is required when Asset Custody is Individual or Service Provider, and must match an existing Contact Directory record.',
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
+    return null;
+  }
+
+  if (/^[a-f0-9]{24}$/i.test(value)) {
+    const byId = await Contact.findOne({ _id: value, isDeleted: false });
+    if (byId) return byId;
+    if (requireMatch) {
+      throw new AppError(
+        'Custodian Contact must match an existing Contact Directory record.',
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
+    return null;
+  }
+
+  const looksLikeEmail = value.includes('@');
+  const byIdentity = await findContactByIdentity({
+    email: looksLikeEmail ? value : '',
+    phone: looksLikeEmail ? '' : value,
+  });
+  if (byIdentity) return byIdentity;
+
+  const contacts = await listActiveContacts();
+  const needle = value.toLowerCase();
+  const nameHits = contacts.filter(
+    (contact) => String(contact.name || '').trim().toLowerCase() === needle,
+  );
+  if (nameHits.length === 1) return nameHits[0];
+  if (nameHits.length > 1) {
+    throw new AppError(
+      `Custodian Contact “${value}” matches multiple Contact Directory records. Use email or mobile number.`,
+      400,
+      'VALIDATION_ERROR',
+    );
+  }
+
+  if (requireMatch) {
+    throw new AppError(
+      'Custodian Contact must match an existing Contact Directory record (name, email, or mobile).',
+      400,
+      'VALIDATION_ERROR',
+    );
+  }
+  return null;
+}
+
 export async function findContactByIdentity({ email, phone, excludeId } = {}) {
   const emailKey = normalizeEmail(email);
   const phoneKey = normalizePhone(phone);

@@ -20,6 +20,8 @@ import {
 import { DESIGNATION_ACCESS_TEMPLATES } from './designationAccess.js';
 import {
   assertAccessPayload,
+  assertActorMayAssignAccess,
+  assertActorMaySetRolePermissions,
   normalizeGrantedPermissions,
 } from './userAccess.js';
 
@@ -353,6 +355,7 @@ router.get(
 
 router.get(
   '/roles/export',
+  requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE, PERMISSIONS.ALL),
   asyncHandler(async (_req, res) => {
     const roles = await Role.find({ isDeleted: false }).sort('name');
     sendExcel(
@@ -429,6 +432,11 @@ router.post(
     permissions = permissions.filter((p) => ALL_PERMISSION_KEYS.includes(p) || p === PERMISSIONS.ALL);
     if (permissions.includes(PERMISSIONS.ALL)) permissions = [PERMISSIONS.ALL];
 
+    const grantOk = assertActorMaySetRolePermissions(req.permissions, permissions, { roleName: name });
+    if (!grantOk.ok) {
+      throw new AppError(grantOk.message, 403, grantOk.code || 'PRIVILEGE_ESCALATION');
+    }
+
     const role = await Role.create({
       name,
       description: String(req.body.description || '').trim(),
@@ -479,6 +487,12 @@ router.patch(
         permissions = [PERMISSIONS.ALL];
       } else if (permissions.includes(PERMISSIONS.ALL)) {
         permissions = [PERMISSIONS.ALL];
+      }
+      const grantOk = assertActorMaySetRolePermissions(req.permissions, permissions, {
+        roleName: role.name,
+      });
+      if (!grantOk.ok) {
+        throw new AppError(grantOk.message, 403, grantOk.code || 'PRIVILEGE_ESCALATION');
       }
       role.permissions = permissions;
     }
@@ -559,6 +573,15 @@ router.post(
     const access = assertAccessPayload({ roleIds, grantedPermissions });
     if (!access.ok) {
       throw new AppError(access.message, 400, 'VALIDATION_ERROR');
+    }
+    const roleRows = await Role.find({ isDeleted: false });
+    const valid = new Set(roleRows.map((r) => String(r._id)));
+    if (access.roleIds.some((id) => !valid.has(id))) {
+      throw new AppError('One or more roles are invalid', 400, 'VALIDATION_ERROR');
+    }
+    const grantOk = assertActorMayAssignAccess(req.permissions, access, roleRows);
+    if (!grantOk.ok) {
+      throw new AppError(grantOk.message, 403, grantOk.code || 'PRIVILEGE_ESCALATION');
     }
     if (!email || !username || !fullName || !password) {
       throw new AppError('Missing required fields', 400, 'VALIDATION_ERROR');
@@ -647,12 +670,16 @@ router.patch(
       if (!access.ok) {
         throw new AppError(access.message, 400, 'VALIDATION_ERROR');
       }
+      const roleRows = await Role.find({ isDeleted: false });
+      const valid = new Set(roleRows.map((r) => String(r._id)));
+      if (access.roleIds.some((id) => !valid.has(id))) {
+        throw new AppError('One or more roles are invalid', 400, 'VALIDATION_ERROR');
+      }
+      const grantOk = assertActorMayAssignAccess(req.permissions, access, roleRows);
+      if (!grantOk.ok) {
+        throw new AppError(grantOk.message, 403, grantOk.code || 'PRIVILEGE_ESCALATION');
+      }
       if (req.body.roleIds !== undefined) {
-        const roleRows = await Role.find({ isDeleted: false });
-        const valid = new Set(roleRows.map((r) => String(r._id)));
-        if (access.roleIds.some((id) => !valid.has(id))) {
-          throw new AppError('One or more roles are invalid', 400, 'VALIDATION_ERROR');
-        }
         user.roleIds = access.roleIds;
       }
       if (req.body.grantedPermissions !== undefined) {

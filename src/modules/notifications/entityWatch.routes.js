@@ -1,11 +1,23 @@
 import { Router } from 'express';
-import { authenticate } from '../../middleware/auth.js';
+import { authenticate, requirePermission } from '../../middleware/auth.js';
 import { asyncHandler, AppError } from '../../utils/helpers.js';
+import { PERMISSIONS } from '../../config/constants.js';
 import { EntityWatch, findWatchForUser } from './entityWatch.model.js';
 import { writeAudit } from '../../utils/audit.js';
 
 const router = Router();
 router.use(authenticate);
+const canWatch = requirePermission(
+  PERMISSIONS.CAMPS_READ,
+  PERMISSIONS.CAMPS_REQUEST,
+  PERMISSIONS.ASSETS_READ,
+  PERMISSIONS.AGREEMENTS_READ,
+  PERMISSIONS.VERIFICATIONS_READ,
+  PERMISSIONS.MOVEMENTS_READ,
+  PERMISSIONS.FINANCE_READ,
+  PERMISSIONS.ASSET_REQUESTS_READ,
+  PERMISSIONS.ALL
+);
 
 const WATCHABLE = new Set([
   'camp_ops_camp',
@@ -47,6 +59,7 @@ router.get(
 
 router.post(
   '/',
+  canWatch,
   asyncHandler(async (req, res) => {
     const entityType = normalizeEntityType(req.body?.entityType);
     const entityId = String(req.body?.entityId || '').trim();
@@ -84,6 +97,7 @@ router.post(
 
 router.delete(
   '/',
+  canWatch,
   asyncHandler(async (req, res) => {
     const entityType = normalizeEntityType(req.body?.entityType || req.query?.entityType);
     const entityId = String(req.body?.entityId || req.query?.entityId || '').trim();

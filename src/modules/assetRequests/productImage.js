@@ -6,6 +6,11 @@ import { v4 as uuid } from 'uuid';
 import { env } from '../../config/env.js';
 import { AppError } from '../../utils/helpers.js';
 import { uploadDir } from '../../config/paths.js';
+import {
+  rejectUnsafeUploadedFiles,
+  collectUploadedFiles,
+  UPLOAD_RULES,
+} from '../../utils/rejectUnsafeUpload.js';
 
 export const assetRequestUploadRoot = uploadDir('asset-requests');
 
@@ -29,6 +34,16 @@ const ATTACHMENT_EXTENSIONS = {
   'application/vnd.ms-excel': '.xls',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
   'text/plain': '.txt',
+};
+
+const PRODUCT_PHOTO_RULES = {
+  allowedExt: [...new Set([...UPLOAD_RULES.images.allowedExt, '.heic', '.heif', '.bmp'])],
+};
+const BILL_RULES = {
+  allowedExt: [...new Set([...PRODUCT_PHOTO_RULES.allowedExt, '.pdf'])],
+};
+const ATTACHMENT_RULES = {
+  allowedExt: [...new Set([...UPLOAD_RULES.anySafe.allowedExt, '.heic', '.heif', '.bmp'])],
 };
 
 const productPhotoMulter = multer({
@@ -79,41 +94,49 @@ const requestAttachmentMulter = multer({
   },
 }).single('attachment');
 
+async function afterSafeUpload(req, next, error, rules, sizeMessage) {
+  if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+    return next(new AppError(sizeMessage, 413, 'FILE_TOO_LARGE'));
+  }
+  if (error instanceof multer.MulterError) {
+    return next(new AppError(error.message, 400, 'UPLOAD_ERROR'));
+  }
+  if (error) return next(error);
+  try {
+    await rejectUnsafeUploadedFiles(collectUploadedFiles(req), rules);
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
 export function productPhotoUpload(req, res, next) {
   productPhotoMulter(req, res, (error) => {
-    if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
-      return next(new AppError('Product photo exceeds the upload size limit', 413, 'FILE_TOO_LARGE'));
-    }
-    if (error instanceof multer.MulterError) {
-      return next(new AppError(error.message, 400, 'UPLOAD_ERROR'));
-    }
-    return error ? next(error) : next();
+    afterSafeUpload(
+      req,
+      next,
+      error,
+      PRODUCT_PHOTO_RULES,
+      'Product photo exceeds the upload size limit'
+    );
   });
 }
 
 export function reimbursementBillUpload(req, res, next) {
   reimbursementBillMulter(req, res, (error) => {
-    if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
-      return next(new AppError('Bill exceeds the upload size limit', 413, 'FILE_TOO_LARGE'));
-    }
-    if (error instanceof multer.MulterError) {
-      return next(new AppError(error.message, 400, 'UPLOAD_ERROR'));
-    }
-    return error ? next(error) : next();
+    afterSafeUpload(req, next, error, BILL_RULES, 'Bill exceeds the upload size limit');
   });
 }
 
 export function requestAttachmentUpload(req, res, next) {
   requestAttachmentMulter(req, res, (error) => {
-    if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
-      return next(
-        new AppError('Attachment exceeds the upload size limit', 413, 'FILE_TOO_LARGE')
-      );
-    }
-    if (error instanceof multer.MulterError) {
-      return next(new AppError(error.message, 400, 'UPLOAD_ERROR'));
-    }
-    return error ? next(error) : next();
+    afterSafeUpload(
+      req,
+      next,
+      error,
+      ATTACHMENT_RULES,
+      'Attachment exceeds the upload size limit'
+    );
   });
 }
 

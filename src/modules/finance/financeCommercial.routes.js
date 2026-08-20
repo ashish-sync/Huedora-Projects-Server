@@ -78,6 +78,7 @@ import {
 import { notifyEvent } from '../notifications/notifyEvent.js';
 import { buildAuditChanges } from '../notifications/fieldDiff.js';
 import { NOTIFICATION_PRIORITIES } from '../notifications/notificationCatalog.js';
+import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 
 const uploadRoot = uploadDir('finance');
 
@@ -664,6 +665,7 @@ router.post(
   '/proformas/upload',
   canWrite,
   upload.single('file'),
+  requireSafeUploads(UPLOAD_RULES.office),
   asyncHandler(async (req, res) => {
     if (!req.file) throw new AppError('File is required', 400, 'VALIDATION_ERROR');
     const recipientName = trimStr(req.body.recipientName);
@@ -943,6 +945,7 @@ router.post(
   '/purchase-orders/upload',
   canWrite,
   upload.single('file'),
+  requireSafeUploads(UPLOAD_RULES.office),
   asyncHandler(async (req, res) => {
     if (!req.file) throw new AppError('File is required', 400, 'VALIDATION_ERROR');
     const vendorName = trimStr(req.body.vendorName || req.body.recipientName);

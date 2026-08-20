@@ -4,9 +4,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import { env } from './config/env.js';
-import { getDbInfo } from './config/db.js';
-import { uploadsRoot } from './config/paths.js';
-import { getRegisteredCollections } from './store/filedb.js';
+import { checkPersistenceReady as defaultCheckPersistenceReady } from './config/db.js';
 import { correlationId, errorHandler, notFound } from './middleware/error.js';
 
 import authRoutes from './modules/auth/auth.routes.js';
@@ -38,10 +36,11 @@ import logisticsRoutes from './modules/logistics/logistics.routes.js';
 import financeRoutes from './modules/finance/finance.routes.js';
 import geoRoutes from './modules/geo/geo.routes.js';
 import picklistRoutes from './modules/picklists/picklist.routes.js';
-import fileRoutes, { toSignedUploadUrl } from './modules/files/file.routes.js';
+import fileRoutes from './modules/files/file.routes.js';
 import retentionRoutes from './modules/retention/retention.routes.js';
 
-export function createApp() {
+export function createApp(options = {}) {
+  const checkReady = options.checkReady || defaultCheckPersistenceReady;
   const app = express();
 
   // Render / Cloudflare sit behind a reverse proxy. needed for correct client IPs
@@ -68,66 +67,40 @@ export function createApp() {
   app.use('/uploads/asset-requests', (_req, res) => {
     res.status(404).json({ error: { code: 'NOT_FOUND', message: 'File not found' } });
   });
-  if (env.isProd) {
-    // Production must not expose a public static tree. Existing DB rows still store
-    // `/uploads/...` paths — redirect those GETs to short-lived signed file URLs so
-    // View/preview links work globally without rewriting stored upload paths.
-    app.use('/uploads', (req, res) => {
-      if (req.method !== 'GET' && req.method !== 'HEAD') {
-        return res.status(405).json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' } });
-      }
-      const relative = String(req.path || '').replace(/^\/+/, '');
-      if (!relative || relative.includes('..')) {
-        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'File not found' } });
-      }
-      const signed = toSignedUploadUrl(`/uploads/${relative}`);
-      if (!signed || signed === `/uploads/${relative}`) {
-        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'File not found' } });
-      }
-      return res.redirect(302, signed);
-    });
-  } else {
-    app.use('/uploads', express.static(uploadsRoot));
-  }
-
-  app.get('/api/v1/health', (_req, res) => {
-    if (env.isProd) {
-      const payload = {
-        status: 'ok',
-        live: true,
-        ts: new Date().toISOString(),
-      };
-      if (String(process.env.MEMORY_LOG || '').toLowerCase() === 'true') {
-        const m = process.memoryUsage();
-        payload.memory = {
-          rssMb: +(m.rss / 1024 / 1024).toFixed(1),
-          heapUsedMb: +(m.heapUsed / 1024 / 1024).toFixed(1),
-        };
-      }
-      return res.json({ data: payload });
+  // Never expose a public static tree. Stored DB paths remain `/uploads/...`;
+  // API responses convert them to short-lived signed `/api/v1/files/signed` URLs.
+  // Direct `/uploads/*` access must not mint tokens (that would bypass auth).
+  app.use('/uploads', (req, res) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return res.status(405).json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' } });
     }
-    const db = getDbInfo();
-    const collections = getRegisteredCollections();
-    const m = process.memoryUsage();
-    res.json({
-      data: {
-        status: 'ok',
-        live: true,
-        service: 'tylo-one-api',
-        persistence: db.mode,
-        mongoConfigured: db.mongoConfigured,
-        collections: collections.length,
-        memory: {
-          rssMb: +(m.rss / 1024 / 1024).toFixed(1),
-          heapUsedMb: +(m.heapUsed / 1024 / 1024).toFixed(1),
-          heapTotalMb: +(m.heapTotal / 1024 / 1024).toFixed(1),
-        },
-        ts: new Date().toISOString(),
+    return res.status(404).json({
+      error: {
+        code: 'NOT_FOUND',
+        message: 'Direct upload URLs are disabled. Use a signed file link from the API.',
       },
     });
   });
 
-  /** Liveness probe. same payload as /health for load balancers / frontend boot gate */
+  /** Liveness: process is up. Do not check Mongo here (use /ready). */
+  app.get('/api/v1/health', (_req, res) => {
+    const payload = {
+      status: 'ok',
+      live: true,
+      service: 'tylo-one-api',
+      ts: new Date().toISOString(),
+    };
+    if (String(process.env.MEMORY_LOG || '').toLowerCase() === 'true') {
+      const m = process.memoryUsage();
+      payload.memory = {
+        rssMb: +(m.rss / 1024 / 1024).toFixed(1),
+        heapUsedMb: +(m.heapUsed / 1024 / 1024).toFixed(1),
+      };
+    }
+    res.status(200).json({ data: payload });
+  });
+
+  /** Liveness probe alias for load balancers / frontend boot gate */
   app.get('/api/v1/live', (_req, res) => {
     res.status(200).json({
       data: {
@@ -139,15 +112,16 @@ export function createApp() {
     });
   });
 
-  /** Readiness: process is up and persistence mode is configured (Mongo required in prod). */
-  app.get('/api/v1/ready', (_req, res) => {
-    const db = getDbInfo();
-    if (env.isProd && db.mode !== 'mongo') {
+  /** Readiness: MongoDB connectivity (prod) or writable file store (dev). */
+  app.get('/api/v1/ready', async (_req, res) => {
+    const check = await checkReady();
+    if (!check.ready) {
       return res.status(503).json({
         data: {
           status: 'not_ready',
           ready: false,
-          reason: 'MongoDB persistence required in production',
+          reason: check.reason,
+          persistence: check.persistence,
           ts: new Date().toISOString(),
         },
       });
@@ -156,7 +130,8 @@ export function createApp() {
       data: {
         status: 'ok',
         ready: true,
-        persistence: db.mode,
+        persistence: check.persistence,
+        mongoHost: check.mongoHost || undefined,
         ts: new Date().toISOString(),
       },
     });

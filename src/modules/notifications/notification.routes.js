@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import fs from 'fs';
 import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
-import { asyncHandler, AppError } from '../../utils/helpers.js';
+import { asyncHandler, AppError, parsePagination, paginated } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { Notification } from './notification.model.js';
 import { resolveImportErrorReport } from '../imports/importErrorReport.js';
@@ -49,6 +49,17 @@ function matchesFilters(n, query) {
   if (query.type) {
     if (String(n.type || '') !== String(query.type)) return false;
   }
+  if (query.category) {
+    const cat = String(query.category).toLowerCase();
+    const module = String(n.module || 'system').toLowerCase();
+    const type = String(n.type || '').toLowerCase();
+    if (cat === 'workflow' && !/camp_|asset_|movement_|agreement_|picklist_|commercial_/i.test(type)) {
+      return false;
+    }
+    if (cat === 'system' && module !== 'system') return false;
+    if (cat === 'alerts' && String(n.priority || '') !== 'critical') return false;
+    if (!['workflow', 'system', 'alerts', ''].includes(cat) && module !== cat) return false;
+  }
   if (query.q) {
     const q = String(query.q).trim().toLowerCase();
     if (q) {
@@ -59,6 +70,14 @@ function matchesFilters(n, query) {
   return true;
 }
 
+function serializeNotification(n) {
+  const row = typeof n.toObject === 'function' ? n.toObject() : { ...n };
+  if (row.meta?.errors) {
+    row.meta = { ...row.meta, errors: undefined, errorsOmitted: true };
+  }
+  return row;
+}
+
 router.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -66,28 +85,28 @@ router.get(
     await deliverDueForUser(req.user._id);
 
     const nowMs = Date.now();
+    const { page, limit } = parsePagination(req.query, { maxLimit: 100 });
     const filter = { userId: req.user._id };
     if (req.query.unread === 'true') filter.readAt = null;
     const showArchived =
-      req.query.archive === '1' ||
-      req.query.archive === 'true' ||
-      req.query.archived === '1';
+      req.query.archive === '1'
+      || req.query.archive === 'true'
+      || req.query.archived === '1';
 
-    const all = await Notification.find(filter).sort({ createdAt: -1 }).limit(400);
-    const data = all
+    // Latest → oldest; fetch a bounded window then filter/paginate in memory
+    // (scheduled / archive flags are not pure Mongo predicates across file + mongo backends).
+    const fetchCap = Math.min(2000, Math.max(limit * page + limit, 400));
+    const all = await Notification.find(filter).sort({ createdAt: -1 }).limit(fetchCap);
+    const filtered = all
       .filter((n) => isActive(n) && isDue(n, nowMs))
       .filter((n) => (showArchived ? isArchived(n) : !isArchived(n)))
-      .filter((n) => matchesFilters(n, req.query))
-      .slice(0, 100)
-      .map((n) => {
-        const row = typeof n.toObject === 'function' ? n.toObject() : { ...n };
-        if (row.meta?.errors) {
-          row.meta = { ...row.meta, errors: undefined, errorsOmitted: true };
-        }
-        return row;
-      });
+      .filter((n) => matchesFilters(n, req.query));
 
-    res.json({ data });
+    const total = filtered.length;
+    const start = (page - 1) * limit;
+    const data = filtered.slice(start, start + limit).map(serializeNotification);
+
+    res.json(paginated(data, total, page, limit));
   })
 );
 

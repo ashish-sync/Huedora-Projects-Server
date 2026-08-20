@@ -100,6 +100,24 @@ export async function ensureSeed() {
         dirty = true;
       }
     }
+    // Merge new Finance SoD keys into Editor/Approver without wiping custom grants
+    if (name === 'Editor' || name === 'Approver') {
+      const requiredFinance = (ROLE_PERMISSIONS[name] || []).filter((p) =>
+        String(p).startsWith('finance:')
+      );
+      const current = new Set(existing.permissions || []);
+      let added = false;
+      for (const p of requiredFinance) {
+        if (!current.has(p)) {
+          current.add(p);
+          added = true;
+        }
+      }
+      if (added) {
+        existing.permissions = [...current];
+        dirty = true;
+      }
+    }
     // Camp Coordinator is a fixed designation bundle — keep permissions in sync
     if (name === 'Camp Coordinator') {
       const expected = [...ROLE_PERMISSIONS['Camp Coordinator']].sort().join('|');
