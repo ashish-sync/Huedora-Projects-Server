@@ -26,10 +26,8 @@ import {
 } from './import/importClientMasterValidation.js';
 import {
   buildCampDuplicateKey,
-  buildDuplicatePreviewFlag,
-  findExistingDuplicateCamp,
-  formatDuplicateCampMessage,
 } from './campDuplicate.js';
+import { findImportDuplicateToSkip } from './import/importSkipDuplicates.js';
 
 async function resolveClientForRow(row, { allowCreate = false } = {}) {
   const name = trimStr(row.clientName);
@@ -128,12 +126,12 @@ async function buildBodyPreviewFromMappedRows(mappedRows, defaults = {}, catalog
         const client = await resolveClientForRow(entry.row, { allowCreate: false });
         if (client?._id) entry.row.clientName = client.name;
 
-        const duplicate = await findExistingDuplicateCamp({ client, row: entry.row });
-        if (duplicate) {
-          entry.duplicateOf = buildDuplicatePreviewFlag(duplicate);
+        const hit = await findImportDuplicateToSkip({ client, row: entry.row });
+        if (hit) {
+          entry.duplicateOf = hit.flag;
           entry.errors = [
             ...(entry.errors || []),
-            formatDuplicateCampMessage(duplicate),
+            hit.reason,
           ];
         }
 

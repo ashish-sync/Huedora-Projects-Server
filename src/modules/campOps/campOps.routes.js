@@ -95,6 +95,7 @@ import {
   normalizeImportSource,
 } from './import/importRowEnrichment.js';
 import { validateMappedImportRowsWithClientMaster } from './import/importClientMasterValidation.js';
+import { findImportDuplicateToSkip } from './import/importSkipDuplicates.js';
 import {
   parseCampRequestWithValidation,
   parsedFieldsToCampRow,
@@ -162,8 +163,6 @@ import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.r
 import { assertHistoricalCampDatesAllowed, localTodayIso } from './campDatePolicy.js';
 import { assertHcwAssignmentGap } from './hcwAssignmentGap.js';
 import {
-  findExistingDuplicateCamp,
-  formatDuplicateCampMessage,
   createCampEnsuringNoDuplicate,
   assertNoDuplicateOnCampSave,
   attachDuplicateKey,
@@ -3973,14 +3972,40 @@ router.post(
     const mappedRows = mapImportRows(rows, mapping, defaultClientName);
     const enrichedRows = await enrichMappedImportRowsFromPin(mappedRows);
     const { validRows, invalidRows } = await validateMappedImportRowsWithClientMaster(enrichedRows);
+
+    const clients = await CampOpsClient.find({ isDeleted: false });
+    const clientMap = new Map(clients.map((c) => [String(c.name || '').toLowerCase(), c]));
+    const creatableRows = [];
+    const duplicateRows = [];
+
+    for (const row of validRows) {
+      const client = clientMap.get(String(row.clientName || '').toLowerCase());
+      if (!client) {
+        creatableRows.push(row);
+        continue;
+      }
+      const hit = await findImportDuplicateToSkip({ client, row });
+      if (hit) {
+        duplicateRows.push({
+          ...row,
+          duplicateOf: hit.flag,
+          errors: [...(row.errors || []), hit.reason],
+        });
+        continue;
+      }
+      creatableRows.push(row);
+    }
+
     res.json({
       summary: {
         total: mappedRows.length,
-        valid: validRows.length,
+        valid: creatableRows.length,
         invalid: invalidRows.length,
+        duplicates: duplicateRows.length,
       },
-      validRows,
+      validRows: creatableRows,
       invalidRows,
+      duplicateRows,
       mapping,
     });
   })
@@ -4014,6 +4039,7 @@ router.post(
           rowNumber: row.rowNumber,
           clientName: row.clientName,
           reason: `Client "${row.clientName}" is not configured in Client Master`,
+          skipReason: 'missing_client',
         });
         continue;
       }
@@ -4029,22 +4055,15 @@ router.post(
       });
       await assertClientIdAccess(req.user, client._id);
 
-      const duplicate = await findExistingDuplicateCamp({
-        client,
-        row: {
-          clientName: client.name,
-          doctorName: row.doctorName,
-          campaignType: row.campaignType,
-          campDate: row.campDate,
-          startTime: row.startTime,
-        },
-      });
-      if (duplicate) {
+      // Never update/replace an existing camp — skip identity matches unchanged.
+      const dupHit = await findImportDuplicateToSkip({ client, row });
+      if (dupHit) {
         skipped.push({
           rowNumber: row.rowNumber,
           clientName: row.clientName,
-          campId: duplicate.campId,
-          reason: formatDuplicateCampMessage(duplicate),
+          campId: dupHit.duplicate.campId,
+          reason: dupHit.reason,
+          skipReason: 'duplicate',
         });
         continue;
       }
@@ -4091,16 +4110,18 @@ router.post(
             doctorName: row.doctorName,
             campaignType: row.campaignType,
             campDate: row.campDate,
-            startTime: row.startTime,
+            startTime: schedule.startTime,
           },
         });
       } catch (err) {
         if (err instanceof CampDuplicateError) {
+          // Race / concurrent create — still do not mutate the existing camp.
           skipped.push({
             rowNumber: row.rowNumber,
             clientName: row.clientName,
             campId: err.existingCamp?.campId,
             reason: err.message,
+            skipReason: 'duplicate',
           });
           continue;
         }
@@ -4112,6 +4133,7 @@ router.post(
     await audit(req, 'camp_ops.import_confirm', 'camp_ops_import', null, null, {
       created: created.length,
       skipped: skipped.length,
+      skippedDuplicates: skipped.filter((s) => s.skipReason === 'duplicate').length,
       invalid: invalidRows.length,
     });
 
@@ -4131,6 +4153,7 @@ router.post(
       summary: {
         created: created.length,
         skipped: skipped.length,
+        skippedDuplicates: skipped.filter((s) => s.skipReason === 'duplicate').length,
         invalid: invalidRows.length,
       },
       created,

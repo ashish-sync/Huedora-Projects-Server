@@ -30,12 +30,11 @@ import {
 import { normalizePasteStartTime } from './pasteTimeNormalize.js';
 import {
   buildCampDuplicateKey,
-  buildDuplicatePreviewFlag,
   CampDuplicateError,
   createCampEnsuringNoDuplicate,
-  findExistingDuplicateCamp,
   formatDuplicateCampMessage,
 } from './campDuplicate.js';
+import { findImportDuplicateToSkip } from './import/importSkipDuplicates.js';
 
 const BLOCK_SEPARATOR = /(?:^|\n)\s*(?:---+|===+|\*\*\*+)\s*(?:\n|$)/;
 
@@ -279,12 +278,12 @@ async function buildBodyPreview(text, defaults = {}, { user, referenceDate = nul
         entry.row.clientName = client.name;
       }
 
-      const duplicate = await findExistingDuplicateCamp({ client, row: entry.row });
-      entry.duplicateOf = buildDuplicatePreviewFlag(duplicate);
-      if (duplicate) {
+      const hit = await findImportDuplicateToSkip({ client, row: entry.row });
+      entry.duplicateOf = hit?.flag || null;
+      if (hit) {
         entry.errors = [
           ...(entry.errors || []),
-          formatDuplicateCampMessage(duplicate),
+          hit.reason,
         ];
       }
 
@@ -490,7 +489,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
         },
       );
 
-      const liveDuplicate = await findExistingDuplicateCamp({
+      const liveHit = await findImportDuplicateToSkip({
         client,
         row: {
           clientName: client.name || entry.row.clientName,
@@ -498,14 +497,16 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
           campaignType: entry.row.campaignType,
           campDate: entry.row.campDate,
           startTime: entry.row.startTime,
+          endTime: entry.row.endTime,
+          durationHours: entry.row.durationHours,
         },
       });
-      if (liveDuplicate) {
+      if (liveHit) {
         results.push({
           status: 'duplicate',
           rowNumber: entry.rowNumber,
-          campId: liveDuplicate.campId,
-          id: liveDuplicate._id,
+          campId: liveHit.duplicate.campId,
+          id: liveHit.duplicate._id,
         });
         continue;
       }
