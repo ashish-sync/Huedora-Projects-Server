@@ -9,6 +9,7 @@ import {
 } from '../../../utils/spreadsheetLimits.js';
 import { importAppError, describeImportFileProblem } from '../../../utils/importErrors.js';
 import { assertSafeUpload } from '../../../utils/uploadSafety.js';
+import { createUploadStorage } from '../../../storage/createUploadStorage.js';
 
 export const importTempRoot = uploadDir('import-temp');
 
@@ -26,9 +27,10 @@ export function assertImportExtension(originalname) {
   return ext;
 }
 
-/** Multer disk storage — file lands under import-temp, never kept after job ends. */
+/** Multer disk storage — file lands under import-temp, never kept after job ends (skip R2). */
 export const tabularImportUpload = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
+    skipR2: true,
     destination: (_req, _file, cb) => {
       try {
         ensureTempRoot();

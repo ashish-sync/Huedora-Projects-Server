@@ -1,12 +1,7 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { v4 as uuid } from 'uuid';
 import { AgreementDocument } from './agreement.model.js';
 import { buildAgreementPdfBuffer, pdfOptionsFromAgreement } from './agreementPdf.js';
-import { uploadDir } from '../../config/paths.js';
-
-const uploadRoot = uploadDir('agreements');
+import { writeUploadBuffer } from '../../storage/persistUpload.js';
 
 /**
  * Persist the fully signed agreement PDF as the primary contract document.
@@ -37,9 +32,9 @@ export async function persistSignedAgreementPdf(agreement, uploadedBy = null) {
     .replace(/[^a-zA-Z0-9._-]+/g, '_')
     .slice(0, 80);
   const pdfKey = `${uuid()}-${safeTitle}-signed.pdf`;
-  const fullPath = path.join(uploadRoot, pdfKey);
-  fs.mkdirSync(uploadRoot, { recursive: true });
-  fs.writeFileSync(fullPath, pdfBuffer);
+  await writeUploadBuffer(`agreements/${pdfKey}`, pdfBuffer, {
+    contentType: 'application/pdf',
+  });
 
   const record = await AgreementDocument.create({
     agreementId: agreement._id,

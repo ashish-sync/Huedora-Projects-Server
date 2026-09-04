@@ -16,11 +16,12 @@ import {
 import { env } from '../../config/env.js';
 import { uploadDir } from '../../config/paths.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
+import { createUploadStorage } from '../../storage/createUploadStorage.js';
 
 const uploadRoot = uploadDir('verifications');
 
 const upload = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, uploadRoot),
     filename: (_req, file, cb) => {
       const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';

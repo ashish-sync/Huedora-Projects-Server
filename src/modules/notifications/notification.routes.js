@@ -7,6 +7,7 @@ import { Notification } from './notification.model.js';
 import { resolveImportErrorReport } from '../imports/importErrorReport.js';
 import { isArchived } from '../retention/archivePolicy.js';
 import { archiveExpiredForUser, archiveExpiredNotifications } from './notificationArchive.js';
+import { isApprovalRequestNotification } from './notificationCatalog.js';
 
 const router = Router();
 router.use(authenticate);
@@ -53,12 +54,20 @@ function matchesFilters(n, query) {
     const cat = String(query.category).toLowerCase();
     const module = String(n.module || 'system').toLowerCase();
     const type = String(n.type || '').toLowerCase();
-    if (cat === 'workflow' && !/camp_|asset_|movement_|agreement_|picklist_|commercial_/i.test(type)) {
+    const isApproval = isApprovalRequestNotification(n);
+    if (cat === 'approvals') {
+      if (!isApproval) return false;
+    } else if (cat === 'updates') {
+      if (isApproval) return false;
+    } else if (cat === 'workflow' && !/camp_|asset_|movement_|agreement_|picklist_|commercial_/i.test(type)) {
+      return false;
+    } else if (cat === 'system' && module !== 'system') {
+      return false;
+    } else if (cat === 'alerts' && String(n.priority || '') !== 'critical') {
+      return false;
+    } else if (!['workflow', 'system', 'alerts', 'approvals', 'updates', ''].includes(cat) && module !== cat) {
       return false;
     }
-    if (cat === 'system' && module !== 'system') return false;
-    if (cat === 'alerts' && String(n.priority || '') !== 'critical') return false;
-    if (!['workflow', 'system', 'alerts', ''].includes(cat) && module !== cat) return false;
   }
   if (query.q) {
     const q = String(query.q).trim().toLowerCase();
@@ -187,11 +196,30 @@ router.post(
 router.post(
   '/read-all',
   asyncHandler(async (req, res) => {
-    await Notification.updateMany(
-      { userId: req.user._id, readAt: null },
-      { $set: { readAt: new Date() } }
-    );
-    res.json({ data: { ok: true } });
+    const category = String(req.body?.category || req.query?.category || '').trim().toLowerCase();
+    const now = new Date();
+    if (!category || category === 'all') {
+      await Notification.updateMany(
+        { userId: req.user._id, readAt: null },
+        { $set: { readAt: now } }
+      );
+      return res.json({ data: { ok: true } });
+    }
+
+    // Scope mark-read to Approvals / Updates so inbox tabs don't wipe the other bucket.
+    const pending = await Notification.find({
+      userId: req.user._id,
+      readAt: null,
+    }).limit(2000);
+    let marked = 0;
+    for (const n of pending) {
+      if (n.cancelledAt || isArchived(n)) continue;
+      if (!matchesFilters(n, { category })) continue;
+      n.readAt = now;
+      await n.save();
+      marked += 1;
+    }
+    res.json({ data: { ok: true, marked } });
   })
 );
 

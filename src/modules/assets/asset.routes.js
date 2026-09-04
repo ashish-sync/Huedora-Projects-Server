@@ -43,11 +43,12 @@ import { findContactForCustodian } from '../contacts/contactIdentity.js';
 import { buildAssetPlaceholderSnapshot } from './assetPlaceholderSnapshot.js';
 import { uploadDir } from '../../config/paths.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
+import { createUploadStorage } from '../../storage/createUploadStorage.js';
 
 const agreementUploadRoot = uploadDir('agreements');
 
 const agreementUpload = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, agreementUploadRoot),
     filename: (_req, file, cb) => {
       const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');

@@ -76,3 +76,32 @@ export function canMergePriorities(existingPriority, incomingPriority) {
   }
   return true;
 }
+
+/** Types that always mean “action required from an approver”. */
+export const APPROVAL_REQUEST_TYPES = Object.freeze([
+  'CAMP_REVIEW',
+  'CAMP_REVIEW_OVERDUE',
+  'PICKLIST_SUGGESTION',
+]);
+
+/**
+ * True when the inbox item is an approval/review request (not a status update).
+ * Decision notices reusing *_APPROVAL types are excluded via title wording.
+ */
+export function isApprovalRequestNotification(n = {}) {
+  if (String(n?.meta?.kind || n?.kind || '').toLowerCase() === 'approval') return true;
+  if (String(n?.meta?.kind || n?.kind || '').toLowerCase() === 'update') return false;
+
+  const type = String(n?.type || '').trim().toUpperCase();
+  if (APPROVAL_REQUEST_TYPES.includes(type)) return true;
+
+  const title = String(n?.title || '').toLowerCase();
+  if (/needs (approval|review)/i.test(title)) return true;
+  if (/approval required|awaiting approval|pending approval/i.test(title)) return true;
+
+  // Shared type for request + decision — only the "needs approval" form is a request.
+  if (type === 'ASSET_REQUEST_APPROVAL' || type === 'MOVEMENT_APPROVAL') {
+    return /needs approval/.test(title);
+  }
+  return false;
+}

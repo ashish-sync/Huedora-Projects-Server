@@ -1,0 +1,38 @@
+import fs from 'fs';
+import multer from 'multer';
+import { persistLocalUploadToR2 } from './persistUpload.js';
+
+/**
+ * Multer storage: disk (same as multer.diskStorage) + optional R2 mirror.
+ *
+ * @param {{
+ *   destination: import('multer').DiskStorageOptions['destination'],
+ *   filename: import('multer').DiskStorageOptions['filename'],
+ *   skipR2?: boolean,
+ * }} options
+ */
+export function createUploadStorage({ destination, filename, skipR2 = false } = {}) {
+  const disk = multer.diskStorage({ destination, filename });
+
+  return {
+    _handleFile(req, file, cb) {
+      disk._handleFile(req, file, (err, info) => {
+        if (err) return cb(err);
+        if (skipR2 || !info?.path) return cb(null, info);
+        persistLocalUploadToR2(info.path, { contentType: file.mimetype })
+          .then(() => cb(null, info))
+          .catch((persistErr) => {
+            try {
+              if (info.path && fs.existsSync(info.path)) fs.unlinkSync(info.path);
+            } catch {
+              /* ignore */
+            }
+            cb(persistErr);
+          });
+      });
+    },
+    _removeFile(req, file, cb) {
+      disk._removeFile(req, file, cb);
+    },
+  };
+}

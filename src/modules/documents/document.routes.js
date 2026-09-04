@@ -12,10 +12,13 @@ import { writeAudit } from '../../utils/audit.js';
 import { v4 as uuid } from 'uuid';
 import { uploadDir } from '../../config/paths.js';
 import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
+import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { renameLocalUpload } from '../../storage/persistUpload.js';
+import { sendUploadFile } from '../../storage/serveUpload.js';
 
 const uploadRoot = uploadDir();
 
-const storage = multer.diskStorage({
+const storage = createUploadStorage({
   destination: (_req, _file, cb) => {
     const dir = path.join(uploadRoot, 'tmp');
     fs.mkdirSync(dir, { recursive: true });
@@ -84,7 +87,7 @@ router.post(
     fs.mkdirSync(destDir, { recursive: true });
     const destName = req.file.filename;
     const destPath = path.join(destDir, destName);
-    fs.renameSync(req.file.path, destPath);
+    await renameLocalUpload(req.file.path, destPath, { contentType: req.file.mimetype });
 
     const storageKey = path.join(entityType, String(entityId), destName).replace(/\\/g, '/');
     const doc = await Document.create({
@@ -116,8 +119,6 @@ router.get(
   asyncHandler(async (req, res) => {
     const doc = await Document.findOne({ _id: req.params.id, isDeleted: false });
     if (!doc) throw new AppError('Document not found', 404);
-    const full = path.join(uploadRoot, doc.storageKey);
-    if (!fs.existsSync(full)) throw new AppError('File missing on disk', 404);
     await writeAudit({
       actorId: req.user._id,
       actorEmail: req.user.email,
@@ -126,7 +127,9 @@ router.get(
       entityId: doc._id,
       requestId: req.requestId,
     });
-    res.download(full, doc.originalName);
+    await sendUploadFile(res, path.join(uploadRoot, doc.storageKey), {
+      downloadName: doc.originalName,
+    });
   })
 );
 

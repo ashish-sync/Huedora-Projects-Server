@@ -6,11 +6,12 @@ import { authenticate } from '../../middleware/auth.js';
 import { asyncHandler, AppError } from '../../utils/helpers.js';
 import { env } from '../../config/env.js';
 import { uploadsRoot } from '../../config/paths.js';
+import { sendUploadFile } from '../../storage/serveUpload.js';
 
 const router = Router();
 
 /**
- * Resolve a relative path under uploadsRoot safely.
+ * Resolve a relative path under uploadsRoot safely (disk existence required).
  * Accepts `camp-ops/a.pdf`, `/uploads/camp-ops/a.pdf`, or URL-encoded segments.
  */
 export function resolveUploadPath(relativePath) {
@@ -106,10 +107,7 @@ router.get(
     if (payload?.kind !== 'file' || !payload?.path) {
       throw new AppError('Invalid file token', 400, 'VALIDATION_ERROR');
     }
-    const full = resolveUploadPath(payload.path);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Cache-Control', 'private, no-store');
-    res.sendFile(full);
+    await sendUploadFile(res, payload.path);
   }),
 );
 

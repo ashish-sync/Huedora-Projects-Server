@@ -30,3 +30,14 @@ services:
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
+      # Cloudflare R2 (tylo-one-files) — set secrets in Render dashboard
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        value: tylo-one-files
+      - key: R2_REQUIRED
+        sync: false

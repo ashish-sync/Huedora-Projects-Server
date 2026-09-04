@@ -38,6 +38,7 @@ import geoRoutes from './modules/geo/geo.routes.js';
 import picklistRoutes from './modules/picklists/picklist.routes.js';
 import fileRoutes from './modules/files/file.routes.js';
 import retentionRoutes from './modules/retention/retention.routes.js';
+import objectStorageRoutes from './storage/objectStorage.routes.js';
 
 export function createApp(options = {}) {
   const checkReady = options.checkReady || defaultCheckPersistenceReady;
@@ -115,6 +116,7 @@ export function createApp(options = {}) {
   /** Readiness: MongoDB connectivity (prod) or writable file store (dev). */
   app.get('/api/v1/ready', async (_req, res) => {
     const check = await checkReady();
+    const objectStorage = check.objectStorage || undefined;
     if (!check.ready) {
       return res.status(503).json({
         data: {
@@ -122,6 +124,7 @@ export function createApp(options = {}) {
           ready: false,
           reason: check.reason,
           persistence: check.persistence,
+          objectStorage,
           ts: new Date().toISOString(),
         },
       });
@@ -132,6 +135,7 @@ export function createApp(options = {}) {
         ready: true,
         persistence: check.persistence,
         mongoHost: check.mongoHost || undefined,
+        objectStorage,
         ts: new Date().toISOString(),
       },
     });
@@ -176,6 +180,7 @@ export function createApp(options = {}) {
   app.use('/api/v1/geo', geoRoutes);
   app.use('/api/v1/picklists', picklistRoutes);
   app.use('/api/v1/files', fileRoutes);
+  app.use('/api/v1/system', objectStorageRoutes);
   app.use('/api/v1/retention', retentionRoutes);
   // Scoped mounts only. never mount repairs as a /api/v1 catch-all (it hid missing routes).
   app.use('/api/v1/repairs', repairRoutes);

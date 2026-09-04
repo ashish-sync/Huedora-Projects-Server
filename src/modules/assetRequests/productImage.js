@@ -11,6 +11,9 @@ import {
   collectUploadedFiles,
   UPLOAD_RULES,
 } from '../../utils/rejectUnsafeUpload.js';
+import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { uploadExists } from '../../storage/serveUpload.js';
+import { deleteLocalUpload } from '../../storage/persistUpload.js';
 
 export const assetRequestUploadRoot = uploadDir('asset-requests');
 
@@ -47,7 +50,7 @@ const ATTACHMENT_RULES = {
 };
 
 const productPhotoMulter = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, assetRequestUploadRoot),
     filename: (_req, file, cb) => cb(null, `${uuid()}${IMAGE_EXTENSIONS[file.mimetype]}`),
   }),
@@ -61,7 +64,7 @@ const productPhotoMulter = multer({
 }).single('productPhoto');
 
 const reimbursementBillMulter = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, assetRequestUploadRoot),
     filename: (_req, file, cb) => cb(null, `${uuid()}${BILL_EXTENSIONS[file.mimetype]}`),
   }),
@@ -75,7 +78,7 @@ const reimbursementBillMulter = multer({
 }).single('bill');
 
 const requestAttachmentMulter = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, assetRequestUploadRoot),
     filename: (_req, file, cb) => cb(null, `${uuid()}${ATTACHMENT_EXTENSIONS[file.mimetype]}`),
   }),
@@ -162,33 +165,45 @@ export function imageFilePath(image) {
   return resolved.startsWith(rootPrefix) ? resolved : null;
 }
 
-export function existingImageFilePath(image) {
+export async function existingImageFilePath(image) {
   const filePath = imageFilePath(image);
-  if (!filePath || !fs.existsSync(filePath)) return null;
-  const realRoot = fs.realpathSync(assetRequestUploadRoot);
-  const realFile = fs.realpathSync(filePath);
-  return realFile.startsWith(`${realRoot}${path.sep}`) ? realFile : null;
+  if (!filePath) return null;
+  if (fs.existsSync(filePath)) {
+    const realRoot = fs.realpathSync(assetRequestUploadRoot);
+    const realFile = fs.realpathSync(filePath);
+    return realFile.startsWith(`${realRoot}${path.sep}`) ? realFile : null;
+  }
+  if (await uploadExists(filePath)) return filePath;
+  return null;
 }
 
-export function existingAttachmentFilePath(attachment) {
+export async function existingAttachmentFilePath(attachment) {
   const filename = path.basename(String(attachment?.filename || ''));
   const allowedFile =
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(jpg|png|webp|gif|heic|heif|bmp|pdf|doc|docx|xls|xlsx|txt)$/i;
   if (!filename || filename !== attachment?.filename || !allowedFile.test(filename)) return null;
   const resolved = path.resolve(assetRequestUploadRoot, filename);
   const rootPrefix = `${path.resolve(assetRequestUploadRoot)}${path.sep}`;
-  if (!resolved.startsWith(rootPrefix) || !fs.existsSync(resolved)) return null;
-  const realRoot = fs.realpathSync(assetRequestUploadRoot);
-  const realFile = fs.realpathSync(resolved);
-  return realFile.startsWith(`${realRoot}${path.sep}`) ? realFile : null;
+  if (!resolved.startsWith(rootPrefix)) return null;
+  if (fs.existsSync(resolved)) {
+    const realRoot = fs.realpathSync(assetRequestUploadRoot);
+    const realFile = fs.realpathSync(resolved);
+    return realFile.startsWith(`${realRoot}${path.sep}`) ? realFile : null;
+  }
+  if (await uploadExists(resolved)) return resolved;
+  return null;
 }
 
 export function removeImageFile(image) {
   const filePath = imageFilePath(image);
-  if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  if (filePath) {
+    deleteLocalUpload(filePath).catch(() => {});
+  }
 }
 
 export function removeAttachmentFile(attachment) {
-  const filePath = existingAttachmentFilePath(attachment);
-  if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  const filename = path.basename(String(attachment?.filename || ''));
+  if (!filename) return;
+  const resolved = path.resolve(assetRequestUploadRoot, filename);
+  deleteLocalUpload(resolved).catch(() => {});
 }

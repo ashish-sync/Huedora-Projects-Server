@@ -196,6 +196,7 @@ router.post(
       includeWatchers: false,
       actor: req.user,
       module: 'masters',
+      meta: { kind: 'approval' },
     });
 
     await writeAudit({
@@ -242,6 +243,7 @@ router.post(
         includeWatchers: false,
         actor: req.user,
         module: 'masters',
+        meta: { kind: 'update' },
       });
     }
 
@@ -291,6 +293,7 @@ router.post(
         actor: req.user,
         module: 'masters',
         priority: 'important',
+        meta: { kind: 'update' },
       });
     }
 

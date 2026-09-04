@@ -31,11 +31,12 @@ import {
 } from '../devices/device.constants.js';
 import { uploadDir } from '../../config/paths.js';
 import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
+import { createUploadStorage } from '../../storage/createUploadStorage.js';
 
 const uploadRoot = uploadDir('verifications');
 
 const upload = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, uploadRoot),
     filename: (_req, file, cb) => {
       const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';

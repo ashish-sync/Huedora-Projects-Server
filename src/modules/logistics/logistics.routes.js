@@ -104,11 +104,12 @@ import {
 import { productMasterAssetName } from './productMasterLabel.js';
 import { uploadDir } from '../../config/paths.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
+import { createUploadStorage } from '../../storage/createUploadStorage.js';
 
 const inwardUploadRoot = uploadDir('logistics');
 
 const inwardUpload = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, inwardUploadRoot),
     filename: (_req, file, cb) => {
       const safe = String(file.originalname || 'file')
@@ -123,7 +124,7 @@ const inwardUpload = multer({
 const productUploadRoot = uploadDir('logistics', 'products');
 
 const productUpload = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, productUploadRoot),
     filename: (_req, file, cb) => {
       const safe = String(file.originalname || 'file')

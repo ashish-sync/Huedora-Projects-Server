@@ -26,6 +26,7 @@ import {
 import { normalizePhone } from '../../utils/identityNormalize.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { uploadDir } from '../../config/paths.js';
+import { createUploadStorage } from '../../storage/createUploadStorage.js';
 import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import {
   assertSpreadsheetUpload,
@@ -107,7 +108,7 @@ async function enrichContactsWithProviders(contacts = []) {
 }
 
 const kycUpload = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
     destination: (_req, _file, cb) => {
       try {
         fs.mkdirSync(contactUploadRoot, { recursive: true });

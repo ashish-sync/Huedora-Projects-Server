@@ -37,12 +37,15 @@ import { sanitizeHtml } from '../../utils/sanitizeHtml.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { applyArchiveListFilter } from '../retention/archivePolicy.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
+import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { copyLocalUpload } from '../../storage/persistUpload.js';
+import { sendUploadFile } from '../../storage/serveUpload.js';
 
 const uploadRoot = uploadDir('agreements');
 const previewRoot = uploadDir('previews');
 
 const upload = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, uploadRoot),
     filename: (_req, file, cb) => {
       const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -470,7 +473,9 @@ router.post(
 
     if (previewEntry?.pdfPath && fs.existsSync(previewEntry.pdfPath)) {
       const pdfKey = `${uuid()}-preview.pdf`;
-      fs.copyFileSync(previewEntry.pdfPath, path.join(uploadRoot, pdfKey));
+      await copyLocalUpload(previewEntry.pdfPath, path.join(uploadRoot, pdfKey), {
+        contentType: 'application/pdf',
+      });
       await AgreementDocument.create({
         agreementId: agreement._id,
         name: `${title}.pdf`,
@@ -488,7 +493,10 @@ router.post(
         const src = path.join(previewRoot, previewEntry.filledDocxKey);
         if (fs.existsSync(src)) {
           const docxKey = `${uuid()}-filled.docx`;
-          fs.copyFileSync(src, path.join(uploadRoot, docxKey));
+          await copyLocalUpload(src, path.join(uploadRoot, docxKey), {
+            contentType:
+              'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          });
           await AgreementDocument.create({
             agreementId: agreement._id,
             name: `${title}-filled.docx`,
@@ -971,8 +979,8 @@ router.get(
     if (!doc) throw new AppError('Document not found', 404);
     if (doc.storageKey) {
       const full = path.join(uploadRoot, doc.storageKey);
-      if (!fs.existsSync(full)) throw new AppError('File missing', 404);
-      return res.download(full, doc.name);
+      await sendUploadFile(res, full, { downloadName: doc.name });
+      return;
     }
     res.type('text/plain').send(doc.textContent || '');
   })

@@ -70,6 +70,8 @@ import { buildDeliveryChallanPdfBuffer } from './deliveryChallanPdf.js';
 import { buildBillOfSupplyPdfBuffer } from './billOfSupplyPdf.js';
 import { buildQuotationPdfBuffer } from './quotationPdf.js';
 import { uploadDir } from '../../config/paths.js';
+import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { pipeUploadToResponse } from '../../storage/serveUpload.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import {
   assertCommercialDocWithinPoBalance,
@@ -92,7 +94,7 @@ const ALLOWED_COMMERCIAL_MIMES = new Set([
 
 const ALLOWED_COMMERCIAL_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx']);
 
-const storage = multer.diskStorage({
+const storage = createUploadStorage({
   destination: (_req, _file, cb) => cb(null, uploadRoot),
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname || '').toLowerCase() || '.pdf';
@@ -635,14 +637,13 @@ router.get(
 
     if (row.source === 'uploaded' && row.storageKey) {
       const filePath = path.join(uploadRoot, row.storageKey);
-      if (!fs.existsSync(filePath)) throw new AppError('Uploaded file missing', 404);
       const asDownload = String(req.query.download || '') === '1';
       res.setHeader('Content-Type', row.uploadedMimeType || 'application/pdf');
       res.setHeader(
         'Content-Disposition',
         `${asDownload ? 'attachment' : 'inline'}; filename="${(row.uploadedFileName || row.documentNumber || 'proforma').replace(/[^\w.-]+/g, '_')}.pdf"`
       );
-      fs.createReadStream(filePath).pipe(res);
+      await pipeUploadToResponse(res, filePath, { contentType: row.uploadedMimeType || 'application/pdf' });
       return;
     }
 
@@ -917,14 +918,13 @@ router.get(
 
     if (row.source === 'uploaded' && row.storageKey) {
       const filePath = path.join(uploadRoot, row.storageKey);
-      if (!fs.existsSync(filePath)) throw new AppError('Uploaded file missing', 404);
       const asDownload = String(req.query.download || '') === '1';
       res.setHeader('Content-Type', row.uploadedMimeType || 'application/pdf');
       res.setHeader(
         'Content-Disposition',
         `${asDownload ? 'attachment' : 'inline'}; filename="${(row.uploadedFileName || row.documentNumber || 'purchase-order').replace(/[^\w.-]+/g, '_')}.pdf"`
       );
-      fs.createReadStream(filePath).pipe(res);
+      await pipeUploadToResponse(res, filePath, { contentType: row.uploadedMimeType || 'application/pdf' });
       return;
     }
 
@@ -1199,14 +1199,13 @@ router.get(
 
     if (row.source === 'uploaded' && row.storageKey) {
       const filePath = path.join(uploadRoot, row.storageKey);
-      if (!fs.existsSync(filePath)) throw new AppError('Uploaded file missing', 404);
       const asDownload = String(req.query.download || '') === '1';
       res.setHeader('Content-Type', row.uploadedMimeType || 'application/pdf');
       res.setHeader(
         'Content-Disposition',
         `${asDownload ? 'attachment' : 'inline'}; filename="${(row.uploadedFileName || row.documentNumber || 'invoice').replace(/[^\w.-]+/g, '_')}.pdf"`
       );
-      fs.createReadStream(filePath).pipe(res);
+      await pipeUploadToResponse(res, filePath, { contentType: row.uploadedMimeType || 'application/pdf' });
       return;
     }
 
@@ -1406,14 +1405,13 @@ router.get(
 
     if (row.source === 'uploaded' && row.storageKey) {
       const filePath = path.join(uploadRoot, row.storageKey);
-      if (!fs.existsSync(filePath)) throw new AppError('Uploaded file missing', 404);
       const asDownload = String(req.query.download || '') === '1';
       res.setHeader('Content-Type', row.uploadedMimeType || 'application/pdf');
       res.setHeader(
         'Content-Disposition',
         `${asDownload ? 'attachment' : 'inline'}; filename="${(row.uploadedFileName || row.documentNumber || 'credit-note').replace(/[^\w.-]+/g, '_')}.pdf"`
       );
-      fs.createReadStream(filePath).pipe(res);
+      await pipeUploadToResponse(res, filePath, { contentType: row.uploadedMimeType || 'application/pdf' });
       return;
     }
 
@@ -1628,14 +1626,13 @@ function registerInvoiceLikeDocRoutes({
 
       if (row.source === 'uploaded' && row.storageKey) {
         const filePath = path.join(uploadRoot, row.storageKey);
-        if (!fs.existsSync(filePath)) throw new AppError('Uploaded file missing', 404);
         const asDownload = String(req.query.download || '') === '1';
         res.setHeader('Content-Type', row.uploadedMimeType || 'application/pdf');
         res.setHeader(
           'Content-Disposition',
           `${asDownload ? 'attachment' : 'inline'}; filename="${(row.uploadedFileName || row.documentNumber || fileSlug).replace(/[^\w.-]+/g, '_')}.pdf"`
         );
-        fs.createReadStream(filePath).pipe(res);
+        await pipeUploadToResponse(res, filePath, { contentType: row.uploadedMimeType || 'application/pdf' });
         return;
       }
 

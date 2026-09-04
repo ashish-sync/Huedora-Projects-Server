@@ -101,47 +101,103 @@ export function getDbInfo() {
  * - mongo: ping the server (fails when Atlas is down / disconnected)
  * - file: data directory must be writable
  */
+async function attachObjectStorageReady(base) {
+  try {
+    const { getR2Env, describeR2Config } = await import('../storage/r2Env.js');
+    const { probeObjectStore } = await import('../storage/objectStore.js');
+    const cfg = getR2Env();
+    const summary = describeR2Config(cfg);
+    base.objectStorage = {
+      enabled: summary.enabled,
+      bucket: summary.bucket,
+      endpointHost: summary.endpointHost,
+    };
+    if (!cfg.enabled) {
+      if (cfg.required || (env.isProd && env.r2Required)) {
+        return {
+          ...base,
+          ready: false,
+          reason: `R2 required but not configured (missing: ${summary.missing.join(', ') || 'credentials'})`,
+        };
+      }
+      return base;
+    }
+    const probe = await probeObjectStore();
+    base.objectStorage = {
+      ...base.objectStorage,
+      ok: probe.ok,
+      reason: probe.reason || undefined,
+    };
+    if (!probe.ok && (cfg.required || env.r2Required)) {
+      return {
+        ...base,
+        ready: false,
+        reason: probe.reason || 'R2 HeadBucket failed',
+      };
+    }
+    return base;
+  } catch (err) {
+    if (env.r2Required) {
+      return {
+        ...base,
+        ready: false,
+        reason: err?.message || 'Object storage check failed',
+      };
+    }
+    base.objectStorage = { enabled: false, error: err?.message || 'check failed' };
+    return base;
+  }
+}
+
 export async function checkPersistenceReady() {
   const info = getDbInfo();
   if (env.isProd && info.mode !== 'mongo') {
-    return {
+    return attachObjectStorageReady({
       ready: false,
       reason: 'MongoDB persistence required in production',
       persistence: info.mode,
-    };
+    });
   }
   if (info.mode === 'mongo') {
     if (!env.useMongoose) {
-      return { ready: false, reason: 'MongoDB not configured', persistence: info.mode };
+      return attachObjectStorageReady({
+        ready: false,
+        reason: 'MongoDB not configured',
+        persistence: info.mode,
+      });
     }
     try {
       const mongoose = (await import('mongoose')).default;
       if (mongoose.connection.readyState !== 1) {
-        return {
+        return attachObjectStorageReady({
           ready: false,
           reason: 'MongoDB connection is not ready',
           persistence: info.mode,
           mongoState: mongoose.connection.readyState,
-        };
+        });
       }
       await mongoose.connection.db.admin().command({ ping: 1 });
-      return { ready: true, persistence: info.mode, mongoHost: info.mongoHost };
+      return attachObjectStorageReady({
+        ready: true,
+        persistence: info.mode,
+        mongoHost: info.mongoHost,
+      });
     } catch (err) {
-      return {
+      return attachObjectStorageReady({
         ready: false,
         reason: err?.message || 'MongoDB ping failed',
         persistence: info.mode,
-      };
+      });
     }
   }
   try {
     fs.accessSync(dataDir, fs.constants.R_OK | fs.constants.W_OK);
-    return { ready: true, persistence: info.mode };
+    return attachObjectStorageReady({ ready: true, persistence: info.mode });
   } catch (err) {
-    return {
+    return attachObjectStorageReady({
       ready: false,
       reason: err?.message || 'Data directory not writable',
       persistence: info.mode,
-    };
+    });
   }
 }

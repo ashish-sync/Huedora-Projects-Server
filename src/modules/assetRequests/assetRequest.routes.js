@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import path from 'path';
+import { pipeUploadToResponse } from '../../storage/serveUpload.js';
 import { createHash, randomBytes } from 'crypto';
 import { authenticate, requirePermission } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
@@ -655,6 +656,7 @@ async function notifyApprovers({ request, actorId, reason }) {
     recipients: approvers.map((a) => a._id),
     includeWatchers: true,
     module: 'assets',
+    meta: { kind: 'approval' },
   });
 }
 
@@ -885,15 +887,13 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
-    const filePath = existingImageFilePath(row.productImage);
+    const filePath = await existingImageFilePath(row.productImage);
     if (!filePath) {
       throw new AppError('Product image not found', 404);
     }
     res.type(row.productImage.mimeType || 'application/octet-stream');
     res.setHeader('Content-Disposition', `inline; filename="product-image${path.extname(filePath)}"`);
-    await new Promise((resolve, reject) => {
-      res.sendFile(filePath, (error) => (error ? reject(error) : resolve()));
-    });
+    await pipeUploadToResponse(res, filePath);
   })
 );
 
@@ -951,16 +951,14 @@ router.get(
     if (row.requestType !== 'REIMBURSEMENT') {
       throw new AppError('Bill is not available for this request type', 400);
     }
-    const filePath = existingAttachmentFilePath(row.billAttachment);
+    const filePath = await existingAttachmentFilePath(row.billAttachment);
     if (!filePath) throw new AppError('Bill not found', 404);
     res.type(row.billAttachment.mimeType || 'application/octet-stream');
     res.setHeader(
       'Content-Disposition',
       `inline; filename="bill${path.extname(filePath)}"`
     );
-    await new Promise((resolve, reject) => {
-      res.sendFile(filePath, (error) => (error ? reject(error) : resolve()));
-    });
+    await pipeUploadToResponse(res, filePath);
   })
 );
 
@@ -1015,16 +1013,14 @@ router.get(
     if (row.requestType !== 'OTHER' && row.requestType !== 'MASTER_ADD') {
       throw new AppError('Attachment is not available for this request type', 400);
     }
-    const filePath = existingAttachmentFilePath(row.requestAttachment);
+    const filePath = await existingAttachmentFilePath(row.requestAttachment);
     if (!filePath) throw new AppError('Attachment not found', 404);
     res.type(row.requestAttachment.mimeType || 'application/octet-stream');
     res.setHeader(
       'Content-Disposition',
       `inline; filename="request-attachment${path.extname(filePath)}"`
     );
-    await new Promise((resolve, reject) => {
-      res.sendFile(filePath, (error) => (error ? reject(error) : resolve()));
-    });
+    await pipeUploadToResponse(res, filePath);
   })
 );
 
@@ -1079,16 +1075,14 @@ router.get(
     if (row.requestType !== 'HIRING') {
       throw new AppError('Job description is not available for this request type', 400);
     }
-    const filePath = existingAttachmentFilePath(row.jdAttachment);
+    const filePath = await existingAttachmentFilePath(row.jdAttachment);
     if (!filePath) throw new AppError('Job description not found', 404);
     res.type(row.jdAttachment.mimeType || 'application/octet-stream');
     res.setHeader(
       'Content-Disposition',
       `inline; filename="jd${path.extname(filePath)}"`
     );
-    await new Promise((resolve, reject) => {
-      res.sendFile(filePath, (error) => (error ? reject(error) : resolve()));
-    });
+    await pipeUploadToResponse(res, filePath);
   })
 );
 
@@ -1622,7 +1616,7 @@ router.post(
       let fileBuffer = null;
       let fileName = '';
       if (row.masterEntity === 'templates') {
-        const filePath = existingAttachmentFilePath(row.requestAttachment);
+        const filePath = await existingAttachmentFilePath(row.requestAttachment);
         if (!filePath) {
           throw new AppError(
             'Upload a Word (.docx) template before approving this request',
@@ -1681,6 +1675,7 @@ router.post(
           entityId: row._id,
           includeWatchers: true,
           module: 'assets',
+          meta: { kind: 'update' },
         });
       }
 
@@ -1737,6 +1732,7 @@ router.post(
         entityId: row._id,
         includeWatchers: true,
         module: 'assets',
+        meta: { kind: 'update' },
       });
     }
 
@@ -1794,6 +1790,7 @@ router.post(
         includeWatchers: true,
         module: 'assets',
         priority: 'critical',
+        meta: { kind: 'update' },
       });
     }
 
@@ -2148,6 +2145,7 @@ router.post(
         entityId: row._id,
         includeWatchers: true,
         module: 'assets',
+        meta: { kind: 'update' },
       });
     }
 

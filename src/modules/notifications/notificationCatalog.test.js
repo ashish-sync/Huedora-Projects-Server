@@ -4,6 +4,7 @@ import {
   canMergePriorities,
   defaultGroupKey,
   resolveEventMeta,
+  isApprovalRequestNotification,
   NOTIFICATION_PRIORITIES,
   NOTIFICATION_TTL_DAYS,
 } from './notificationCatalog.js';
@@ -31,6 +32,43 @@ describe('notificationCatalog', () => {
 
   it('uses 7-day TTL', () => {
     assert.equal(NOTIFICATION_TTL_DAYS, 7);
+  });
+
+  it('detects approval-request notifications', () => {
+    assert.equal(
+      isApprovalRequestNotification({ type: 'CAMP_REVIEW', title: 'Camp needs review' }),
+      true
+    );
+    assert.equal(
+      isApprovalRequestNotification({
+        type: 'ASSET_REQUEST_APPROVAL',
+        title: 'Request X needs approval',
+      }),
+      true
+    );
+    assert.equal(
+      isApprovalRequestNotification({
+        type: 'ASSET_REQUEST_APPROVAL',
+        title: 'Request X approved',
+      }),
+      false
+    );
+    assert.equal(
+      isApprovalRequestNotification({
+        type: 'ASSET_REQUEST_APPROVAL',
+        title: 'Request X approved',
+        meta: { kind: 'update' },
+      }),
+      false
+    );
+    assert.equal(
+      isApprovalRequestNotification({
+        type: 'ASSET_REQUEST_APPROVAL',
+        title: 'opaque',
+        meta: { kind: 'approval' },
+      }),
+      true
+    );
   });
 });
 

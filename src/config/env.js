@@ -78,6 +78,12 @@ export const env = {
   dataDir: String(process.env.DATA_DIR || '').trim(),
   /** Uploaded files root. Mount a persistent disk here on Render if not using object storage. */
   uploadsDir: String(process.env.UPLOADS_DIR || '').trim(),
+  /**
+   * Cloudflare R2 object storage (S3 API). When credentials are set, uploads dual-write
+   * to local disk + R2 and signed downloads fall back to R2 after redeploys.
+   * See `server/src/storage/r2Env.js` for env var names (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, …).
+   */
+  r2Required: String(process.env.R2_REQUIRED || '').toLowerCase() === 'true',
   smtpEnabled: String(process.env.SMTP_ENABLED || 'false').toLowerCase() === 'true',
   seedAgreementSamples:
     !isProd && String(process.env.SEED_AGREEMENT_SAMPLES || 'false').toLowerCase() === 'true',

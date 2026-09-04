@@ -34,7 +34,7 @@ import { Contact, normalizeContactPayload } from '../contacts/contact.model.js';
 import { assertContactIdentityAvailable } from '../contacts/contactIdentity.js';
 import { resolvePinTargets, upsertNormalizedPin, enrichPinRecord } from '../geo/pinCode.service.js';
 import { DocumentTemplate } from '../templates/template.model.js';
-import { analyzeDocx, writeBuffer } from '../templates/docxPlaceholders.js';
+import { analyzeDocx, writeBufferPersisted } from '../templates/docxPlaceholders.js';
 import {
   SignatureMaster,
   normalizeSignaturePayload,
@@ -338,7 +338,10 @@ async function createTemplate(payload, fileBuffer, originalName, actor, requestI
   const analysis = await analyzeDocx(fileBuffer);
   const safeName = String(originalName || 'template.docx').replace(/[^a-zA-Z0-9._-]/g, '_');
   const storageKey = `${uuid()}-${safeName}`;
-  writeBuffer(path.join(templateRoot, storageKey), fileBuffer);
+  await writeBufferPersisted(path.join(templateRoot, storageKey), fileBuffer, {
+    contentType:
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  });
 
   const tpl = await DocumentTemplate.create({
     name,

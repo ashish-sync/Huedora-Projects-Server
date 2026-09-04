@@ -163,6 +163,7 @@ router.post(
         actor: req.user,
         excludeActor: true,
         module: 'assets',
+        meta: { kind: 'approval' },
       });
     }
 
@@ -217,6 +218,7 @@ router.post(
       includeWatchers: true,
       actor: req.user,
       module: 'assets',
+      meta: { kind: 'update' },
     });
     res.json({ data: movement });
   })

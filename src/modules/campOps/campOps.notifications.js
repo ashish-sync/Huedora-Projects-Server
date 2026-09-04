@@ -53,6 +53,7 @@ export async function notifyCampApprovers({ camp, actorId, type, title, body }) 
     actor: actorId ? { _id: actorId } : null,
     module: 'camp',
     group: true,
+    meta: { kind: 'approval' },
   });
 }
 
@@ -70,6 +71,7 @@ export async function notifyCampRequester({ camp, type, title, body, priority })
     module: 'camp',
     priority,
     group: true,
+    meta: { kind: 'update' },
   });
 }
 

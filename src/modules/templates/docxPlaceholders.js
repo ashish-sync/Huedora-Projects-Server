@@ -9,6 +9,7 @@ import {
   normalizeDetectedLineColumns,
 } from './serviceAgreementLineTable.js';
 import { repackDocxDocumentXml } from './repackDocx.js';
+import { persistLocalUploadToR2 } from '../../storage/persistUpload.js';
 
 export { repackDocxDocumentXml } from './repackDocx.js';
 
@@ -1100,5 +1101,12 @@ export function ensureDir(dir) {
 export function writeBuffer(filePath, buffer) {
   ensureDir(path.dirname(filePath));
   fs.writeFileSync(filePath, buffer);
+  return filePath;
+}
+
+/** Disk write + R2 mirror when object storage is enabled. */
+export async function writeBufferPersisted(filePath, buffer, { contentType } = {}) {
+  writeBuffer(filePath, buffer);
+  await persistLocalUploadToR2(filePath, { contentType });
   return filePath;
 }

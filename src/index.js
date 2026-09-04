@@ -268,6 +268,32 @@ async function main() {
     console.error('[rules-boot] existing-data rules apply failed:', err.message);
   }
   ensureUploadDirs();
+  try {
+    const { getR2Env, describeR2Config } = await import('./storage/r2Env.js');
+    const { probeObjectStore } = await import('./storage/objectStore.js');
+    const cfg = getR2Env();
+    const summary = describeR2Config(cfg);
+    if (cfg.enabled) {
+      const probe = await probeObjectStore({ force: true });
+      if (probe.ok) {
+        console.log(
+          `[storage] Cloudflare R2 ready bucket=${summary.bucket} host=${summary.endpointHost}`,
+        );
+      } else {
+        console.error(`[storage] Cloudflare R2 probe failed: ${probe.reason}`);
+        if (cfg.required || env.r2Required) {
+          throw new Error(`R2_REQUIRED but HeadBucket failed: ${probe.reason}`);
+        }
+      }
+    } else if (env.isProd) {
+      console.warn(
+        `[storage] R2 not enabled — uploads use ephemeral disk only. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET (tylo-one-files). missing=${summary.missing.join(',') || 'none'}`,
+      );
+    }
+  } catch (err) {
+    if (env.r2Required) throw err;
+    console.error('[storage] R2 boot check failed:', err.message);
+  }
   await hydrateEmailIngestState();
   await maybeFreshStart();
   await maybePurgeAllCampsOnBoot();

@@ -17,6 +17,7 @@ import {
   fillTextPlaceholders,
   validatePlaceholderValue,
   writeBuffer,
+  writeBufferPersisted,
   ensureDir,
   readDocxBuffer,
   repackDocxDocumentXml,
@@ -32,6 +33,7 @@ import { importRateLimiter } from '../../middleware/importRateLimit.js';
 import { executeUploadedImport } from '../imports/streaming/runStreamingImport.js';
 import { uploadDir } from '../../config/paths.js';
 import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
+import { ensureLocalUpload, pipeUploadToResponse } from '../../storage/serveUpload.js';
 
 const templateRoot = uploadDir('templates');
 const previewRoot = uploadDir('previews');
@@ -289,8 +291,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const tpl = await DocumentTemplate.findOne({ _id: req.params.id, isDeleted: false });
     if (!tpl?.storageKey) throw new AppError('No Word file on this template', 404);
-    const full = path.join(templateRoot, tpl.storageKey);
-    if (!fs.existsSync(full)) throw new AppError('File missing', 404);
+    const full = await ensureLocalUpload(path.join(templateRoot, tpl.storageKey));
 
     const cachePath = `${full}.print.pdf`;
     try {
@@ -331,19 +332,17 @@ router.get(
     if (!tpl) throw new AppError('Template not found', 404);
 
     if (tpl.sourceType === 'DOCX' && tpl.storageKey) {
-      const full = path.join(templateRoot, tpl.storageKey);
-      if (fs.existsSync(full)) {
-        try {
-          const analysis = await analyzeDocx(fs.readFileSync(full));
-          tpl.repeatableTables = analysis.repeatableTables || [];
-          if (Array.isArray(analysis.placeholders)) {
-            tpl.placeholders = analysis.placeholders;
-          }
-          tpl.bodyHtml = analysis.plain || tpl.bodyHtml;
-          await tpl.save();
-        } catch {
-          /* keep stored metadata */
+      try {
+        const full = await ensureLocalUpload(path.join(templateRoot, tpl.storageKey));
+        const analysis = await analyzeDocx(fs.readFileSync(full));
+        tpl.repeatableTables = analysis.repeatableTables || [];
+        if (Array.isArray(analysis.placeholders)) {
+          tpl.placeholders = analysis.placeholders;
         }
+        tpl.bodyHtml = analysis.plain || tpl.bodyHtml;
+        await tpl.save();
+      } catch {
+        /* keep stored metadata */
       }
     }
 
@@ -356,8 +355,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const tpl = await DocumentTemplate.findOne({ _id: req.params.id, isDeleted: false });
     if (!tpl?.storageKey) throw new AppError('No Word file on this template', 404);
-    const full = path.join(templateRoot, tpl.storageKey);
-    if (!fs.existsSync(full)) throw new AppError('File missing', 404);
+    const full = await ensureLocalUpload(path.join(templateRoot, tpl.storageKey));
     res.download(full, tpl.originalFileName || 'template.docx');
   })
 );
@@ -470,7 +468,9 @@ router.post(
     const analysis = await analyzeDocx(req.file.buffer);
     const storageKey = `${uuid()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     const storedPath = path.join(templateRoot, storageKey);
-    writeBuffer(storedPath, req.file.buffer);
+    await writeBufferPersisted(storedPath, req.file.buffer, {
+      contentType: req.file.mimetype,
+    });
     invalidatePrintPreviewCache(storedPath);
 
     const tpl = await DocumentTemplate.create({
@@ -512,8 +512,8 @@ router.post(
     let repeatableTables = Array.isArray(tpl.repeatableTables) ? tpl.repeatableTables : [];
 
     if (tpl.sourceType === 'DOCX' && tpl.storageKey) {
-      const fullPath = path.join(templateRoot, tpl.storageKey);
-      if (fs.existsSync(fullPath)) {
+      try {
+        const fullPath = await ensureLocalUpload(path.join(templateRoot, tpl.storageKey));
         const analysis = await analyzeDocx(fs.readFileSync(fullPath));
         placeholders = analysis.placeholders || [];
         repeatableTables = analysis.repeatableTables || [];
@@ -521,6 +521,8 @@ router.post(
         tpl.repeatableTables = repeatableTables;
         if (analysis.plain) tpl.bodyHtml = analysis.plain;
         await tpl.save();
+      } catch {
+        /* keep stored metadata when file unavailable */
       }
     } else if (!placeholders.length && tpl.bodyHtml) {
       placeholders = extractPlaceholdersFromText(tpl.bodyHtml);
@@ -606,8 +608,7 @@ router.post(
     let blocks = null;
 
     if (tpl.sourceType === 'DOCX' && tpl.storageKey) {
-      const full = path.join(templateRoot, tpl.storageKey);
-      if (!fs.existsSync(full)) throw new AppError('Template Word file missing', 404);
+      const full = await ensureLocalUpload(path.join(templateRoot, tpl.storageKey));
       const buffer = fs.readFileSync(full);
       const filled = await fillDocxBuffer(buffer, values, {
         repeatableTables,
@@ -618,7 +619,7 @@ router.post(
       blocks = filled.blocks;
       filledDocxBuffer = filled.filledBuffer;
       filledDocxKey = `${uuid()}-filled.docx`;
-      writeBuffer(path.join(previewRoot, filledDocxKey), filled.filledBuffer);
+      await writeBufferPersisted(path.join(previewRoot, filledDocxKey), filled.filledBuffer);
     }
 
     const title = req.body.title || tpl.name;

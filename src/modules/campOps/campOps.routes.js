@@ -223,11 +223,14 @@ import { uploadDir } from '../../config/paths.js';
 import { toSignedUploadUrl } from '../files/file.routes.js';
 import { buildExecutionDocumentFileName } from './executionDocumentName.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
+import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { renameLocalUpload } from '../../storage/persistUpload.js';
+import { pipeUploadToResponse } from '../../storage/serveUpload.js';
 
 const campUploadRoot = uploadDir('camp-ops');
 
 const campDocUpload = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, campUploadRoot),
     filename: (_req, file, cb) => {
       const safe = String(file.originalname || 'document').replace(/[^\w.\-]+/g, '_');
@@ -1280,7 +1283,7 @@ router.post(
             }
             fs.unlinkSync(finalPath);
           }
-          fs.renameSync(tempPath, finalPath);
+          await renameLocalUpload(tempPath, finalPath, { contentType: file.mimetype });
         } catch (err) {
           if (err instanceof AppError) throw err;
           throw new AppError(
@@ -3342,7 +3345,7 @@ router.delete(
 );
 
 const clientMasterPoUpload = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, campUploadRoot),
     filename: (_req, file, cb) => {
       const safe = String(file.originalname || 'po-file').replace(/[^\w.\-]+/g, '_');
@@ -3431,14 +3434,13 @@ router.get(
       files.find((f) => String(f.id) === String(req.params.fileId) || String(f.storedName) === String(req.params.fileId));
     if (!doc?.storedName) throw new AppError('File not found', 404, 'NOT_FOUND');
     const full = path.join(campUploadRoot, doc.storedName);
-    if (!fs.existsSync(full)) throw new AppError('File missing on server', 404, 'NOT_FOUND');
     res.setHeader('Content-Type', doc.mimeType || 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader(
       'Content-Disposition',
       `inline; filename="${String(doc.fileName || doc.storedName).replace(/"/g, '')}"`
     );
-    fs.createReadStream(full).pipe(res);
+    await pipeUploadToResponse(res, full, { contentType: doc.mimeType });
   })
 );
 
@@ -3594,17 +3596,16 @@ function findPoEntry(row, poId) {
   return { orders, entry: orders[0] };
 }
 
-function sendPoFileResponse(res, doc) {
+async function sendPoFileResponse(res, doc) {
   if (!doc?.storedName) throw new AppError('No PO file attached', 404, 'NOT_FOUND');
   const full = path.join(campUploadRoot, doc.storedName);
-  if (!fs.existsSync(full)) throw new AppError('PO file missing on server', 404, 'NOT_FOUND');
   res.setHeader('Content-Type', doc.mimeType || 'application/octet-stream');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader(
     'Content-Disposition',
     `inline; filename="${String(doc.fileName || doc.storedName).replace(/"/g, '')}"`
   );
-  fs.createReadStream(full).pipe(res);
+  await pipeUploadToResponse(res, full, { contentType: doc.mimeType });
 }
 
 router.get(

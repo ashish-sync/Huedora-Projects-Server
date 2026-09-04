@@ -28,6 +28,7 @@ import {
 } from './vendorBill.sod.js';
 import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
 import { assertEntityNotStale, beginIdempotentCreate, readIdempotencyKey } from '../../utils/mutationGuards.js';
+import { createUploadStorage } from '../../storage/createUploadStorage.js';
 
 const router = Router();
 router.use(authenticate);
@@ -49,7 +50,7 @@ const canTransition = requirePermission(
 
 const vendorBillUploadRoot = uploadDir('finance-vendor-bills');
 const vendorBillUpload = multer({
-  storage: multer.diskStorage({
+  storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, vendorBillUploadRoot),
     filename: (_req, file, cb) => {
       const safe = String(file.originalname || 'bill').replace(/[^\w.\-]+/g, '_');
