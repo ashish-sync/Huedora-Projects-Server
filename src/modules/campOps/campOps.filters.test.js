@@ -196,3 +196,10 @@ test('buildCampFilter search matches key camp headers', () => {
   assert.equal(campIdClause.campId.source, 'Mumbai');
   assert.equal(campIdClause.campId.flags, 'i');
 });
+
+test('buildCampFilter maps campaign and campaignName to campaignName', () => {
+  const byAlias = buildCampFilter({ campaign: 'BMD' });
+  assert.equal(byAlias.campaignName, 'BMD');
+  const byName = buildCampFilter({ campaignName: 'Dietician' });
+  assert.equal(byName.campaignName, 'Dietician');
+});

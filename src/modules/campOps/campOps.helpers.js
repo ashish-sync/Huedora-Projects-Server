@@ -193,6 +193,7 @@ export function buildCampFilter(query = {}) {
   const client = trimStr(query.client || query.clientId);
   const state = trimStr(query.state);
   const campaignType = trimStr(query.campaignType);
+  const campaign = trimStr(query.campaign || query.campaignName);
   const lifecycleStage = trimStr(query.lifecycleStage || query.stage);
   const boardStage = trimStr(query.boardStage);
   const assignmentFilter = trimStr(query.assignmentFilter);
@@ -281,6 +282,7 @@ export function buildCampFilter(query = {}) {
   if (client) filter.clientId = client;
   if (state) filter.state = state;
   if (campaignType) filter.campaignType = campaignType;
+  if (campaign) filter.campaignName = campaign;
   if (hcwContactId) filter.hcwContactId = hcwContactId;
 
   const skipLifecycleForRequestReview = requestReviewStatus === 'request_approved'
