@@ -279,6 +279,21 @@ async function main() {
         console.log(
           `[storage] Cloudflare R2 ready bucket=${summary.bucket} host=${summary.endpointHost}`,
         );
+        try {
+          const { probeObjectStoreWrite } = await import('./storage/objectStore.js');
+          const write = await probeObjectStoreWrite({ force: true });
+          if (write.ok) {
+            console.log(`[storage] Cloudflare R2 write probe ok key=${write.probeKey}`);
+          } else {
+            console.error(`[storage] Cloudflare R2 write probe failed: ${write.reason}`);
+            if (cfg.required || env.r2Required) {
+              throw new Error(`R2_REQUIRED but write probe failed: ${write.reason}`);
+            }
+          }
+        } catch (writeErr) {
+          if (cfg.required || env.r2Required) throw writeErr;
+          console.error('[storage] Cloudflare R2 write probe error:', writeErr.message);
+        }
       } else {
         console.error(`[storage] Cloudflare R2 probe failed: ${probe.reason}`);
         if (cfg.required || env.r2Required) {

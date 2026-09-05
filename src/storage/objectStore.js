@@ -17,6 +17,9 @@ function buildClient(cfg = getR2Env()) {
   if (!cfg.enabled) return null;
   const key = `${cfg.endpoint}|${cfg.accessKeyId}|${cfg.region}|${cfg.bucket}`;
   if (client && clientKey === key) return client;
+  // AWS SDK JS ≥3.729 defaults to CRC32 checksums that Cloudflare R2 rejects on PutObject.
+  // HeadBucket still succeeds, so /ready can look healthy while uploads fail to land.
+  // See: https://developers.cloudflare.com/r2/examples/aws/aws-sdk-js-v3/
   client = new S3Client({
     region: cfg.region || 'auto',
     endpoint: cfg.endpoint,
@@ -25,6 +28,8 @@ function buildClient(cfg = getR2Env()) {
       secretAccessKey: cfg.secretAccessKey,
     },
     forcePathStyle: true,
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
   });
   clientKey = key;
   return client;
@@ -50,12 +55,14 @@ export async function putLocalFile(absPath, objectKey, opts = {}) {
   const cfg = getR2Env();
   if (!cfg.enabled) return { skipped: true };
   const s3 = buildClient(cfg);
+  const stat = fs.statSync(absPath);
   const body = fs.createReadStream(absPath);
   await s3.send(
     new PutObjectCommand({
       Bucket: cfg.bucket,
       Key: objectKey,
       Body: body,
+      ContentLength: stat.size,
       ContentType: opts.contentType || undefined,
     }),
   );
@@ -182,6 +189,72 @@ export async function probeObjectStore({ force = false } = {}) {
     };
   }
   return lastProbe;
+}
+
+/**
+ * Write probe: PutObject + HeadObject + DeleteObject of a tiny marker.
+ * Catches R2 write failures that HeadBucket misses (checksum / ACL / permission).
+ * Never returns object body or secrets.
+ */
+export async function probeObjectStoreWrite({ force = false } = {}) {
+  const cfg = getR2Env();
+  const summary = describeR2Config(cfg);
+  if (!cfg.enabled) {
+    return {
+      ok: false,
+      enabled: false,
+      reason: cfg.credentialProblem || 'R2 disabled',
+      ...summary,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  const objectKey = `_tylo-health/write-probe.txt`;
+  const body = Buffer.from(`tylo-r2-write-probe ${new Date().toISOString()}\n`, 'utf8');
+  try {
+    const s3 = buildClient(cfg);
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: cfg.bucket,
+        Key: objectKey,
+        Body: body,
+        ContentLength: body.length,
+        ContentType: 'text/plain',
+      }),
+    );
+    const head = await s3.send(
+      new HeadObjectCommand({
+        Bucket: cfg.bucket,
+        Key: objectKey,
+      }),
+    );
+    await s3.send(
+      new DeleteObjectCommand({
+        Bucket: cfg.bucket,
+        Key: objectKey,
+      }),
+    );
+    return {
+      ok: true,
+      enabled: true,
+      reason: null,
+      probeKey: objectKey,
+      bytes: Number(head?.ContentLength) || body.length,
+      ...summary,
+      checkedAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    const code = err?.name || err?.Code || err?.code || 'R2_ERROR';
+    const status = err?.$metadata?.httpStatusCode || err?.statusCode || null;
+    return {
+      ok: false,
+      enabled: true,
+      reason: `${code}${status ? ` (${status})` : ''}: ${err?.message || 'PutObject write probe failed'}`,
+      probeKey: objectKey,
+      ...summary,
+      checkedAt: new Date().toISOString(),
+    };
+  }
 }
 
 export function getLastObjectStoreProbe() {

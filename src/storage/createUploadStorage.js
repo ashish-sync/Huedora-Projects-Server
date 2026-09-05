@@ -20,8 +20,16 @@ export function createUploadStorage({ destination, filename, skipR2 = false } = 
         if (err) return cb(err);
         if (skipR2 || !info?.path) return cb(null, info);
         persistLocalUploadToR2(info.path, { contentType: file.mimetype })
-          .then(() => cb(null, info))
+          .then((result) => {
+            if (result?.key) {
+              console.log(`[storage] R2 put ok key=${result.key}`);
+            }
+            cb(null, info);
+          })
           .catch((persistErr) => {
+            console.error(
+              `[storage] R2 put failed path=${info.path}: ${persistErr?.message || persistErr}`,
+            );
             try {
               if (info.path && fs.existsSync(info.path)) fs.unlinkSync(info.path);
             } catch {
