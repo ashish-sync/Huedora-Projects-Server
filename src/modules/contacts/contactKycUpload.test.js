@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isAllowedContactKycFile, signContactKycUrl, withSignedContactKyc } from './contactKycUpload.js';
+import {
+  isAllowedContactKycFile,
+  signContactKycUrl,
+  storageContactKycUrl,
+  withSignedContactKyc,
+} from './contactKycUpload.js';
 
 test('allows PDF and common image MIME types for contact KYC uploads', () => {
   assert.equal(isAllowedContactKycFile({ mimetype: 'application/pdf', originalname: 'a.pdf' }), true);
@@ -25,4 +30,16 @@ test('signContactKycUrl converts /uploads paths to signed file links', () => {
   });
   assert.match(presented.panCardCopyUrl, /files\/signed/);
   assert.match(presented.passbookCopyUrl, /files\/signed/);
+});
+
+test('storageContactKycUrl keeps durable /uploads paths and ignores signed tokens', () => {
+  assert.equal(
+    storageContactKycUrl('/uploads/contacts/a.pdf', '/uploads/contacts/old.pdf'),
+    '/uploads/contacts/a.pdf',
+  );
+  assert.equal(
+    storageContactKycUrl('/api/v1/files/signed?token=abc', '/uploads/contacts/old.pdf'),
+    '/uploads/contacts/old.pdf',
+  );
+  assert.equal(storageContactKycUrl('', '/uploads/contacts/old.pdf'), '/uploads/contacts/old.pdf');
 });

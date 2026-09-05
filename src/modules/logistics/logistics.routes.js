@@ -311,7 +311,10 @@ function registerMasterCrud({
   uniqueFields = [],
   excel = null,
   canRead: readGuard = canRead,
+  /** Optional mapper for API responses (e.g. sign /uploads file URLs). */
+  serializeRow = null,
 }) {
+  const present = (row) => (serializeRow ? serializeRow(row) : row);
   async function assertUniqueFields(body, excludeId) {
     for (const field of uniqueFields) {
       const val = trimStr(body[field]);
@@ -373,7 +376,7 @@ function registerMasterCrud({
         Model.find(filter).sort(sort || 'name').skip(skip).limit(limit),
         Model.countDocuments(filter),
       ]);
-      res.json(paginated(data, total, page, limit));
+      res.json(paginated(data.map(present), total, page, limit));
     })
   );
 
@@ -439,7 +442,7 @@ function registerMasterCrud({
         after: row.toObject ? row.toObject() : row,
         requestId: req.requestId,
       });
-      res.status(201).json({ data: row });
+      res.status(201).json({ data: present(row) });
     })
   );
 
@@ -476,7 +479,7 @@ function registerMasterCrud({
         after: row.toObject ? row.toObject() : row,
         requestId: req.requestId,
       });
-      res.json({ data: row });
+      res.json({ data: present(row) });
     })
   );
 
@@ -789,6 +792,7 @@ registerMasterCrud({
   codeFormat: PRODUCT_CODE_FORMAT,
   skuPrefix: 'SKU',
   uniqueFields: ['name'],
+  serializeRow: withSignedLogisticsFiles,
   normalize: (b, existing) => {
     const productType = resolveProductType(b.productType ?? existing?.productType) || 'Other';
     if (!IN_OUT_PRODUCT_TYPES.includes(productType)) {

@@ -3,7 +3,7 @@
  * Accept PDF and common image formats (field keys stay passbookCopyUrl / panCardCopyUrl).
  */
 
-import { toSignedUploadUrl } from '../files/file.routes.js';
+import { toSignedUploadUrl, relativeUploadPathFromUrl } from '../files/file.routes.js';
 
 export const CONTACT_KYC_ACCEPT_EXTENSIONS = [
   '.pdf',
@@ -66,6 +66,20 @@ export const CONTACT_KYC_REJECT_MESSAGE =
 /** Production blocks direct /uploads — return a short-lived signed file URL for View links. */
 export function signContactKycUrl(url = '') {
   return toSignedUploadUrl(url);
+}
+
+/**
+ * Persist only durable `/uploads/...` paths. Ignore signed links / blanks from the SPA
+ * so a View/save cycle cannot wipe or replace the stored file key.
+ */
+export function storageContactKycUrl(clientValue, existingValue = '') {
+  const raw = String(clientValue ?? '').trim();
+  if (!raw) return existingValue || '';
+  if (raw.includes('/files/signed')) return existingValue || '';
+  const relative = relativeUploadPathFromUrl(raw);
+  if (relative) return `/uploads/${relative}`;
+  if (raw.startsWith('/uploads/')) return raw;
+  return existingValue || '';
 }
 
 export function withSignedContactKyc(contact) {

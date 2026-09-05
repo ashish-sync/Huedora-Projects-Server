@@ -93,6 +93,20 @@ export function toSignedUploadUrl(urlOrPath, opts) {
   return signUploadFileUrl(relative, opts);
 }
 
+router.post(
+  '/sign',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const pathOrUrl = String(req.body?.path || req.body?.url || '').trim();
+    if (!pathOrUrl) throw new AppError('path is required', 400, 'VALIDATION_ERROR');
+    const signed = toSignedUploadUrl(pathOrUrl);
+    if (!signed || !signed.includes('/files/signed')) {
+      throw new AppError('Not an upload path', 400, 'VALIDATION_ERROR');
+    }
+    res.json({ data: { url: signed } });
+  }),
+);
+
 router.get(
   '/signed',
   asyncHandler(async (req, res) => {

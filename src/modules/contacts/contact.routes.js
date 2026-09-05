@@ -43,6 +43,7 @@ import {
   CONTACT_KYC_REJECT_MESSAGE,
   isAllowedContactKycFile,
   withSignedContactKyc,
+  storageContactKycUrl,
 } from './contactKycUpload.js';
 import { requireSafeUploads } from '../../utils/rejectUnsafeUpload.js';
 
@@ -367,10 +368,14 @@ router.patch(
         bankName: req.body.bankName !== undefined ? req.body.bankName : contact.bankName,
         accountNumber:
           req.body.accountNumber !== undefined ? req.body.accountNumber : contact.accountNumber,
-        passbookCopyUrl:
-          req.body.passbookCopyUrl !== undefined ? req.body.passbookCopyUrl : contact.passbookCopyUrl,
-        panCardCopyUrl:
-          req.body.panCardCopyUrl !== undefined ? req.body.panCardCopyUrl : contact.panCardCopyUrl,
+        passbookCopyUrl: storageContactKycUrl(
+          req.body.passbookCopyUrl !== undefined ? req.body.passbookCopyUrl : undefined,
+          contact.passbookCopyUrl,
+        ),
+        panCardCopyUrl: storageContactKycUrl(
+          req.body.panCardCopyUrl !== undefined ? req.body.panCardCopyUrl : undefined,
+          contact.panCardCopyUrl,
+        ),
         notes: req.body.notes !== undefined ? req.body.notes : contact.notes,
         stateId: req.body.stateId !== undefined ? req.body.stateId : contact.stateId,
         districtId: req.body.districtId !== undefined ? req.body.districtId : contact.districtId,
