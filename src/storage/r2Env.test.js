@@ -13,6 +13,8 @@ describe('r2Env', () => {
     'R2_BUCKET',
     'R2_ENDPOINT',
     'R2_REQUIRED',
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
   ];
   const prev = {};
 
@@ -43,7 +45,7 @@ describe('r2Env', () => {
 
   it('enables when account + keys + bucket are set', () => {
     process.env.R2_ACCOUNT_ID = 'acct123';
-    process.env.R2_ACCESS_KEY_ID = 'AKIA_TEST';
+    process.env.R2_ACCESS_KEY_ID = 'a'.repeat(32);
     process.env.R2_SECRET_ACCESS_KEY = 'secret_test';
     process.env.R2_BUCKET = 'tylo-one-files';
     const cfg = getR2Env();
@@ -52,16 +54,41 @@ describe('r2Env', () => {
     assert.match(cfg.endpoint, /acct123\.r2\.cloudflarestorage\.com/);
     const summary = describeR2Config(cfg);
     assert.equal(summary.hasSecretAccessKey, true);
+    assert.equal(summary.accessKeyIdLength, 32);
     assert.ok(!JSON.stringify(summary).includes('secret_test'));
   });
 
   it('respects R2_ENABLED=false', () => {
     process.env.R2_ACCOUNT_ID = 'acct123';
-    process.env.R2_ACCESS_KEY_ID = 'AKIA_TEST';
+    process.env.R2_ACCESS_KEY_ID = 'a'.repeat(32);
     process.env.R2_SECRET_ACCESS_KEY = 'secret_test';
     process.env.R2_BUCKET = 'tylo-one-files';
     process.env.R2_ENABLED = 'false';
     assert.equal(getR2Env().enabled, false);
+  });
+
+  it('rejects Cloudflare API token length as credentialProblem and disables R2', () => {
+    process.env.R2_ACCOUNT_ID = 'acct123';
+    process.env.R2_ACCESS_KEY_ID = 'x'.repeat(53);
+    process.env.R2_SECRET_ACCESS_KEY = 'secret_test_value_long_enough';
+    process.env.R2_BUCKET = 'tylo-one-files';
+    const cfg = getR2Env();
+    assert.equal(cfg.enabled, false);
+    assert.equal(cfg.accessKeyId.length, 53);
+    assert.match(cfg.credentialProblem || '', /length is 53/);
+    const summary = describeR2Config(cfg);
+    assert.equal(summary.accessKeyIdLength, 53);
+    assert.equal(summary.accessKeyIdExpectedLength, 32);
+  });
+
+  it('strips wrapping quotes from access key', () => {
+    process.env.R2_ACCOUNT_ID = 'acct123';
+    process.env.R2_ACCESS_KEY_ID = `"${'a'.repeat(32)}"`;
+    process.env.R2_SECRET_ACCESS_KEY = 'secret_test';
+    process.env.R2_BUCKET = 'tylo-one-files';
+    const cfg = getR2Env();
+    assert.equal(cfg.enabled, true);
+    assert.equal(cfg.accessKeyId.length, 32);
   });
 });
 

@@ -286,9 +286,13 @@ async function main() {
         }
       }
     } else if (env.isProd) {
-      console.warn(
-        `[storage] R2 not enabled — uploads use ephemeral disk only. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET (tylo-one-files). missing=${summary.missing.join(',') || 'none'}`,
-      );
+      if (cfg.credentialProblem) {
+        console.error(`[storage] ${cfg.credentialProblem}`);
+      } else {
+        console.warn(
+          `[storage] R2 not enabled — uploads use ephemeral disk only. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET (tylo-one-files). missing=${summary.missing.join(',') || 'none'} accessKeyIdLength=${summary.accessKeyIdLength}`,
+        );
+      }
     }
   } catch (err) {
     if (env.r2Required) throw err;

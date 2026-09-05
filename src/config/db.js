@@ -111,13 +111,22 @@ async function attachObjectStorageReady(base) {
       enabled: summary.enabled,
       bucket: summary.bucket,
       endpointHost: summary.endpointHost,
+      accessKeyIdLength: summary.accessKeyIdLength,
+      accessKeyIdExpectedLength: summary.accessKeyIdExpectedLength,
+      credentialProblem: summary.credentialProblem || undefined,
     };
     if (!cfg.enabled) {
+      if (cfg.credentialProblem) {
+        base.objectStorage.ok = false;
+        base.objectStorage.reason = cfg.credentialProblem;
+      }
       if (cfg.required || (env.isProd && env.r2Required)) {
         return {
           ...base,
           ready: false,
-          reason: `R2 required but not configured (missing: ${summary.missing.join(', ') || 'credentials'})`,
+          reason:
+            cfg.credentialProblem ||
+            `R2 required but not configured (missing: ${summary.missing.join(', ') || 'credentials'})`,
         };
       }
       return base;

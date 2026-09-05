@@ -140,9 +140,10 @@ export async function probeObjectStore({ force = false } = {}) {
     lastProbe = {
       ok: false,
       enabled: false,
-      reason: cfg.missing.length
-        ? `R2 not configured (missing: ${cfg.missing.join(', ')})`
-        : 'R2 disabled',
+      reason: cfg.credentialProblem
+        || (cfg.missing.length
+          ? `R2 not configured (missing: ${cfg.missing.join(', ')})`
+          : 'R2 disabled'),
       ...summary,
       checkedAt: new Date().toISOString(),
     };
