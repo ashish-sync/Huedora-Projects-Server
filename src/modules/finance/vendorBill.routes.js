@@ -52,10 +52,6 @@ const vendorBillUploadRoot = uploadDir('finance-vendor-bills');
 const vendorBillUpload = multer({
   storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, vendorBillUploadRoot),
-    filename: (_req, file, cb) => {
-      const safe = String(file.originalname || 'bill').replace(/[^\w.\-]+/g, '_');
-      cb(null, `${Date.now()}-${safe}`);
-    },
   }),
   limits: { fileSize: 12 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {

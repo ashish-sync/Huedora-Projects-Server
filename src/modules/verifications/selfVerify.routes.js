@@ -23,10 +23,6 @@ const uploadRoot = uploadDir('verifications');
 const upload = multer({
   storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, uploadRoot),
-    filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
-      cb(null, `${uuid()}${ext}`);
-    },
   }),
   limits: { fileSize: env.uploadMaxBytes },
   fileFilter: (_req, file, cb) => {

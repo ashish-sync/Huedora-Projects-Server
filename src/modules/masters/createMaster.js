@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { v4 as uuid } from 'uuid';
 import { AppError } from '../../utils/helpers.js';
 import { nextSequence } from '../../utils/counters.js';
 import { throwIfIdentityClash, assertValidEmail, assertValidPhone, normalizePhone } from '../../utils/identityNormalize.js';
@@ -42,6 +41,7 @@ import {
 import { PERMISSIONS } from '../../config/constants.js';
 import { moduleForEntity, validateMasterAddPayload } from './masterCatalog.js';
 import { uploadDir } from '../../config/paths.js';
+import { buildStoredUploadFileName } from '../../storage/uploadKeys.js';
 
 const templateRoot = uploadDir('templates');
 fs.mkdirSync(templateRoot, { recursive: true });
@@ -336,8 +336,7 @@ async function createTemplate(payload, fileBuffer, originalName, actor, requestI
     String(payload.signingType || '').toUpperCase() === 'NON_SIGNING' ? 'NON_SIGNING' : 'SIGNING';
 
   const analysis = await analyzeDocx(fileBuffer);
-  const safeName = String(originalName || 'template.docx').replace(/[^a-zA-Z0-9._-]/g, '_');
-  const storageKey = `${uuid()}-${safeName}`;
+  const storageKey = buildStoredUploadFileName(originalName || 'template.docx');
   await writeBufferPersisted(path.join(templateRoot, storageKey), fileBuffer, {
     contentType:
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

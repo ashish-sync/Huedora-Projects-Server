@@ -52,7 +52,6 @@ const ATTACHMENT_RULES = {
 const productPhotoMulter = multer({
   storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, assetRequestUploadRoot),
-    filename: (_req, file, cb) => cb(null, `${uuid()}${IMAGE_EXTENSIONS[file.mimetype]}`),
   }),
   limits: { fileSize: env.uploadMaxBytes },
   fileFilter: (_req, file, cb) => {
@@ -66,7 +65,6 @@ const productPhotoMulter = multer({
 const reimbursementBillMulter = multer({
   storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, assetRequestUploadRoot),
-    filename: (_req, file, cb) => cb(null, `${uuid()}${BILL_EXTENSIONS[file.mimetype]}`),
   }),
   limits: { fileSize: env.uploadMaxBytes },
   fileFilter: (_req, file, cb) => {
@@ -80,7 +78,6 @@ const reimbursementBillMulter = multer({
 const requestAttachmentMulter = multer({
   storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, assetRequestUploadRoot),
-    filename: (_req, file, cb) => cb(null, `${uuid()}${ATTACHMENT_EXTENSIONS[file.mimetype]}`),
   }),
   limits: { fileSize: env.uploadMaxBytes },
   fileFilter: (_req, file, cb) => {

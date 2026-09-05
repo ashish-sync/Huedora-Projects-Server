@@ -24,10 +24,6 @@ const storage = createUploadStorage({
     fs.mkdirSync(dir, { recursive: true });
     cb(null, dir);
   },
-  filename: (_req, file, cb) => {
-    const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-    cb(null, `${uuid()}-${safe}`);
-  },
 });
 
 const upload = multer({

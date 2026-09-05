@@ -96,10 +96,6 @@ const ALLOWED_COMMERCIAL_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', 
 
 const storage = createUploadStorage({
   destination: (_req, _file, cb) => cb(null, uploadRoot),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname || '').toLowerCase() || '.pdf';
-    cb(null, `${uuid()}${ext}`);
-  },
 });
 
 const upload = multer({

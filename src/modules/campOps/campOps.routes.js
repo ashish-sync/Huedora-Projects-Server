@@ -224,6 +224,7 @@ import { toSignedUploadUrl } from '../files/file.routes.js';
 import { buildExecutionDocumentFileName } from './executionDocumentName.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { multerStoredUploadFileNameWithPurpose } from '../../storage/uploadKeys.js';
 import { renameLocalUpload } from '../../storage/persistUpload.js';
 import { pipeUploadToResponse } from '../../storage/serveUpload.js';
 
@@ -232,10 +233,6 @@ const campUploadRoot = uploadDir('camp-ops');
 const campDocUpload = multer({
   storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, campUploadRoot),
-    filename: (_req, file, cb) => {
-      const safe = String(file.originalname || 'document').replace(/[^\w.\-]+/g, '_');
-      cb(null, `${Date.now()}-${safe}`);
-    },
   }),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
@@ -3347,10 +3344,7 @@ router.delete(
 const clientMasterPoUpload = multer({
   storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, campUploadRoot),
-    filename: (_req, file, cb) => {
-      const safe = String(file.originalname || 'po-file').replace(/[^\w.\-]+/g, '_');
-      cb(null, `po-${Date.now()}-${safe}`);
-    },
+    filename: multerStoredUploadFileNameWithPurpose('po'),
   }),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {

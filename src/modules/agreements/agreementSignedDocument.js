@@ -1,7 +1,7 @@
-import { v4 as uuid } from 'uuid';
 import { AgreementDocument } from './agreement.model.js';
 import { buildAgreementPdfBuffer, pdfOptionsFromAgreement } from './agreementPdf.js';
 import { writeUploadBuffer } from '../../storage/persistUpload.js';
+import { buildStoredUploadFileName } from '../../storage/uploadKeys.js';
 
 /**
  * Persist the fully signed agreement PDF as the primary contract document.
@@ -31,7 +31,7 @@ export async function persistSignedAgreementPdf(agreement, uploadedBy = null) {
   const safeTitle = String(agreement.title || agreement.agreementNumber || 'agreement')
     .replace(/[^a-zA-Z0-9._-]+/g, '_')
     .slice(0, 80);
-  const pdfKey = `${uuid()}-${safeTitle}-signed.pdf`;
+  const pdfKey = buildStoredUploadFileName(`${safeTitle}-signed.pdf`, { purpose: 'signed' });
   await writeUploadBuffer(`agreements/${pdfKey}`, pdfBuffer, {
     contentType: 'application/pdf',
   });

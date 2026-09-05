@@ -3,7 +3,6 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { v4 as uuid } from 'uuid';
 import { authenticate, requirePermission } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
@@ -38,10 +37,6 @@ const uploadRoot = uploadDir('verifications');
 const upload = multer({
   storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, uploadRoot),
-    filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
-      cb(null, `${uuid()}${ext}`);
-    },
   }),
   limits: { fileSize: env.uploadMaxBytes },
   fileFilter: (_req, file, cb) => {

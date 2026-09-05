@@ -111,12 +111,6 @@ const inwardUploadRoot = uploadDir('logistics');
 const inwardUpload = multer({
   storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, inwardUploadRoot),
-    filename: (_req, file, cb) => {
-      const safe = String(file.originalname || 'file')
-        .replace(/[^a-zA-Z0-9._-]/g, '_')
-        .slice(0, 80);
-      cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`);
-    },
   }),
   limits: { fileSize: env.uploadMaxBytes },
 });
@@ -126,12 +120,6 @@ const productUploadRoot = uploadDir('logistics', 'products');
 const productUpload = multer({
   storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, productUploadRoot),
-    filename: (_req, file, cb) => {
-      const safe = String(file.originalname || 'file')
-        .replace(/[^a-zA-Z0-9._-]/g, '_')
-        .slice(0, 80);
-      cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`);
-    },
   }),
   limits: { fileSize: env.uploadMaxBytes },
 });

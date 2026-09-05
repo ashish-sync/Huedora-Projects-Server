@@ -118,10 +118,6 @@ const kycUpload = multer({
         cb(err);
       }
     },
-    filename: (_req, file, cb) => {
-      const safe = String(file.originalname || 'document').replace(/[^\w.\-]+/g, '_');
-      cb(null, `${Date.now()}-${safe}`);
-    },
   }),
   limits: { fileSize: CONTACT_KYC_MAX_BYTES },
   fileFilter: (_req, file, cb) => {

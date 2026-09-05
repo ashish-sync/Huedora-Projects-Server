@@ -40,6 +40,7 @@ import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
 import { copyLocalUpload } from '../../storage/persistUpload.js';
 import { sendUploadFile } from '../../storage/serveUpload.js';
+import { buildStoredUploadFileName } from '../../storage/uploadKeys.js';
 
 const uploadRoot = uploadDir('agreements');
 const previewRoot = uploadDir('previews');
@@ -47,10 +48,6 @@ const previewRoot = uploadDir('previews');
 const upload = multer({
   storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, uploadRoot),
-    filename: (_req, file, cb) => {
-      const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-      cb(null, `${uuid()}-${safe}`);
-    },
   }),
   limits: { fileSize: env.uploadMaxBytes },
 });
@@ -472,7 +469,7 @@ router.post(
     let hasPrimary = false;
 
     if (previewEntry?.pdfPath && fs.existsSync(previewEntry.pdfPath)) {
-      const pdfKey = `${uuid()}-preview.pdf`;
+      const pdfKey = buildStoredUploadFileName(`${title || 'agreement'}.pdf`, { purpose: 'preview' });
       await copyLocalUpload(previewEntry.pdfPath, path.join(uploadRoot, pdfKey), {
         contentType: 'application/pdf',
       });
@@ -492,7 +489,9 @@ router.post(
       if (previewEntry.filledDocxKey) {
         const src = path.join(previewRoot, previewEntry.filledDocxKey);
         if (fs.existsSync(src)) {
-          const docxKey = `${uuid()}-filled.docx`;
+          const docxKey = buildStoredUploadFileName(`${title || 'agreement'}-filled.docx`, {
+            purpose: 'filled',
+          });
           await copyLocalUpload(src, path.join(uploadRoot, docxKey), {
             contentType:
               'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

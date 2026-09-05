@@ -34,6 +34,7 @@ import { executeUploadedImport } from '../imports/streaming/runStreamingImport.j
 import { uploadDir } from '../../config/paths.js';
 import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
 import { ensureLocalUpload, pipeUploadToResponse } from '../../storage/serveUpload.js';
+import { buildStoredUploadFileName } from '../../storage/uploadKeys.js';
 
 const templateRoot = uploadDir('templates');
 const previewRoot = uploadDir('previews');
@@ -466,7 +467,7 @@ router.post(
     }
 
     const analysis = await analyzeDocx(req.file.buffer);
-    const storageKey = `${uuid()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const storageKey = buildStoredUploadFileName(req.file.originalname);
     const storedPath = path.join(templateRoot, storageKey);
     await writeBufferPersisted(storedPath, req.file.buffer, {
       contentType: req.file.mimetype,
@@ -618,7 +619,7 @@ router.post(
       filledText = filled.filledText;
       blocks = filled.blocks;
       filledDocxBuffer = filled.filledBuffer;
-      filledDocxKey = `${uuid()}-filled.docx`;
+      filledDocxKey = buildStoredUploadFileName('filled.docx', { purpose: 'filled' });
       await writeBufferPersisted(path.join(previewRoot, filledDocxKey), filled.filledBuffer);
     }
 

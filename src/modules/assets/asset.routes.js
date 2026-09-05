@@ -50,10 +50,6 @@ const agreementUploadRoot = uploadDir('agreements');
 const agreementUpload = multer({
   storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, agreementUploadRoot),
-    filename: (_req, file, cb) => {
-      const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-      cb(null, `${uuid()}-${safe}`);
-    },
   }),
   limits: { fileSize: env.uploadMaxBytes },
   fileFilter: (_req, file, cb) => {
