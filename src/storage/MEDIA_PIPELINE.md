@@ -83,13 +83,10 @@ Signature Master / Org Master logo & signature data-URLs use `optimizeImageDataU
 
 1. Multer writes **local disk only** (no R2 yet).
 2. Route validates business rules.
-3. Optimize locally (sharp) + register `stored_files` as **`pending`** when R2 is deferred.
-4. `enqueueR2Put` puts the local master; on success → **`ready`**; after 3 failures → **`failed`** + `lastError` (never silent).
-5. Semantic rename (execution docs) migrates the registry key before the final R2 put.
-6. Boot / hourly sweep re-enqueues stuck `pending`/`failed` rows that still have a local file (in-memory queue is lost on restart).
-7. On request validation failure, `discardRequestUploads` removes local (+ R2 if present).
-
-Local disk serve continues while R2 catches up. Admin surfaces failures via object-storage counts and retry endpoints.
+3. Optimize locally (sharp) + register `stored_files`.
+4. **Camp One execution documents (DF/PF/GS/OT):** after semantic rename, **await** PutObject with retries + HeadObject verify before `res.json` — HTTP success means the object is in R2 (not fire-and-forget).
+5. **Other uploads:** may still use `enqueueR2Put` (`pending` → `ready` / `failed`); boot/hourly sweep recovers stuck rows.
+6. On request validation failure, `discardRequestUploads` removes local (+ R2 if present).
 
 ## Remaining performance debt (deferred)
 

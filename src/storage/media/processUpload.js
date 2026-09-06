@@ -161,7 +161,25 @@ export async function processUploadedMedia(absPath, opts = {}) {
   }
 
   if (isObjectStoreEnabled()) {
-    if (opts.deferR2) {
+    if (opts.skipR2) {
+      // Local optimize only — caller will rename then put/enqueue under the final key.
+      await upsertRegistry({
+        objectKey,
+        contentHash,
+        kind,
+        contentType,
+        sizeBytes,
+        originalName,
+        status: 'pending',
+        storageClass: R2_STORAGE_STANDARD,
+        refCount: 1,
+        processedAt: new Date().toISOString(),
+        processAttempts: 1,
+        lastError: '',
+        reductionRatio,
+        lastAccessedAt: new Date().toISOString(),
+      });
+    } else if (opts.deferR2) {
       // Register pending first so a crash before/during R2 cannot look like success.
       await upsertRegistry({
         objectKey,

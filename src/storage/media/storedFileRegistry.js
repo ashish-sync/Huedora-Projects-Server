@@ -2,7 +2,7 @@ import fs from 'fs';
 import { StoredFile } from '../../modules/files/storedFile.model.js';
 import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import { toUploadObjectKey, absoluteUploadPath } from '../uploadKeys.js';
-import { isObjectStoreEnabled, putLocalFile, R2_STORAGE_STANDARD } from '../objectStore.js';
+import { isObjectStoreEnabled, putLocalFile, headObject, R2_STORAGE_STANDARD } from '../objectStore.js';
 
 /**
  * Upsert stored_files row. Use status `pending` while R2 put is deferred/in-flight.
@@ -152,9 +152,13 @@ export async function storedFileStatusCounts() {
 }
 
 /**
- * Put local master to R2 and mark ready (used by retry + r2Put job).
+ * Put local master to R2 and mark ready (used by retry + r2Put job + sync confirm).
+ * Retries with backoff; optional HeadObject verify so PutObject "success" without object is caught.
  */
-export async function putLocalMasterToR2(objectKey, { contentType, originalName } = {}) {
+export async function putLocalMasterToR2(
+  objectKey,
+  { contentType, originalName, retries = 3, verify = true } = {},
+) {
   const key = toUploadObjectKey(objectKey);
   if (!key) throw new Error('Invalid objectKey for R2 put');
   if (!isObjectStoreEnabled()) {
@@ -165,14 +169,42 @@ export async function putLocalMasterToR2(objectKey, { contentType, originalName 
   if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
     throw new Error(`Local master missing for R2 put: ${key}`);
   }
-  await putLocalFile(abs, key, {
-    contentType: contentType || 'application/octet-stream',
-    storageClass: R2_STORAGE_STANDARD,
-  });
-  await markStoredFileReady(key, {
+
+  const attempts = Math.max(1, Number(retries) || 3);
+  let lastErr;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await putLocalFile(abs, key, {
+        contentType: contentType || 'application/octet-stream',
+        storageClass: R2_STORAGE_STANDARD,
+      });
+      if (verify) {
+        const head = await headObject(key);
+        if (!head) {
+          throw new Error(`R2 HeadObject missing after PutObject for ${key}`);
+        }
+      }
+      await markStoredFileReady(key, {
+        originalName,
+        contentType,
+        sizeBytes: fs.statSync(abs).size,
+      });
+      return { ok: true, key, attempts: attempt };
+    } catch (err) {
+      lastErr = err;
+      console.error(
+        `[media] R2 put attempt ${attempt}/${attempts} failed key=${key}: ${err?.message || err}`,
+      );
+      if (attempt < attempts) {
+        await new Promise((r) => setTimeout(r, 400 * 2 ** (attempt - 1)));
+      }
+    }
+  }
+
+  await markStoredFileFailed(key, lastErr, {
+    attempts,
     originalName,
     contentType,
-    sizeBytes: fs.statSync(abs).size,
   });
-  return { ok: true, key };
+  throw lastErr || new Error(`R2 put failed for ${key}`);
 }

@@ -54,6 +54,8 @@ export async function writeUploadBuffer(objectKey, buffer, { contentType, origin
 /**
  * Rename/move within uploads root and keep R2 in sync.
  * @param {{ contentType?: string, deferR2?: boolean, originalName?: string }} [opts]
+ * When deferR2 is false (default for execution-doc confirm), PutObject is awaited
+ * with retries + HeadObject verify before returning.
  */
 export async function renameLocalUpload(fromAbs, toAbs, { contentType, deferR2 = false, originalName } = {}) {
   fs.mkdirSync(path.dirname(toAbs), { recursive: true });
@@ -86,11 +88,24 @@ export async function renameLocalUpload(fromAbs, toAbs, { contentType, deferR2 =
         deleteObject(fromKey).catch(() => {});
       }
     } else {
-      await putLocalFile(toAbs, toKey, { contentType });
+      let sizeBytes;
+      try {
+        sizeBytes = fs.statSync(toAbs).size;
+      } catch {
+        sizeBytes = undefined;
+      }
       await migrateStoredFileKey(fromKey, toKey, {
         contentType,
         originalName,
-        status: 'ready',
+        sizeBytes,
+        status: 'pending',
+      });
+      const { putLocalMasterToR2 } = await import('./media/storedFileRegistry.js');
+      await putLocalMasterToR2(toKey, {
+        contentType,
+        originalName,
+        retries: 3,
+        verify: true,
       });
       if (fromKey && fromKey !== toKey) {
         await deleteObject(fromKey).catch(() => {});

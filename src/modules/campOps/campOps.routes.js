@@ -1280,7 +1280,6 @@ router.post(
   canRequest,
   attachCampUploadLimit,
   campDocUpload.array('documents', 10),
-  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
@@ -1302,7 +1301,7 @@ router.post(
       }
     }
 
-    // Blue-stamp grayscale pipeline (or color photo for GPS selfie) → R2
+    // Blue-stamp grayscale pipeline (or color photo for GPS selfie) — local only; R2 after rename.
     await finalizeExecutionDocumentUploads(req, { docType });
 
     const before = camp.toObject();
@@ -1325,8 +1324,8 @@ router.post(
 
       const tempPath = path.join(campUploadRoot, file.filename);
       const finalPath = path.join(campUploadRoot, storedName);
-      if (tempPath !== finalPath) {
-        try {
+      try {
+        if (tempPath !== finalPath) {
           if (fs.existsSync(finalPath)) {
             // Only replace a file already owned by this camp's document set.
             const owned = existing.some((doc) => doc.storedName === storedName || doc.fileName === storedName);
@@ -1339,19 +1338,25 @@ router.post(
             }
             fs.unlinkSync(finalPath);
           }
-          await renameLocalUpload(tempPath, finalPath, {
-            contentType: file.mimetype,
-            deferR2: true,
-            originalName: displayName,
-          });
-        } catch (err) {
-          if (err instanceof AppError) throw err;
-          throw new AppError(
-            `Could not save execution document as ${displayName}`,
-            500,
-            'UPLOAD_RENAME_FAILED',
-          );
         }
+        // Await PutObject + HeadObject verify so HTTP success means the file is in R2
+        // (not merely local). Retries live inside renameLocalUpload / putLocalMasterToR2.
+        await renameLocalUpload(tempPath, finalPath, {
+          contentType: file.mimetype,
+          deferR2: false,
+          originalName: displayName,
+        });
+      } catch (err) {
+        if (err instanceof AppError) throw err;
+        console.error(
+          `[camp-ops] execution-doc R2 persist failed camp=${camp.campId || camp._id} file=${storedName}:`,
+          err?.message || err,
+        );
+        throw new AppError(
+          `Could not store execution document “${displayName}” in cloud storage. Please try again.`,
+          502,
+          'UPLOAD_R2_FAILED',
+        );
       }
 
       added.push({
@@ -1359,12 +1364,13 @@ router.post(
         fileName: displayName,
         storedName,
         originalFileName: file.originalname,
-      docType,
-      ...(docNote ? { docNote } : {}),
-      mimeType: file.mimetype,
-      fileSize: file.size,
+        docType,
+        ...(docNote ? { docNote } : {}),
+        mimeType: file.mimetype,
+        fileSize: file.size,
         url: `/uploads/camp-ops/${storedName}`,
-      uploadedAt,
+        uploadedAt,
+        storageStatus: 'ready',
       });
     }
 

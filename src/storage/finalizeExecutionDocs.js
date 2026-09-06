@@ -117,7 +117,8 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
       const result = await processUploadedMedia(file.path, {
         originalName: file.originalname,
         mimetype: file.mimetype,
-        deferR2: true,
+        // Rename to semantic name happens next — do not enqueue R2 for the temp key.
+        skipR2: true,
       });
       applyProcessResultToMulterInfo(file, result);
       file.mediaFinalized = true;
@@ -133,7 +134,7 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
       const result = await processUploadedMedia(file.path, {
         originalName: file.originalname,
         mimetype: file.mimetype,
-        deferR2: true,
+        skipR2: true,
       });
       applyProcessResultToMulterInfo(file, result);
       file.mediaFinalized = true;

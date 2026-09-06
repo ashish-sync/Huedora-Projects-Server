@@ -13,6 +13,8 @@ const MAX_ATTEMPTS = 3;
 const BASE_DELAY_MS = 2000;
 /** Pending/failed rows older than this are re-enqueued on boot / recovery sweep. */
 const STUCK_MS = 60_000;
+/** After this many memory deferrals, run the job anyway (avoid infinite starve on free tier). */
+const MAX_MEMORY_DEFERS = 4;
 
 /**
  * @typedef {'process' | 'r2Put'} MediaJobType
@@ -57,6 +59,7 @@ export function enqueueMediaJob(job) {
     mimetype: job.mimetype || '',
     contentType: job.contentType || job.mimetype || '',
     attempts: 0,
+    memoryDefers: 0,
   });
   void pump();
   return id;
@@ -143,11 +146,19 @@ async function pump() {
       const job = queue.shift();
       if (!job) break;
       const mem = warnIfHighMemory('media:queue', { rssWarnMb: 380 });
-      if (mem?.rssMb >= 400) {
-        console.warn(`[media] deferring ${job.id}: high RSS ${mem.rssMb}MB`);
+      if (mem?.rssMb >= 400 && (job.memoryDefers || 0) < MAX_MEMORY_DEFERS) {
+        job.memoryDefers = (job.memoryDefers || 0) + 1;
+        console.warn(
+          `[media] deferring ${job.id}: high RSS ${mem.rssMb}MB (defer ${job.memoryDefers}/${MAX_MEMORY_DEFERS})`,
+        );
         queue.push(job);
         await delay(15_000);
         continue;
+      }
+      if (mem?.rssMb >= 400) {
+        console.warn(
+          `[media] forcing ${job.id} despite high RSS ${mem.rssMb}MB after ${MAX_MEMORY_DEFERS} defers`,
+        );
       }
       try {
         await runJob(job);

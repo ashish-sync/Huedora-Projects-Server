@@ -67,7 +67,10 @@ export async function putLocalFile(absPath, objectKey, opts = {}) {
   if (!cfg.enabled) return { skipped: true };
   const s3 = buildClient(cfg);
   const stat = fs.statSync(absPath);
-  const body = fs.createReadStream(absPath);
+  // Prefer a buffer for typical masters (execution docs / photos) so PutObject
+  // cannot race a concurrent rename/unlink against a streaming Body.
+  const body =
+    stat.size <= 25 * 1024 * 1024 ? fs.readFileSync(absPath) : fs.createReadStream(absPath);
   const storageClass = normalizeStorageClass(opts.storageClass);
   await s3.send(
     new PutObjectCommand({
