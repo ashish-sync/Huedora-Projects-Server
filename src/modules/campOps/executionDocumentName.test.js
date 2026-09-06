@@ -12,9 +12,10 @@ test('doctorNameFileToken strips Dr prefix and uppercases', () => {
   assert.equal(doctorNameFileToken('Dr Karan'), 'KARAN');
   assert.equal(doctorNameFileToken('Dr. Karan Sharma'), 'KARANSHARMA');
   assert.equal(doctorNameFileToken('Karan'), 'KARAN');
+  assert.equal(doctorNameFileToken('Adi'), 'ADI');
 });
 
-test('campDateFileToken formats DDMMYYYY', () => {
+test('campDateFileToken formats DDMMYYYY (legacy helper; not used in file names)', () => {
   assert.equal(campDateFileToken('2026-08-03'), '03082026');
   assert.equal(campDateFileToken('03/08/2026'), '03082026');
 });
@@ -26,22 +27,22 @@ test('executionDocTypeCode maps DF PF GS', () => {
   assert.equal(executionDocTypeCode('other'), 'OT');
 });
 
-test('buildExecutionDocumentBaseName matches KARANDF03082026 pattern', () => {
+test('buildExecutionDocumentBaseName is Doctor + DocCode without date', () => {
   assert.equal(
     buildExecutionDocumentBaseName({
       doctorName: 'Dr Karan',
       campDate: '2026-08-03',
       docType: 'doctor_form',
     }),
-    'KARANDF03082026',
+    'KARANDF',
   );
   assert.equal(
     buildExecutionDocumentBaseName({
-      doctorName: 'Dr Karan',
-      campDate: '2026-08-03',
+      doctorName: 'Adi',
+      campDate: '2026-10-10',
       docType: 'patient_form',
     }),
-    'KARANPF03082026',
+    'ADIPF',
   );
   assert.equal(
     buildExecutionDocumentBaseName({
@@ -49,7 +50,7 @@ test('buildExecutionDocumentBaseName matches KARANDF03082026 pattern', () => {
       campDate: '2026-08-03',
       docType: 'gps_selfie',
     }),
-    'KARANGS03082026',
+    'KARANGS',
   );
 });
 
@@ -61,7 +62,7 @@ test('buildExecutionDocumentFileName keeps extension and avoids collisions', () 
       docType: 'doctor_form',
       originalName: 'scan.pdf',
     }),
-    { fileName: 'KARANDF03082026.pdf', storedName: 'KARANDF03082026.pdf' },
+    { fileName: 'KARANDF.pdf', storedName: 'KARANDF.pdf' },
   );
   assert.deepEqual(
     buildExecutionDocumentFileName({
@@ -69,18 +70,18 @@ test('buildExecutionDocumentFileName keeps extension and avoids collisions', () 
       campDate: '2026-08-03',
       docType: 'doctor_form',
       originalName: 'scan.pdf',
-      existingNames: ['KARANDF03082026.pdf'],
+      existingNames: ['KARANDF.pdf'],
     }),
-    { fileName: 'KARANDF03082026-2.pdf', storedName: 'KARANDF03082026-2.pdf' },
+    { fileName: 'KARANDF-2.pdf', storedName: 'KARANDF-2.pdf' },
   );
   assert.deepEqual(
     buildExecutionDocumentFileName({
-      doctorName: 'Karan',
-      campDate: '2026-08-03',
-      docType: 'doctor_form',
-      originalName: 'scan.pdf',
-      campScope: 'CAMP-1',
+      doctorName: 'Adi',
+      campDate: '2026-10-10',
+      docType: 'patient_form',
+      originalName: 'scan.webp',
+      campScope: '26-10-0001',
     }),
-    { fileName: 'KARANDF03082026.pdf', storedName: 'CAMP-1__KARANDF03082026.pdf' },
+    { fileName: 'ADIPF.webp', storedName: '26-10-0001__ADIPF.webp' },
   );
 });

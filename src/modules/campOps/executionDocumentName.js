@@ -44,15 +44,14 @@ export function executionDocTypeCode(docType = '') {
 }
 
 /**
- * Base name without extension: Doctor + DocCode + CampDate
- * e.g. KARANDF03082026
+ * Base name without extension: Doctor + DocCode (no camp date suffix).
+ * e.g. ADIPF, KARANDF
  */
 export function buildExecutionDocumentBaseName({
   doctorName = '',
-  campDate = '',
   docType = '',
 } = {}) {
-  return `${doctorNameFileToken(doctorName)}${executionDocTypeCode(docType)}${campDateFileToken(campDate)}`;
+  return `${doctorNameFileToken(doctorName)}${executionDocTypeCode(docType)}`;
 }
 
 function fileExtension(fileName = '') {
@@ -64,18 +63,17 @@ function fileExtension(fileName = '') {
 /**
  * Unique stored/display file name for an upload.
  * Collisions get -2, -3, … before the extension.
- * Optional campScope keeps disk names unique across camps with the same doctor/date.
+ * Optional campScope keeps disk names unique across camps (e.g. 26-10-0001__ADIPF.webp).
  */
 export function buildExecutionDocumentFileName({
   doctorName = '',
-  campDate = '',
   docType = '',
   originalName = '',
   existingNames = [],
   index = 0,
   campScope = '',
 } = {}) {
-  const base = buildExecutionDocumentBaseName({ doctorName, campDate, docType });
+  const base = buildExecutionDocumentBaseName({ doctorName, docType });
   const ext = fileExtension(originalName);
   const scope = String(campScope || '')
     .replace(/[^\w.-]+/g, '_')

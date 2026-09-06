@@ -215,8 +215,8 @@ export async function optimizeExecutionDocPdf(absPath) {
 }
 
 /**
- * Optimize one execution-document file on disk. GPS selfies stay as normal photos
- * (caller should skip this helper for gps_selfie).
+ * Optimize one execution-document file on disk.
+ * GPS selfies use optimizeGpsSelfie.js (indexed-color WebP) — caller routes separately.
  *
  * @param {string} absPath
  * @param {{ originalName?: string, mimetype?: string }} [opts]

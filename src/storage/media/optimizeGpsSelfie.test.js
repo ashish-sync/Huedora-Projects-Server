@@ -1,0 +1,110 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import sharp from 'sharp';
+import {
+  GPS_SELFIE_LONG_EDGE,
+  GPS_SELFIE_PALETTE_COLORS,
+  GPS_SELFIE_PALETTE_COLORS_MIN,
+  optimizeGpsSelfieToIndexedWebp,
+  optimizeGpsSelfieFile,
+} from './optimizeGpsSelfie.js';
+
+describe('GPS selfie indexed WebP', () => {
+  it('encodes color selfie as WebP using 8–16 colour palette (not grayscale L)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tylo-gps-selfie-'));
+    const src = path.join(dir, 'selfie.jpg');
+
+    // Distinct color regions so palette quantization has real work
+    const width = 1600;
+    const height = 1200;
+    const raw = Buffer.alloc(width * height * 3);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const i = (y * width + x) * 3;
+        if (x < width / 3) {
+          raw[i] = 220;
+          raw[i + 1] = 60;
+          raw[i + 2] = 60;
+        } else if (x < (2 * width) / 3) {
+          raw[i] = 50;
+          raw[i + 1] = 180;
+          raw[i + 2] = 70;
+        } else {
+          raw[i] = 40;
+          raw[i + 1] = 90;
+          raw[i + 2] = 210;
+        }
+      }
+    }
+
+    await sharp(raw, { raw: { width, height, channels: 3 } })
+      .jpeg({ quality: 92 })
+      .toFile(src);
+
+    const before = fs.statSync(src).size;
+    const result = await optimizeGpsSelfieToIndexedWebp(src);
+
+    assert.equal(result.contentType, 'image/webp');
+    assert.equal(result.ext, '.webp');
+    assert.equal(result.indexed, true);
+    assert.equal(result.encodeMode, 'indexed-webp');
+    assert.ok(
+      result.paletteColors >= GPS_SELFIE_PALETTE_COLORS_MIN
+        && result.paletteColors <= GPS_SELFIE_PALETTE_COLORS,
+    );
+    assert.ok(Math.max(result.width, result.height) <= GPS_SELFIE_LONG_EDGE);
+    assert.ok(result.buffer.length > 0);
+    assert.ok(result.buffer.length < before);
+
+    const meta = await sharp(result.buffer).metadata();
+    assert.equal(meta.format, 'webp');
+    assert.ok(!meta.exif);
+    // Must remain color (not single-channel L grayscale)
+    assert.ok(
+      meta.channels >= 3 || meta.space === 'srgb',
+      `expected color WebP, got channels=${meta.channels} space=${meta.space}`,
+    );
+
+    // Spot-check that distinct hues survive palette (not collapsed to gray)
+    const { data, info } = await sharp(result.buffer)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const sample = (px, py) => {
+      const idx = (py * info.width + px) * info.channels;
+      return [data[idx], data[idx + 1], data[idx + 2]];
+    };
+    const left = sample(Math.floor(info.width * 0.15), Math.floor(info.height * 0.5));
+    const mid = sample(Math.floor(info.width * 0.5), Math.floor(info.height * 0.5));
+    const right = sample(Math.floor(info.width * 0.85), Math.floor(info.height * 0.5));
+    assert.ok(left[0] > left[2], `left should stay reddish, got ${left}`);
+    assert.ok(mid[1] > mid[0], `mid should stay greenish, got ${mid}`);
+    assert.ok(right[2] > right[0], `right should stay bluish, got ${right}`);
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('optimizeGpsSelfieFile returns kind image with reductionRatio', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tylo-gps-selfie-'));
+    const src = path.join(dir, 'gs.jpg');
+    await sharp({
+      create: {
+        width: 900,
+        height: 1200,
+        channels: 3,
+        background: { r: 120, g: 90, b: 70 },
+      },
+    })
+      .jpeg({ quality: 90 })
+      .toFile(src);
+
+    const result = await optimizeGpsSelfieFile(src);
+    assert.equal(result.kind, 'image');
+    assert.equal(result.ext, '.webp');
+    assert.ok(result.reductionRatio != null && result.reductionRatio < 1);
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
