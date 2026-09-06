@@ -225,12 +225,10 @@ import { buildExecutionDocumentFileName } from './executionDocumentName.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
 import { multerStoredUploadFileNameWithPurpose } from '../../storage/uploadKeys.js';
-import { renameLocalUpload } from '../../storage/persistUpload.js';
+import { renameLocalUpload, deleteLocalUpload } from '../../storage/persistUpload.js';
 import { pipeUploadToResponse } from '../../storage/serveUpload.js';
-import {
-  ensureUploadCommit,
-  finalizeRequestUploads,
-} from '../../storage/uploadLifecycle.js';
+import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
+import { finalizeExecutionDocumentUploads } from '../../storage/finalizeExecutionDocs.js';
 
 const campUploadRoot = uploadDir('camp-ops');
 const CAMP_DOC_MAX_BYTES = 10 * 1024 * 1024;
@@ -242,15 +240,8 @@ const campDocUpload = multer({
   limits: { fileSize: CAMP_DOC_MAX_BYTES },
   fileFilter: (_req, file, cb) => {
     const mime = String(file.mimetype || '').toLowerCase();
-    const allowed =
-      mime.startsWith('image/')
-      || mime === 'application/pdf'
-      || mime.includes('spreadsheet')
-      || mime.includes('excel')
-      || mime === 'text/csv'
-      || mime === 'application/msword'
-      || mime.includes('wordprocessingml');
-    cb(allowed ? null : new Error('File type not allowed for execution documents'), allowed);
+    const allowed = mime.startsWith('image/') || mime === 'application/pdf';
+    cb(allowed ? null : new Error('Execution documents must be PDF or image (max 10 MB)'), allowed);
   },
 });
 
@@ -1258,8 +1249,8 @@ router.post(
       }
     }
 
-    // Optimize + R2 only after business validation (before semantic rename)
-    await finalizeRequestUploads(req);
+    // Blue-stamp grayscale pipeline (or color photo for GPS selfie) → R2
+    await finalizeExecutionDocumentUploads(req, { docType });
 
     const before = camp.toObject();
     const existing = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
@@ -1268,11 +1259,12 @@ router.post(
     const added = [];
 
     for (const [index, file] of files.entries()) {
+      // Use post-optimize filename so display/stored names get .webp / .pdf
       const { fileName: displayName, storedName } = buildExecutionDocumentFileName({
         doctorName: camp.doctorName,
         campDate: camp.campDate,
         docType,
-        originalName: file.originalname,
+        originalName: file.filename || file.originalname,
         existingNames: usedNames,
         index,
         campScope: camp.campId || camp._id,
@@ -1332,6 +1324,55 @@ router.post(
 
     await camp.save();
     await audit(req, 'camp_ops.execution_docs', 'camp_ops_camp', camp._id, before, camp.toObject());
+    res.json({ data: enrichCamp(camp) });
+  })
+);
+
+router.delete(
+  '/camps/:id/execution-documents/:fileId',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const camp = await loadCampForUser(req, req.params.id);
+    if (!canEditLifecycleStage(camp, 'execution', { isAdmin: isCampAdmin(req) })) {
+      throw new AppError('Cannot remove execution documents for this camp', 400, 'VALIDATION_ERROR');
+    }
+
+    const fileId = String(req.params.fileId || '').trim();
+    if (!fileId) throw new AppError('Document id required', 400, 'VALIDATION_ERROR');
+
+    const existing = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
+    const idx = existing.findIndex(
+      (doc) =>
+        String(doc.id || '') === fileId
+        || String(doc.storedName || '') === fileId
+        || String(doc.fileName || '') === fileId,
+    );
+    if (idx < 0) throw new AppError('Execution document not found', 404, 'NOT_FOUND');
+
+    const before = camp.toObject();
+    const [removed] = existing.splice(idx, 1);
+    camp.executionDocuments = existing;
+
+    if (String(removed?.docType || '').toLowerCase() === 'gps_selfie') {
+      const remainingSelfie = existing.find(
+        (doc) => String(doc.docType || '').toLowerCase() === 'gps_selfie',
+      );
+      if (remainingSelfie?.url) {
+        camp.inTimeSelfieUrl = remainingSelfie.url;
+      } else if (
+        !camp.inTimeSelfieUrl
+        || camp.inTimeSelfieUrl === removed?.url
+        || (removed?.storedName && String(camp.inTimeSelfieUrl).includes(String(removed.storedName)))
+      ) {
+        camp.inTimeSelfieUrl = '';
+      }
+    }
+
+    await camp.save();
+    if (removed?.storedName) {
+      await deleteLocalUpload(path.join(campUploadRoot, removed.storedName));
+    }
+    await audit(req, 'camp_ops.execution_docs_delete', 'camp_ops_camp', camp._id, before, camp.toObject());
     res.json({ data: enrichCamp(camp) });
   })
 );
