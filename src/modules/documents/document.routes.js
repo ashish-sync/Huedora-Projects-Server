@@ -13,6 +13,7 @@ import { v4 as uuid } from 'uuid';
 import { uploadDir } from '../../config/paths.js';
 import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
 import { renameLocalUpload } from '../../storage/persistUpload.js';
 import { sendUploadFile } from '../../storage/serveUpload.js';
 
@@ -70,6 +71,7 @@ router.post(
   '/',
   requirePermission(PERMISSIONS.DOCUMENTS_WRITE),
   upload.single('file'),
+  ensureUploadCommit(),
   asyncHandler(async (req, res) => {
     if (!req.file) throw new AppError('file required', 400, 'VALIDATION_ERROR');
     await rejectUnsafeUploadedFiles(req.file, {

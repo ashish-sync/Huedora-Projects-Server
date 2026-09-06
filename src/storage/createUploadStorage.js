@@ -1,22 +1,13 @@
 import fs from 'fs';
 import multer from 'multer';
 import { multerStoredUploadFileName } from './uploadKeys.js';
-import {
-  applyProcessResultToMulterInfo,
-  processUploadedMedia,
-} from './media/processUpload.js';
-import { enqueueMediaJob } from './media/mediaQueue.js';
 
 /**
- * Multer storage: disk + media optimize + optional R2 mirror.
- * Defaults to the shared stored-file naming convention when `filename` is omitted.
+ * Multer storage: local disk only.
+ * R2 + media optimize run later via finalizeRequestUploads() after the route
+ * accepts the upload — avoids orphan objects when validation fails.
  *
- * @param {{
- *   destination: import('multer').DiskStorageOptions['destination'],
- *   filename?: import('multer').DiskStorageOptions['filename'],
- *   skipR2?: boolean,
- *   skipMediaPipeline?: boolean,
- * }} options
+ * Import temps: pass skipR2: true (same disk-only behavior; no finalize needed).
  */
 export function createUploadStorage({
   destination,
@@ -25,54 +16,19 @@ export function createUploadStorage({
   skipMediaPipeline = false,
 } = {}) {
   const disk = multer.diskStorage({ destination, filename });
+  // skipR2 / skipMediaPipeline retained for call-site compatibility; both mean disk-only.
+  void skipR2;
+  void skipMediaPipeline;
 
   return {
     _handleFile(req, file, cb) {
       disk._handleFile(req, file, (err, info) => {
         if (err) return cb(err);
-        if (!info?.path) return cb(null, info);
-
-        // Ephemeral import temps: keep old behavior (no R2, no optimize).
-        if (skipR2 || skipMediaPipeline) {
-          return cb(null, info);
+        if (info) {
+          info.mediaFinalized = false;
+          info.persistDeferred = true;
         }
-
-        processUploadedMedia(info.path, {
-          originalName: file.originalname,
-          mimetype: file.mimetype,
-        })
-          .then((result) => {
-            applyProcessResultToMulterInfo(info, result);
-            if (result?.objectKey) {
-              console.log(
-                `[storage] media ready key=${result.objectKey} kind=${result.kind}` +
-                  (result.reductionRatio != null
-                    ? ` reduction=${(result.reductionRatio * 100).toFixed(0)}%`
-                    : ''),
-              );
-            }
-            cb(null, info);
-          })
-          .catch((persistErr) => {
-            console.error(
-              `[storage] media process failed path=${info.path}: ${persistErr?.message || persistErr}`,
-            );
-            // Keep original on disk; mirror raw bytes to R2; enqueue retry
-            if (info.path && fs.existsSync(info.path)) {
-              import('./persistUpload.js')
-                .then(({ persistLocalUploadToR2 }) =>
-                  persistLocalUploadToR2(info.path, { contentType: file.mimetype }).catch(() => {}),
-                )
-                .catch(() => {});
-              enqueueMediaJob({
-                absPath: info.path,
-                originalName: file.originalname,
-                mimetype: file.mimetype,
-              });
-              return cb(null, info);
-            }
-            cb(persistErr);
-          });
+        cb(null, info);
       });
     },
     _removeFile(req, file, cb) {

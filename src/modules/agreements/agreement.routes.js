@@ -38,6 +38,7 @@ import { escapeRegex } from '../../utils/escapeRegex.js';
 import { applyArchiveListFilter } from '../retention/archivePolicy.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
 import { copyLocalUpload } from '../../storage/persistUpload.js';
 import { sendUploadFile } from '../../storage/serveUpload.js';
 import { buildStoredUploadFileName } from '../../storage/uploadKeys.js';
@@ -297,6 +298,7 @@ router.post(
   '/',
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
   upload.single('file'),
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const body = req.body || {};
@@ -911,6 +913,7 @@ router.post(
   '/:id/documents',
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
   upload.single('file'),
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const agreement = await Agreement.findOne({ _id: req.params.id, isDeleted: false });

@@ -12,6 +12,7 @@ import {
   UPLOAD_RULES,
 } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
 import { uploadExists } from '../../storage/serveUpload.js';
 import { deleteLocalUpload } from '../../storage/persistUpload.js';
 
@@ -114,7 +115,10 @@ export function productPhotoUpload(req, res, next) {
   productPhotoMulter(req, res, (error) => {
     afterSafeUpload(
       req,
-      next,
+      (err) => {
+        if (err) return next(err);
+        ensureUploadCommit()(req, res, next);
+      },
       error,
       PRODUCT_PHOTO_RULES,
       'Product photo exceeds the upload size limit'
@@ -124,7 +128,16 @@ export function productPhotoUpload(req, res, next) {
 
 export function reimbursementBillUpload(req, res, next) {
   reimbursementBillMulter(req, res, (error) => {
-    afterSafeUpload(req, next, error, BILL_RULES, 'Bill exceeds the upload size limit');
+    afterSafeUpload(
+      req,
+      (err) => {
+        if (err) return next(err);
+        ensureUploadCommit()(req, res, next);
+      },
+      error,
+      BILL_RULES,
+      'Bill exceeds the upload size limit'
+    );
   });
 }
 
@@ -132,7 +145,10 @@ export function requestAttachmentUpload(req, res, next) {
   requestAttachmentMulter(req, res, (error) => {
     afterSafeUpload(
       req,
-      next,
+      (err) => {
+        if (err) return next(err);
+        ensureUploadCommit()(req, res, next);
+      },
       error,
       ATTACHMENT_RULES,
       'Attachment exceeds the upload size limit'

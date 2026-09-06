@@ -71,6 +71,7 @@ import { buildBillOfSupplyPdfBuffer } from './billOfSupplyPdf.js';
 import { buildQuotationPdfBuffer } from './quotationPdf.js';
 import { uploadDir } from '../../config/paths.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
 import { pipeUploadToResponse } from '../../storage/serveUpload.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import {
@@ -662,6 +663,7 @@ router.post(
   '/proformas/upload',
   canWrite,
   upload.single('file'),
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.office),
   asyncHandler(async (req, res) => {
     if (!req.file) throw new AppError('File is required', 400, 'VALIDATION_ERROR');
@@ -941,6 +943,7 @@ router.post(
   '/purchase-orders/upload',
   canWrite,
   upload.single('file'),
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.office),
   asyncHandler(async (req, res) => {
     if (!req.file) throw new AppError('File is required', 400, 'VALIDATION_ERROR');

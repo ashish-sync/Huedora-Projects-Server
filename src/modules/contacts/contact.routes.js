@@ -27,6 +27,7 @@ import { normalizePhone } from '../../utils/identityNormalize.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { uploadDir } from '../../config/paths.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
 import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import {
   assertSpreadsheetUpload,
@@ -404,6 +405,7 @@ router.post(
   '/:id/kyc-document',
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
   kycUpload.single('file'),
+  ensureUploadCommit(),
   requireSafeUploads({ allowedExt: CONTACT_KYC_ACCEPT_EXTENSIONS }),
   asyncHandler(async (req, res) => {
     const docType = String(req.body?.docType || '').trim();

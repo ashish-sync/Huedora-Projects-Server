@@ -1,10 +1,11 @@
 /**
  * Shared post-multer upload check (disk or memory).
- * Rejects executables and magic/extension mismatches; unlinks disk files on failure.
+ * Rejects executables and magic/extension mismatches; removes local + R2 on failure.
  */
 import fs from 'fs';
 import { AppError, asyncHandler } from './helpers.js';
 import { assertSafeUpload } from './uploadSafety.js';
+import { deleteLocalUpload } from '../storage/persistUpload.js';
 
 export function collectUploadedFiles(req) {
   const out = [];
@@ -44,12 +45,17 @@ export async function rejectUnsafeUploadedFiles(files, rules = {}) {
       rules
     );
     if (!check.ok) {
-      if (file.path) {
-        try {
-          fs.unlinkSync(file.path);
-        } catch {
-          /* ignore */
-        }
+      const target = file.path || file.filename;
+      if (target) {
+        await deleteLocalUpload(target).catch(() => {
+          if (file.path) {
+            try {
+              fs.unlinkSync(file.path);
+            } catch {
+              /* ignore */
+            }
+          }
+        });
       }
       throw new AppError(check.message, 400, 'UPLOAD_REJECTED');
     }

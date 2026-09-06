@@ -44,6 +44,7 @@ import { buildAssetPlaceholderSnapshot } from './assetPlaceholderSnapshot.js';
 import { uploadDir } from '../../config/paths.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
 
 const agreementUploadRoot = uploadDir('agreements');
 
@@ -314,6 +315,7 @@ router.post(
   '/:id/documents',
   canManageDocs,
   agreementUpload.single('file'),
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.office),
   asyncHandler(async (req, res) => {
     const asset = await Asset.findOne({ _id: req.params.id, isDeleted: false });
@@ -409,6 +411,7 @@ router.post(
   '/:id/documents/:agreementId/replace',
   canManageDocs,
   agreementUpload.single('file'),
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.office),
   asyncHandler(async (req, res) => {
     const asset = await Asset.findOne({ _id: req.params.id, isDeleted: false });

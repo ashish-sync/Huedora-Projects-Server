@@ -31,6 +31,7 @@ import {
 import { uploadDir } from '../../config/paths.js';
 import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
 
 const uploadRoot = uploadDir('verifications');
 
@@ -333,6 +334,7 @@ router.post(
   '/records/:id/rounds/:round',
   requirePermission(PERMISSIONS.VERIFICATIONS_WRITE),
   photoUpload,
+  ensureUploadCommit(),
   asyncHandler(async (req, res) => {
     const roundNum = Number(req.params.round);
     const record = await VerificationRecord.findOne({ _id: req.params.id, isDeleted: false });

@@ -29,6 +29,7 @@ import {
 import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
 import { assertEntityNotStale, beginIdempotentCreate, readIdempotencyKey } from '../../utils/mutationGuards.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
 
 const router = Router();
 router.use(authenticate);
@@ -643,14 +644,16 @@ router.post(
   '/vendor-bills/:id/attachment',
   canWrite,
   (req, res, next) => {
+    req.uploadMaxBytes = 12 * 1024 * 1024;
     vendorBillUpload.array('bills', 10)(req, res, (err) => {
       if (err) {
-        next(new AppError(err.message || 'Upload failed', 400, 'UPLOAD_ERROR'));
+        next(err);
         return;
       }
       next();
     });
   },
+  ensureUploadCommit(),
   asyncHandler(uploadVendorBillAttachment),
 );
 router.delete('/vendor-bills/:id', requireAdmin, asyncHandler(softDeleteVendorBill));
@@ -667,14 +670,16 @@ router.post(
   '/invoices/:id/attachment',
   canWrite,
   (req, res, next) => {
+    req.uploadMaxBytes = 12 * 1024 * 1024;
     vendorBillUpload.array('bills', 10)(req, res, (err) => {
       if (err) {
-        next(new AppError(err.message || 'Upload failed', 400, 'UPLOAD_ERROR'));
+        next(err);
         return;
       }
       next();
     });
   },
+  ensureUploadCommit(),
   asyncHandler(uploadVendorBillAttachment),
 );
 router.delete('/invoices/:id', requireAdmin, asyncHandler(softDeleteVendorBill));

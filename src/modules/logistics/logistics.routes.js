@@ -105,6 +105,7 @@ import { productMasterAssetName } from './productMasterLabel.js';
 import { uploadDir } from '../../config/paths.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
 
 const inwardUploadRoot = uploadDir('logistics');
 
@@ -1140,6 +1141,7 @@ router.post(
   '/products/:id/files',
   canMaster,
   productFiles,
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const row = await LogisticsProduct.findOne({ _id: req.params.id, isDeleted: false });
@@ -1826,9 +1828,11 @@ function normalizeInOutBody(body, existing = null, actor = null) {
     expDate: expiryApplicable ? expiryDate : '',
     productPhoto: body.productPhoto ?? existing?.productPhoto ?? null,
     invoiceDoc: body.invoiceDoc ?? existing?.invoiceDoc ?? null,
-    attachments: Array.isArray(body.attachments)
-      ? body.attachments
-      : existing?.attachments || [],
+    // Omit empty attachment arrays so PATCH cannot wipe existing files by accident.
+    attachments:
+      Array.isArray(body.attachments) && body.attachments.length > 0
+        ? body.attachments
+        : existing?.attachments || [],
     isActive: body.isActive !== false,
   };
 
@@ -2488,6 +2492,7 @@ router.post(
       next();
     });
   },
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const filesMeta = attachmentsFromUpload(req, null);
@@ -2556,6 +2561,7 @@ router.patch(
       next();
     });
   },
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const row = await LogisticsInOutEntry.findOne({ _id: req.params.id, isDeleted: false });
@@ -2584,12 +2590,8 @@ router.patch(
         throw new AppError(`Transaction ID “${body.uniqueKey}” already exists`, 400, 'DUPLICATE');
       }
     }
-    // Preserve attachments/remarks — blank/empty payload fields must not wipe stock txn data.
-    const clearKeys = [];
-    if (Array.isArray(req.body.attachments) && req.body.attachments.length === 0) {
-      clearKeys.push('attachments');
-    }
-    assignPreservingExisting(row, body, { clearKeys });
+    // Preserve attachments — empty arrays must not wipe existing stock txn docs.
+    assignPreservingExisting(row, body, { clearKeys: [] });
     await row.save();
 
     await writeAudit({

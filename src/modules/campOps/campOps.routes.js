@@ -227,14 +227,19 @@ import { createUploadStorage } from '../../storage/createUploadStorage.js';
 import { multerStoredUploadFileNameWithPurpose } from '../../storage/uploadKeys.js';
 import { renameLocalUpload } from '../../storage/persistUpload.js';
 import { pipeUploadToResponse } from '../../storage/serveUpload.js';
+import {
+  ensureUploadCommit,
+  finalizeRequestUploads,
+} from '../../storage/uploadLifecycle.js';
 
 const campUploadRoot = uploadDir('camp-ops');
+const CAMP_DOC_MAX_BYTES = 10 * 1024 * 1024;
 
 const campDocUpload = multer({
   storage: createUploadStorage({
     destination: (_req, _file, cb) => cb(null, campUploadRoot),
   }),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: CAMP_DOC_MAX_BYTES },
   fileFilter: (_req, file, cb) => {
     const mime = String(file.mimetype || '').toLowerCase();
     const allowed =
@@ -248,6 +253,11 @@ const campDocUpload = multer({
     cb(allowed ? null : new Error('File type not allowed for execution documents'), allowed);
   },
 });
+
+function attachCampUploadLimit(req, _res, next) {
+  req.uploadMaxBytes = CAMP_DOC_MAX_BYTES;
+  next();
+}
 
 function signStoredUploadUrl(url) {
   return toSignedUploadUrl(url);
@@ -1224,7 +1234,9 @@ router.get(
 router.post(
   '/camps/:id/execution-documents',
   canRequest,
+  attachCampUploadLimit,
   campDocUpload.array('documents', 10),
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
@@ -1245,6 +1257,9 @@ router.post(
         throw new AppError('GPS Selfie must be an image file', 400, 'VALIDATION_ERROR');
       }
     }
+
+    // Optimize + R2 only after business validation (before semantic rename)
+    await finalizeRequestUploads(req);
 
     const before = camp.toObject();
     const existing = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
@@ -3363,12 +3378,16 @@ const clientMasterPoUpload = multer({
 
 function unlinkPoFile(storedName) {
   if (!storedName) return;
-  const full = path.join(campUploadRoot, storedName);
-  try {
-    if (fs.existsSync(full)) fs.unlinkSync(full);
-  } catch {
-    /* ignore */
-  }
+  import('../../storage/persistUpload.js')
+    .then(({ deleteLocalUpload }) => deleteLocalUpload(path.join(campUploadRoot, storedName)))
+    .catch(() => {
+      const full = path.join(campUploadRoot, storedName);
+      try {
+        if (fs.existsSync(full)) fs.unlinkSync(full);
+      } catch {
+        /* ignore */
+      }
+    });
 }
 
 function getCampTermsFilesMutable(row) {
@@ -3382,7 +3401,9 @@ function getCampTermsFilesMutable(row) {
 router.post(
   '/client-masters/:id/camp-terms-files',
   canRequest,
+  attachCampUploadLimit,
   clientMasterPoUpload.array('files', 10),
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
@@ -3647,10 +3668,12 @@ router.get(
 router.post(
   '/client-masters/:id/po-file/:poId',
   canRequest,
+  attachCampUploadLimit,
   clientMasterPoUpload.fields([
     { name: 'files', maxCount: 10 },
     { name: 'poFile', maxCount: 1 },
   ]),
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
@@ -3677,10 +3700,12 @@ router.post(
 router.post(
   '/client-masters/:id/po-file',
   canRequest,
+  attachCampUploadLimit,
   clientMasterPoUpload.fields([
     { name: 'files', maxCount: 10 },
     { name: 'poFile', maxCount: 1 },
   ]),
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });

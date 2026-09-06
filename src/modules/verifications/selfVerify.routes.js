@@ -17,6 +17,7 @@ import { env } from '../../config/env.js';
 import { uploadDir } from '../../config/paths.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
 
 const uploadRoot = uploadDir('verifications');
 
@@ -134,6 +135,7 @@ router.get(
 router.post(
   '/:token',
   photoUpload,
+  ensureUploadCommit(),
   requireSafeUploads(UPLOAD_RULES.images),
   asyncHandler(async (req, res) => {
     const { invite, record, asset } = await resolveInvite(req.params.token);

@@ -28,6 +28,11 @@ Verified (Cloudflare docs, 2026): R2 supports **Standard** and **Infrequent Acce
 - `POST /api/v1/system/media/retry-failed`
 - `POST /api/v1/system/media/cold-archive` body `{ dryRun?, limit? }`
 
-## v1 scope
+## Upload lifecycle (v1+)
 
-New uploads only — no historical backfill.
+1. Multer writes **local disk only** (no R2 yet).
+2. Route validates business rules.
+3. `finalizeRequestUploads` / `ensureUploadCommit` optimize + put R2.
+4. On failure, `discardRequestUploads` removes local (+ R2 if present).
+
+This avoids orphan R2 objects when validation rejects the request.
