@@ -33,7 +33,10 @@ agreements/signed__20260906-deadbeef__Lease-signed.pdf
 2. **DB keeps the human name** — `name` / `originalName` / `fileName` for UI; the stored key is for storage/search.
 3. **Never rewrite old keys** — existing objects and DB URLs remain valid.
 4. **Imports temp** (`import-temp/`) may stay ephemeral and skip R2.
-5. **Exception:** Camp execution documents may still be renamed to `{campId}__{doctor…}{date}.ext` for field identification after upload.
+5. **Exception — Camp execution documents** (canonical, see `executionDocumentName.js`):
+   - Display: `{DOCTOR}{DF|PF|GS|OT}.ext` → `ADIPF.webp`
+   - Stored: `{campId}__{DOCTOR}{CODE}.ext` → `26-10-0001__ADIPF.webp`
+   - No camp-date suffix. Temp multer names still use the general pattern until rename after optimize.
 6. **Media pipeline:** New uploads are optimized/registered per `MEDIA_PIPELINE.md` (images→WebP, PDFs stay PDF, 90-day R2 Infrequent Access).
 
 ## R2 console search tips

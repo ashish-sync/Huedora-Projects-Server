@@ -445,7 +445,7 @@ router.patch(
   asyncHandler(async (req, res) => {
     assertOrgMasterEditor(req.user, req.permissions);
     const profile = await getOrCreateOrgProfile();
-    assignPreservingExisting(profile, mergeOrgProfile(req.body));
+    assignPreservingExisting(profile, await mergeOrgProfile(req.body));
     profile.updatedById = req.user._id;
     profile.updatedByEmail = req.user.email;
     await profile.save();

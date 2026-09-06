@@ -1,37 +1,57 @@
 import sharp from 'sharp';
+import {
+  optimizeGpsSelfieToIndexedWebp,
+  GPS_SELFIE_LONG_EDGE,
+  GPS_SELFIE_PALETTE_COLORS,
+  GPS_SELFIE_PALETTE_COLORS_MIN,
+  GPS_SELFIE_WEBP_EFFORT,
+} from './optimizeGpsSelfie.js';
 
-export const IMAGE_MAX_LONG_EDGE = 2500;
+/**
+ * Standard image master for all uploads except Camp One DF/PF/Other scans:
+ * indexed-color (8–16) full-color lossless WebP @ long edge 1280 — same as GPS Selfie.
+ */
+export const IMAGE_MAX_LONG_EDGE = GPS_SELFIE_LONG_EDGE;
+export const STANDARD_IMAGE_PALETTE_COLORS = GPS_SELFIE_PALETTE_COLORS;
+export const STANDARD_IMAGE_PALETTE_COLORS_MIN = GPS_SELFIE_PALETTE_COLORS_MIN;
+export const STANDARD_IMAGE_WEBP_EFFORT = GPS_SELFIE_WEBP_EFFORT;
+/** @deprecated Lossy Q90 is no longer the standard master encode; kept for preview only. */
 export const WEBP_QUALITY = 90;
 
 /**
- * Normalize → strip metadata → resize max long edge → WebP Q90.
- * @param {string} absPath
- * @returns {Promise<{ buffer: Buffer, contentType: string, ext: string, width: number, height: number }>}
+ * Normalize → strip metadata → resize → indexed full-color lossless WebP.
+ * Same rule as Camp One GPS Selfie (not grayscale L / not lossy Q45).
+ *
+ * @param {string|Buffer} input abs path or buffer
+ * @param {{ colours?: number, longEdge?: number }} [opts]
  */
-export async function optimizeImageToWebp(absPath) {
-  // Field phone photos / A4 scans can exceed sharp's default ~268MP guard.
-  const pipeline = sharp(absPath, {
-    failOn: 'none',
-    animated: false,
-    limitInputPixels: 268402689 * 4,
-  })
-    .rotate() // honor EXIF orientation, then strip
-    .resize({
-      width: IMAGE_MAX_LONG_EDGE,
-      height: IMAGE_MAX_LONG_EDGE,
-      fit: 'inside',
-      withoutEnlargement: true,
-    })
-    .webp({ quality: WEBP_QUALITY, effort: 4 });
+export async function optimizeImageToWebp(input, opts = {}) {
+  return optimizeGpsSelfieToIndexedWebp(input, opts);
+}
 
-  const { data, info } = await pipeline.toBuffer({ resolveWithObject: true });
-  return {
-    buffer: data,
-    contentType: 'image/webp',
-    ext: '.webp',
-    width: info.width || 0,
-    height: info.height || 0,
-  };
+/**
+ * Optimize a `data:image/...;base64,...` payload (Signature Master, Org logo, etc.).
+ * Non-image / invalid data URLs are returned unchanged.
+ * @param {string} dataUrl
+ * @returns {Promise<string>}
+ */
+export async function optimizeImageDataUrl(dataUrl) {
+  const raw = String(dataUrl || '').trim();
+  const match = /^data:([^;,]+);base64,([\s\S]+)$/i.exec(raw);
+  if (!match) return raw;
+  const mime = String(match[1] || '').toLowerCase();
+  if (!mime.startsWith('image/')) return raw;
+  if (mime.includes('svg')) return raw;
+
+  try {
+    const input = Buffer.from(match[2], 'base64');
+    if (!input.length) return raw;
+    const result = await optimizeGpsSelfieToIndexedWebp(input);
+    return `data:image/webp;base64,${result.buffer.toString('base64')}`;
+  } catch (err) {
+    console.warn(`[media] optimizeImageDataUrl failed: ${err?.message || err}`);
+    return raw;
+  }
 }
 
 /**

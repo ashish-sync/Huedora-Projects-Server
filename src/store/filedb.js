@@ -10,6 +10,7 @@ import {
   registerCollection,
   getRegisteredCollections,
   mergeDocumentFields,
+  queryCollection,
 } from './persistence.js';
 import { entityIdMapKey, idsEqual } from '../utils/entityIds.js';
 
@@ -231,6 +232,32 @@ class Query {
   }
 
   async exec() {
+    // Mongo pushdown when safe (no populate) — avoids full-collection hydrate.
+    if (getPersistenceMode() === 'mongo' && !this._populate.length) {
+      const sort =
+        typeof this._sort === 'object' && this._sort && !Array.isArray(this._sort)
+          ? this._sort
+          : this._sort;
+      let projection = null;
+      if (this._select) {
+        projection = {};
+        for (const f of String(this._select).split(/\s+/).filter(Boolean)) {
+          if (f.startsWith('-')) projection[f.slice(1)] = 0;
+          else projection[f] = 1;
+        }
+      }
+      const { data } = await queryCollection(this.model.modelName, {
+        filter: this.filter,
+        sort,
+        skip: this._skip,
+        limit: this._limit,
+        projection,
+      });
+      // queryCollection returns plain objects; wrap like the cache path.
+      const rows = data.map((r) => (this._select ? r : clone(r)));
+      return rows.map((r) => this.model._wrap(r, { alreadyCloned: true }));
+    }
+
     // Match/sort on cache refs — clone only after skip/limit (avoids OOM on paginated finds).
     let rows = (await this.model._all()).filter((d) => match(d, this.filter));
     if (this._sort) {
@@ -483,6 +510,10 @@ export function defineCollection(name, defaults = {}) {
       return rows.map((row) => model._wrap(row));
     },
     async countDocuments(filter = {}) {
+      if (getPersistenceMode() === 'mongo') {
+        const { total } = await queryCollection(name, { filter, limit: 0 });
+        return total;
+      }
       return scanCollection(name, { filter });
     },
     async updateOne(filter, update) {

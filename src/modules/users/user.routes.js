@@ -498,6 +498,8 @@ router.patch(
     }
 
     await role.save();
+    const { invalidateAuthCache } = await import('../../middleware/auth.js');
+    invalidateAuthCache();
 
     await writeAudit({
       actorId: req.user._id,
@@ -525,6 +527,8 @@ router.delete(
     }
     role.isDeleted = true;
     await role.save();
+    const { invalidateAuthCache } = await import('../../middleware/auth.js');
+    invalidateAuthCache();
     await writeAudit({
       actorId: req.user._id,
       actorEmail: req.user.email,
@@ -701,6 +705,8 @@ router.patch(
       user.tokenVersion = (user.tokenVersion || 0) + 1;
     }
     await user.save();
+    const { invalidateAuthCache } = await import('../../middleware/auth.js');
+    invalidateAuthCache(user._id);
     await user.populate('roleIds');
     await user.populate('reportingManagerId', 'fullName email designation');
     await writeAudit({
@@ -730,6 +736,8 @@ router.delete(
     user.isActive = false;
     user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
+    const { invalidateAuthCache } = await import('../../middleware/auth.js');
+    invalidateAuthCache(user._id);
     await clearReportingManagerForUser(user._id);
     await writeAudit({
       actorId: req.user._id,

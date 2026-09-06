@@ -13,11 +13,20 @@ const PROCESS_INVENTORY = {
   Dietician: 'Dietician Kit',
 };
 
+let lastUsageSyncAt = 0;
+const USAGE_SYNC_MIN_INTERVAL_MS = 5 * 60 * 1000;
+
 /**
  * Ensure approved camps appear as usage rows (auto-updated from Camp Management).
- * Idempotent upsert by campRequestId.
+ * Idempotent upsert by campRequestId. Debounced to avoid N+1 on every usage list hit.
  */
-export async function syncUsageFromCamps() {
+export async function syncUsageFromCamps({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - lastUsageSyncAt < USAGE_SYNC_MIN_INTERVAL_MS) {
+    return { skipped: true, upserted: 0 };
+  }
+  lastUsageSyncAt = now;
+
   const camps = await CampRequest.find({
     isDeleted: false,
     status: { $in: ['Approved', 'Completed', 'Executed'] },

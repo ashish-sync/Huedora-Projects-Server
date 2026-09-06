@@ -171,6 +171,8 @@ export async function hydratePersistence() {
  * Return the live collection array (cache reference).
  * Callers that need isolation must clone matched documents themselves (Query.exec does).
  * Deep-cloning the full collection on every read caused multi‑GB RSS spikes with large audits.
+ *
+ * Prefer queryCollection() for paginated lists — it never loads the full Mongo collection.
  */
 export async function loadCollection(name) {
   if (mode === 'mongo') {
@@ -193,6 +195,155 @@ export async function loadCollection(name) {
   cache.set(name, rows);
   fileMtime.set(name, mtimeMs);
   return rows;
+}
+
+/**
+ * Paginated / filtered read without hydrating the entire Mongo collection.
+ * File mode falls back to loadCollection + in-memory match/sort/slice.
+ *
+ * @param {string} name logical collection name (e.g. camp_ops_camps)
+ * @param {{ filter?: object, sort?: object|string, skip?: number, limit?: number|null, projection?: object }} [opts]
+ * @returns {Promise<{ data: object[], total: number }>}
+ */
+export async function queryCollection(name, opts = {}) {
+  const filter = opts.filter && typeof opts.filter === 'object' ? opts.filter : {};
+  const skip = Math.max(0, Number(opts.skip) || 0);
+  const limit = opts.limit == null ? null : Math.max(0, Number(opts.limit));
+  const projection = opts.projection && typeof opts.projection === 'object' ? opts.projection : null;
+  const sortSpec = normalizeSortSpec(opts.sort);
+
+  if (mode === 'mongo' && mongoDb) {
+    const col = mongoDb.collection(collectionKey(name));
+    const cursor = col.find(filter);
+    if (sortSpec) cursor.sort(sortSpec);
+    if (skip) cursor.skip(skip);
+    if (limit != null) cursor.limit(limit);
+    if (projection) cursor.project(projection);
+    const [data, total] = await Promise.all([
+      cursor.toArray(),
+      col.countDocuments(filter),
+    ]);
+    return { data, total };
+  }
+
+  // File / offline fallback — same semantics as Query.exec (full load once).
+  const { matchDocument } = await import('./filedb.js');
+  let rows = (await loadCollection(name)).filter((d) => matchDocument(d, filter));
+  if (sortSpec) {
+    const fields = Object.entries(sortSpec).map(([key, dir]) => ({
+      key,
+      dir: Number(dir) < 0 ? -1 : 1,
+    }));
+    rows = rows.slice().sort((a, b) => {
+      for (const { key, dir } of fields) {
+        const av = key.split('.').reduce((o, k) => (o == null ? o : o[k]), a);
+        const bv = key.split('.').reduce((o, k) => (o == null ? o : o[k]), b);
+        if (av < bv) return -1 * dir;
+        if (av > bv) return 1 * dir;
+      }
+      return 0;
+    });
+  }
+  const total = rows.length;
+  if (skip) rows = rows.slice(skip);
+  if (limit != null) rows = rows.slice(0, limit);
+  if (projection) {
+    rows = rows.map((row) => projectRow(row, projection));
+  } else {
+    rows = rows.map((row) => clone(row));
+  }
+  return { data: rows, total };
+}
+
+function normalizeSortSpec(sort) {
+  if (!sort) return null;
+  if (typeof sort === 'object' && !Array.isArray(sort)) {
+    const out = {};
+    for (const [key, dirVal] of Object.entries(sort)) {
+      out[key] = Number(dirVal) < 0 ? -1 : 1;
+    }
+    return Object.keys(out).length ? out : null;
+  }
+  const out = {};
+  for (const f of String(sort).split(/\s+/).filter(Boolean)) {
+    const key = f.replace(/^-/, '');
+    out[key] = f.startsWith('-') ? -1 : 1;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+function projectRow(row, projection) {
+  const includeMode = Object.values(projection).some((v) => Number(v) === 1);
+  const next = {};
+  if (includeMode) {
+    if (projection._id !== 0) next._id = row._id;
+    for (const [k, v] of Object.entries(projection)) {
+      if (k === '_id') continue;
+      if (Number(v) === 1 && Object.prototype.hasOwnProperty.call(row, k)) next[k] = row[k];
+    }
+    return next;
+  }
+  Object.assign(next, clone(row));
+  for (const [k, v] of Object.entries(projection)) {
+    if (Number(v) === 0) delete next[k];
+  }
+  return next;
+}
+
+/** Ensure common list indexes (non-blocking; safe to call on boot). */
+export async function ensureListIndexes() {
+  if (mode !== 'mongo' || !mongoDb) return { skipped: true };
+  const specs = [
+    {
+      name: 'camp_ops_camps',
+      indexes: [
+        { key: { isDeleted: 1, campDate: 1, startTime: 1 }, name: 'list_deleted_date_time' },
+        { key: { isDeleted: 1, clientId: 1, campDate: 1 }, name: 'list_deleted_client_date' },
+        { key: { isDeleted: 1, status: 1, lifecycleStage: 1 }, name: 'list_deleted_status_stage' },
+      ],
+    },
+    {
+      name: 'camp_ops_clients',
+      indexes: [{ key: { isDeleted: 1, name: 1 }, name: 'list_deleted_name' }],
+    },
+    {
+      name: 'contacts',
+      indexes: [
+        { key: { isDeleted: 1, contactCategory: 1, name: 1 }, name: 'list_deleted_category_name' },
+      ],
+    },
+  ];
+  const results = [];
+  for (const spec of specs) {
+    const col = mongoDb.collection(collectionKey(spec.name));
+    for (const idx of spec.indexes) {
+      try {
+        await col.createIndex(idx.key, { name: idx.name, background: true });
+        results.push({ collection: spec.name, index: idx.name, ok: true });
+      } catch (err) {
+        results.push({
+          collection: spec.name,
+          index: idx.name,
+          ok: false,
+          error: String(err?.message || err).slice(0, 200),
+        });
+      }
+    }
+  }
+  return { ok: true, results };
+}
+
+/**
+ * Run an aggregation pipeline against a collection (Mongo only).
+ * File mode returns null so callers can fall back.
+ */
+export async function aggregateCollection(name, pipeline = []) {
+  if (mode !== 'mongo' || !mongoDb) return null;
+  return mongoDb.collection(collectionKey(name)).aggregate(pipeline).toArray();
+}
+
+export function mongoCollectionName(logicalName) {
+  return collectionKey(logicalName);
 }
 
 /** Upsert a single document — avoids rewriting the entire collection to Mongo. */

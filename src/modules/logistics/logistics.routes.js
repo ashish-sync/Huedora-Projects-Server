@@ -2733,8 +2733,14 @@ router.get(
   '/dashboard',
   canRead,
   asyncHandler(async (req, res) => {
-    const [rows, usageRows] = await Promise.all([
-      LogisticsInOutEntry.find({ isDeleted: false }),
+    const { queryCollection } = await import('../../store/persistence.js');
+    const [{ data: rows }, usageRows] = await Promise.all([
+      queryCollection('logistics_in_out_entries', {
+        filter: { isDeleted: false },
+        // Cap dashboard scan — UI aggregates; full history belongs in movement lists
+        limit: 5000,
+        sort: { createdAt: -1 },
+      }),
       listUsageMerged(),
     ]);
     const data = buildDashboard(rows, usageRows, {

@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import {
   buildExecutionDocumentBaseName,
   buildExecutionDocumentFileName,
-  campDateFileToken,
+  buildStubExecutionDocuments,
   doctorNameFileToken,
   executionDocTypeCode,
+  executionDocumentDisplayName,
+  stripLegacyCampDateFromExecutionName,
 } from './executionDocumentName.js';
 
 test('doctorNameFileToken strips Dr prefix and uppercases', () => {
@@ -13,11 +15,6 @@ test('doctorNameFileToken strips Dr prefix and uppercases', () => {
   assert.equal(doctorNameFileToken('Dr. Karan Sharma'), 'KARANSHARMA');
   assert.equal(doctorNameFileToken('Karan'), 'KARAN');
   assert.equal(doctorNameFileToken('Adi'), 'ADI');
-});
-
-test('campDateFileToken formats DDMMYYYY (legacy helper; not used in file names)', () => {
-  assert.equal(campDateFileToken('2026-08-03'), '03082026');
-  assert.equal(campDateFileToken('03/08/2026'), '03082026');
 });
 
 test('executionDocTypeCode maps DF PF GS', () => {
@@ -31,7 +28,6 @@ test('buildExecutionDocumentBaseName is Doctor + DocCode without date', () => {
   assert.equal(
     buildExecutionDocumentBaseName({
       doctorName: 'Dr Karan',
-      campDate: '2026-08-03',
       docType: 'doctor_form',
     }),
     'KARANDF',
@@ -39,7 +35,6 @@ test('buildExecutionDocumentBaseName is Doctor + DocCode without date', () => {
   assert.equal(
     buildExecutionDocumentBaseName({
       doctorName: 'Adi',
-      campDate: '2026-10-10',
       docType: 'patient_form',
     }),
     'ADIPF',
@@ -47,7 +42,6 @@ test('buildExecutionDocumentBaseName is Doctor + DocCode without date', () => {
   assert.equal(
     buildExecutionDocumentBaseName({
       doctorName: 'Dr Karan',
-      campDate: '2026-08-03',
       docType: 'gps_selfie',
     }),
     'KARANGS',
@@ -58,7 +52,6 @@ test('buildExecutionDocumentFileName keeps extension and avoids collisions', () 
   assert.deepEqual(
     buildExecutionDocumentFileName({
       doctorName: 'Karan',
-      campDate: '2026-08-03',
       docType: 'doctor_form',
       originalName: 'scan.pdf',
     }),
@@ -67,7 +60,6 @@ test('buildExecutionDocumentFileName keeps extension and avoids collisions', () 
   assert.deepEqual(
     buildExecutionDocumentFileName({
       doctorName: 'Karan',
-      campDate: '2026-08-03',
       docType: 'doctor_form',
       originalName: 'scan.pdf',
       existingNames: ['KARANDF.pdf'],
@@ -77,11 +69,48 @@ test('buildExecutionDocumentFileName keeps extension and avoids collisions', () 
   assert.deepEqual(
     buildExecutionDocumentFileName({
       doctorName: 'Adi',
-      campDate: '2026-10-10',
       docType: 'patient_form',
       originalName: 'scan.webp',
       campScope: '26-10-0001',
     }),
     { fileName: 'ADIPF.webp', storedName: '26-10-0001__ADIPF.webp' },
   );
+});
+
+test('stripLegacyCampDateFromExecutionName removes DDMMYYYY after doc code', () => {
+  assert.equal(stripLegacyCampDateFromExecutionName('ADIPF10102026.webp'), 'ADIPF.webp');
+  assert.equal(
+    stripLegacyCampDateFromExecutionName('26-10-0001__ADIPF10102026.webp'),
+    '26-10-0001__ADIPF.webp',
+  );
+  assert.equal(stripLegacyCampDateFromExecutionName('ADIPF.webp'), 'ADIPF.webp');
+});
+
+test('executionDocumentDisplayName prefers clean logical name', () => {
+  assert.equal(
+    executionDocumentDisplayName({
+      fileName: 'ADIPF10102026.webp',
+      storedName: '26-10-0001__ADIPF10102026.webp',
+    }),
+    'ADIPF.webp',
+  );
+  assert.equal(
+    executionDocumentDisplayName({
+      storedName: '26-10-0001__KARANDF.webp',
+    }),
+    'KARANDF.webp',
+  );
+});
+
+test('buildStubExecutionDocuments uses canonical nomenclature', () => {
+  const docs = buildStubExecutionDocuments(
+    { doctorName: 'Adi', campId: '26-10-0001' },
+    { ext: '.pdf' },
+  );
+  assert.equal(docs.length, 2);
+  assert.equal(docs[0].fileName, 'ADIDF.pdf');
+  assert.equal(docs[0].storedName, '26-10-0001__ADIDF.pdf');
+  assert.equal(docs[0].docType, 'doctor_form');
+  assert.equal(docs[1].fileName, 'ADIPF.pdf');
+  assert.equal(docs[1].storedName, '26-10-0001__ADIPF.pdf');
 });

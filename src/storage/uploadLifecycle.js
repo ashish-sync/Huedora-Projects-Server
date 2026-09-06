@@ -19,6 +19,7 @@ export async function finalizeRequestUploads(req) {
     const result = await processUploadedMedia(file.path, {
       originalName: file.originalname,
       mimetype: file.mimetype,
+      deferR2: true,
     });
     applyProcessResultToMulterInfo(file, result);
     file.mediaFinalized = true;

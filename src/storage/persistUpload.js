@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { isObjectStoreEnabled, putLocalFile, putBuffer, deleteObject } from './objectStore.js';
 import { toUploadObjectKey, absoluteUploadPath } from './uploadKeys.js';
+import { migrateStoredFileKey } from './media/storedFileRegistry.js';
 
 /**
  * After a file lands on local disk, mirror it to R2 when enabled.
@@ -52,8 +53,9 @@ export async function writeUploadBuffer(objectKey, buffer, { contentType, origin
 
 /**
  * Rename/move within uploads root and keep R2 in sync.
+ * @param {{ contentType?: string, deferR2?: boolean, originalName?: string }} [opts]
  */
-export async function renameLocalUpload(fromAbs, toAbs, { contentType } = {}) {
+export async function renameLocalUpload(fromAbs, toAbs, { contentType, deferR2 = false, originalName } = {}) {
   fs.mkdirSync(path.dirname(toAbs), { recursive: true });
   if (fromAbs !== toAbs) {
     fs.renameSync(fromAbs, toAbs);
@@ -61,10 +63,45 @@ export async function renameLocalUpload(fromAbs, toAbs, { contentType } = {}) {
   const toKey = toUploadObjectKey(toAbs);
   const fromKey = toUploadObjectKey(fromAbs);
   if (isObjectStoreEnabled() && toKey) {
-    await putLocalFile(toAbs, toKey, { contentType });
-    if (fromKey && fromKey !== toKey) {
-      await deleteObject(fromKey).catch(() => {});
+    if (deferR2) {
+      let sizeBytes;
+      try {
+        sizeBytes = fs.statSync(toAbs).size;
+      } catch {
+        sizeBytes = undefined;
+      }
+      await migrateStoredFileKey(fromKey, toKey, {
+        contentType,
+        originalName,
+        sizeBytes,
+      });
+      const { enqueueR2Put } = await import('./media/mediaQueue.js');
+      await enqueueR2Put({
+        absPath: toAbs,
+        objectKey: toKey,
+        contentType,
+        originalName,
+      });
+      if (fromKey && fromKey !== toKey) {
+        deleteObject(fromKey).catch(() => {});
+      }
+    } else {
+      await putLocalFile(toAbs, toKey, { contentType });
+      await migrateStoredFileKey(fromKey, toKey, {
+        contentType,
+        originalName,
+        status: 'ready',
+      });
+      if (fromKey && fromKey !== toKey) {
+        await deleteObject(fromKey).catch(() => {});
+      }
     }
+  } else if (toKey) {
+    await migrateStoredFileKey(fromKey, toKey, {
+      contentType,
+      originalName,
+      status: 'ready',
+    });
   }
   return { absPath: toAbs, objectKey: toKey };
 }

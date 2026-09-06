@@ -10,6 +10,7 @@
 import { connectDb, disconnectDb } from '../src/config/db.js';
 import { ensureSeed } from '../src/seed.js';
 import { ensureCampOpsSeed, CAMP_ONE_DEMO } from '../src/modules/campOps/campOps.seed.js';
+import { buildStubExecutionDocuments } from '../src/modules/campOps/executionDocumentName.js';
 
 const base = (process.env.API_BASE || 'http://localhost:5000/api/v1').replace(/\/$/, '');
 const results = [];
@@ -200,10 +201,7 @@ async function fillExecutionReady(campMongoId) {
       actualPatients: 36,
       rxCount: 10,
       hcwGapOverrideAcknowledged: true,
-      executionDocuments: [
-        { docType: 'doctor_form', fileName: 'df-qa.pdf', url: 'https://example.local/df-qa.pdf' },
-        { docType: 'patient_form', fileName: 'pf-qa.pdf', url: 'https://example.local/pf-qa.pdf' },
-      ],
+      executionDocuments: buildStubExecutionDocuments(current),
     },
   });
   return getCamp(campMongoId);
@@ -232,10 +230,7 @@ async function markComplete(campMongoId) {
       hcwGapOverrideAcknowledged: true,
       executionDocuments: current.executionDocuments?.length
         ? current.executionDocuments
-        : [
-          { docType: 'doctor_form', fileName: 'df-qa.pdf', url: 'https://example.local/df-qa.pdf' },
-          { docType: 'patient_form', fileName: 'pf-qa.pdf', url: 'https://example.local/pf-qa.pdf' },
-        ],
+        : buildStubExecutionDocuments(current),
     },
   });
   return getCamp(campMongoId);

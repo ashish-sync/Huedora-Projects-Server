@@ -78,6 +78,13 @@ import {
   archiveCampRecord,
 } from './campOps.helpers.js';
 import { matchesExecutionFilter } from './campStageFilters.js';
+import {
+  enrichCampList,
+  compareCampListOrder,
+  cheapRequestReviewStatus,
+  cheapIsOverdue,
+  cheapEffectiveCamp,
+} from './campOps.listDto.js';
 import { buildOperationsBoard } from './campOps.operationsBoard.js';
 import { resolveContactPersonFields } from './campContactPersons.js';
 import {
@@ -221,7 +228,7 @@ import fs from 'fs';
 import path from 'path';
 import { uploadDir } from '../../config/paths.js';
 import { toSignedUploadUrl } from '../files/file.routes.js';
-import { buildExecutionDocumentFileName } from './executionDocumentName.js';
+import { buildExecutionDocumentFileName, executionDocumentDisplayName } from './executionDocumentName.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
 import { multerStoredUploadFileNameWithPurpose } from '../../storage/uploadKeys.js';
@@ -257,10 +264,14 @@ function signStoredUploadUrl(url) {
 function withSignedCampFiles(camp) {
   const obj = { ...camp };
   if (Array.isArray(obj.executionDocuments)) {
-    obj.executionDocuments = obj.executionDocuments.map((doc) => ({
-      ...doc,
-      url: signStoredUploadUrl(doc.url),
-    }));
+    obj.executionDocuments = obj.executionDocuments.map((doc) => {
+      const displayName = executionDocumentDisplayName(doc);
+      return {
+        ...doc,
+        fileName: displayName || doc.fileName,
+        url: signStoredUploadUrl(doc.url),
+      };
+    });
   }
   if (obj.inTimeSelfieUrl) {
     obj.inTimeSelfieUrl = signStoredUploadUrl(obj.inTimeSelfieUrl);
@@ -283,43 +294,83 @@ function enrichCamp(camp) {
   return withSignedCampFiles(obj);
 }
 
-function compareCampListOrder(a, b, today = localTodayIso()) {
-  const ad = String(a.campDate || '');
-  const bd = String(b.campDate || '');
-  const aUpcoming = Boolean(ad && ad >= today);
-  const bUpcoming = Boolean(bd && bd >= today);
-  if (aUpcoming !== bUpcoming) return aUpcoming ? -1 : 1;
-  if (ad !== bd) return ad.localeCompare(bd);
-  const at = String(a.startTime || '');
-  const bt = String(b.startTime || '');
-  if (at !== bt) return at.localeCompare(bt);
-  return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
-}
+/** Projection for list queries — exclude heavy blobs. */
+const CAMP_LIST_PROJECTION = {
+  executionDocuments: 0,
+  executionCaptured: 0,
+  consumablesUsed: 0,
+  contactPersons: 0,
+  whatsappRaw: 0,
+  emailRaw: 0,
+  emailBody: 0,
+  campTermsFiles: 0,
+  purchaseOrders: 0,
+};
 
-/** Sort + page camps without filedb cloning the full match set. */
+/** Sort + page camps; enrich only the page; never sign file URLs on list. */
 async function paginateCampsInMemory(filter, { page, limit, skip }, predicate = null) {
-  const { loadCollection, matchDocument } = await import('../../store/filedb.js');
-  const all = await loadCollection('camp_ops_camps');
-  const matched = [];
-  for (const camp of all) {
-    if (!matchDocument(camp, filter)) continue;
-    matched.push(camp);
+  const { queryCollection, aggregateCollection, getPersistenceMode } = await import(
+    '../../store/persistence.js'
+  );
+  const today = localTodayIso();
+
+  // Mongo + no JS predicate: true skip/limit with upcoming-first sort.
+  if (!predicate && getPersistenceMode() === 'mongo') {
+    const facet = await aggregateCollection('camp_ops_camps', [
+      { $match: filter },
+      {
+        $project: {
+          executionDocuments: 0,
+          executionCaptured: 0,
+          consumablesUsed: 0,
+          contactPersons: 0,
+          whatsappRaw: 0,
+          emailRaw: 0,
+          emailBody: 0,
+          campTermsFiles: 0,
+          purchaseOrders: 0,
+        },
+      },
+      {
+        $addFields: {
+          _listUpcoming: {
+            $cond: [{ $gte: ['$campDate', today] }, 0, 1],
+          },
+        },
+      },
+      { $sort: { _listUpcoming: 1, campDate: 1, startTime: 1, createdAt: 1 } },
+      {
+        $facet: {
+          data: [{ $skip: skip }, { $limit: limit }],
+          total: [{ $count: 'n' }],
+        },
+      },
+    ]);
+    const bucket = Array.isArray(facet) && facet[0] ? facet[0] : { data: [], total: [] };
+    const total = Number(bucket.total?.[0]?.n) || 0;
+    const pageRows = (bucket.data || []).map((c) => enrichCampList(c));
+    return paginated(pageRows, total, page, limit);
   }
+
+  const { data: matched } = await queryCollection('camp_ops_camps', {
+    filter,
+    projection: CAMP_LIST_PROJECTION,
+  });
   matched.sort((a, b) => compareCampListOrder(a, b));
 
   if (!predicate) {
     const total = matched.length;
-    const data = matched.slice(skip, skip + limit).map((c) => enrichCamp({ ...c }));
-    return paginated(data, total, page, limit);
+    const pageRows = matched.slice(skip, skip + limit).map((c) => enrichCampList(c));
+    return paginated(pageRows, total, page, limit);
   }
 
   const filtered = [];
   for (const camp of matched) {
-    const enriched = enrichCamp({ ...camp });
-    if (predicate(enriched)) filtered.push(enriched);
+    if (predicate(camp)) filtered.push(camp);
   }
   const total = filtered.length;
-  return paginated(filtered.slice(skip, skip + limit), total, page, limit);
+  const pageRows = filtered.slice(skip, skip + limit).map((c) => enrichCampList(c));
+  return paginated(pageRows, total, page, limit);
 }
 
 async function loadCampForUser(req, campId) {
@@ -901,8 +952,7 @@ router.get(
   '/camps',
   canRead,
   asyncHandler(async (req, res) => {
-    await promoteDueAssignedCampsToExecution();
-    await repairCancelledClosureCampsToFinancial();
+    // Promote/repair moved off the list hot path (boot + GET /camps/:id).
     const { page, limit, skip } = parsePagination(req.query);
     const overdueOnly = req.query.overdue === '1' || req.query.overdue === 'true';
     const reactionRequired = req.query.reactionRequired === '1' || req.query.reactionRequired === 'true';
@@ -916,8 +966,10 @@ router.get(
         await paginateCampsInMemory(
           filter,
           { page, limit, skip },
-          combinePredicates(scopePredicate, (row) => row.requestReviewStatus === 'information_requested'),
-        )
+          combinePredicates(scopePredicate, (row) =>
+            cheapRequestReviewStatus(row, 'information_requested'),
+          ),
+        ),
       );
     }
 
@@ -926,8 +978,10 @@ router.get(
         await paginateCampsInMemory(
           filter,
           { page, limit, skip },
-          combinePredicates(scopePredicate, (row) => row.requestReviewStatus === requestReviewStatus),
-        )
+          combinePredicates(scopePredicate, (row) =>
+            cheapRequestReviewStatus(row, requestReviewStatus),
+          ),
+        ),
       );
     }
 
@@ -936,8 +990,10 @@ router.get(
         await paginateCampsInMemory(
           filter,
           { page, limit, skip },
-          combinePredicates(scopePredicate, (row) => matchesExecutionFilter(row, executionFilter)),
-        )
+          combinePredicates(scopePredicate, (row) =>
+            matchesExecutionFilter(cheapEffectiveCamp(row), executionFilter),
+          ),
+        ),
       );
     }
 
@@ -947,8 +1003,8 @@ router.get(
         await paginateCampsInMemory(
           filter,
           { page, limit, skip },
-          combinePredicates(scopePredicate, (row) => isCampOverdue(row)),
-        )
+          combinePredicates(scopePredicate, (row) => cheapIsOverdue(row)),
+        ),
       );
     }
 
@@ -958,10 +1014,7 @@ router.get(
       );
     }
 
-    const rows = await CampOpsCamp.find(filter).sort('campDate startTime createdAt');
-    rows.sort((a, b) => compareCampListOrder(a, b));
-    const total = rows.length;
-    res.json(paginated(rows.slice(skip, skip + limit).map(enrichCamp), total, page, limit));
+    return res.json(await paginateCampsInMemory(filter, { page, limit, skip }, null));
   })
 );
 
@@ -1262,7 +1315,6 @@ router.post(
       // Use post-optimize filename so display/stored names get .webp / .pdf
       const { fileName: displayName, storedName } = buildExecutionDocumentFileName({
         doctorName: camp.doctorName,
-        campDate: camp.campDate,
         docType,
         originalName: file.filename || file.originalname,
         existingNames: usedNames,
@@ -1287,7 +1339,11 @@ router.post(
             }
             fs.unlinkSync(finalPath);
           }
-          await renameLocalUpload(tempPath, finalPath, { contentType: file.mimetype });
+          await renameLocalUpload(tempPath, finalPath, {
+            contentType: file.mimetype,
+            deferR2: true,
+            originalName: displayName,
+          });
         } catch (err) {
           if (err instanceof AppError) throw err;
           throw new AppError(

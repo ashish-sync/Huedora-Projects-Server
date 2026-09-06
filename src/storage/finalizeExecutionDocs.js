@@ -8,7 +8,7 @@ import {
 import { optimizeGpsSelfieFile } from './media/optimizeGpsSelfie.js';
 import { processUploadedMedia, applyProcessResultToMulterInfo } from './media/processUpload.js';
 import { toUploadObjectKey, absoluteUploadPath, publicUploadPath } from './uploadKeys.js';
-import { isObjectStoreEnabled, putLocalFile, deleteObject, R2_STORAGE_STANDARD } from './objectStore.js';
+import { isObjectStoreEnabled, R2_STORAGE_STANDARD } from './objectStore.js';
 import { sha256File } from './media/contentHash.js';
 import { StoredFile } from '../modules/files/storedFile.model.js';
 import { assignPreservingExisting } from '../store/dataIntegrity.js';
@@ -50,21 +50,13 @@ async function writeOptimizedUpload(file, optimized, sourceKey) {
     throw new Error('Execution document optimize write failed verification');
   }
 
-  if (isObjectStoreEnabled()) {
-    await putLocalFile(nextAbs, nextKey, {
-      contentType: optimized.contentType,
-      storageClass: R2_STORAGE_STANDARD,
-    });
-  }
-
+  // Local commit only — R2 is enqueued after semantic rename so the registry key
+  // matches the final stored name (never leave a false-ready temp key on R2).
   if (nextAbs !== file.path) {
     try {
       fs.unlinkSync(file.path);
     } catch {
       /* ignore */
-    }
-    if (isObjectStoreEnabled() && sourceKey && sourceKey !== nextKey) {
-      await deleteObject(sourceKey).catch(() => {});
     }
   }
 
@@ -76,7 +68,7 @@ async function writeOptimizedUpload(file, optimized, sourceKey) {
     contentType: optimized.contentType,
     sizeBytes: optimized.buffer.length,
     originalName: file.originalname,
-    status: 'ready',
+    status: isObjectStoreEnabled() ? 'pending' : 'ready',
     storageClass: R2_STORAGE_STANDARD,
     refCount: 1,
     processedAt: new Date().toISOString(),
@@ -125,6 +117,7 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
       const result = await processUploadedMedia(file.path, {
         originalName: file.originalname,
         mimetype: file.mimetype,
+        deferR2: true,
       });
       applyProcessResultToMulterInfo(file, result);
       file.mediaFinalized = true;
@@ -140,6 +133,7 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
       const result = await processUploadedMedia(file.path, {
         originalName: file.originalname,
         mimetype: file.mimetype,
+        deferR2: true,
       });
       applyProcessResultToMulterInfo(file, result);
       file.mediaFinalized = true;

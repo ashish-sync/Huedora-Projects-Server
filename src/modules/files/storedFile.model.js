@@ -13,7 +13,7 @@ export const StoredFile = defineCollection('stored_files', {
   contentType: '',
   sizeBytes: 0,
   originalName: '',
-  status: 'pending', // pending | ready | failed | archived
+  status: 'pending', // pending (local ok, R2 deferred) | ready | failed | archived
   storageClass: 'STANDARD', // STANDARD | STANDARD_IA
   refCount: 1,
   lastAccessedAt: null,

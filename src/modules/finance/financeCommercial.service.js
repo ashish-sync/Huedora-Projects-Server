@@ -245,7 +245,7 @@ export async function getOrCreateOrgProfile() {
   return row;
 }
 
-export function mergeOrgProfile(body = {}) {
+export async function mergeOrgProfile(body = {}) {
   const fields = [
     'legalName',
     'brandLine',
@@ -295,6 +295,13 @@ export function mergeOrgProfile(body = {}) {
       if (!value) continue;
     }
     out[key] = value;
+  }
+
+  const { optimizeImageDataUrl } = await import('../../storage/media/optimizeImage.js');
+  for (const key of ['logoDataUrl', 'signatureDataUrl', 'paymentQrDataUrl']) {
+    if (typeof out[key] === 'string' && out[key].startsWith('data:image')) {
+      out[key] = await optimizeImageDataUrl(out[key]);
+    }
   }
   return out;
 }

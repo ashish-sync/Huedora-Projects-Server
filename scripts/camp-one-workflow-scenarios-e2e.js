@@ -14,6 +14,7 @@ import { ensureCampOpsSeed, CAMP_ONE_DEMO } from '../src/modules/campOps/campOps
 import { canEditLifecycleStage } from '../src/modules/campOps/campOps.lifecycle.js';
 import { preserveOrCaptureSubmissionTracking } from '../src/modules/campOps/campOps.helpers.js';
 import { assertWorkflowAction, WORKFLOW_ACTIONS } from '../src/modules/campOps/campOps.workflow.js';
+import { buildStubExecutionDocuments } from '../src/modules/campOps/executionDocumentName.js';
 
 const base = (process.env.API_BASE || 'http://localhost:5000/api/v1').replace(/\/$/, '');
 const results = [];
@@ -237,10 +238,7 @@ async function fillExecutionReady(campId, extras = {}) {
       actualPatients: 36,
       rxCount: 10,
       hcwGapOverrideAcknowledged: true,
-      executionDocuments: [
-        { docType: 'doctor_form', fileName: 'df-e2e.pdf', url: 'https://example.local/df-e2e.pdf' },
-        { docType: 'patient_form', fileName: 'pf-e2e.pdf', url: 'https://example.local/pf-e2e.pdf' },
-      ],
+      executionDocuments: buildStubExecutionDocuments(current),
       ...extras,
     },
   });
@@ -270,10 +268,7 @@ async function markComplete(campId) {
       hcwGapOverrideAcknowledged: true,
       executionDocuments: current.executionDocuments?.length
         ? current.executionDocuments
-        : [
-          { docType: 'doctor_form', fileName: 'df-e2e.pdf', url: 'https://example.local/df-e2e.pdf' },
-          { docType: 'patient_form', fileName: 'pf-e2e.pdf', url: 'https://example.local/pf-e2e.pdf' },
-        ],
+        : buildStubExecutionDocuments(current),
     },
   });
   return getCamp(campId);

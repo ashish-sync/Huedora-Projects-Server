@@ -19,6 +19,7 @@ import {
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
+import { optimizeImageDataUrl } from '../../storage/media/optimizeImage.js';
 
 const router = Router();
 router.use(authenticate);
@@ -187,6 +188,8 @@ router.post(
       throw new AppError('Capture a drawn signature or upload an image', 400, 'VALIDATION_ERROR');
     } else if (!payload.signatureData.startsWith('data:image')) {
       throw new AppError('Signature image must be a PNG or JPEG', 400, 'VALIDATION_ERROR');
+    } else {
+      payload.signatureData = await optimizeImageDataUrl(payload.signatureData);
     }
 
     if (!hasPermission(req, PERMISSIONS.ALL)) {
@@ -244,6 +247,8 @@ router.patch(
       throw new AppError('Signature data is required', 400, 'VALIDATION_ERROR');
     } else if (!payload.signatureData.startsWith('data:image')) {
       throw new AppError('Signature image must be a PNG or JPEG', 400, 'VALIDATION_ERROR');
+    } else if (req.body.signatureData) {
+      payload.signatureData = await optimizeImageDataUrl(payload.signatureData);
     }
 
     assignPreservingExisting(row, payload);

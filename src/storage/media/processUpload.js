@@ -79,10 +79,12 @@ export async function processUploadedMedia(absPath, opts = {}) {
 
   if (!skipOptimize && kind === 'image') {
     const before = fs.statSync(absPath).size;
+    // Standard master: indexed full-color lossless WebP (GPS Selfie rule).
+    // Always rewrite to .webp so format is consistent across upload surfaces.
     const result = await optimizeImageToWebp(absPath);
     const after = result.buffer.length;
-    if (after > 0 && after < before) {
-      reductionRatio = after / before;
+    if (after > 0) {
+      reductionRatio = before > 0 ? after / before : null;
       const nextKey = masterKeyWithExt(sourceKey, '.webp');
       const nextAbs = absoluteUploadPath(nextKey);
       fs.mkdirSync(path.dirname(nextAbs), { recursive: true });
@@ -99,7 +101,7 @@ export async function processUploadedMedia(absPath, opts = {}) {
         }
       }
       workingAbs = nextAbs;
-      contentType = result.contentType;
+      contentType = result.contentType || 'image/webp';
     } else {
       contentType = mimetype || contentType;
     }
@@ -159,31 +161,85 @@ export async function processUploadedMedia(absPath, opts = {}) {
   }
 
   if (isObjectStoreEnabled()) {
-    await putLocalFile(workingAbs, objectKey, {
+    if (opts.deferR2) {
+      // Register pending first so a crash before/during R2 cannot look like success.
+      await upsertRegistry({
+        objectKey,
+        contentHash,
+        kind,
+        contentType,
+        sizeBytes,
+        originalName,
+        status: 'pending',
+        storageClass: R2_STORAGE_STANDARD,
+        refCount: 1,
+        processedAt: new Date().toISOString(),
+        processAttempts: 1,
+        lastError: '',
+        reductionRatio,
+        lastAccessedAt: new Date().toISOString(),
+      });
+      const { enqueueR2Put } = await import('./mediaQueue.js');
+      await enqueueR2Put({
+        absPath: workingAbs,
+        objectKey,
+        contentType,
+        originalName,
+      });
+    } else {
+      await putLocalFile(workingAbs, objectKey, {
+        contentType,
+        storageClass: R2_STORAGE_STANDARD,
+      });
+      await upsertRegistry({
+        objectKey,
+        contentHash,
+        kind,
+        contentType,
+        sizeBytes,
+        originalName,
+        status: 'ready',
+        storageClass: R2_STORAGE_STANDARD,
+        refCount: 1,
+        processedAt: new Date().toISOString(),
+        processAttempts: 1,
+        lastError: '',
+        reductionRatio,
+        lastAccessedAt: new Date().toISOString(),
+      });
+    }
+  } else {
+    await upsertRegistry({
+      objectKey,
+      contentHash,
+      kind,
       contentType,
+      sizeBytes,
+      originalName,
+      status: 'ready',
       storageClass: R2_STORAGE_STANDARD,
+      refCount: 1,
+      processedAt: new Date().toISOString(),
+      processAttempts: 1,
+      lastError: '',
+      reductionRatio,
+      lastAccessedAt: new Date().toISOString(),
     });
   }
 
-  const row = await upsertRegistry({
+  const row = await StoredFile.findOne({
     objectKey,
-    contentHash,
-    kind,
-    contentType,
-    sizeBytes,
-    originalName,
-    status: 'ready',
-    storageClass: R2_STORAGE_STANDARD,
-    refCount: 1,
-    processedAt: new Date().toISOString(),
-    processAttempts: 1,
-    lastError: '',
-    reductionRatio,
-    lastAccessedAt: new Date().toISOString(),
+    isDeleted: false,
   });
 
   if (isObjectStoreEnabled() && obsoleteKey && obsoleteKey !== objectKey) {
-    await deleteObject(obsoleteKey).catch(() => {});
+    if (opts.deferR2) {
+      // Best-effort async delete of obsolete key after new master is queued
+      const { deleteObject } = await import('../objectStore.js');
+      deleteObject(obsoleteKey).catch(() => {});
+    } else {
+      await deleteObject(obsoleteKey).catch(() => {});
+    }
   }
 
   return {

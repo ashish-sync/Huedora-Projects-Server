@@ -11,6 +11,7 @@
  * Set PROD_SMOKE_SKIP_MUTATIONS=1 for read-only mode (no camp create).
  */
 import { getHcwFinanceBlockers } from '../src/modules/contacts/hcwFinanceReadiness.js';
+import { buildStubExecutionDocuments } from '../src/modules/campOps/executionDocumentName.js';
 
 const base = (
   process.env.API_BASE
@@ -319,6 +320,7 @@ async function main() {
     });
 
     await runStep('Planned → Executed → Mark Complete', async () => {
+      const before = await getCamp(campMongoId);
       await api(`/camp-ops/camps/${campMongoId}`, {
         method: 'PUT',
         body: {
@@ -335,10 +337,7 @@ async function main() {
           actualPatients: 8,
           rxCount: 2,
           hcwGapOverrideAcknowledged: true,
-          executionDocuments: [
-            { docType: 'doctor_form', fileName: 'df-prod-smoke.pdf', url: 'https://example.local/df-prod-smoke.pdf' },
-            { docType: 'patient_form', fileName: 'pf-prod-smoke.pdf', url: 'https://example.local/pf-prod-smoke.pdf' },
-          ],
+          executionDocuments: buildStubExecutionDocuments(before),
           markComplete: true,
         },
       });

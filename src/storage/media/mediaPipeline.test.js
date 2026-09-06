@@ -5,7 +5,12 @@ import os from 'os';
 import path from 'path';
 import sharp from 'sharp';
 import { classifyUploadKind } from './mediaKinds.js';
-import { optimizeImageToWebp, IMAGE_MAX_LONG_EDGE, WEBP_QUALITY } from './optimizeImage.js';
+import {
+  optimizeImageToWebp,
+  IMAGE_MAX_LONG_EDGE,
+  STANDARD_IMAGE_PALETTE_COLORS,
+  STANDARD_IMAGE_PALETTE_COLORS_MIN,
+} from './optimizeImage.js';
 import { optimizePdfBuffer } from './optimizePdf.js';
 import { PDFDocument } from 'pdf-lib';
 import { sha256Buffer } from './contentHash.js';
@@ -19,38 +24,56 @@ describe('media kinds', () => {
   });
 });
 
-describe('image optimize', () => {
-  it('converts oversized jpeg to smaller webp under max long edge', async () => {
+describe('standard image optimize (GPS Selfie rule)', () => {
+  it('converts color jpeg to indexed full-color lossless WebP under max long edge', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tylo-media-'));
     const src = path.join(dir, 'big.jpg');
-    await sharp({
-      create: {
-        width: 3200,
-        height: 2000,
-        channels: 3,
-        background: { r: 180, g: 160, b: 140 },
-      },
-    })
-      .jpeg({ quality: 95 })
+    const width = 1600;
+    const height = 1200;
+    const raw = Buffer.alloc(width * height * 3);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const i = (y * width + x) * 3;
+        if (x < width / 3) {
+          raw[i] = 220;
+          raw[i + 1] = 60;
+          raw[i + 2] = 60;
+        } else if (x < (2 * width) / 3) {
+          raw[i] = 50;
+          raw[i + 1] = 180;
+          raw[i + 2] = 70;
+        } else {
+          raw[i] = 40;
+          raw[i + 1] = 90;
+          raw[i + 2] = 210;
+        }
+      }
+    }
+    await sharp(raw, { raw: { width, height, channels: 3 } })
+      .jpeg({ quality: 92 })
       .toFile(src);
 
     const before = fs.statSync(src).size;
     const result = await optimizeImageToWebp(src);
     assert.equal(result.contentType, 'image/webp');
     assert.equal(result.ext, '.webp');
-    assert.ok(result.width <= IMAGE_MAX_LONG_EDGE);
-    assert.ok(result.height <= IMAGE_MAX_LONG_EDGE);
-    assert.equal(WEBP_QUALITY, 90);
+    assert.equal(result.indexed, true);
+    assert.equal(result.encodeMode, 'indexed-webp');
+    assert.ok(
+      result.paletteColors >= STANDARD_IMAGE_PALETTE_COLORS_MIN
+        && result.paletteColors <= STANDARD_IMAGE_PALETTE_COLORS,
+    );
+    assert.ok(Math.max(result.width, result.height) <= IMAGE_MAX_LONG_EDGE);
     assert.ok(result.buffer.length > 0);
+    assert.ok(result.buffer.length < before);
+
+    const meta = await sharp(result.buffer).metadata();
+    assert.equal(meta.format, 'webp');
     assert.ok(
-      result.buffer.length < before,
-      `expected webp ${result.buffer.length} < jpeg ${before}`,
+      meta.channels >= 3 || meta.space === 'srgb',
+      `expected color WebP, got channels=${meta.channels} space=${meta.space}`,
     );
-    // Target ≥50% reduction on synthetic flat image (handwriting photos may vary)
-    assert.ok(
-      result.buffer.length / before <= 0.5,
-      `expected ≥50% reduction, got ratio=${(result.buffer.length / before).toFixed(2)}`,
-    );
+
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

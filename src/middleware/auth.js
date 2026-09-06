@@ -5,6 +5,18 @@ import { AppError } from '../utils/helpers.js';
 import { PERMISSIONS } from '../config/constants.js';
 import { collectUserPermissions } from '../modules/users/userAccess.js';
 
+const AUTH_CACHE_TTL_MS = Number(process.env.AUTH_CACHE_TTL_MS) || 30_000;
+/** @type {Map<string, { expires: number, user: object, permissions: Set<string>, tokenVersion: number }>} */
+const authCache = new Map();
+
+export function invalidateAuthCache(userId) {
+  if (!userId) {
+    authCache.clear();
+    return;
+  }
+  authCache.delete(String(userId));
+}
+
 export async function authenticate(req, _res, next) {
   try {
     const header = req.headers.authorization || '';
@@ -18,8 +30,20 @@ export async function authenticate(req, _res, next) {
       throw new AppError('Invalid or expired token', 401, 'UNAUTHORIZED');
     }
 
+    const cacheKey = String(payload.sub || '');
+    const cached = cacheKey ? authCache.get(cacheKey) : null;
+    if (
+      cached
+      && cached.expires > Date.now()
+      && (payload.tv === undefined || payload.tv === cached.tokenVersion)
+    ) {
+      req.user = cached.user;
+      req.permissions = cached.permissions;
+      return next();
+    }
+
     const user = await User.findOne({ _id: payload.sub, isDeleted: false, isActive: true }).populate(
-      'roleIds'
+      'roleIds',
     );
     if (!user) throw new AppError('User not found or inactive', 401, 'UNAUTHORIZED');
     if (payload.tv !== undefined && payload.tv !== user.tokenVersion) {
@@ -27,6 +51,14 @@ export async function authenticate(req, _res, next) {
     }
 
     const permissions = collectUserPermissions(user);
+    if (cacheKey) {
+      authCache.set(cacheKey, {
+        expires: Date.now() + AUTH_CACHE_TTL_MS,
+        user,
+        permissions,
+        tokenVersion: user.tokenVersion,
+      });
+    }
 
     req.user = user;
     req.permissions = permissions;

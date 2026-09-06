@@ -3,7 +3,7 @@ import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/helpers.js';
 import { describeR2Config, getR2Env } from './r2Env.js';
 import { probeObjectStore, probeObjectStoreWrite } from './objectStore.js';
-import { mediaQueueStats, retryFailedMediaJobs } from './media/mediaQueue.js';
+import { mediaQueueStats, retryFailedMediaJobs, requeueStuckMediaJobs, storedFileStatusCounts } from './media/mediaQueue.js';
 import { runFileColdStorageJob } from './media/coldStorageJob.js';
 
 const router = Router();
@@ -30,10 +30,12 @@ router.get(
     if (probeMode === 'write') {
       writeProbe = await probeObjectStoreWrite({ force: true });
     }
+    const fileCounts = await storedFileStatusCounts();
     res.json({
       data: {
         ...summary,
         mediaQueue: mediaQueueStats(),
+        storedFiles: fileCounts,
         probe: probe
           ? {
               ok: probe.ok,
@@ -54,14 +56,28 @@ router.get(
   }),
 );
 
-/** POST /api/v1/system/media/retry-failed — reprocess failed optimize jobs */
+/** POST /api/v1/system/media/retry-failed — re-put local masters for failed/pending rows */
 router.post(
   '/media/retry-failed',
   authenticate,
   requireAdmin,
   asyncHandler(async (req, res) => {
     const limit = Math.min(100, Math.max(1, Number(req.body?.limit) || 25));
-    const result = await retryFailedMediaJobs({ limit });
+    const includePending = req.body?.includePending !== false;
+    const result = await retryFailedMediaJobs({ limit, includePending });
+    res.json({ data: result });
+  }),
+);
+
+/** POST /api/v1/system/media/requeue-stuck — enqueue pending/failed local masters (same as boot recovery) */
+router.post(
+  '/media/requeue-stuck',
+  authenticate,
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const limit = Math.min(200, Math.max(1, Number(req.body?.limit) || 50));
+    const olderThanMs = Math.max(0, Number(req.body?.olderThanMs) || 0);
+    const result = await requeueStuckMediaJobs({ limit, olderThanMs });
     res.json({ data: result });
   }),
 );

@@ -318,6 +318,33 @@ async function main() {
   await maybePurgeAllCampsOnBoot();
   await ensureSeed();
   try {
+    const { ensureListIndexes } = await import('./store/persistence.js');
+    const idx = await ensureListIndexes();
+    if (idx?.results?.length) {
+      const failed = idx.results.filter((r) => !r.ok);
+      if (failed.length) {
+        console.warn('[db] list index ensure issues:', failed.map((f) => f.index).join(', '));
+      } else {
+        console.log('[db] list indexes ensured');
+      }
+    }
+  } catch (err) {
+    console.error('[db] ensureListIndexes failed:', err.message);
+  }
+  try {
+    const {
+      promoteDueAssignedCampsToExecution,
+      repairCancelledClosureCampsToFinancial,
+    } = await import('./modules/campOps/campOps.lifecycle.js');
+    const promoted = await promoteDueAssignedCampsToExecution();
+    const repaired = await repairCancelledClosureCampsToFinancial();
+    if (promoted || repaired) {
+      console.log(`[camp-ops] boot promote/repair done`);
+    }
+  } catch (err) {
+    console.error('[camp-ops] boot promote/repair failed:', err.message);
+  }
+  try {
     const { ensureTeamUsersInDatabase } = await import('./boot/ensureTeamUsers.js');
     await ensureTeamUsersInDatabase();
   } catch (err) {
@@ -398,6 +425,24 @@ async function main() {
             .catch((err) => console.error('[media] cold storage job failed:', err.message));
         run();
         const t = setInterval(run, 6 * 60 * 60 * 1000);
+        if (typeof t.unref === 'function') t.unref();
+      })
+      .catch(() => {});
+    import('./storage/media/mediaQueue.js')
+      .then(({ requeueStuckMediaJobs }) => {
+        const run = () =>
+          requeueStuckMediaJobs({ olderThanMs: 60_000, limit: 50 })
+            .then((r) => {
+              if (r.enqueued) {
+                console.warn(
+                  `[media] requeue stuck R2 puts: enqueued=${r.enqueued} skipped=${r.skipped}`,
+                );
+              }
+            })
+            .catch((err) => console.error('[media] requeue stuck failed:', err.message));
+        // After boot settle, then hourly — in-memory queue is lost on restart.
+        setTimeout(run, 15_000);
+        const t = setInterval(run, 60 * 60 * 1000);
         if (typeof t.unref === 'function') t.unref();
       })
       .catch(() => {});

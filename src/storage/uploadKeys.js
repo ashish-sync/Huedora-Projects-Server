@@ -31,8 +31,9 @@ import { uploadsRoot } from '../config/paths.js';
  * 5. Human display / original name stays in the DB (`name`, `originalName`, `fileName`, …).
  * 6. Never rewrite existing keys — old timestamp/uuid patterns keep working via toUploadObjectKey.
  *
- * Exception: Camp execution finals may be renamed to a camp-scoped semantic name
- * (`{campId}__{doctorCode}{date}.ext`) for field ops; that rename is intentional.
+ * Exception: Camp execution finals use semantic names from `executionDocumentName.js`:
+ * display `{DOCTOR}{DF|PF|GS|OT}.ext`, stored `{campId}__{DOCTOR}{CODE}.ext`
+ * (e.g. `ADIPF.webp` / `26-10-0001__ADIPF.webp`) — no camp-date suffix.
  */
 
 const SAFE_NAME_MAX = 80;

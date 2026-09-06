@@ -5,10 +5,10 @@ Verified (Cloudflare docs, 2026): R2 supports **Standard** and **Infrequent Acce
 ## Goals
 
 - One optimized **master** per upload (no permanent thumbs/previews)
-- Images → WebP Q90, max long edge 2500px, metadata stripped
+- **Standard images** (all upload surfaces except Camp DF/PF/Other): indexed full-color lossless WebP, 8–16 colour palette, long edge **1280px** — same rule as GPS Selfie
 - PDFs stay PDF (never WebP); light optimize only when smaller + same page count
-- **Camp One execution documents** (not GPS selfies): 8-bit L grayscale → lossy WebP Q45 / grayscale JPEG-in-PDF Q45 @ ~1700px → R2 (see below)
-- **Camp One GPS Selfie (GS):** Indexed Color WebP with an **8–16 colour palette** (lossless WebP after palette quantize) — not grayscale L / not Q45
+- **Camp One execution documents** (DF / PF / Other only): 8-bit L grayscale → lossy WebP Q45 / grayscale JPEG-in-PDF Q45 @ ~1700px → R2 (see below)
+- **Camp One GPS Selfie (GS):** same standard indexed-color lossless WebP path
 - SHA-256 soft dedupe + `refCount`
 - `lastAccessedAt` on `stored_files` (independent of entity 90-day retention)
 - Idle 90 days → CopyObject to `STANDARD_IA` → verify → update DB → drop local disk copy
@@ -16,6 +16,19 @@ Verified (Cloudflare docs, 2026): R2 supports **Standard** and **Infrequent Acce
 - On-demand preview: `?preview=1&w=240` on signed file URL (disposable `uploads/cache/thumbs/`)
 
 ## Camp One — Execution Documents
+
+### File nomenclature (canonical)
+
+| Layer | Pattern | Example |
+|-------|---------|---------|
+| Display / `fileName` | `{DOCTOR}{CODE}.ext` | `ADIPF.webp` |
+| Stored / R2 key | `{campId}__{DOCTOR}{CODE}.ext` | `26-10-0001__ADIPF.webp` |
+
+Codes: **DF** doctor form · **PF** patient form · **GS** GPS selfie · **OT** other.  
+No camp-date numeric suffix. Collisions use `-2`, `-3`, … before the extension.  
+Implemented only in `modules/campOps/executionDocumentName.js` (upload route + QA stubs).
+
+### Optimize path
 
 Specialized path for Doctor Form / Patient Form / Other (not GPS Selfie):
 
@@ -30,25 +43,29 @@ Specialized path for Doctor Form / Patient Form / Other (not GPS Selfie):
 | Target | Soft 150–300 KB/page (preferred 250–300 for handwriting); logged only |
 | Storage | Same disk→validate→R2 finalize as other uploads |
 
-Modules: `media/optimizeExecutionDoc.js`, `media/optimizeGpsSelfie.js`, `finalizeExecutionDocs.js`.
+Modules: `media/optimizeExecutionDoc.js`, `media/optimizeGpsSelfie.js` / `media/optimizeImage.js` (shared standard), `finalizeExecutionDocs.js`.
 
-### GPS Selfie (GS)
+### Standard images + GPS Selfie (GS)
+
+Used for **all image uploads** except Camp DF/PF/Other scans (via `optimizeImageToWebp` → same encoder as GPS Selfie):
 
 | Step | Behavior |
 |------|----------|
 | Strip metadata | Sharp encode drops EXIF/GPS/profiles/thumbs |
 | Resize | Long edge 1280px |
 | Color | Quantize to **8–16 colour indexed palette** (prefers 16; may use 8 if still large) |
-| Output | Lossless **Indexed Color WebP** (not grayscale L, not lossy Q45) |
-| Fallback | Generic photo WebP pipeline if palette encode fails |
+| Output | Lossless **Indexed Color WebP** (full-color, not grayscale L, not lossy Q45) |
+
+Signature Master / Org Master logo & signature data-URLs use `optimizeImageDataUrl` with the same rule.
 
 ## Key modules
 
 | Path | Role |
 |------|------|
 | `media/processUpload.js` | Optimize + dedupe + register + R2 put |
-| `media/optimizeExecutionDoc.js` | Execution-doc blue-stamp grayscale encode |
-| `media/optimizeGpsSelfie.js` | GPS selfie indexed-color WebP encode |
+| `media/optimizeImage.js` | **Standard** indexed full-color lossless WebP (all images except DF/PF/Other) |
+| `media/optimizeExecutionDoc.js` | Execution-doc blue-stamp grayscale encode (DF/PF/Other only) |
+| `media/optimizeGpsSelfie.js` | Shared indexed-color WebP encoder (GPS Selfie + standard images) |
 | `finalizeExecutionDocs.js` | Camp execution-document finalize → R2 |
 | `media/mediaQueue.js` | Concurrency 1 retries / memory defer |
 | `media/coldStorageJob.js` | 90-day IA transition |
@@ -57,14 +74,27 @@ Modules: `media/optimizeExecutionDoc.js`, `media/optimizeGpsSelfie.js`, `finaliz
 
 ## Admin APIs
 
-- `POST /api/v1/system/media/retry-failed`
+- `GET /api/v1/system/object-storage` — R2 probe + `mediaQueue` + `storedFiles` counts (`pending` / `failed` / `ready`)
+- `POST /api/v1/system/media/retry-failed` — re-put local masters for `failed` (and stuck `pending`) rows; never silently skips
+- `POST /api/v1/system/media/requeue-stuck` — same recovery as boot (re-enqueue after process restart)
 - `POST /api/v1/system/media/cold-archive` body `{ dryRun?, limit? }`
 
 ## Upload lifecycle (v1+)
 
 1. Multer writes **local disk only** (no R2 yet).
 2. Route validates business rules.
-3. `finalizeRequestUploads` / `ensureUploadCommit` optimize + put R2.
-4. On failure, `discardRequestUploads` removes local (+ R2 if present).
+3. Optimize locally (sharp) + register `stored_files` as **`pending`** when R2 is deferred.
+4. `enqueueR2Put` puts the local master; on success → **`ready`**; after 3 failures → **`failed`** + `lastError` (never silent).
+5. Semantic rename (execution docs) migrates the registry key before the final R2 put.
+6. Boot / hourly sweep re-enqueues stuck `pending`/`failed` rows that still have a local file (in-memory queue is lost on restart).
+7. On request validation failure, `discardRequestUploads` removes local (+ R2 if present).
 
-This avoids orphan R2 objects when validation rejects the request.
+Local disk serve continues while R2 catches up. Admin surfaces failures via object-storage counts and retry endpoints.
+
+## Remaining performance debt (deferred)
+
+- Full `global.css` monolith split (high regression risk).
+- Deferring **sharp** off the request path (naming/extension coupling to on-path optimize).
+- Cursor-based pagination UI (skip/limit is enough for current page controls).
+- Render free cold starts / 512MB host limits (ops, not code alone).
+- Predicate camp-list branches still load all matching projected rows before in-memory filter/page (cheaper than full hydrate + URL signing, but not Mongo skip/limit).

@@ -500,13 +500,15 @@ function buildCampPayoutFilter(query = {}) {
 
 const listCampPayouts = asyncHandler(async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
-  const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 200));
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
   const skip = (page - 1) * limit;
   const filter = buildCampPayoutFilter(req.query);
-  const rows = await CampOpsCamp.find(filter).sort('-submittedToFinanceAt');
-  const total = rows.length;
+  const [rows, total] = await Promise.all([
+    CampOpsCamp.find(filter).sort('-submittedToFinanceAt').skip(skip).limit(limit),
+    CampOpsCamp.countDocuments(filter),
+  ]);
   const data = await enrichCampPayoutsWithPayee(
-    rows.slice(skip, skip + limit).map(campPayoutSummary),
+    (Array.isArray(rows) ? rows : []).map(campPayoutSummary),
   );
   res.json(paginated(data, total, page, limit));
 });
