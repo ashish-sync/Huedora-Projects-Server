@@ -5,6 +5,9 @@ import { AppError } from '../utils/helpers.js';
 import { uploadsRoot } from '../config/paths.js';
 import { isObjectStoreEnabled, getObject, headObject } from './objectStore.js';
 import { toUploadObjectKey, absoluteUploadPath } from './uploadKeys.js';
+import { touchStoredFileAccess } from './media/touchAccess.js';
+import { ensureHotStorage } from './media/ensureHotStorage.js';
+import { getOrCreateImagePreview } from './media/thumbCache.js';
 
 /**
  * Resolve a relative upload path and ensure the object exists (disk or R2).
@@ -21,6 +24,13 @@ export async function resolveUploadLocation(relativePath) {
     absPath = absoluteUploadPath(objectKey);
   } catch {
     throw new AppError('Invalid file path', 400, 'VALIDATION_ERROR');
+  }
+
+  // Auto-restore from Infrequent Access before resolving
+  try {
+    await ensureHotStorage(objectKey);
+  } catch (err) {
+    console.warn(`[storage] restore before resolve failed: ${err?.message || err}`);
   }
 
   if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) {
@@ -64,6 +74,13 @@ export async function openUploadReadStream(absOrKey) {
   const key = toUploadObjectKey(absOrKey);
   if (!key) throw new AppError('Invalid file path', 400, 'VALIDATION_ERROR');
 
+  try {
+    await ensureHotStorage(key);
+  } catch (err) {
+    console.warn(`[storage] restore before open failed: ${err?.message || err}`);
+  }
+  void touchStoredFileAccess(key);
+
   let absPath;
   try {
     absPath = absoluteUploadPath(key);
@@ -94,12 +111,41 @@ export async function openUploadReadStream(absOrKey) {
 
 /**
  * Stream an upload to an Express response (download or inline).
+ * Optional preview=true|1 generates a disposable image thumb (not for PDFs).
  */
 export async function sendUploadFile(res, absOrKey, {
   downloadName,
   contentType,
   inline = false,
+  preview = false,
+  previewWidth = 240,
 } = {}) {
+  const keyHint = toUploadObjectKey(absOrKey);
+  if (keyHint) {
+    void touchStoredFileAccess(keyHint);
+  }
+
+  if (preview) {
+    try {
+      const thumb = await getOrCreateImagePreview(absOrKey, {
+        width: previewWidth,
+        originalName: downloadName || absOrKey,
+        contentType,
+      });
+      if (thumb?.absPath) {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'private, max-age=3600');
+        res.type(thumb.contentType);
+        return new Promise((resolve, reject) => {
+          res.sendFile(thumb.absPath, (err) => (err ? reject(err) : resolve()));
+        });
+      }
+    } catch (err) {
+      console.warn(`[storage] preview generation failed: ${err?.message || err}`);
+      // fall through to master
+    }
+  }
+
   const loc = await resolveUploadLocation(absOrKey);
 
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -150,6 +196,14 @@ export async function pipeUploadToResponse(res, absOrKey, { contentType } = {}) 
 export async function ensureLocalUpload(absOrKey) {
   const key = toUploadObjectKey(absOrKey);
   if (!key) throw new AppError('Invalid file path', 400, 'VALIDATION_ERROR');
+
+  try {
+    await ensureHotStorage(key);
+  } catch (err) {
+    console.warn(`[storage] restore before ensureLocal failed: ${err?.message || err}`);
+  }
+  void touchStoredFileAccess(key);
+
   const absPath = absoluteUploadPath(key);
   if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) return absPath;
 

@@ -5,9 +5,20 @@ import {
   HeadObjectCommand,
   HeadBucketCommand,
   DeleteObjectCommand,
+  CopyObjectCommand,
 } from '@aws-sdk/client-s3';
 import fs from 'fs';
 import { getR2Env, describeR2Config } from './r2Env.js';
+
+/** Cloudflare R2 Infrequent Access (verified: docs support STANDARD + STANDARD_IA). */
+export const R2_STORAGE_STANDARD = 'STANDARD';
+export const R2_STORAGE_IA = 'STANDARD_IA';
+
+function normalizeStorageClass(storageClass) {
+  const raw = String(storageClass || '').trim().toUpperCase();
+  if (raw === R2_STORAGE_IA || raw === 'INTELLIGENT_TIERING') return R2_STORAGE_IA;
+  return R2_STORAGE_STANDARD;
+}
 
 let client = null;
 let clientKey = '';
@@ -57,6 +68,7 @@ export async function putLocalFile(absPath, objectKey, opts = {}) {
   const s3 = buildClient(cfg);
   const stat = fs.statSync(absPath);
   const body = fs.createReadStream(absPath);
+  const storageClass = normalizeStorageClass(opts.storageClass);
   await s3.send(
     new PutObjectCommand({
       Bucket: cfg.bucket,
@@ -64,9 +76,10 @@ export async function putLocalFile(absPath, objectKey, opts = {}) {
       Body: body,
       ContentLength: stat.size,
       ContentType: opts.contentType || undefined,
+      StorageClass: storageClass,
     }),
   );
-  return { ok: true, key: objectKey, bucket: cfg.bucket };
+  return { ok: true, key: objectKey, bucket: cfg.bucket, storageClass };
 }
 
 /**
@@ -79,6 +92,7 @@ export async function putBuffer(buffer, objectKey, opts = {}) {
   const cfg = getR2Env();
   if (!cfg.enabled) return { skipped: true };
   const s3 = buildClient(cfg);
+  const storageClass = normalizeStorageClass(opts.storageClass);
   await s3.send(
     new PutObjectCommand({
       Bucket: cfg.bucket,
@@ -86,9 +100,47 @@ export async function putBuffer(buffer, objectKey, opts = {}) {
       Body: buffer,
       ContentType: opts.contentType || undefined,
       ContentLength: buffer.length,
+      StorageClass: storageClass,
     }),
   );
-  return { ok: true, key: objectKey, bucket: cfg.bucket };
+  return { ok: true, key: objectKey, bucket: cfg.bucket, storageClass };
+}
+
+/**
+ * Change storage class in-place (same key) via CopyObject.
+ * R2 docs: CopyObject + x-amz-storage-class STANDARD | STANDARD_IA.
+ * @param {string} objectKey
+ * @param {'STANDARD'|'STANDARD_IA'} storageClass
+ * @param {{ contentType?: string }} [opts]
+ */
+export async function copyObjectStorageClass(objectKey, storageClass, opts = {}) {
+  const cfg = getR2Env();
+  if (!cfg.enabled) return { skipped: true };
+  const key = String(objectKey || '').replace(/^\/+/, '');
+  if (!key) throw new Error('Invalid object key');
+  const targetClass = normalizeStorageClass(storageClass);
+  const s3 = buildClient(cfg);
+  const params = {
+    Bucket: cfg.bucket,
+    Key: key,
+    CopySource: `/${cfg.bucket}/${key}`,
+    StorageClass: targetClass,
+    MetadataDirective: 'COPY',
+  };
+  if (opts.contentType) {
+    params.ContentType = opts.contentType;
+    params.MetadataDirective = 'REPLACE';
+  }
+  await s3.send(new CopyObjectCommand(params));
+  const head = await headObject(key);
+  const reported = normalizeStorageClass(head?.StorageClass || targetClass);
+  return {
+    ok: true,
+    key,
+    storageClass: reported,
+    verified: reported === targetClass || !head?.StorageClass,
+    contentLength: head?.ContentLength ?? null,
+  };
 }
 
 export async function getObject(objectKey) {

@@ -121,7 +121,10 @@ router.get(
     if (payload?.kind !== 'file' || !payload?.path) {
       throw new AppError('Invalid file token', 400, 'VALIDATION_ERROR');
     }
-    await sendUploadFile(res, payload.path);
+    await sendUploadFile(res, payload.path, {
+      preview: ['1', 'true', 'yes'].includes(String(req.query.preview || '').toLowerCase()),
+      previewWidth: Number(req.query.w) || 240,
+    });
   }),
 );
 

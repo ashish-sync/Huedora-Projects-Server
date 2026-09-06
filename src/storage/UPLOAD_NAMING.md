@@ -34,6 +34,7 @@ agreements/signed__20260906-deadbeef__Lease-signed.pdf
 3. **Never rewrite old keys** — existing objects and DB URLs remain valid.
 4. **Imports temp** (`import-temp/`) may stay ephemeral and skip R2.
 5. **Exception:** Camp execution documents may still be renamed to `{campId}__{doctor…}{date}.ext` for field identification after upload.
+6. **Media pipeline:** New uploads are optimized/registered per `MEDIA_PIPELINE.md` (images→WebP, PDFs stay PDF, 90-day R2 Infrequent Access).
 
 ## R2 console search tips
 

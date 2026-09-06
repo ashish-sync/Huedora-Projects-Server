@@ -384,6 +384,23 @@ async function main() {
         if (typeof t.unref === 'function') t.unref();
       })
       .catch(() => {});
+    import('./storage/media/coldStorageJob.js')
+      .then(({ runFileColdStorageJob }) => {
+        const run = () =>
+          runFileColdStorageJob()
+            .then((r) => {
+              if (r.archived || r.errors || r.thumbsRemoved) {
+                console.warn(
+                  `[media] cold storage: scanned=${r.scanned} archived=${r.archived} errors=${r.errors} thumbsRemoved=${r.thumbsRemoved}`,
+                );
+              }
+            })
+            .catch((err) => console.error('[media] cold storage job failed:', err.message));
+        run();
+        const t = setInterval(run, 6 * 60 * 60 * 1000);
+        if (typeof t.unref === 'function') t.unref();
+      })
+      .catch(() => {});
     import('./modules/notifications/notificationArchive.js')
       .then(({ archiveExpiredNotifications }) => {
         const run = () =>

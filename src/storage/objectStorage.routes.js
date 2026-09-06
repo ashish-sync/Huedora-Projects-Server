@@ -3,6 +3,8 @@ import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/helpers.js';
 import { describeR2Config, getR2Env } from './r2Env.js';
 import { probeObjectStore, probeObjectStoreWrite } from './objectStore.js';
+import { mediaQueueStats, retryFailedMediaJobs } from './media/mediaQueue.js';
+import { runFileColdStorageJob } from './media/coldStorageJob.js';
 
 const router = Router();
 
@@ -31,6 +33,7 @@ router.get(
     res.json({
       data: {
         ...summary,
+        mediaQueue: mediaQueueStats(),
         probe: probe
           ? {
               ok: probe.ok,
@@ -48,6 +51,31 @@ router.get(
           : null,
       },
     });
+  }),
+);
+
+/** POST /api/v1/system/media/retry-failed — reprocess failed optimize jobs */
+router.post(
+  '/media/retry-failed',
+  authenticate,
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const limit = Math.min(100, Math.max(1, Number(req.body?.limit) || 25));
+    const result = await retryFailedMediaJobs({ limit });
+    res.json({ data: result });
+  }),
+);
+
+/** POST /api/v1/system/media/cold-archive — run 90-day file IA job (optional dryRun) */
+router.post(
+  '/media/cold-archive',
+  authenticate,
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const dryRun = Boolean(req.body?.dryRun);
+    const limit = Math.min(500, Math.max(1, Number(req.body?.limit) || 100));
+    const result = await runFileColdStorageJob({ dryRun, limit });
+    res.json({ data: result });
   }),
 );
 

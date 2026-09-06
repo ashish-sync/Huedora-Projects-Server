@@ -20,15 +20,30 @@ export async function persistLocalUploadToR2(absPath, { contentType } = {}) {
 }
 
 /**
- * Write buffer to disk under uploads and mirror to R2.
- * @returns {{ absPath: string, objectKey: string }}
+ * Write buffer to disk under uploads, run media pipeline (optimize/register), mirror to R2.
+ * @returns {{ absPath: string, objectKey: string, contentType?: string, sizeBytes?: number }}
  */
-export async function writeUploadBuffer(objectKey, buffer, { contentType } = {}) {
+export async function writeUploadBuffer(objectKey, buffer, { contentType, originalName, skipMediaPipeline = false } = {}) {
   const key = toUploadObjectKey(objectKey);
   if (!key) throw new Error('Invalid upload object key');
   const absPath = absoluteUploadPath(key);
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   fs.writeFileSync(absPath, buffer);
+
+  if (!skipMediaPipeline) {
+    const { processUploadedMedia } = await import('./media/processUpload.js');
+    const result = await processUploadedMedia(absPath, {
+      originalName: originalName || path.basename(key),
+      mimetype: contentType || '',
+    });
+    return {
+      absPath: result.absPath,
+      objectKey: result.objectKey,
+      contentType: result.contentType,
+      sizeBytes: result.sizeBytes,
+    };
+  }
+
   if (isObjectStoreEnabled()) {
     await putBuffer(Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer), key, { contentType });
   }
