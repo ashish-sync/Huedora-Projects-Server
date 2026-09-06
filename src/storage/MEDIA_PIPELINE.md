@@ -10,7 +10,7 @@ Verified (Cloudflare docs, 2026): R2 supports **Standard** and **Infrequent Acce
 - SHA-256 soft dedupe + `refCount`
 - `lastAccessedAt` on `stored_files` (independent of entity 90-day retention)
 - Idle 90 days → CopyObject to `STANDARD_IA` → verify → update DB → drop local disk copy
-- Access → CopyObject back to `STANDARD` → serve
+- Access → CopyObject back to `STANDARD` → **`lastAccessedAt = NOW`** (90-day clock resets; prevents archive↔restore oscillation)
 - On-demand preview: `?preview=1&w=240` on signed file URL (disposable `uploads/cache/thumbs/`)
 
 ## Key modules

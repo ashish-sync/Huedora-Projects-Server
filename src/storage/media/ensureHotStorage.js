@@ -7,17 +7,31 @@ import {
 } from '../objectStore.js';
 import { toUploadObjectKey, absoluteUploadPath } from '../uploadKeys.js';
 import { getStoredFileByKey } from './touchAccess.js';
+import { StoredFile } from '../../modules/files/storedFile.model.js';
 import fs from 'fs';
 
 /**
- * If object is on Infrequent Access, CopyObject back to STANDARD before serving.
- * Verifies Head, then updates registry. Same object key — no permanent second copy.
+ * Mark registry row as hot Standard and reset the 90-day idle clock.
+ * Critical: lastAccessedAt = NOW so cold job cannot immediately re-archive.
  */
-export async function ensureHotStorage(absOrKey) {
+export function applyHotAccessFields(row, { now = new Date() } = {}) {
+  if (!row) return null;
+  const iso = (now instanceof Date ? now : new Date(now)).toISOString();
+  row.status = 'ready';
+  row.storageClass = R2_STORAGE_STANDARD;
+  row.lastAccessedAt = iso;
+  return row;
+}
+
+/**
+ * If object is on Infrequent Access, CopyObject back to STANDARD before serving.
+ * Always resets lastAccessedAt on restore so the 90-day clock restarts.
+ */
+export async function ensureHotStorage(absOrKey, { now = new Date() } = {}) {
   const objectKey = toUploadObjectKey(absOrKey);
   if (!objectKey) return { restored: false };
 
-  const row = await getStoredFileByKey(objectKey);
+  let row = await getStoredFileByKey(objectKey);
   const classFromDb = String(row?.storageClass || '').toUpperCase();
   let needsRestore =
     classFromDb === R2_STORAGE_IA || String(row?.status) === 'archived';
@@ -33,9 +47,15 @@ export async function ensureHotStorage(absOrKey) {
   }
 
   if (!isObjectStoreEnabled()) {
-    if (row) {
-      row.status = 'ready';
-      row.storageClass = R2_STORAGE_STANDARD;
+    if (!row) {
+      row = await StoredFile.create({
+        objectKey,
+        status: 'ready',
+        storageClass: R2_STORAGE_STANDARD,
+        lastAccessedAt: (now instanceof Date ? now : new Date(now)).toISOString(),
+      });
+    } else {
+      applyHotAccessFields(row, { now });
       await row.save();
     }
     return { restored: true, objectKey, row, localOnly: true };
@@ -48,14 +68,19 @@ export async function ensureHotStorage(absOrKey) {
     throw new Error(`Failed to restore object from Infrequent Access: ${objectKey}`);
   }
 
-  if (row) {
-    row.status = 'ready';
-    row.storageClass = R2_STORAGE_STANDARD;
-    row.lastAccessedAt = new Date().toISOString();
+  if (!row) {
+    row = await StoredFile.create({
+      objectKey,
+      status: 'ready',
+      storageClass: R2_STORAGE_STANDARD,
+      lastAccessedAt: (now instanceof Date ? now : new Date(now)).toISOString(),
+    });
+  } else {
+    applyHotAccessFields(row, { now });
     await row.save();
   }
 
-  console.log(`[media] restored to STANDARD key=${objectKey}`);
+  console.log(`[media] restored to STANDARD key=${objectKey} lastAccessedAt=${row.lastAccessedAt}`);
   return { restored: true, objectKey, row, result };
 }
 

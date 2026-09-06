@@ -9,7 +9,12 @@ export const WEBP_QUALITY = 90;
  * @returns {Promise<{ buffer: Buffer, contentType: string, ext: string, width: number, height: number }>}
  */
 export async function optimizeImageToWebp(absPath) {
-  const pipeline = sharp(absPath, { failOn: 'none', animated: false })
+  // Field phone photos / A4 scans can exceed sharp's default ~268MP guard.
+  const pipeline = sharp(absPath, {
+    failOn: 'none',
+    animated: false,
+    limitInputPixels: 268402689 * 4,
+  })
     .rotate() // honor EXIF orientation, then strip
     .resize({
       width: IMAGE_MAX_LONG_EDGE,

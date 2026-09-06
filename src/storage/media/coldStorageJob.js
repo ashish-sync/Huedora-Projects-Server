@@ -15,6 +15,9 @@ export const FILE_IDLE_ARCHIVE_DAYS = 90;
  * Move idle ready files to R2 Infrequent Access (STANDARD_IA).
  * Clock: lastAccessedAt only — independent of entity retention soft-archive.
  *
+ * Restore path (ensureHotStorage) must set lastAccessedAt=NOW when moving
+ * IA → STANDARD so this job cannot oscillate (archive → access → archive).
+ *
  * Safety: CopyObject to IA → Head verify → update DB → delete local hot copy.
  * Object key stays the same (class change); no permanent second master.
  */
@@ -23,10 +26,13 @@ export async function runFileColdStorageJob({ dryRun = false, limit = 100 } = {}
   const rows = await StoredFile.find({ isDeleted: false, status: 'ready' });
   const list = (Array.isArray(rows) ? rows : [])
     .filter((r) => {
+      // Already cold or missing idle timestamp — skip
       if (String(r.storageClass || '').toUpperCase() === R2_STORAGE_IA) return false;
-      const accessed = r.lastAccessedAt ? new Date(r.lastAccessedAt) : r.processedAt ? new Date(r.processedAt) : null;
+      if (String(r.status) === 'archived') return false;
+      const accessed = r.lastAccessedAt ? new Date(r.lastAccessedAt) : null;
       if (!accessed || Number.isNaN(accessed.getTime())) return false;
-      return accessed <= cutoff;
+      // Strict: only idle if last access is older than cutoff (restore resets this)
+      return accessed.getTime() <= cutoff.getTime();
     })
     .slice(0, limit);
 
