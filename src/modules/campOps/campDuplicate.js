@@ -162,7 +162,10 @@ export function attachDuplicateKey(doc = {}, { client = null } = {}) {
     startTime: doc.startTime,
   });
   if (key) doc.duplicateKey = key;
-  else if ('duplicateKey' in doc) delete doc.duplicateKey;
+  else {
+    if ('duplicateKey' in doc) delete doc.duplicateKey;
+    doc.duplicateKey = undefined;
+  }
   return doc;
 }
 
@@ -305,6 +308,7 @@ export async function createCampEnsuringNoDuplicate(CampModel, doc, { client = n
     startTime: checkRow?.startTime,
   });
   if (key) doc.duplicateKey = key;
+  else if ('duplicateKey' in doc) delete doc.duplicateKey;
 
   return withDuplicateKeyLock(key, async () => {
     await assertNoDuplicateCamp({ client, row: checkRow });
@@ -345,21 +349,46 @@ export function formatDuplicateCampMessage(_existingCamp) {
   return DUPLICATE_CAMP_MESSAGE;
 }
 
-/** Partial unique index: active camps with a non-empty duplicateKey. */
+/** Partial unique index: active camps with a non-empty string duplicateKey. */
 export const CAMP_DUPLICATE_INDEX_NAME = 'camp_duplicate_key_unique';
 
 /**
  * MongoDB partial indexes do not support `$ne` / `$not`.
- * Use `$gt: ''` so only non-empty string keys are indexed (Atlas / older engines OK).
+ * Empty keys must be absent/null in the document; the filter indexes only real strings.
  */
 export const CAMP_DUPLICATE_INDEX_PARTIAL_FILTER = {
   isDeleted: false,
-  duplicateKey: { $gt: '' },
+  duplicateKey: { $type: 'string' },
 };
 
-export async function ensureCampDuplicateIndex(mongoDb) {
-  if (!mongoDb) return;
+/**
+ * Clear empty-string duplicateKey values so `$type: "string"` partial index is correct.
+ */
+export async function migrateEmptyCampDuplicateKeys(mongoDb) {
+  if (!mongoDb) return { matched: 0, modified: 0 };
   const col = mongoDb.collection('tylo_camp_ops_camps');
+  const result = await col.updateMany(
+    { duplicateKey: { $in: ['', null] } },
+    { $unset: { duplicateKey: '' } },
+  );
+  return {
+    matched: result.matchedCount ?? result.n ?? 0,
+    modified: result.modifiedCount ?? result.nModified ?? 0,
+  };
+}
+
+export async function ensureCampDuplicateIndex(mongoDb) {
+  if (!mongoDb) {
+    throw new Error('ensureCampDuplicateIndex requires an active MongoDB connection');
+  }
+  const col = mongoDb.collection('tylo_camp_ops_camps');
+  const migration = await migrateEmptyCampDuplicateKeys(mongoDb);
+  if (migration.modified) {
+    console.log(
+      `[db] Cleared ${migration.modified} empty camp duplicateKey value(s) before unique index`,
+    );
+  }
+
   const spec = {
     unique: true,
     partialFilterExpression: CAMP_DUPLICATE_INDEX_PARTIAL_FILTER,
@@ -368,22 +397,32 @@ export async function ensureCampDuplicateIndex(mongoDb) {
 
   try {
     await col.createIndex({ duplicateKey: 1 }, spec);
-    return;
+    console.log(`[db] Ensured Mongo index ${CAMP_DUPLICATE_INDEX_NAME}`);
+    return { ok: true, name: CAMP_DUPLICATE_INDEX_NAME, migration };
   } catch (err) {
     const msg = String(err?.message || err);
-    // Replace a previously failed / incompatible definition with the same name.
     const conflict =
       err?.code === 85
       || err?.code === 86
       || /IndexOptionsConflict|IndexKeySpecsConflict|already exists|Expression not supported/i.test(msg);
-    if (!conflict) throw err;
+    if (!conflict) {
+      const wrapped = new Error(
+        `Required Mongo index ${CAMP_DUPLICATE_INDEX_NAME} failed: ${msg}`,
+      );
+      wrapped.cause = err;
+      throw wrapped;
+    }
     try {
       await col.dropIndex(CAMP_DUPLICATE_INDEX_NAME);
     } catch (dropErr) {
       if (!/index not found|ns not found/i.test(String(dropErr?.message || dropErr))) {
-        throw dropErr;
+        throw new Error(
+          `Required Mongo index ${CAMP_DUPLICATE_INDEX_NAME} could not be replaced: ${dropErr?.message || dropErr}`,
+        );
       }
     }
     await col.createIndex({ duplicateKey: 1 }, spec);
+    console.log(`[db] Recreated Mongo index ${CAMP_DUPLICATE_INDEX_NAME}`);
+    return { ok: true, name: CAMP_DUPLICATE_INDEX_NAME, recreated: true, migration };
   }
 }

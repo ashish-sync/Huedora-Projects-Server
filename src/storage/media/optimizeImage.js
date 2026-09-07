@@ -46,7 +46,8 @@ export async function optimizeImageDataUrl(dataUrl) {
   try {
     const input = Buffer.from(match[2], 'base64');
     if (!input.length) return raw;
-    const result = await optimizeGpsSelfieToIndexedWebp(input);
+    const { materializeOptimizeResult } = await import('./optimizeGpsSelfie.js');
+    const result = await materializeOptimizeResult(await optimizeGpsSelfieToIndexedWebp(input));
     return `data:image/webp;base64,${result.buffer.toString('base64')}`;
   } catch (err) {
     console.warn(`[media] optimizeImageDataUrl failed: ${err?.message || err}`);

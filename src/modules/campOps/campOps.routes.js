@@ -236,6 +236,12 @@ import { renameLocalUpload, deleteLocalUpload } from '../../storage/persistUploa
 import { pipeUploadToResponse } from '../../storage/serveUpload.js';
 import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
 import { finalizeExecutionDocumentUploads } from '../../storage/finalizeExecutionDocs.js';
+import {
+  presignExecutionDocumentUploads,
+  confirmExecutionDocumentUploads,
+} from '../../storage/executionDocDirectUpload.js';
+import { EXEC_DOC_MAX_FILES_PER_REQUEST } from '../../storage/media/uploadLimits.js';
+import { logMemory } from '../../utils/memory.js';
 
 const campUploadRoot = uploadDir('camp-ops');
 const CAMP_DOC_MAX_BYTES = 10 * 1024 * 1024;
@@ -1276,10 +1282,68 @@ router.get(
 );
 
 router.post(
+  '/camps/:id/execution-documents/presign',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const camp = await loadCampForUser(req, req.params.id);
+    if (!canEditLifecycleStage(camp, 'execution', { isAdmin: isCampAdmin(req) })) {
+      throw new AppError('Cannot upload execution documents for this camp', 400, 'VALIDATION_ERROR');
+    }
+    const docType = trimStr(req.body?.docType) || 'other';
+    if (!EXECUTION_DOC_TYPES.includes(docType)) {
+      throw new AppError('Invalid execution document type', 400, 'VALIDATION_ERROR');
+    }
+    const files = Array.isArray(req.body?.files) ? req.body.files : [];
+    const result = await presignExecutionDocumentUploads({ camp, docType, files });
+    res.json({ data: result });
+  }),
+);
+
+router.post(
+  '/camps/:id/execution-documents/confirm',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const camp = await loadCampForUser(req, req.params.id);
+    if (!canEditLifecycleStage(camp, 'execution', { isAdmin: isCampAdmin(req) })) {
+      throw new AppError('Cannot upload execution documents for this camp', 400, 'VALIDATION_ERROR');
+    }
+    const docType = trimStr(req.body?.docType) || 'other';
+    const docNote = trimStr(req.body?.docNote);
+    if (!EXECUTION_DOC_TYPES.includes(docType)) {
+      throw new AppError('Invalid execution document type', 400, 'VALIDATION_ERROR');
+    }
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    logMemory('route:exec-doc-confirm:start', { docType, count: items.length });
+
+    const before = camp.toObject();
+    const { added } = await confirmExecutionDocumentUploads({
+      camp,
+      docType,
+      docNote,
+      items,
+    });
+
+    const existing = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
+    camp.executionDocuments = [...existing, ...added];
+    if (docType === 'gps_selfie') {
+      const selfie = added[added.length - 1];
+      if (selfie?.url) {
+        camp.inTimeSelfieUrl = selfie.url;
+        camp.lifecycleStage = camp.lifecycleStage || 'execution';
+      }
+    }
+    await camp.save();
+    await audit(req, 'camp_ops.execution_docs', 'camp_ops_camp', camp._id, before, camp.toObject());
+    logMemory('route:exec-doc-confirm:done', { docType, count: added.length });
+    res.json({ data: enrichCamp(camp) });
+  }),
+);
+
+router.post(
   '/camps/:id/execution-documents',
   canRequest,
   attachCampUploadLimit,
-  campDocUpload.array('documents', 10),
+  campDocUpload.array('documents', EXEC_DOC_MAX_FILES_PER_REQUEST),
   requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
@@ -1301,8 +1365,19 @@ router.post(
       }
     }
 
-    // Blue-stamp grayscale pipeline (or color photo for GPS selfie) — local only; R2 after rename.
-    await finalizeExecutionDocumentUploads(req, { docType });
+    logMemory('route:exec-doc-multipart:start', { docType, count: files.length });
+    try {
+      await finalizeExecutionDocumentUploads(req, { docType });
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      const code = err?.code || 'UPLOAD_OPTIMIZE_FAILED';
+      const status = err?.status || 500;
+      throw new AppError(
+        err?.message || 'Could not process the uploaded file. Try a smaller image.',
+        status,
+        code,
+      );
+    }
 
     const before = camp.toObject();
     const existing = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];

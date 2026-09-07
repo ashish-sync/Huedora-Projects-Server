@@ -198,13 +198,14 @@ test('formatDuplicateCampMessage uses canonical duplicate entry text', () => {
   assert.match(DUPLICATE_CAMP_MESSAGE, /Client, Doctor, Division\/Campaign Type, Camp Date, and Start Time/);
 });
 
-test('camp duplicate unique index filter avoids unsupported $ne/$not', () => {
+test('camp duplicate unique index filter uses $type string (no $ne/$not)', () => {
   assert.equal(CAMP_DUPLICATE_INDEX_NAME, 'camp_duplicate_key_unique');
   assert.deepEqual(CAMP_DUPLICATE_INDEX_PARTIAL_FILTER, {
     isDeleted: false,
-    duplicateKey: { $gt: '' },
+    duplicateKey: { $type: 'string' },
   });
   const encoded = JSON.stringify(CAMP_DUPLICATE_INDEX_PARTIAL_FILTER);
   assert.equal(encoded.includes('$ne'), false);
   assert.equal(encoded.includes('$not'), false);
+  assert.equal(encoded.includes('$gt'), false);
 });

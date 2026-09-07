@@ -1,49 +1,78 @@
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import sharp from 'sharp';
+import {
+  SHARP_LIMIT_INPUT_PIXELS,
+  STANDARD_IMAGE_LONG_EDGE,
+  WEBP_PASSTHROUGH_MAX_BYTES,
+  assertPixelBudget,
+} from './uploadLimits.js';
+import { logMemory } from '../../utils/memory.js';
 
-/** GPS selfie / standard-image long-edge cap. */
-export const GPS_SELFIE_LONG_EDGE = 1280;
-/** Preferred palette size (Indexed Color). */
+/** @deprecated use STANDARD_IMAGE_LONG_EDGE */
+export const GPS_SELFIE_LONG_EDGE = STANDARD_IMAGE_LONG_EDGE;
 export const GPS_SELFIE_PALETTE_COLORS = 16;
-/** Smaller palette when preferred still leaves a large file. */
 export const GPS_SELFIE_PALETTE_COLORS_MIN = 8;
 export const GPS_SELFIE_WEBP_EFFORT = 4;
-/** Skip re-encode when input WebP is already within budget (avoids OOM / timeouts). */
-export const WEBP_PASSTHROUGH_MAX_BYTES = 900 * 1024;
+export { WEBP_PASSTHROUGH_MAX_BYTES };
 
 const SHARP_OPTS = {
   failOn: 'none',
   animated: false,
-  limitInputPixels: 268402689 * 4,
+  limitInputPixels: SHARP_LIMIT_INPUT_PIXELS,
 };
 
-function readInputBuffer(input) {
-  if (Buffer.isBuffer(input)) return input;
-  return fs.readFileSync(input);
-}
-
-function resultFromBuffer(buffer, info = {}, extras = {}) {
+function resultFromFile(absPath, info = {}, extras = {}) {
+  const size = fs.statSync(absPath).size;
   return {
-    buffer,
+    /** Prefer filePath so callers avoid holding a second Buffer copy. */
+    filePath: absPath,
+    buffer: null,
     contentType: 'image/webp',
     ext: '.webp',
     width: info.width || 0,
     height: info.height || 0,
     pageCount: 1,
-    bytesPerPage: buffer.length,
+    bytesPerPage: size,
     paletteColors: extras.paletteColors ?? null,
     indexed: extras.indexed !== false,
     encodeMode: extras.encodeMode || 'indexed-webp',
   };
 }
 
+async function readResultBuffer(result) {
+  if (Buffer.isBuffer(result.buffer) && result.buffer.length) return result.buffer;
+  if (result.filePath && fs.existsSync(result.filePath)) {
+    return fs.readFileSync(result.filePath);
+  }
+  throw new Error('Optimized image result missing bytes');
+}
+
+/** Ensure callers that still expect `.buffer` get one (prefer filePath when possible). */
+export async function materializeOptimizeResult(result) {
+  if (Buffer.isBuffer(result?.buffer) && result.buffer.length) return result;
+  const buffer = await readResultBuffer(result);
+  return { ...result, buffer, bytesPerPage: buffer.length };
+}
+
+function tmpWebpPath(tag = 'img') {
+  return path.join(
+    os.tmpdir(),
+    `tylo-${tag}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.webp`,
+  );
+}
+
 /**
- * Light resize-only WebP (lossless when possible). Used when palette path fails
- * or for oversized WebP that only needs a dimension cap.
+ * Light resize-only lossless WebP written to a temp file (no multi-buffer PNG round-trip).
  */
 export async function optimizeWebpResizeOnly(input, opts = {}) {
   const longEdge = opts.longEdge ?? GPS_SELFIE_LONG_EDGE;
-  const { data, info } = await sharp(input, SHARP_OPTS)
+  const outPath = opts.outPath || tmpWebpPath('resize');
+  logMemory('optimize:webp-resize:start');
+  const meta = await sharp(input, SHARP_OPTS).metadata();
+  assertPixelBudget(meta.width, meta.height);
+  await sharp(input, SHARP_OPTS)
     .rotate()
     .resize({
       width: longEdge,
@@ -55,20 +84,21 @@ export async function optimizeWebpResizeOnly(input, opts = {}) {
       lossless: true,
       effort: Math.min(4, GPS_SELFIE_WEBP_EFFORT),
     })
-    .toBuffer({ resolveWithObject: true });
-  return resultFromBuffer(data, info, {
+    .toFile(outPath);
+  const info = await sharp(outPath, SHARP_OPTS).metadata();
+  logMemory('optimize:webp-resize:done', { bytes: fs.statSync(outPath).size });
+  return resultFromFile(outPath, info, {
     indexed: false,
     encodeMode: 'webp-resize',
   });
 }
 
 /**
- * Quantize to an 8–16 colour indexed image, then lossless WebP.
- * Already-suitable WebP inputs pass through (or resize-only) to avoid Render OOM
- * from PNG palette round-trips on large/lossless sources.
+ * Quantize to 8–16 colour indexed image, then lossless WebP — file intermediates only.
+ * Already-suitable WebP inputs pass through (copy) without decode/re-encode.
  *
- * @param {string|Buffer} input
- * @param {{ colours?: number, longEdge?: number }} [opts]
+ * @param {string|Buffer} input path preferred
+ * @param {{ colours?: number, longEdge?: number, outPath?: string }} [opts]
  */
 export async function optimizeGpsSelfieToIndexedWebp(input, opts = {}) {
   const longEdge = opts.longEdge ?? GPS_SELFIE_LONG_EDGE;
@@ -76,105 +106,163 @@ export async function optimizeGpsSelfieToIndexedWebp(input, opts = {}) {
     GPS_SELFIE_PALETTE_COLORS,
     Math.max(GPS_SELFIE_PALETTE_COLORS_MIN, opts.colours ?? GPS_SELFIE_PALETTE_COLORS),
   );
+  const outPath = opts.outPath || tmpWebpPath('indexed');
 
   let meta;
   try {
     meta = await sharp(input, SHARP_OPTS).metadata();
-  } catch {
-    meta = null;
+  } catch (err) {
+    const e = new Error(`Could not read image metadata: ${err?.message || err}`);
+    e.code = 'UPLOAD_OPTIMIZE_FAILED';
+    e.status = 400;
+    throw e;
   }
+  assertPixelBudget(meta.width, meta.height);
 
-  if (meta?.format === 'webp') {
+  if (meta.format === 'webp' && typeof input === 'string' && fs.existsSync(input)) {
     const maxDim = Math.max(Number(meta.width) || 0, Number(meta.height) || 0);
-    const inputBuf = readInputBuffer(input);
+    const size = fs.statSync(input).size;
     if (
       maxDim > 0
       && maxDim <= longEdge
-      && inputBuf.length > 0
-      && inputBuf.length <= WEBP_PASSTHROUGH_MAX_BYTES
+      && size > 0
+      && size <= WEBP_PASSTHROUGH_MAX_BYTES
     ) {
-      return resultFromBuffer(inputBuf, meta, {
+      logMemory('optimize:webp-passthrough', { bytes: size, width: meta.width, height: meta.height });
+      fs.copyFileSync(input, outPath);
+      return resultFromFile(outPath, meta, {
         indexed: true,
         encodeMode: 'webp-passthrough',
       });
     }
     if (maxDim > longEdge) {
       try {
-        return await optimizeWebpResizeOnly(input, { longEdge });
+        return await optimizeWebpResizeOnly(input, { longEdge, outPath });
       } catch {
-        /* fall through to palette path */
+        /* fall through */
       }
     }
   }
 
+  // Buffer input that is already small WebP — write once then passthrough path
+  if (meta.format === 'webp' && Buffer.isBuffer(input)) {
+    const maxDim = Math.max(Number(meta.width) || 0, Number(meta.height) || 0);
+    if (
+      maxDim > 0
+      && maxDim <= longEdge
+      && input.length > 0
+      && input.length <= WEBP_PASSTHROUGH_MAX_BYTES
+    ) {
+      fs.writeFileSync(outPath, input);
+      return resultFromFile(outPath, meta, {
+        indexed: true,
+        encodeMode: 'webp-passthrough',
+      });
+    }
+  }
+
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tylo-idx-'));
+  const resizedPng = path.join(workDir, 'resized.png');
+  const indexedPng = path.join(workDir, 'indexed.png');
+
   try {
-    const resized = sharp(input, SHARP_OPTS)
+    logMemory('optimize:indexed:start', { preferred });
+    await sharp(input, SHARP_OPTS)
       .rotate()
       .resize({
         width: longEdge,
         height: longEdge,
         fit: 'inside',
         withoutEnlargement: true,
-      });
-
-    // Materialize once so we can try 16 then 8 colours without re-decoding source
-    const basePng = await resized.png({ compressionLevel: 3, force: true }).toBuffer();
+      })
+      .png({ compressionLevel: 3, force: true })
+      .toFile(resizedPng);
 
     async function encodeWithPalette(colours) {
-      const indexedPng = await sharp(basePng)
+      await sharp(resizedPng, SHARP_OPTS)
         .png({
           palette: true,
           colours,
           effort: 5,
           dither: 1.0,
         })
-        .toBuffer();
+        .toFile(indexedPng);
 
-      const { data, info } = await sharp(indexedPng)
+      const candidate = path.join(workDir, `out-${colours}.webp`);
+      await sharp(indexedPng, SHARP_OPTS)
         .webp({
           lossless: true,
           effort: GPS_SELFIE_WEBP_EFFORT,
         })
-        .toBuffer({ resolveWithObject: true });
+        .toFile(candidate);
 
-      return resultFromBuffer(data, info, {
-        paletteColors: colours,
-        indexed: true,
-        encodeMode: 'indexed-webp',
-      });
+      const info = await sharp(candidate, SHARP_OPTS).metadata();
+      return {
+        path: candidate,
+        info,
+        colours,
+        size: fs.statSync(candidate).size,
+      };
     }
 
     let best = await encodeWithPalette(preferred);
-    if (
-      preferred > GPS_SELFIE_PALETTE_COLORS_MIN
-      && best.buffer.length > 350 * 1024
-    ) {
+    if (preferred > GPS_SELFIE_PALETTE_COLORS_MIN && best.size > 350 * 1024) {
       const tighter = await encodeWithPalette(GPS_SELFIE_PALETTE_COLORS_MIN);
-      if (tighter.buffer.length < best.buffer.length) best = tighter;
+      if (tighter.size < best.size) {
+        try {
+          fs.unlinkSync(best.path);
+        } catch {
+          /* ignore */
+        }
+        best = tighter;
+      } else {
+        try {
+          fs.unlinkSync(tighter.path);
+        } catch {
+          /* ignore */
+        }
+      }
     }
-    return best;
+
+    fs.copyFileSync(best.path, outPath);
+    logMemory('optimize:indexed:done', { bytes: best.size, colours: best.colours });
+    return resultFromFile(outPath, best.info, {
+      paletteColors: best.colours,
+      indexed: true,
+      encodeMode: 'indexed-webp',
+    });
   } catch (err) {
     console.warn(
       `[media] indexed WebP encode failed (${err?.message || err}); using resize-only WebP`,
     );
-    return optimizeWebpResizeOnly(input, { longEdge });
+    return optimizeWebpResizeOnly(input, { longEdge, outPath });
+  } finally {
+    try {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   }
 }
 
 /**
  * Optimize a GPS selfie file on disk → indexed-color WebP (or passthrough).
  * @param {string} absPath
- * @param {{ lightOnly?: boolean }} [opts]
+ * @param {{ lightOnly?: boolean, outPath?: string }} [opts]
  */
 export async function optimizeGpsSelfieFile(absPath, opts = {}) {
   const before = fs.statSync(absPath).size;
+  const outPath = opts.outPath || tmpWebpPath('gs');
   const result = opts.lightOnly
-    ? await optimizeWebpResizeOnly(absPath)
-    : await optimizeGpsSelfieToIndexedWebp(absPath);
+    ? await optimizeWebpResizeOnly(absPath, { outPath })
+    : await optimizeGpsSelfieToIndexedWebp(absPath, { outPath });
+  const after = result.filePath && fs.existsSync(result.filePath)
+    ? fs.statSync(result.filePath).size
+    : (result.buffer?.length || 0);
   return {
     ...result,
     kind: 'image',
-    reductionRatio: before > 0 ? result.buffer.length / before : null,
+    reductionRatio: before > 0 ? after / before : null,
     originalBytes: before,
   };
 }

@@ -4,6 +4,12 @@ import sharp from 'sharp';
 import { PDFDocument } from 'pdf-lib';
 import { classifyUploadKind } from './mediaKinds.js';
 
+import {
+  SHARP_LIMIT_INPUT_PIXELS,
+  assertPixelBudget,
+} from './uploadLimits.js';
+import { logMemory } from '../../utils/memory.js';
+
 /** Long-edge target for ~150–200 DPI A4 field scans */
 export const EXEC_DOC_LONG_EDGE = 1700;
 /** Lossy WebP / JPEG quality (Pillow-script equivalent: quality=45). */
@@ -19,7 +25,7 @@ export const EXEC_DOC_TARGET_KB_PREFERRED_MAX = 300;
 const SHARP_OPTS = {
   failOn: 'none',
   animated: false,
-  limitInputPixels: 268402689 * 4,
+  limitInputPixels: SHARP_LIMIT_INPUT_PIXELS,
 };
 
 /**
@@ -52,6 +58,10 @@ export function buildExecutionScanPipeline(input, { longEdge = EXEC_DOC_LONG_EDG
  * @returns {Promise<{ data: Buffer, width: number, height: number, channels: number }>}
  */
 export async function prepareScanPageL(input, opts = {}) {
+  if (typeof input === 'string') {
+    const meta = await sharp(input, SHARP_OPTS).metadata();
+    assertPixelBudget(meta.width, meta.height);
+  }
   const { data, info } = await buildExecutionScanPipeline(input, {
     sharpInput: opts.sharpInput,
   })
@@ -114,19 +124,25 @@ export async function encodeLToJpeg(page, { quality = EXEC_DOC_JPEG_QUALITY } = 
  * @param {{ sharpInput?: object }} [opts]
  */
 export async function optimizeExecutionDocImage(input, opts = {}) {
+  logMemory('exec-doc:image:start');
   const page = await prepareScanPageL(input, opts);
-  const encoded = await encodeLToWebp(page);
-  return {
-    buffer: encoded.buffer,
-    contentType: 'image/webp',
-    ext: '.webp',
-    width: encoded.info.width || page.width,
-    height: encoded.info.height || page.height,
-    channels: 1,
-    pageCount: 1,
-    bytesPerPage: encoded.buffer.length,
-    encodeQuality: encoded.quality,
-  };
+  try {
+    const encoded = await encodeLToWebp(page);
+    return {
+      buffer: encoded.buffer,
+      contentType: 'image/webp',
+      ext: '.webp',
+      width: encoded.info.width || page.width,
+      height: encoded.info.height || page.height,
+      channels: 1,
+      pageCount: 1,
+      bytesPerPage: encoded.buffer.length,
+      encodeQuality: encoded.quality,
+    };
+  } finally {
+    page.data = null;
+    logMemory('exec-doc:image:done');
+  }
 }
 
 /**
@@ -146,10 +162,12 @@ export async function optimizeExecutionDocPageJpeg(input, opts = {}) {
 }
 
 async function rasterizePdfPages(absPath) {
+  // One page at a time — do not accumulate raw L buffers across pages.
   const pages = [];
   let page = 0;
   for (;;) {
     try {
+      logMemory('exec-doc:pdf-page', { page });
       const jpeg = await optimizeExecutionDocPageJpeg(absPath, {
         sharpInput: { density: 175, page },
       });
@@ -190,26 +208,32 @@ export async function optimizeExecutionDocPdf(absPath) {
   outPdf.setCreator('TYLO One');
 
   let totalBytes = 0;
-  for (const page of pages) {
+  const dims = { width: pages[0]?.width || 0, height: pages[0]?.height || 0, pageCount: pages.length };
+  for (let i = 0; i < pages.length; i += 1) {
+    const page = pages[i];
     const embedded = await outPdf.embedJpg(page.buffer);
     const w = embedded.width;
     const h = embedded.height;
     const pdfPage = outPdf.addPage([w, h]);
     pdfPage.drawImage(embedded, { x: 0, y: 0, width: w, height: h });
     totalBytes += page.buffer.length;
+    // Drop JPEG bytes immediately after embed to limit peak RSS.
+    page.buffer = null;
+    pages[i] = null;
   }
 
   const buffer = Buffer.from(
     await outPdf.save({ useObjectStreams: true, addDefaultPage: false }),
   );
+  logMemory('exec-doc:pdf:done', { pages: dims.pageCount, bytes: buffer.length });
   return {
     buffer,
     contentType: 'application/pdf',
     ext: '.pdf',
-    width: pages[0]?.width || 0,
-    height: pages[0]?.height || 0,
-    pageCount: pages.length,
-    bytesPerPage: Math.round(buffer.length / pages.length),
+    width: dims.width,
+    height: dims.height,
+    pageCount: dims.pageCount,
+    bytesPerPage: Math.round(buffer.length / dims.pageCount),
     jpegBytesTotal: totalBytes,
   };
 }
@@ -266,9 +290,15 @@ export function footprintBandLabel(bytesPerPage) {
 }
 
 export function logExecutionDocFootprint(label, result) {
-  if (!result?.buffer) return;
-  const kb = (result.buffer.length / 1024).toFixed(1);
-  const perPageBytes = result.bytesPerPage != null ? result.bytesPerPage : result.buffer.length;
+  const size = Number(result?.bytesPerPage)
+    || (Buffer.isBuffer(result?.buffer) ? result.buffer.length : 0)
+    || (result?.filePath && fs.existsSync(result.filePath) ? fs.statSync(result.filePath).size : 0);
+  if (!size) return;
+  const total = Buffer.isBuffer(result?.buffer)
+    ? result.buffer.length
+    : (result?.filePath && fs.existsSync(result.filePath) ? fs.statSync(result.filePath).size : size);
+  const kb = (total / 1024).toFixed(1);
+  const perPageBytes = result.bytesPerPage != null ? result.bytesPerPage : size;
   const perPage = (perPageBytes / 1024).toFixed(1);
   const band = footprintBandLabel(perPageBytes);
   const q = result.encodeQuality != null ? ` q=${result.encodeQuality}` : '';

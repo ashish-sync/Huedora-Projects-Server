@@ -15,7 +15,17 @@ import { isObjectStoreEnabled, R2_STORAGE_STANDARD } from './objectStore.js';
 import { sha256File } from './media/contentHash.js';
 import { StoredFile } from '../modules/files/storedFile.model.js';
 import { assignPreservingExisting } from '../store/dataIntegrity.js';
-import { warnIfHighMemory } from '../utils/memory.js';
+import { warnIfHighMemory, logMemory } from '../utils/memory.js';
+import { withImageProcessGate } from './media/imageProcessGate.js';
+import {
+  assertUploadByteLimit,
+  assertPixelBudget,
+  EXEC_DOC_MAX_BYTES,
+  EXEC_DOC_MAX_FILES_PER_REQUEST,
+  SHARP_LIMIT_INPUT_PIXELS,
+} from './media/uploadLimits.js';
+import { AppError } from '../utils/helpers.js';
+import sharp from 'sharp';
 
 function masterKeyWithExt(objectKey, newExt) {
   const key = String(objectKey || '').replace(/\\/g, '/');
@@ -42,20 +52,45 @@ async function upsertRegistry(patch) {
   return row;
 }
 
+function optimizedByteLength(optimized) {
+  if (optimized?.filePath && fs.existsSync(optimized.filePath)) {
+    return fs.statSync(optimized.filePath).size;
+  }
+  if (Buffer.isBuffer(optimized?.buffer)) return optimized.buffer.length;
+  return 0;
+}
+
 async function writeOptimizedUpload(file, optimized, sourceKey) {
-  logExecutionDocFootprint(file.originalname || sourceKey, optimized);
+  logExecutionDocFootprint(file.originalname || sourceKey, {
+    ...optimized,
+    buffer: optimized.buffer || Buffer.alloc(0),
+    bytesPerPage: optimizedByteLength(optimized),
+  });
 
   const nextKey = masterKeyWithExt(sourceKey, optimized.ext);
   const nextAbs = absoluteUploadPath(nextKey);
   fs.mkdirSync(path.dirname(nextAbs), { recursive: true });
-  fs.writeFileSync(nextAbs, optimized.buffer);
 
-  if (!fs.existsSync(nextAbs) || fs.statSync(nextAbs).size !== optimized.buffer.length) {
-    throw new Error('Execution document optimize write failed verification');
+  if (optimized.filePath && fs.existsSync(optimized.filePath)) {
+    if (path.resolve(optimized.filePath) !== path.resolve(nextAbs)) {
+      fs.copyFileSync(optimized.filePath, nextAbs);
+      try {
+        fs.unlinkSync(optimized.filePath);
+      } catch {
+        /* ignore */
+      }
+    }
+  } else if (Buffer.isBuffer(optimized.buffer) && optimized.buffer.length) {
+    fs.writeFileSync(nextAbs, optimized.buffer);
+  } else {
+    throw new AppError('Optimized upload produced no bytes', 500, 'UPLOAD_OPTIMIZE_FAILED');
   }
 
-  // Local commit only — R2 is enqueued after semantic rename so the registry key
-  // matches the final stored name (never leave a false-ready temp key on R2).
+  const sizeBytes = fs.statSync(nextAbs).size;
+  if (!sizeBytes) {
+    throw new AppError('Execution document optimize write failed verification', 500, 'UPLOAD_OPTIMIZE_FAILED');
+  }
+
   if (nextAbs !== file.path) {
     try {
       fs.unlinkSync(file.path);
@@ -70,7 +105,7 @@ async function writeOptimizedUpload(file, optimized, sourceKey) {
     contentHash,
     kind: optimized.kind || 'other',
     contentType: optimized.contentType,
-    sizeBytes: optimized.buffer.length,
+    sizeBytes,
     originalName: file.originalname,
     status: isObjectStoreEnabled() ? 'pending' : 'ready',
     storageClass: R2_STORAGE_STANDARD,
@@ -84,79 +119,116 @@ async function writeOptimizedUpload(file, optimized, sourceKey) {
 
   file.path = nextAbs;
   file.filename = path.basename(nextAbs);
-  file.size = optimized.buffer.length;
+  file.size = sizeBytes;
   file.mimetype = optimized.contentType;
   file.objectKey = nextKey;
   file.mediaFinalized = true;
   file.publicPath = publicUploadPath(nextKey);
 }
 
+async function assertSafeImagePixels(absPath) {
+  const meta = await sharp(absPath, {
+    failOn: 'none',
+    animated: false,
+    limitInputPixels: SHARP_LIMIT_INPUT_PIXELS,
+  }).metadata();
+  assertPixelBudget(meta.width, meta.height);
+  return meta;
+}
+
+function mapOptimizeError(err) {
+  if (err instanceof AppError) return err;
+  const code = err?.code || 'UPLOAD_OPTIMIZE_FAILED';
+  const status = err?.status || (code === 'UPLOAD_TOO_MANY_PIXELS' || code === 'UPLOAD_TOO_LARGE' ? 413 : 500);
+  return new AppError(
+    err?.message || 'Image processing failed. Try a smaller image.',
+    status,
+    code,
+  );
+}
+
 /**
- * Camp One execution-document finalize → R2.
+ * Camp One execution-document finalize (local optimize only; R2 after rename).
  * DF/PF/Other: 8-bit L grayscale WebP/PDF.
- * GPS Selfie: indexed-color WebP (8–16 palette).
+ * GPS Selfie: indexed-color WebP (8–16 palette) or passthrough.
  */
 export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {}) {
   const files = collectUploadedFiles(req);
+  if (files.length > EXEC_DOC_MAX_FILES_PER_REQUEST) {
+    throw new AppError(
+      `Upload at most ${EXEC_DOC_MAX_FILES_PER_REQUEST} files at a time.`,
+      400,
+      'UPLOAD_TOO_MANY_FILES',
+    );
+  }
   const isGpsSelfie = String(docType) === 'gps_selfie';
+  logMemory('finalize:exec-docs:start', { docType, fileCount: files.length });
 
   for (const file of files) {
     if (!file?.path || file.mediaFinalized) continue;
     if (!fs.existsSync(file.path)) continue;
 
+    assertUploadByteLimit(file.size || fs.statSync(file.path).size, EXEC_DOC_MAX_BYTES);
     const sourceKey = toUploadObjectKey(file.path);
 
-    if (isGpsSelfie) {
-      const mem = warnIfHighMemory('media:gps-selfie', { rssWarnMb: 350 });
-      const lightOnly = mem?.rssMb != null && mem.rssMb >= 350;
-      try {
-        const optimized = await optimizeGpsSelfieFile(file.path, { lightOnly });
-        if (optimized?.buffer?.length) {
-          await writeOptimizedUpload(file, optimized, sourceKey);
-          continue;
-        }
-      } catch (err) {
-        console.warn(
-          `[media:gps-selfie] indexed WebP failed (${err?.message || err}); falling back to resize-only WebP`,
-        );
+    await withImageProcessGate(`finalize:${docType}`, async () => {
+      if (isGpsSelfie || String(file.mimetype || '').startsWith('image/')) {
+        await assertSafeImagePixels(file.path);
       }
-      // Do not call processUploadedMedia here — it uses the same indexed encoder.
-      try {
-        const light = await optimizeWebpResizeOnly(file.path);
-        if (light?.buffer?.length) {
-          await writeOptimizedUpload(
-            file,
-            { ...light, kind: 'image', reductionRatio: null },
-            sourceKey,
+
+      if (isGpsSelfie) {
+        const mem = warnIfHighMemory('media:gps-selfie', { rssWarnMb: 350 });
+        const lightOnly = mem?.rssMb != null && mem.rssMb >= 350;
+        try {
+          const optimized = await optimizeGpsSelfieFile(file.path, { lightOnly });
+          if (optimizedByteLength(optimized) > 0) {
+            await writeOptimizedUpload(file, optimized, sourceKey);
+            return;
+          }
+        } catch (err) {
+          console.warn(
+            `[media:gps-selfie] indexed WebP failed (${err?.message || err}); falling back to resize-only WebP`,
           );
-          continue;
         }
-      } catch (fallbackErr) {
-        console.warn(
-          `[media:gps-selfie] resize-only fallback failed (${fallbackErr?.message || fallbackErr})`,
-        );
+        try {
+          const light = await optimizeWebpResizeOnly(file.path);
+          if (optimizedByteLength(light) > 0) {
+            await writeOptimizedUpload(
+              file,
+              { ...light, kind: 'image', reductionRatio: null },
+              sourceKey,
+            );
+            return;
+          }
+        } catch (fallbackErr) {
+          console.warn(
+            `[media:gps-selfie] resize-only fallback failed (${fallbackErr?.message || fallbackErr})`,
+          );
+          throw mapOptimizeError(fallbackErr);
+        }
+        throw new AppError('GPS Selfie optimize failed', 500, 'UPLOAD_OPTIMIZE_FAILED');
       }
-      throw new Error('GPS Selfie optimize failed');
-    }
 
-    const optimized = await optimizeExecutionDocumentFile(file.path, {
-      originalName: file.originalname,
-      mimetype: file.mimetype,
-    });
-
-    if (!optimized?.buffer?.length) {
-      const result = await processUploadedMedia(file.path, {
+      const optimized = await optimizeExecutionDocumentFile(file.path, {
         originalName: file.originalname,
         mimetype: file.mimetype,
-        skipR2: true,
       });
-      applyProcessResultToMulterInfo(file, result);
-      file.mediaFinalized = true;
-      continue;
-    }
 
-    await writeOptimizedUpload(file, optimized, sourceKey);
+      if (!optimizedByteLength(optimized)) {
+        const result = await processUploadedMedia(file.path, {
+          originalName: file.originalname,
+          mimetype: file.mimetype,
+          skipR2: true,
+        });
+        applyProcessResultToMulterInfo(file, result);
+        file.mediaFinalized = true;
+        return;
+      }
+
+      await writeOptimizedUpload(file, optimized, sourceKey);
+    }, { originalName: file.originalname, size: file.size });
   }
 
+  logMemory('finalize:exec-docs:done', { docType, fileCount: files.length });
   return files;
 }

@@ -8,6 +8,7 @@ import {
   CopyObjectCommand,
 } from '@aws-sdk/client-s3';
 import fs from 'fs';
+import path from 'path';
 import { getR2Env, describeR2Config } from './r2Env.js';
 
 /** Cloudflare R2 Infrequent Access (verified: docs support STANDARD + STANDARD_IA). */
@@ -67,21 +68,23 @@ export async function putLocalFile(absPath, objectKey, opts = {}) {
   if (!cfg.enabled) return { skipped: true };
   const s3 = buildClient(cfg);
   const stat = fs.statSync(absPath);
-  // Prefer a buffer for typical masters (execution docs / photos) so PutObject
-  // cannot race a concurrent rename/unlink against a streaming Body.
-  const body =
-    stat.size <= 25 * 1024 * 1024 ? fs.readFileSync(absPath) : fs.createReadStream(absPath);
+  // Always stream from disk — never hold a second full-file Buffer for PutObject.
+  const body = fs.createReadStream(absPath);
   const storageClass = normalizeStorageClass(opts.storageClass);
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: cfg.bucket,
-      Key: objectKey,
-      Body: body,
-      ContentLength: stat.size,
-      ContentType: opts.contentType || undefined,
-      StorageClass: storageClass,
-    }),
-  );
+  try {
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: cfg.bucket,
+        Key: objectKey,
+        Body: body,
+        ContentLength: stat.size,
+        ContentType: opts.contentType || undefined,
+        StorageClass: storageClass,
+      }),
+    );
+  } finally {
+    if (typeof body.destroy === 'function') body.destroy();
+  }
   return { ok: true, key: objectKey, bucket: cfg.bucket, storageClass };
 }
 
@@ -156,6 +159,79 @@ export async function getObject(objectKey) {
       Key: objectKey,
     }),
   );
+}
+
+/**
+ * Stream an R2 object to a local file without buffering the whole body in RAM.
+ * @param {string} objectKey
+ * @param {string} absPath
+ */
+export async function getObjectToFile(objectKey, absPath) {
+  const cfg = getR2Env();
+  if (!cfg.enabled) throw new Error('Object store is not enabled');
+  const s3 = buildClient(cfg);
+  const res = await s3.send(
+    new GetObjectCommand({
+      Bucket: cfg.bucket,
+      Key: objectKey,
+    }),
+  );
+  fs.mkdirSync(path.dirname(absPath), { recursive: true });
+  await new Promise((resolve, reject) => {
+    const out = fs.createWriteStream(absPath);
+    const body = res.Body;
+    if (!body || typeof body.pipe !== 'function') {
+      reject(new Error('R2 GetObject returned a non-stream body'));
+      return;
+    }
+    body.pipe(out);
+    out.on('finish', resolve);
+    out.on('error', reject);
+    body.on?.('error', reject);
+  });
+  return {
+    ok: true,
+    key: objectKey,
+    contentType: res.ContentType || null,
+    sizeBytes: fs.statSync(absPath).size,
+  };
+}
+
+/**
+ * Browser → R2 direct PUT via S3-compatible presigned URL.
+ * Requires R2 bucket CORS to allow PUT from the app origin.
+ * @param {string} objectKey
+ * @param {{ contentType?: string, expiresIn?: number }} [opts]
+ */
+export async function createPresignedPutUrl(objectKey, opts = {}) {
+  const cfg = getR2Env();
+  if (!cfg.enabled) {
+    const err = new Error('Direct cloud upload is not configured');
+    err.code = 'DIRECT_UPLOAD_UNAVAILABLE';
+    throw err;
+  }
+  const key = String(objectKey || '').replace(/^\/+/, '');
+  if (!key) throw new Error('Invalid object key');
+  const s3 = buildClient(cfg);
+  const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
+  const contentType = opts.contentType || 'application/octet-stream';
+  const expiresIn = Math.min(900, Math.max(60, Number(opts.expiresIn) || 600));
+  const command = new PutObjectCommand({
+    Bucket: cfg.bucket,
+    Key: key,
+    ContentType: contentType,
+    StorageClass: normalizeStorageClass(opts.storageClass),
+  });
+  const uploadUrl = await getSignedUrl(s3, command, { expiresIn });
+  return {
+    uploadUrl,
+    objectKey: key,
+    bucket: cfg.bucket,
+    expiresIn,
+    headers: {
+      'Content-Type': contentType,
+    },
+  };
 }
 
 export async function headObject(objectKey) {

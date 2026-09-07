@@ -10,6 +10,7 @@ import {
   GPS_SELFIE_PALETTE_COLORS_MIN,
   optimizeGpsSelfieToIndexedWebp,
   optimizeGpsSelfieFile,
+  materializeOptimizeResult,
 } from './optimizeGpsSelfie.js';
 
 describe('GPS selfie indexed WebP', () => {
@@ -45,7 +46,8 @@ describe('GPS selfie indexed WebP', () => {
       .toFile(src);
 
     const before = fs.statSync(src).size;
-    const result = await optimizeGpsSelfieToIndexedWebp(src);
+    const rawResult = await optimizeGpsSelfieToIndexedWebp(src);
+    const result = await materializeOptimizeResult(rawResult);
 
     assert.equal(result.contentType, 'image/webp');
     assert.equal(result.ext, '.webp');
@@ -102,7 +104,8 @@ describe('GPS selfie indexed WebP', () => {
     const result = await optimizeGpsSelfieToIndexedWebp(webpBuf);
     assert.equal(result.encodeMode, 'webp-passthrough');
     assert.equal(result.contentType, 'image/webp');
-    assert.ok(Buffer.compare(result.buffer, webpBuf) === 0);
+    const materialized = await materializeOptimizeResult(result);
+    assert.ok(Buffer.compare(materialized.buffer, webpBuf) === 0);
   });
 
   it('optimizeGpsSelfieFile returns kind image with reductionRatio', async () => {

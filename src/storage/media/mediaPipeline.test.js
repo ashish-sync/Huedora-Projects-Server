@@ -11,6 +11,7 @@ import {
   STANDARD_IMAGE_PALETTE_COLORS,
   STANDARD_IMAGE_PALETTE_COLORS_MIN,
 } from './optimizeImage.js';
+import { materializeOptimizeResult } from './optimizeGpsSelfie.js';
 import { optimizePdfBuffer } from './optimizePdf.js';
 import { PDFDocument } from 'pdf-lib';
 import { sha256Buffer } from './contentHash.js';
@@ -54,7 +55,7 @@ describe('standard image optimize (GPS Selfie rule)', () => {
       .toFile(src);
 
     const before = fs.statSync(src).size;
-    const result = await optimizeImageToWebp(src);
+    const result = await materializeOptimizeResult(await optimizeImageToWebp(src));
     assert.equal(result.contentType, 'image/webp');
     assert.equal(result.ext, '.webp');
     assert.equal(result.indexed, true);

@@ -89,16 +89,27 @@ export async function processUploadedMedia(absPath, opts = {}) {
       );
       result = await optimizeWebpResizeOnly(absPath);
     }
-    const after = result.buffer.length;
-    if (after > 0) {
-      reductionRatio = before > 0 ? after / before : null;
-      const nextKey = masterKeyWithExt(sourceKey, '.webp');
-      const nextAbs = absoluteUploadPath(nextKey);
-      fs.mkdirSync(path.dirname(nextAbs), { recursive: true });
-      fs.writeFileSync(nextAbs, result.buffer);
-      if (!fs.existsSync(nextAbs) || fs.statSync(nextAbs).size !== after) {
-        throw new Error('Optimized image master missing after write');
+    const nextKey = masterKeyWithExt(sourceKey, '.webp');
+    const nextAbs = absoluteUploadPath(nextKey);
+    fs.mkdirSync(path.dirname(nextAbs), { recursive: true });
+    if (result.filePath && fs.existsSync(result.filePath)) {
+      if (path.resolve(result.filePath) !== path.resolve(nextAbs)) {
+        fs.copyFileSync(result.filePath, nextAbs);
+        try {
+          fs.unlinkSync(result.filePath);
+        } catch {
+          /* ignore */
+        }
       }
+    } else if (Buffer.isBuffer(result.buffer) && result.buffer.length) {
+      fs.writeFileSync(nextAbs, result.buffer);
+    } else {
+      contentType = mimetype || contentType;
+      // leave workingAbs unchanged
+    }
+    if (fs.existsSync(nextAbs) && fs.statSync(nextAbs).size > 0) {
+      const after = fs.statSync(nextAbs).size;
+      reductionRatio = before > 0 ? after / before : null;
       if (nextAbs !== absPath) {
         obsoleteKey = sourceKey;
         try {

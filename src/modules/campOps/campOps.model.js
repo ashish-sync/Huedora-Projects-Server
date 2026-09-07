@@ -5,8 +5,9 @@ export const CampOpsCamp = defineCollection('camp_ops_camps', {
   ...softDelete,
   ...archiveFields,
   campId: '',
-  /** Canonical duplicate guard: client + doctor + division + camp date + start time */
-  duplicateKey: '',
+  /** Canonical duplicate guard: client + doctor + division + camp date + start time.
+   * Absent/null when incomplete — never store empty string (Mongo partial unique index). */
+  duplicateKey: null,
   clientId: null,
   clientName: '',
   campaignId: null,

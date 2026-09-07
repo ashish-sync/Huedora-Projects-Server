@@ -5,7 +5,7 @@ import {
 } from '../modules/campOps/campDuplicate.js';
 import { isDateFieldToken } from '../modules/templates/docxPlaceholders.js';
 
-const DUP_LOCK_ID = 'recompute_camp_duplicate_keys:v2';
+const DUP_LOCK_ID = 'recompute_camp_duplicate_keys:v3';
 const TPL_LOCK_ID = 'refresh_doc_template_date_placeholders:v1';
 
 function campCreatedMs(camp) {
@@ -36,7 +36,7 @@ export async function recomputeCampDuplicateKeys({ dryRun = false } = {}) {
       startTime: camp.startTime,
     });
     if (!key) {
-      if (camp.duplicateKey) {
+      if (Object.prototype.hasOwnProperty.call(camp, 'duplicateKey')) {
         clearedIncomplete += 1;
         if (!dryRun) {
           delete camp.duplicateKey;
