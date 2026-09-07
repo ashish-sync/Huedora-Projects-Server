@@ -164,12 +164,17 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
     stateId: body.stateId || null,
     districtId: body.districtId || null,
     cityId: body.cityId || null,
-    providerEmployees: normalizeProviderEmployees(
+  };
+
+  // Only touch the roster when the client actually sent an array.
+  // Missing / undefined must not become [] and wipe persisted employees on PATCH/import.
+  if (Array.isArray(body.providerEmployees)) {
+    payload.providerEmployees = normalizeProviderEmployees(
       body.providerEmployees,
       contactCategory,
-      contactCategory === 'Healthcare Worker' ? resourceType : ''
-    ),
-  };
+      contactCategory === 'Healthcare Worker' ? resourceType : '',
+    );
+  }
 
   if (validate) {
     if (!payload.name) throw new AppError('Name is required', 400, 'VALIDATION_ERROR');
@@ -211,7 +216,7 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
       if (!String(payload.contact || '').trim()) {
         throw new AppError('Mobile number is required for Service Provider', 400, 'VALIDATION_ERROR');
       }
-      for (let i = 0; i < payload.providerEmployees.length; i += 1) {
+      for (let i = 0; i < (payload.providerEmployees || []).length; i += 1) {
         const emp = payload.providerEmployees[i];
         if (!emp.name) {
           throw new AppError(`Employee ${i + 1}: name is required`, 400, 'VALIDATION_ERROR');

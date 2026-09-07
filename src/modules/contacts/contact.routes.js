@@ -381,10 +381,9 @@ router.patch(
           req.body.serviceProviderContactId !== undefined
             ? req.body.serviceProviderContactId
             : contact.serviceProviderContactId,
-        providerEmployees:
-          req.body.providerEmployees !== undefined
-            ? req.body.providerEmployees
-            : contact.providerEmployees,
+        ...(Object.prototype.hasOwnProperty.call(req.body, 'providerEmployees')
+          ? { providerEmployees: req.body.providerEmployees }
+          : {}),
       },
       { validate: true }
     );
@@ -394,7 +393,21 @@ router.patch(
       phone: payload.contact,
       excludeId: contact._id,
     });
-    assignPreservingExisting(contact, payload);
+
+    const wasProvider = isServiceProviderContact(contact);
+    const stillProvider = isServiceProviderContact(payload);
+    const clearKeys = [];
+    // Leaving Service Provider → clear embedded roster intentionally.
+    if (wasProvider && !stillProvider) {
+      payload.providerEmployees = [];
+      clearKeys.push('providerEmployees');
+    }
+    // Staying non-provider: never let a missing/empty roster field wipe history.
+    if (!stillProvider && !clearKeys.includes('providerEmployees')) {
+      delete payload.providerEmployees;
+    }
+
+    assignPreservingExisting(contact, payload, clearKeys.length ? { clearKeys } : undefined);
     contact.updatedBy = req.user._id;
     await contact.save();
     res.json({ data: withSignedContactKyc(contact) });
