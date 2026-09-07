@@ -377,6 +377,62 @@ export async function migrateEmptyCampDuplicateKeys(mongoDb) {
   };
 }
 
+function campCreatedMs(camp) {
+  const t = Date.parse(camp?.createdAt || camp?.updatedAt || 0);
+  return Number.isFinite(t) ? t : 0;
+}
+
+/**
+ * Before creating the unique partial index: for each duplicateKey shared by 2+
+ * active camps, keep the oldest row and $unset duplicateKey on the rest.
+ * App-level duplicate checks still block new creates; index stays valid.
+ */
+export async function resolveCollidingCampDuplicateKeys(mongoDb) {
+  if (!mongoDb) return { groups: 0, cleared: 0 };
+  const col = mongoDb.collection('tylo_camp_ops_camps');
+  const groups = await col
+    .aggregate([
+      {
+        $match: {
+          isDeleted: { $ne: true },
+          duplicateKey: { $type: 'string', $gt: '' },
+        },
+      },
+      {
+        $group: {
+          _id: '$duplicateKey',
+          ids: { $push: '$_id' },
+          count: { $sum: 1 },
+        },
+      },
+      { $match: { count: { $gt: 1 } } },
+    ])
+    .toArray();
+
+  let cleared = 0;
+  for (const group of groups) {
+    const docs = await col
+      .find({ _id: { $in: group.ids }, isDeleted: { $ne: true } })
+      .project({ _id: 1, createdAt: 1, updatedAt: 1, duplicateKey: 1 })
+      .toArray();
+    docs.sort(
+      (a, b) =>
+        campCreatedMs(a) - campCreatedMs(b)
+        || String(a._id).localeCompare(String(b._id)),
+    );
+    const losers = docs.slice(1);
+    for (const doc of losers) {
+      const result = await col.updateOne(
+        { _id: doc._id },
+        { $unset: { duplicateKey: '' } },
+      );
+      if ((result.modifiedCount ?? result.nModified ?? 0) > 0) cleared += 1;
+    }
+  }
+
+  return { groups: groups.length, cleared };
+}
+
 export async function ensureCampDuplicateIndex(mongoDb) {
   if (!mongoDb) {
     throw new Error('ensureCampDuplicateIndex requires an active MongoDB connection');
@@ -389,22 +445,66 @@ export async function ensureCampDuplicateIndex(mongoDb) {
     );
   }
 
+  const collisions = await resolveCollidingCampDuplicateKeys(mongoDb);
+  if (collisions.cleared) {
+    console.warn(
+      `[db] Cleared ${collisions.cleared} colliding camp duplicateKey value(s) across ${collisions.groups} group(s) before unique index`,
+    );
+  }
+
   const spec = {
     unique: true,
     partialFilterExpression: CAMP_DUPLICATE_INDEX_PARTIAL_FILTER,
     name: CAMP_DUPLICATE_INDEX_NAME,
   };
 
-  try {
+  async function create() {
     await col.createIndex({ duplicateKey: 1 }, spec);
+  }
+
+  try {
+    await create();
     console.log(`[db] Ensured Mongo index ${CAMP_DUPLICATE_INDEX_NAME}`);
-    return { ok: true, name: CAMP_DUPLICATE_INDEX_NAME, migration };
+    return { ok: true, name: CAMP_DUPLICATE_INDEX_NAME, migration, collisions };
   } catch (err) {
     const msg = String(err?.message || err);
+    const isDupKey =
+      err?.code === 11000
+      || /E11000 duplicate key|dup key/i.test(msg);
     const conflict =
       err?.code === 85
       || err?.code === 86
       || /IndexOptionsConflict|IndexKeySpecsConflict|already exists|Expression not supported/i.test(msg);
+
+    if (isDupKey) {
+      // Race / missed group: resolve again, then recreate.
+      const again = await resolveCollidingCampDuplicateKeys(mongoDb);
+      if (again.cleared) {
+        console.warn(
+          `[db] Retry: cleared ${again.cleared} more colliding duplicateKey value(s)`,
+        );
+      }
+      try {
+        await col.dropIndex(CAMP_DUPLICATE_INDEX_NAME);
+      } catch (dropErr) {
+        if (!/index not found|ns not found/i.test(String(dropErr?.message || dropErr))) {
+          /* index may never have finished building */
+        }
+      }
+      await create();
+      console.log(`[db] Ensured Mongo index ${CAMP_DUPLICATE_INDEX_NAME} after collision cleanup`);
+      return {
+        ok: true,
+        name: CAMP_DUPLICATE_INDEX_NAME,
+        migration,
+        collisions: {
+          groups: collisions.groups + again.groups,
+          cleared: collisions.cleared + again.cleared,
+        },
+        retried: true,
+      };
+    }
+
     if (!conflict) {
       const wrapped = new Error(
         `Required Mongo index ${CAMP_DUPLICATE_INDEX_NAME} failed: ${msg}`,
@@ -421,8 +521,8 @@ export async function ensureCampDuplicateIndex(mongoDb) {
         );
       }
     }
-    await col.createIndex({ duplicateKey: 1 }, spec);
+    await create();
     console.log(`[db] Recreated Mongo index ${CAMP_DUPLICATE_INDEX_NAME}`);
-    return { ok: true, name: CAMP_DUPLICATE_INDEX_NAME, recreated: true, migration };
+    return { ok: true, name: CAMP_DUPLICATE_INDEX_NAME, recreated: true, migration, collisions };
   }
 }

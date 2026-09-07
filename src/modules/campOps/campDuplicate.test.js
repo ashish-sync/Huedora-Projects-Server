@@ -13,6 +13,7 @@ import {
   startTimesMatch,
   CAMP_DUPLICATE_INDEX_NAME,
   CAMP_DUPLICATE_INDEX_PARTIAL_FILTER,
+  resolveCollidingCampDuplicateKeys,
 } from './campDuplicate.js';
 
 test('buildCampDuplicateKey uses client + doctor + division + date + start time', () => {
@@ -208,4 +209,32 @@ test('camp duplicate unique index filter uses $type string (no $ne/$not)', () =>
   assert.equal(encoded.includes('$ne'), false);
   assert.equal(encoded.includes('$not'), false);
   assert.equal(encoded.includes('$gt'), false);
+});
+
+test('resolveCollidingCampDuplicateKeys keeps oldest and unsets losers', async () => {
+  const docs = [
+    { _id: 'b', duplicateKey: 'k1', createdAt: '2026-08-22T12:00:00.000Z', isDeleted: false },
+    { _id: 'a', duplicateKey: 'k1', createdAt: '2026-08-22T10:00:00.000Z', isDeleted: false },
+    { _id: 'c', duplicateKey: 'k2', createdAt: '2026-08-22T11:00:00.000Z', isDeleted: false },
+  ];
+  const unsetIds = [];
+  const col = {
+    aggregate: () => ({
+      toArray: async () => [{ _id: 'k1', ids: ['a', 'b'], count: 2 }],
+    }),
+    find: (filter) => ({
+      project: () => ({
+        toArray: async () => docs.filter((d) => filter._id.$in.includes(d._id)),
+      }),
+    }),
+    updateOne: async (filter) => {
+      unsetIds.push(String(filter._id));
+      return { modifiedCount: 1 };
+    },
+  };
+  const mongoDb = { collection: () => col };
+  const result = await resolveCollidingCampDuplicateKeys(mongoDb);
+  assert.equal(result.groups, 1);
+  assert.equal(result.cleared, 1);
+  assert.deepEqual(unsetIds, ['b']);
 });
