@@ -345,18 +345,45 @@ export function formatDuplicateCampMessage(_existingCamp) {
   return DUPLICATE_CAMP_MESSAGE;
 }
 
+/** Partial unique index: active camps with a non-empty duplicateKey. */
+export const CAMP_DUPLICATE_INDEX_NAME = 'camp_duplicate_key_unique';
+
+/**
+ * MongoDB partial indexes do not support `$ne` / `$not`.
+ * Use `$gt: ''` so only non-empty string keys are indexed (Atlas / older engines OK).
+ */
+export const CAMP_DUPLICATE_INDEX_PARTIAL_FILTER = {
+  isDeleted: false,
+  duplicateKey: { $gt: '' },
+};
+
 export async function ensureCampDuplicateIndex(mongoDb) {
   if (!mongoDb) return;
   const col = mongoDb.collection('tylo_camp_ops_camps');
-  await col.createIndex(
-    { duplicateKey: 1 },
-    {
-      unique: true,
-      partialFilterExpression: {
-        isDeleted: false,
-        duplicateKey: { $type: 'string', $ne: '' },
-      },
-      name: 'camp_duplicate_key_unique',
-    },
-  );
+  const spec = {
+    unique: true,
+    partialFilterExpression: CAMP_DUPLICATE_INDEX_PARTIAL_FILTER,
+    name: CAMP_DUPLICATE_INDEX_NAME,
+  };
+
+  try {
+    await col.createIndex({ duplicateKey: 1 }, spec);
+    return;
+  } catch (err) {
+    const msg = String(err?.message || err);
+    // Replace a previously failed / incompatible definition with the same name.
+    const conflict =
+      err?.code === 85
+      || err?.code === 86
+      || /IndexOptionsConflict|IndexKeySpecsConflict|already exists|Expression not supported/i.test(msg);
+    if (!conflict) throw err;
+    try {
+      await col.dropIndex(CAMP_DUPLICATE_INDEX_NAME);
+    } catch (dropErr) {
+      if (!/index not found|ns not found/i.test(String(dropErr?.message || dropErr))) {
+        throw dropErr;
+      }
+    }
+    await col.createIndex({ duplicateKey: 1 }, spec);
+  }
 }
