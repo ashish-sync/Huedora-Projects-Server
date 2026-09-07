@@ -104,7 +104,7 @@ export async function renameLocalUpload(fromAbs, toAbs, { contentType, deferR2 =
       await putLocalMasterToR2(toKey, {
         contentType,
         originalName,
-        retries: 3,
+        retries: 2,
         verify: true,
       });
       if (fromKey && fromKey !== toKey) {

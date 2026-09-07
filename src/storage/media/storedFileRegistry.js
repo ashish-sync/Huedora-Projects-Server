@@ -157,7 +157,7 @@ export async function storedFileStatusCounts() {
  */
 export async function putLocalMasterToR2(
   objectKey,
-  { contentType, originalName, retries = 3, verify = true } = {},
+  { contentType, originalName, retries = 2, verify = true } = {},
 ) {
   const key = toUploadObjectKey(objectKey);
   if (!key) throw new Error('Invalid objectKey for R2 put');
@@ -170,7 +170,7 @@ export async function putLocalMasterToR2(
     throw new Error(`Local master missing for R2 put: ${key}`);
   }
 
-  const attempts = Math.max(1, Number(retries) || 3);
+  const attempts = Math.max(1, Number(retries) || 2);
   let lastErr;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -196,7 +196,7 @@ export async function putLocalMasterToR2(
         `[media] R2 put attempt ${attempt}/${attempts} failed key=${key}: ${err?.message || err}`,
       );
       if (attempt < attempts) {
-        await new Promise((r) => setTimeout(r, 400 * 2 ** (attempt - 1)));
+        await new Promise((r) => setTimeout(r, 200 * 2 ** (attempt - 1)));
       }
     }
   }

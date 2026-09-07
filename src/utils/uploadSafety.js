@@ -36,6 +36,20 @@ export function fileExtension(name = '') {
 
 export function detectMagicMime(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 4) return null;
+  // WebP: RIFF....WEBP
+  if (
+    buffer.length >= 12
+    && buffer[0] === 0x52
+    && buffer[1] === 0x49
+    && buffer[2] === 0x46
+    && buffer[3] === 0x46
+    && buffer[8] === 0x57
+    && buffer[9] === 0x45
+    && buffer[10] === 0x42
+    && buffer[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
   for (const sig of SIGNATURES) {
     if (sig.bytes.every((b, i) => buffer[i] === b)) return sig.mime;
   }
@@ -73,7 +87,7 @@ export function assertSafeUpload(file, rules = {}) {
     if (!magic) {
       // Legacy .doc / unknown binaries without a known signature — reject only when
       // extension claims a typed format we can verify.
-      if (['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.docx', '.xlsx', '.pptx', '.zip'].includes(ext)) {
+      if (['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.docx', '.xlsx', '.pptx', '.zip'].includes(ext)) {
         return { ok: false, message: 'File content signature is not recognized' };
       }
       return { ok: true };
@@ -92,6 +106,9 @@ export function assertSafeUpload(file, rules = {}) {
         return { ok: false, message: 'JPEG signature mismatch' };
       }
       if (ext === '.gif' && magic !== 'image/gif') return { ok: false, message: 'GIF signature mismatch' };
+    }
+    if (ext === '.webp' && magic !== 'image/webp') {
+      return { ok: false, message: 'WebP signature mismatch' };
     }
   }
 

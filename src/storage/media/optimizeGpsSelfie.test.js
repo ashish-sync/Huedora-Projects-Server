@@ -86,6 +86,25 @@ describe('GPS selfie indexed WebP', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('passes through already-suitable WebP without re-encoding', async () => {
+    const { data: webpBuf } = await sharp({
+      create: {
+        width: 640,
+        height: 480,
+        channels: 3,
+        background: { r: 40, g: 120, b: 200 },
+      },
+    })
+      .png({ palette: true, colours: 16 })
+      .webp({ lossless: true, effort: 2 })
+      .toBuffer({ resolveWithObject: true });
+
+    const result = await optimizeGpsSelfieToIndexedWebp(webpBuf);
+    assert.equal(result.encodeMode, 'webp-passthrough');
+    assert.equal(result.contentType, 'image/webp');
+    assert.ok(Buffer.compare(result.buffer, webpBuf) === 0);
+  });
+
   it('optimizeGpsSelfieFile returns kind image with reductionRatio', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tylo-gps-selfie-'));
     const src = path.join(dir, 'gs.jpg');

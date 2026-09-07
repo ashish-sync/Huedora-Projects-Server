@@ -65,7 +65,7 @@ Signature Master / Org Master logo & signature data-URLs use `optimizeImageDataU
 | `media/processUpload.js` | Optimize + dedupe + register + R2 put |
 | `media/optimizeImage.js` | **Standard** indexed full-color lossless WebP (all images except DF/PF/Other) |
 | `media/optimizeExecutionDoc.js` | Execution-doc blue-stamp grayscale encode (DF/PF/Other only) |
-| `media/optimizeGpsSelfie.js` | Shared indexed-color WebP encoder (GPS Selfie + standard images) |
+| `media/optimizeGpsSelfie.js` | Shared indexed-color WebP encoder (GPS Selfie + standard images); already-suitable WebP passthrough |
 | `finalizeExecutionDocs.js` | Camp execution-document finalize → R2 |
 | `media/mediaQueue.js` | Concurrency 1 retries / memory defer |
 | `media/coldStorageJob.js` | 90-day IA transition |

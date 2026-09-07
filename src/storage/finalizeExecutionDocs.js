@@ -5,13 +5,17 @@ import {
   optimizeExecutionDocumentFile,
   logExecutionDocFootprint,
 } from './media/optimizeExecutionDoc.js';
-import { optimizeGpsSelfieFile } from './media/optimizeGpsSelfie.js';
+import {
+  optimizeGpsSelfieFile,
+  optimizeWebpResizeOnly,
+} from './media/optimizeGpsSelfie.js';
 import { processUploadedMedia, applyProcessResultToMulterInfo } from './media/processUpload.js';
 import { toUploadObjectKey, absoluteUploadPath, publicUploadPath } from './uploadKeys.js';
 import { isObjectStoreEnabled, R2_STORAGE_STANDARD } from './objectStore.js';
 import { sha256File } from './media/contentHash.js';
 import { StoredFile } from '../modules/files/storedFile.model.js';
 import { assignPreservingExisting } from '../store/dataIntegrity.js';
+import { warnIfHighMemory } from '../utils/memory.js';
 
 function masterKeyWithExt(objectKey, newExt) {
   const key = String(objectKey || '').replace(/\\/g, '/');
@@ -103,26 +107,36 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
     const sourceKey = toUploadObjectKey(file.path);
 
     if (isGpsSelfie) {
+      const mem = warnIfHighMemory('media:gps-selfie', { rssWarnMb: 350 });
+      const lightOnly = mem?.rssMb != null && mem.rssMb >= 350;
       try {
-        const optimized = await optimizeGpsSelfieFile(file.path);
+        const optimized = await optimizeGpsSelfieFile(file.path, { lightOnly });
         if (optimized?.buffer?.length) {
           await writeOptimizedUpload(file, optimized, sourceKey);
           continue;
         }
       } catch (err) {
         console.warn(
-          `[media:gps-selfie] indexed WebP failed (${err?.message || err}); falling back to generic photo pipeline`,
+          `[media:gps-selfie] indexed WebP failed (${err?.message || err}); falling back to resize-only WebP`,
         );
       }
-      const result = await processUploadedMedia(file.path, {
-        originalName: file.originalname,
-        mimetype: file.mimetype,
-        // Rename to semantic name happens next — do not enqueue R2 for the temp key.
-        skipR2: true,
-      });
-      applyProcessResultToMulterInfo(file, result);
-      file.mediaFinalized = true;
-      continue;
+      // Do not call processUploadedMedia here — it uses the same indexed encoder.
+      try {
+        const light = await optimizeWebpResizeOnly(file.path);
+        if (light?.buffer?.length) {
+          await writeOptimizedUpload(
+            file,
+            { ...light, kind: 'image', reductionRatio: null },
+            sourceKey,
+          );
+          continue;
+        }
+      } catch (fallbackErr) {
+        console.warn(
+          `[media:gps-selfie] resize-only fallback failed (${fallbackErr?.message || fallbackErr})`,
+        );
+      }
+      throw new Error('GPS Selfie optimize failed');
     }
 
     const optimized = await optimizeExecutionDocumentFile(file.path, {

@@ -31,6 +31,33 @@ test('accepts real PDF buffer', () => {
   assert.equal(result.ok, true);
 });
 
+test('detects WebP RIFF magic and accepts .webp', () => {
+  const webp = Buffer.from([
+    0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00,
+    0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x20,
+  ]);
+  assert.equal(detectMagicMime(webp), 'image/webp');
+  const ok = assertSafeUpload(
+    { originalname: 'gs.webp', mimetype: 'image/webp', buffer: webp, size: webp.length },
+    { allowedExt: ['.webp'] },
+  );
+  assert.equal(ok.ok, true);
+});
+
+test('rejects spoofed .webp without WEBP chunk', () => {
+  const riff = Buffer.from([
+    0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00,
+    0x57, 0x41, 0x56, 0x45, 0x00, 0x00, 0x00, 0x00,
+  ]);
+  const result = assertSafeUpload({
+    originalname: 'fake.webp',
+    mimetype: 'image/webp',
+    buffer: riff,
+    size: riff.length,
+  });
+  assert.equal(result.ok, false);
+});
+
 test('fileExtension normalizes', () => {
   assert.equal(fileExtension('a/B.PNG'), '.png');
 });

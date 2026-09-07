@@ -6,6 +6,7 @@ import { isObjectStoreEnabled, putLocalFile, deleteObject, R2_STORAGE_STANDARD }
 import { toUploadObjectKey, absoluteUploadPath, publicUploadPath } from '../uploadKeys.js';
 import { classifyUploadKind } from './mediaKinds.js';
 import { optimizeImageToWebp } from './optimizeImage.js';
+import { optimizeWebpResizeOnly } from './optimizeGpsSelfie.js';
 import { optimizePdfBuffer } from './optimizePdf.js';
 import { sha256Buffer, sha256File } from './contentHash.js';
 import { warnIfHighMemory } from '../../utils/memory.js';
@@ -79,9 +80,15 @@ export async function processUploadedMedia(absPath, opts = {}) {
 
   if (!skipOptimize && kind === 'image') {
     const before = fs.statSync(absPath).size;
-    // Standard master: indexed full-color lossless WebP (GPS Selfie rule).
-    // Always rewrite to .webp so format is consistent across upload surfaces.
-    const result = await optimizeImageToWebp(absPath);
+    let result;
+    try {
+      result = await optimizeImageToWebp(absPath);
+    } catch (err) {
+      console.warn(
+        `[media] standard image optimize failed (${err?.message || err}); trying resize-only WebP`,
+      );
+      result = await optimizeWebpResizeOnly(absPath);
+    }
     const after = result.buffer.length;
     if (after > 0) {
       reductionRatio = before > 0 ? after / before : null;
