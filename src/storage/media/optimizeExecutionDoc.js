@@ -9,6 +9,9 @@ import {
   assertPixelBudget,
 } from './uploadLimits.js';
 import { logMemory } from '../../utils/memory.js';
+import { configureSharpForLowMemory } from './sharpConfig.js';
+
+configureSharpForLowMemory();
 
 /** Long-edge target for ~150–200 DPI A4 field scans */
 export const EXEC_DOC_LONG_EDGE = 1700;
@@ -26,6 +29,7 @@ const SHARP_OPTS = {
   failOn: 'none',
   animated: false,
   limitInputPixels: SHARP_LIMIT_INPUT_PIXELS,
+  sequentialRead: true,
 };
 
 /**

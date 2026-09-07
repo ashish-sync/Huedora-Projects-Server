@@ -85,7 +85,7 @@ Signature Master / Org Master logo & signature data-URLs use `optimizeImageDataU
 2. Route validates business rules.
 3. Optimize locally (sharp) + register `stored_files`.
 4. **Camp One execution documents (DF/PF/GS/OT):** prefer **browser → R2 presigned PUT** (`/execution-documents/presign` + `/confirm`); multipart remains as fallback. After semantic rename, **await** PutObject with retries + HeadObject verify before `res.json` when the server still handles the file bytes.
-5. **Memory (Render 512MB):** Sharp jobs use a process-wide concurrency gate, file-based encode (`.toFile`), WebP passthrough, ≤12MP / 10MB pre-checks, streaming R2 Put/Get, and `[memory]` logs around each stage.
+5. **Memory (Render 512MB):** Sharp `cache=false` / `concurrency=1`; GPS WebP never palette-re-encoded (passthrough or resize-only); direct GPS WebP confirm uses R2 `CopyObject` only; process-wide image gate; ≤8MP / 10MB / 1 file per request; `[memory]` logs around each stage.
 6. **Other uploads:** may still use `enqueueR2Put` (`pending` → `ready` / `failed`); boot/hourly sweep recovers stuck rows.
 6. On request validation failure, `discardRequestUploads` removes local (+ R2 if present).
 

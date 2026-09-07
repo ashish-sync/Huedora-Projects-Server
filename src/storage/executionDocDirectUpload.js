@@ -1,6 +1,6 @@
 /**
  * Browser → Cloudflare R2 direct upload for Camp One execution documents.
- * Server never proxies the full original bytes when R2 is enabled.
+ * Suitable WebP masters stay in R2 (CopyObject) — never downloaded + Sharp-decoded.
  */
 import path from 'path';
 import fs from 'fs';
@@ -11,8 +11,10 @@ import {
   getObjectToFile,
   isObjectStoreEnabled,
   deleteObject,
+  copyObjectToKey,
+  R2_STORAGE_STANDARD,
 } from './objectStore.js';
-import { absoluteUploadPath, publicUploadPath } from './uploadKeys.js';
+import { absoluteUploadPath } from './uploadKeys.js';
 import { buildExecutionDocumentFileName } from '../modules/campOps/executionDocumentName.js';
 import {
   assertUploadByteLimit,
@@ -24,12 +26,39 @@ import { AppError } from '../utils/helpers.js';
 import { finalizeExecutionDocumentUploads } from './finalizeExecutionDocs.js';
 import { renameLocalUpload } from './persistUpload.js';
 import { assertSafeUpload } from '../utils/uploadSafety.js';
+import { StoredFile } from '../modules/files/storedFile.model.js';
+import { assignPreservingExisting } from '../store/dataIntegrity.js';
+import { configureSharpForLowMemory } from './media/sharpConfig.js';
+
+configureSharpForLowMemory();
 
 const TEMP_PREFIX = 'camp-ops/_direct/';
 
 function safeOriginalExt(name = '') {
   const ext = path.extname(String(name || '')).toLowerCase();
   return ext && ext !== '.' ? ext : '';
+}
+
+function isWebpUpload({ originalName, contentType }) {
+  const mime = String(contentType || '').toLowerCase();
+  const ext = safeOriginalExt(originalName);
+  return mime === 'image/webp' || ext === '.webp';
+}
+
+async function upsertRegistry(patch) {
+  const key = String(patch.objectKey || '').trim();
+  if (!key) throw new Error('objectKey required');
+  let row = await StoredFile.findOne({ objectKey: key, isDeleted: false });
+  if (!row) {
+    return StoredFile.create({
+      objectKey: key,
+      ...patch,
+      lastAccessedAt: patch.lastAccessedAt || new Date().toISOString(),
+    });
+  }
+  assignPreservingExisting(row, patch, { clearKeys: ['lastError'] });
+  await row.save();
+  return row;
 }
 
 /**
@@ -99,8 +128,75 @@ export async function presignExecutionDocumentUploads({
 }
 
 /**
- * After browser PUT to R2: stream object to disk, optimize under gate, confirm R2, attach to camp.
- * Returns the same shape as the multipart upload handler's added docs + enriched camp fields.
+ * Confirm a WebP under the upload size cap via R2 CopyObject only.
+ * No GetObject body through Node and no Sharp decode (lossless WebP OOM fix).
+ */
+async function confirmPassthroughWebpInR2({
+  camp,
+  docType,
+  docNote,
+  item,
+  objectKey,
+  remoteSize,
+  usedNames,
+  uploadedAt,
+}) {
+  const originalName = String(item.originalName || path.basename(objectKey));
+  const contentType = 'image/webp';
+  assertUploadByteLimit(remoteSize, EXEC_DOC_MAX_BYTES);
+
+  const { fileName: displayName, storedName } = buildExecutionDocumentFileName({
+    doctorName: camp.doctorName,
+    docType,
+    originalName: `${path.parse(originalName).name || 'upload'}.webp`,
+    existingNames: usedNames,
+    index: 0,
+    campScope: camp.campId || camp._id,
+  });
+  usedNames.push(displayName, storedName);
+
+  const finalKey = `camp-ops/${storedName}`;
+  logMemory('confirm:webp-copy-object', { from: objectKey, to: finalKey, bytes: remoteSize });
+  await copyObjectToKey(objectKey, finalKey, {
+    contentType,
+    storageClass: R2_STORAGE_STANDARD,
+  });
+
+  await upsertRegistry({
+    objectKey: finalKey,
+    contentHash: '',
+    kind: 'image',
+    contentType,
+    sizeBytes: remoteSize,
+    originalName,
+    status: 'ready',
+    storageClass: R2_STORAGE_STANDARD,
+    refCount: 1,
+    processedAt: new Date().toISOString(),
+    processAttempts: 1,
+    lastError: '',
+    reductionRatio: 1,
+    lastAccessedAt: new Date().toISOString(),
+  });
+
+  logMemory('confirm:webp-passthrough-done', { storedName, bytes: remoteSize });
+  return {
+    id: storedName,
+    fileName: displayName,
+    storedName,
+    originalFileName: originalName,
+    docType,
+    ...(docNote ? { docNote } : {}),
+    mimeType: contentType,
+    fileSize: remoteSize,
+    url: `/uploads/camp-ops/${storedName}`,
+    uploadedAt,
+    storageStatus: 'ready',
+  };
+}
+
+/**
+ * After browser PUT to R2: confirm. WebP masters prefer CopyObject; others stream + optimize.
  */
 export async function confirmExecutionDocumentUploads({
   camp,
@@ -125,6 +221,10 @@ export async function confirmExecutionDocumentUploads({
 
   const multerLikeFiles = [];
   const tempKeys = [];
+  const existing = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
+  const uploadedAt = new Date().toISOString();
+  const usedNames = existing.flatMap((doc) => [doc.fileName, doc.storedName]).filter(Boolean);
+  const added = [];
 
   try {
     for (const item of items) {
@@ -154,13 +254,30 @@ export async function confirmExecutionDocumentUploads({
         );
       }
       assertUploadByteLimit(remoteSize || expectedSize, EXEC_DOC_MAX_BYTES);
+      tempKeys.push(objectKey);
+
+      // Fast path: GPS Selfie WebP — CopyObject only (no Sharp decode / palette re-encode).
+      if (docType === 'gps_selfie' && isWebpUpload({ originalName, contentType })) {
+        const passthrough = await confirmPassthroughWebpInR2({
+          camp,
+          docType,
+          docNote,
+          item: { ...item, originalName, contentType },
+          objectKey,
+          remoteSize: remoteSize || expectedSize,
+          usedNames,
+          uploadedAt,
+        });
+        if (passthrough) {
+          added.push(passthrough);
+          continue;
+        }
+      }
 
       const localAbs = absoluteUploadPath(objectKey);
       logMemory('confirm:get-to-disk', { objectKey, remoteSize });
       await getObjectToFile(objectKey, localAbs);
-      tempKeys.push(objectKey);
 
-      // Peek magic without loading whole file
       const magic = Buffer.alloc(16);
       const fd = fs.openSync(localAbs, 'r');
       try {
@@ -191,65 +308,61 @@ export async function confirmExecutionDocumentUploads({
       });
     }
 
-    const fakeReq = reqStub || { files: multerLikeFiles, file: undefined };
-    fakeReq.files = multerLikeFiles;
-    await finalizeExecutionDocumentUploads(fakeReq, { docType });
+    if (multerLikeFiles.length) {
+      const fakeReq = reqStub || { files: multerLikeFiles, file: undefined };
+      fakeReq.files = multerLikeFiles;
+      await finalizeExecutionDocumentUploads(fakeReq, { docType });
 
-    const existing = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
-    const uploadedAt = new Date().toISOString();
-    const usedNames = existing.flatMap((doc) => [doc.fileName, doc.storedName]).filter(Boolean);
-    const added = [];
-
-    for (const [index, file] of multerLikeFiles.entries()) {
-      const { fileName: displayName, storedName } = buildExecutionDocumentFileName({
-        doctorName: camp.doctorName,
-        docType,
-        originalName: file.filename || file.originalname,
-        existingNames: usedNames,
-        index,
-        campScope: camp.campId || camp._id,
-      });
-      usedNames.push(displayName, storedName);
-
-      const tempPath = file.path;
-      const finalPath = absoluteUploadPath(`camp-ops/${storedName}`);
-
-      try {
-        await renameLocalUpload(tempPath, finalPath, {
-          contentType: file.mimetype,
-          deferR2: false,
-          originalName: displayName,
+      for (const [index, file] of multerLikeFiles.entries()) {
+        const { fileName: displayName, storedName } = buildExecutionDocumentFileName({
+          doctorName: camp.doctorName,
+          docType,
+          originalName: file.filename || file.originalname,
+          existingNames: usedNames,
+          index,
+          campScope: camp.campId || camp._id,
         });
-      } catch (err) {
-        console.error(
-          `[camp-ops] direct confirm R2 persist failed camp=${camp.campId || camp._id} file=${storedName}:`,
-          err?.message || err,
-        );
-        throw new AppError(
-          `Could not store execution document “${displayName}” in cloud storage. Please try again.`,
-          502,
-          'UPLOAD_R2_FAILED',
-        );
-      }
+        usedNames.push(displayName, storedName);
 
-      added.push({
-        id: storedName,
-        fileName: displayName,
-        storedName,
-        originalFileName: file.originalname,
-        docType,
-        ...(docNote ? { docNote } : {}),
-        mimeType: file.mimetype,
-        fileSize: file.size,
-        url: `/uploads/camp-ops/${storedName}`,
-        uploadedAt,
-        storageStatus: 'ready',
-      });
+        const tempPath = file.path;
+        const finalPath = absoluteUploadPath(`camp-ops/${storedName}`);
+
+        try {
+          await renameLocalUpload(tempPath, finalPath, {
+            contentType: file.mimetype,
+            deferR2: false,
+            originalName: displayName,
+          });
+        } catch (err) {
+          console.error(
+            `[camp-ops] direct confirm R2 persist failed camp=${camp.campId || camp._id} file=${storedName}:`,
+            err?.message || err,
+          );
+          throw new AppError(
+            `Could not store execution document “${displayName}” in cloud storage. Please try again.`,
+            502,
+            'UPLOAD_R2_FAILED',
+          );
+        }
+
+        added.push({
+          id: storedName,
+          fileName: displayName,
+          storedName,
+          originalFileName: file.originalname,
+          docType,
+          ...(docNote ? { docNote } : {}),
+          mimeType: file.mimetype,
+          fileSize: file.size,
+          url: `/uploads/camp-ops/${storedName}`,
+          uploadedAt,
+          storageStatus: 'ready',
+        });
+      }
     }
 
     return { added };
   } finally {
-    // Best-effort cleanup of direct-upload temp keys in R2
     for (const key of tempKeys) {
       try {
         await deleteObject(key);

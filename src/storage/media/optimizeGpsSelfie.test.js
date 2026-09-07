@@ -108,6 +108,39 @@ describe('GPS selfie indexed WebP', () => {
     assert.ok(Buffer.compare(materialized.buffer, webpBuf) === 0);
   });
 
+  it('passes through large-under-cap WebP without palette decode (OOM guard)', async () => {
+    // Noisy source so lossless WebP stays large (> former 900KB passthrough cap).
+    const crypto = await import('node:crypto');
+    const webpBuf = await sharp(crypto.randomBytes(1100 * 800 * 3), {
+      raw: { width: 1100, height: 800, channels: 3 },
+    })
+      .webp({ lossless: true, effort: 1 })
+      .toBuffer();
+    assert.ok(webpBuf.length > 900 * 1024, `expected fat webp, got ${webpBuf.length}`);
+
+    const result = await optimizeGpsSelfieToIndexedWebp(webpBuf);
+    assert.equal(result.encodeMode, 'webp-passthrough');
+    const materialized = await materializeOptimizeResult(result);
+    assert.equal(materialized.buffer.length, webpBuf.length);
+  });
+
+  it('resize-only for oversized WebP — never palette path', async () => {
+    const webpBuf = await sharp({
+      create: {
+        width: 2000,
+        height: 1500,
+        channels: 3,
+        background: { r: 10, g: 20, b: 30 },
+      },
+    })
+      .webp({ lossless: true, effort: 1 })
+      .toBuffer();
+
+    const result = await optimizeGpsSelfieToIndexedWebp(webpBuf);
+    assert.equal(result.encodeMode, 'webp-resize');
+    assert.ok(Math.max(result.width, result.height) <= GPS_SELFIE_LONG_EDGE);
+  });
+
   it('optimizeGpsSelfieFile returns kind image with reductionRatio', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tylo-gps-selfie-'));
     const src = path.join(dir, 'gs.jpg');

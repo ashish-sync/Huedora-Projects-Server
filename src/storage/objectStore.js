@@ -149,6 +149,41 @@ export async function copyObjectStorageClass(objectKey, storageClass, opts = {})
   };
 }
 
+/**
+ * Server-side copy between keys (no body through Node heap).
+ * Used to promote a direct-upload temp WebP to its semantic final key.
+ */
+export async function copyObjectToKey(fromKey, toKey, opts = {}) {
+  const cfg = getR2Env();
+  if (!cfg.enabled) return { skipped: true };
+  const from = String(fromKey || '').replace(/^\/+/, '');
+  const to = String(toKey || '').replace(/^\/+/, '');
+  if (!from || !to) throw new Error('Invalid object key for copy');
+  const s3 = buildClient(cfg);
+  const storageClass = normalizeStorageClass(opts.storageClass);
+  const params = {
+    Bucket: cfg.bucket,
+    Key: to,
+    CopySource: `/${cfg.bucket}/${from}`,
+    StorageClass: storageClass,
+    MetadataDirective: 'COPY',
+  };
+  if (opts.contentType) {
+    params.ContentType = opts.contentType;
+    params.MetadataDirective = 'REPLACE';
+  }
+  await s3.send(new CopyObjectCommand(params));
+  const head = await headObject(to);
+  if (!head) throw new Error(`R2 HeadObject missing after CopyObject for ${to}`);
+  return {
+    ok: true,
+    from,
+    to,
+    contentLength: Number(head.ContentLength) || null,
+    contentType: head.ContentType || opts.contentType || null,
+  };
+}
+
 export async function getObject(objectKey) {
   const cfg = getR2Env();
   if (!cfg.enabled) return null;

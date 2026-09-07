@@ -11,6 +11,9 @@ import { ensureUploadDirs } from './config/paths.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { configureSharpForLowMemory } from './storage/media/sharpConfig.js';
+
+configureSharpForLowMemory();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const freshStartTrigger = path.resolve(__dirname, '../.fresh-start');
