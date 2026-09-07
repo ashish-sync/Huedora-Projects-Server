@@ -11,18 +11,18 @@ import {
   getObjectToFile,
   isObjectStoreEnabled,
   deleteObject,
-} from '../objectStore.js';
-import { absoluteUploadPath, publicUploadPath } from '../uploadKeys.js';
+} from './objectStore.js';
+import { absoluteUploadPath, publicUploadPath } from './uploadKeys.js';
 import { buildExecutionDocumentFileName } from '../../modules/campOps/executionDocumentName.js';
 import {
   assertUploadByteLimit,
   EXEC_DOC_MAX_BYTES,
   EXEC_DOC_MAX_FILES_PER_REQUEST,
-} from '../media/uploadLimits.js';
+} from './media/uploadLimits.js';
 import { logMemory } from '../../utils/memory.js';
 import { AppError } from '../../utils/helpers.js';
-import { finalizeExecutionDocumentUploads } from '../finalizeExecutionDocs.js';
-import { renameLocalUpload } from '../persistUpload.js';
+import { finalizeExecutionDocumentUploads } from './finalizeExecutionDocs.js';
+import { renameLocalUpload } from './persistUpload.js';
 import { assertSafeUpload } from '../../utils/uploadSafety.js';
 
 const TEMP_PREFIX = 'camp-ops/_direct/';
