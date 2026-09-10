@@ -84,7 +84,7 @@ export function createApp(options = {}) {
   });
 
   /** Liveness: process is up. Do not check Mongo here (use /ready). */
-  app.get('/api/v1/health', (_req, res) => {
+  app.get('/api/v1/health', async (_req, res) => {
     const payload = {
       status: 'ok',
       live: true,
@@ -97,6 +97,12 @@ export function createApp(options = {}) {
         rssMb: +(m.rss / 1024 / 1024).toFixed(1),
         heapUsedMb: +(m.heapUsed / 1024 / 1024).toFixed(1),
       };
+      try {
+        const { getCacheStats } = await import('./store/persistence.js');
+        payload.cache = getCacheStats();
+      } catch {
+        payload.cache = { totalDocs: null };
+      }
     }
     res.status(200).json({ data: payload });
   });
