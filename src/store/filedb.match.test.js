@@ -48,6 +48,25 @@ test('$in matches hex ids case-insensitively', () => {
   );
 });
 
+test('regex matches nested array fields (providerEmployees.name/mobile)', () => {
+  const doc = {
+    name: 'Care Agency',
+    providerEmployees: [
+      { name: 'Ravi Kumar', mobile: '9123456789' },
+      { name: 'Anita', mobile: '9988776655' },
+    ],
+  };
+  assert.equal(matchDocument(doc, { 'providerEmployees.name': /ravi/i }), true);
+  assert.equal(matchDocument(doc, { 'providerEmployees.mobile': /9988776655/ }), true);
+  assert.equal(matchDocument(doc, { 'providerEmployees.name': /nobody/i }), false);
+  assert.equal(
+    matchDocument(doc, {
+      $or: [{ name: /care/i }, { 'providerEmployees.name': /anita/i }],
+    }),
+    true
+  );
+});
+
 test('consumables resolve with loose division/method matching', () => {
   const mapped = resolveMappedConsumablesFromRecords([
     {

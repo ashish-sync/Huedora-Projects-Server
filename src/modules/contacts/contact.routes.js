@@ -92,21 +92,27 @@ async function validateServiceProviderLink(payload, contactId = null) {
   }
 }
 
-async function enrichContactsWithProviders(contacts = []) {
+async function enrichContactsWithProviders(contacts = [], { signKyc = true } = {}) {
   const ids = [
     ...new Set(
       contacts.map((c) => c.serviceProviderContactId).filter(Boolean).map(String)
     ),
   ];
-  if (!ids.length) return contacts;
-  const providers = await Contact.find({ _id: { $in: ids }, isDeleted: false });
-  const byId = Object.fromEntries(providers.map((p) => [String(p._id), p.name || '']));
-  return contacts.map((c) => withSignedContactKyc({
-    ...c,
+  const attachProviderName = (c, byId = {}) => ({
+    ...(c.toObject ? c.toObject() : c),
     serviceProviderName: c.serviceProviderContactId
       ? byId[String(c.serviceProviderContactId)] || ''
       : '',
-  }));
+  });
+  if (!ids.length) {
+    return contacts.map((c) => (signKyc ? withSignedContactKyc(c) : attachProviderName(c)));
+  }
+  const providers = await Contact.find({ _id: { $in: ids }, isDeleted: false });
+  const byId = Object.fromEntries(providers.map((p) => [String(p._id), p.name || '']));
+  return contacts.map((c) => {
+    const row = attachProviderName(c, byId);
+    return signKyc ? withSignedContactKyc(row) : row;
+  });
 }
 
 const kycUpload = multer({
@@ -198,6 +204,9 @@ router.get(
         { state: new RegExp(q, 'i') },
         { pinCode: new RegExp(q, 'i') },
         { address: new RegExp(q, 'i') },
+        // Service Provider embedded employees (name / mobile)
+        { 'providerEmployees.name': new RegExp(q, 'i') },
+        { 'providerEmployees.mobile': new RegExp(q, 'i') },
       ];
     }
     if (req.query.state) {
@@ -222,7 +231,9 @@ router.get(
       Contact.find(filter).sort(sort || 'name').skip(skip).limit(limit),
       Contact.countDocuments(filter),
     ]);
-    const data = await enrichContactsWithProviders(rawData);
+    // Assignment pickers only need identity/geo/profession — skip KYC URL signing.
+    const assignLight = String(req.query.assign || '') === '1';
+    const data = await enrichContactsWithProviders(rawData, { signKyc: !assignLight });
     res.json(paginated(data, total, page, limit));
   })
 );

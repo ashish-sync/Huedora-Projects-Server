@@ -53,3 +53,29 @@ test('empty providerEmployees array would wipe if sent — callers must omit ins
   assignPreservingExisting(contact, { providerEmployees: [] });
   assert.deepEqual(contact.providerEmployees, []);
 });
+
+test('PATCH blank city/state must not wipe persisted location', () => {
+  const contact = {
+    name: 'Vendor Co',
+    contactCategory: 'Vendor',
+    city: 'Pune',
+    state: 'Maharashtra',
+    stateId: 'st1',
+    cityId: 'ct1',
+  };
+  const payload = normalizeContactPayload({
+    name: 'Vendor Co',
+    contactCategory: 'Vendor',
+    supplyCategory: 'Medical',
+    contact: '9876543210',
+    city: '',
+    state: '',
+    stateId: '',
+    cityId: '',
+  });
+  assignPreservingExisting(contact, payload);
+  assert.equal(contact.city, 'Pune');
+  assert.equal(contact.state, 'Maharashtra');
+  assert.equal(contact.stateId, 'st1');
+  assert.equal(contact.cityId, 'ct1');
+});

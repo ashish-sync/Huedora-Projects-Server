@@ -25,6 +25,45 @@ function clone(v) {
   return v == null ? v : JSON.parse(JSON.stringify(v));
 }
 
+function get(obj, key) {
+  return key.split('.').reduce((a, k) => (a == null ? a : a[k]), obj);
+}
+
+/**
+ * Collect leaf values for a dotted path, expanding arrays (Mongo-like:
+ * { 'providerEmployees.name': /x/ } matches any element).
+ */
+function collectPathValues(obj, key) {
+  const parts = String(key || '').split('.').filter(Boolean);
+  if (!parts.length) return [];
+  let nodes = [obj];
+  for (const part of parts) {
+    const next = [];
+    for (const node of nodes) {
+      if (node == null) continue;
+      if (Array.isArray(node)) {
+        for (const item of node) {
+          if (item == null) continue;
+          if (typeof item === 'object') next.push(item[part]);
+        }
+      } else if (typeof node === 'object') {
+        next.push(node[part]);
+      }
+    }
+    nodes = next;
+  }
+  return nodes;
+}
+
+function pathMatchesRegex(doc, key, regex) {
+  const values = collectPathValues(doc, key);
+  if (!values.length) return regex.test('');
+  return values.some((v) => {
+    if (Array.isArray(v)) return v.some((item) => regex.test(String(item ?? '')));
+    return regex.test(String(v ?? ''));
+  });
+}
+
 function match(doc, filter = {}) {
   if (!filter || !Object.keys(filter).length) return true;
   return Object.entries(filter).every(([key, val]) => {
@@ -75,21 +114,17 @@ function match(doc, filter = {}) {
         if (val.$lt && t >= new Date(val.$lt).getTime()) return false;
         return true;
       }
-      if (val instanceof RegExp) return val.test(String(get(doc, key) ?? ''));
+      if (val instanceof RegExp) return pathMatchesRegex(doc, key, val);
       if (val.$regex) {
         const r = new RegExp(val.$regex, val.$options || 'i');
-        return r.test(String(get(doc, key) ?? ''));
+        return pathMatchesRegex(doc, key, r);
       }
     }
-    if (val instanceof RegExp) return val.test(String(get(doc, key) ?? ''));
+    if (val instanceof RegExp) return pathMatchesRegex(doc, key, val);
     const cur = get(doc, key);
     if (cur && typeof cur === 'object' && cur._id) return idsEqual(cur._id, val);
     return idsEqual(cur, val);
   });
-}
-
-function get(obj, key) {
-  return key.split('.').reduce((a, k) => (a == null ? a : a[k]), obj);
 }
 
 function applyUpdate(doc, update) {
