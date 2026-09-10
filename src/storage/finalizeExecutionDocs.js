@@ -8,6 +8,7 @@ import {
 import {
   optimizeGpsSelfieFile,
   optimizeWebpResizeOnly,
+  isWebpFileByMagic,
 } from './media/optimizeGpsSelfie.js';
 import { processUploadedMedia, applyProcessResultToMulterInfo } from './media/processUpload.js';
 import { toUploadObjectKey, absoluteUploadPath, publicUploadPath } from './uploadKeys.js';
@@ -15,7 +16,7 @@ import { isObjectStoreEnabled, R2_STORAGE_STANDARD } from './objectStore.js';
 import { sha256File } from './media/contentHash.js';
 import { StoredFile } from '../modules/files/storedFile.model.js';
 import { assignPreservingExisting } from '../store/dataIntegrity.js';
-import { warnIfHighMemory, logMemory } from '../utils/memory.js';
+import { warnIfHighMemory, logMemory, relieveMemoryPressure, RSS_DROP_CACHE_MB, RSS_REFUSE_IMAGE_MB } from '../utils/memory.js';
 import { withImageProcessGate } from './media/imageProcessGate.js';
 import {
   assertUploadByteLimit,
@@ -164,6 +165,15 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
   const isGpsSelfie = String(docType) === 'gps_selfie';
   logMemory('finalize:exec-docs:start', { docType, fileCount: files.length });
 
+  const startMem = warnIfHighMemory('finalize:exec-docs', { rssWarnMb: 350 });
+  let rssMb = startMem?.rssMb;
+  if (rssMb >= RSS_DROP_CACHE_MB) {
+    const after = await relieveMemoryPressure('finalize:exec-docs');
+    rssMb = after?.rssMb ?? rssMb;
+  }
+  const memoryPressure = rssMb != null && rssMb >= 350;
+  const refuseSharp = rssMb != null && rssMb >= RSS_REFUSE_IMAGE_MB;
+
   for (const file of files) {
     if (!file?.path || file.mediaFinalized) continue;
     if (!fs.existsSync(file.path)) continue;
@@ -171,14 +181,33 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
     assertUploadByteLimit(file.size || fs.statSync(file.path).size, EXEC_DOC_MAX_BYTES);
     const sourceKey = toUploadObjectKey(file.path);
 
+    // High RSS: GPS WebP = byte-copy only (no Sharp / no gate). This is what OOM'd at ~540MB before.
+    if (isGpsSelfie && memoryPressure && isWebpFileByMagic(file.path)) {
+      logMemory('finalize:gps-webp-passthrough', { rssMb });
+      const optimized = await optimizeGpsSelfieFile(file.path, { lightOnly: true });
+      if (optimizedByteLength(optimized) > 0) {
+        await writeOptimizedUpload(file, optimized, sourceKey);
+        continue;
+      }
+    }
+
+    if (refuseSharp) {
+      throw new AppError(
+        `Server memory is too high (${rssMb} MB) for image processing. Upload a WebP GPS selfie or try again shortly.`,
+        503,
+        'UPLOAD_MEMORY_PRESSURE',
+      );
+    }
+
     await withImageProcessGate(`finalize:${docType}`, async () => {
-      if (isGpsSelfie || String(file.mimetype || '').startsWith('image/')) {
+      const lightOnly = isGpsSelfie && memoryPressure;
+
+      // Sharp metadata itself can OOM when RSS is already high — skip under lightOnly.
+      if (!lightOnly && (isGpsSelfie || String(file.mimetype || '').startsWith('image/'))) {
         await assertSafeImagePixels(file.path);
       }
 
       if (isGpsSelfie) {
-        const mem = warnIfHighMemory('media:gps-selfie', { rssWarnMb: 350 });
-        const lightOnly = mem?.rssMb != null && mem.rssMb >= 350;
         try {
           const optimized = await optimizeGpsSelfieFile(file.path, { lightOnly });
           if (optimizedByteLength(optimized) > 0) {
@@ -186,8 +215,18 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
             return;
           }
         } catch (err) {
+          if (err?.code === 'UPLOAD_MEMORY_PRESSURE' || err?.status === 503) {
+            throw mapOptimizeError(err);
+          }
           console.warn(
             `[media:gps-selfie] indexed WebP failed (${err?.message || err}); falling back to resize-only WebP`,
+          );
+        }
+        if (lightOnly) {
+          throw new AppError(
+            'Server memory is too high to process this GPS selfie. Upload a WebP or try again shortly.',
+            503,
+            'UPLOAD_MEMORY_PRESSURE',
           );
         }
         try {

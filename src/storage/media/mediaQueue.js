@@ -146,19 +146,22 @@ async function pump() {
       const job = queue.shift();
       if (!job) break;
       const mem = warnIfHighMemory('media:queue', { rssWarnMb: 380 });
-      if (mem?.rssMb >= 400 && (job.memoryDefers || 0) < MAX_MEMORY_DEFERS) {
-        job.memoryDefers = (job.memoryDefers || 0) + 1;
-        console.warn(
-          `[media] deferring ${job.id}: high RSS ${mem.rssMb}MB (defer ${job.memoryDefers}/${MAX_MEMORY_DEFERS})`,
-        );
-        queue.push(job);
-        await delay(15_000);
-        continue;
-      }
       if (mem?.rssMb >= 400) {
+        job.memoryDefers = (job.memoryDefers || 0) + 1;
+        if (job.memoryDefers < MAX_MEMORY_DEFERS) {
+          console.warn(
+            `[media] deferring ${job.id}: high RSS ${mem.rssMb}MB (defer ${job.memoryDefers}/${MAX_MEMORY_DEFERS})`,
+          );
+          queue.push(job);
+          await delay(15_000);
+          continue;
+        }
+        // Do not force past ~400MB — that regularly OOMs Render free (512MB).
+        // Leave the job out of the in-process queue; requeueStuckMediaJobs recovers later.
         console.warn(
-          `[media] forcing ${job.id} despite high RSS ${mem.rssMb}MB after ${MAX_MEMORY_DEFERS} defers`,
+          `[media] skipping ${job.id}: RSS still ${mem.rssMb}MB after ${MAX_MEMORY_DEFERS} defers — will recover on requeue`,
         );
+        continue;
       }
       try {
         await runJob(job);

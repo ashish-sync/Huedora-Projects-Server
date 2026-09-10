@@ -47,7 +47,13 @@ export async function connectDb() {
     connectedMongoUri = uri;
     mongoose.set('strictQuery', true);
     try {
-      await mongoose.connect(uri, { serverSelectionTimeoutMS: 15000 });
+      await mongoose.connect(uri, {
+        serverSelectionTimeoutMS: 15000,
+        // Keep driver pool tiny on Render free (~512MB RSS).
+        maxPoolSize: 5,
+        minPoolSize: 1,
+        maxIdleTimeMS: 30000,
+      });
     } catch (err) {
       throw formatMongoConnectError(err, uri);
     }

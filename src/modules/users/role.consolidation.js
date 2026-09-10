@@ -101,10 +101,14 @@ export async function consolidateLegacyRoles() {
       changed = true;
     }
 
-    if (changed || deduped.join('|') !== currentIds.join('|')) {
-      user.roleIds = deduped;
-      await user.save();
-      usersUpdated += 1;
+    if (changed) {
+      const beforeKey = [...currentIds].sort().join('|');
+      const afterKey = [...deduped].sort().join('|');
+      if (beforeKey !== afterKey) {
+        user.roleIds = deduped;
+        await user.save();
+        usersUpdated += 1;
+      }
     }
   }
 

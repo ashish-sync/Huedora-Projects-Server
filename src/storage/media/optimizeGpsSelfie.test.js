@@ -162,4 +162,42 @@ describe('GPS selfie indexed WebP', () => {
 
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it('lightOnly WebP is byte-copy only (no Sharp resize — Render OOM guard)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tylo-gps-light-'));
+    const src = path.join(dir, 'gs.webp');
+    await sharp({
+      create: {
+        width: 640,
+        height: 480,
+        channels: 3,
+        background: { r: 10, g: 20, b: 30 },
+      },
+    })
+      .webp({ lossless: true, effort: 1 })
+      .toFile(src);
+    const before = fs.statSync(src).size;
+
+    const result = await optimizeGpsSelfieFile(src, { lightOnly: true });
+    assert.equal(result.encodeMode, 'webp-passthrough-light');
+    assert.equal(fs.statSync(result.filePath).size, before);
+
+    await assert.rejects(
+      () => optimizeGpsSelfieFile(path.join(dir, 'missing.jpg'), { lightOnly: true }),
+      (err) => err.code === 'UPLOAD_MEMORY_PRESSURE' || err.code === 'ENOENT',
+    );
+
+    const jpeg = path.join(dir, 'gs.jpg');
+    await sharp({
+      create: { width: 100, height: 100, channels: 3, background: { r: 1, g: 2, b: 3 } },
+    })
+      .jpeg()
+      .toFile(jpeg);
+    await assert.rejects(
+      () => optimizeGpsSelfieFile(jpeg, { lightOnly: true }),
+      (err) => err.code === 'UPLOAD_MEMORY_PRESSURE' && err.status === 503,
+    );
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });

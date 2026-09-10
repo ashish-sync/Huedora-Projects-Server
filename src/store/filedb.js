@@ -232,8 +232,9 @@ class Query {
   }
 
   async exec() {
-    // Mongo pushdown when safe (no populate) — avoids full-collection hydrate.
-    if (getPersistenceMode() === 'mongo' && !this._populate.length) {
+    // Mongo pushdown for filter/limit — then populate. Avoids full-collection hydrate
+    // on login (User.findOne().populate('roleIds')) and other populated finds.
+    if (getPersistenceMode() === 'mongo') {
       const sort =
         typeof this._sort === 'object' && this._sort && !Array.isArray(this._sort)
           ? this._sort
@@ -251,10 +252,13 @@ class Query {
         sort,
         skip: this._skip,
         limit: this._limit,
-        projection,
+        projection: this._populate.length ? null : projection,
       });
-      // queryCollection returns plain objects; wrap like the cache path.
-      const rows = data.map((r) => (this._select ? r : clone(r)));
+      let rows = data.map((r) => clone(r));
+      for (const p of this._populate) {
+        await this.model._populateMany(rows, p.field, p.select);
+      }
+      if (this._select) rows = rows.map((row) => project(row, this._select));
       return rows.map((r) => this.model._wrap(r, { alreadyCloned: true }));
     }
 
@@ -517,6 +521,14 @@ export function defineCollection(name, defaults = {}) {
       return scanCollection(name, { filter });
     },
     async updateOne(filter, update) {
+      if (getPersistenceMode() === 'mongo') {
+        const { data } = await queryCollection(name, { filter, limit: 1 });
+        if (!data[0]) return { matchedCount: 0, modifiedCount: 0 };
+        const next = applyUpdate(clone(data[0]), update);
+        await upsertDocument(name, next);
+        invalidateIdIndex(name);
+        return { matchedCount: 1, modifiedCount: 1 };
+      }
       const rows = await model._all();
       const idx = rows.findIndex((d) => match(d, filter));
       if (idx < 0) return { matchedCount: 0, modifiedCount: 0 };
@@ -526,6 +538,14 @@ export function defineCollection(name, defaults = {}) {
       return { matchedCount: 1, modifiedCount: 1 };
     },
     async updateMany(filter, update) {
+      if (getPersistenceMode() === 'mongo') {
+        const { data } = await queryCollection(name, { filter });
+        if (!data.length) return { matchedCount: 0, modifiedCount: 0 };
+        const changed = data.map((row) => applyUpdate(clone(row), update));
+        await bulkUpsertDocuments(name, changed);
+        invalidateIdIndex(name);
+        return { matchedCount: changed.length, modifiedCount: changed.length };
+      }
       const rows = await model._all();
       const changed = [];
       for (let i = 0; i < rows.length; i++) {
@@ -535,13 +555,19 @@ export function defineCollection(name, defaults = {}) {
         }
       }
       if (changed.length) {
-        if (getPersistenceMode() === 'mongo') await bulkUpsertDocuments(name, changed);
-        else await model._write(rows);
+        await model._write(rows);
         invalidateIdIndex(name);
       }
       return { matchedCount: changed.length, modifiedCount: changed.length };
     },
     async deleteOne(filter = {}) {
+      if (getPersistenceMode() === 'mongo') {
+        const { data } = await queryCollection(name, { filter, limit: 1 });
+        if (!data[0]) return { deletedCount: 0 };
+        await deleteDocument(name, data[0]._id);
+        invalidateIdIndex(name);
+        return { deletedCount: 1, deletedId: data[0]._id };
+      }
       const rows = await model._all();
       const idx = rows.findIndex((d) => match(d, filter));
       if (idx < 0) return { deletedCount: 0 };

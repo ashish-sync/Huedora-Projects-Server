@@ -256,9 +256,28 @@ export async function optimizeGpsSelfieToIndexedWebp(input, opts = {}) {
 export async function optimizeGpsSelfieFile(absPath, opts = {}) {
   const before = fs.statSync(absPath).size;
   const outPath = opts.outPath || tmpWebpPath('gs');
-  const result = opts.lightOnly
-    ? await optimizeWebpResizeOnly(absPath, { outPath })
-    : await optimizeGpsSelfieToIndexedWebp(absPath, { outPath });
+
+  // Under memory pressure: NEVER decode/resize. WebP → byte copy; anything else refuses.
+  if (opts.lightOnly) {
+    if (isWebpFileByMagic(absPath)) {
+      logMemory('optimize:webp-passthrough-light', { bytes: before });
+      fs.copyFileSync(absPath, outPath);
+      return {
+        ...resultFromFile(outPath, {}, { indexed: true, encodeMode: 'webp-passthrough-light' }),
+        kind: 'image',
+        reductionRatio: 1,
+        originalBytes: before,
+      };
+    }
+    const err = new Error(
+      'Server memory is too high to convert this image. Upload a WebP (≤1280px) or try again shortly.',
+    );
+    err.code = 'UPLOAD_MEMORY_PRESSURE';
+    err.status = 503;
+    throw err;
+  }
+
+  const result = await optimizeGpsSelfieToIndexedWebp(absPath, { outPath });
   const after = result.filePath && fs.existsSync(result.filePath)
     ? fs.statSync(result.filePath).size
     : (result.buffer?.length || 0);
@@ -268,4 +287,25 @@ export async function optimizeGpsSelfieFile(absPath, opts = {}) {
     reductionRatio: before > 0 ? after / before : null,
     originalBytes: before,
   };
+}
+
+/** WebP RIFF header without Sharp (safe under memory pressure). */
+export function isWebpFileByMagic(absPath) {
+  let fd;
+  try {
+    fd = fs.openSync(absPath, 'r');
+    const buf = Buffer.alloc(12);
+    if (fs.readSync(fd, buf, 0, 12, 0) < 12) return false;
+    return buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
+  } catch {
+    return false;
+  } finally {
+    if (fd != null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
 }

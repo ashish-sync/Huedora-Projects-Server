@@ -1,7 +1,14 @@
 /**
  * Process-wide gate so concurrent uploads cannot spike Sharp/RSS past Render 512MB.
  */
-import { withMemoryLog, warnIfHighMemory, logMemory } from '../../utils/memory.js';
+import {
+  withMemoryLog,
+  warnIfHighMemory,
+  logMemory,
+  assertSafeRssForImageProcess,
+  relieveMemoryPressure,
+  RSS_DROP_CACHE_MB,
+} from '../../utils/memory.js';
 import { IMAGE_PROCESS_CONCURRENCY } from './uploadLimits.js';
 
 let active = 0;
@@ -40,10 +47,15 @@ export function imageProcessGateStats() {
  * @returns {Promise<T>}
  */
 export async function withImageProcessGate(label, fn, extra = {}) {
-  warnIfHighMemory(`gate:wait:${label}`, { rssWarnMb: 360 });
+  const snap = warnIfHighMemory(`gate:wait:${label}`, { rssWarnMb: 360 });
+  if (snap.rssMb >= RSS_DROP_CACHE_MB) {
+    await relieveMemoryPressure(`gate:${label}`);
+  }
+  assertSafeRssForImageProcess(`gate:${label}`);
   logMemory(`gate:queue:${label}`, { ...extra, ...imageProcessGateStats() });
   await acquire();
   try {
+    assertSafeRssForImageProcess(`gate:run:${label}`);
     return await withMemoryLog(`gate:run:${label}`, fn, {
       ...extra,
       ...imageProcessGateStats(),
