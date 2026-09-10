@@ -1,4 +1,3 @@
-import { CampOpsCamp } from './campOps.model.js';
 import { normalizeCampName } from './campOps.constants.js';
 import {
   getRequestStageBlockers,
@@ -455,12 +454,18 @@ export async function generateCampId(campDate = new Date()) {
   const yy = String(date.getFullYear()).slice(-2);
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const prefix = `${yy}-${mm}-`;
-  const rows = (await CampOpsCamp._all()).filter(
-    (r) => !r.isDeleted && String(r.campId || '').startsWith(prefix)
-  );
+  const { queryCollection } = await import('../../store/persistence.js');
+  // Project campId only — never full-hydrate camp_ops_camps into the process cache.
+  const { data: rows } = await queryCollection('camp_ops_camps', {
+    filter: {
+      isDeleted: { $ne: true },
+      campId: { $regex: `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}` },
+    },
+    projection: { campId: 1 },
+  });
   let maxSeq = 0;
   for (const row of rows) {
-    const parts = String(row.campId).split('-');
+    const parts = String(row.campId || '').split('-');
     const seq = Number(parts[2]);
     if (!Number.isNaN(seq) && seq > maxSeq) maxSeq = seq;
   }

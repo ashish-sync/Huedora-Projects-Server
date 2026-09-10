@@ -85,7 +85,11 @@ import {
   cheapIsOverdue,
   cheapEffectiveCamp,
 } from './campOps.listDto.js';
-import { buildOperationsBoard } from './campOps.operationsBoard.js';
+import {
+  createOperationsBoardState,
+  addCampToOperationsBoard,
+  finalizeOperationsBoard,
+} from './campOps.operationsBoard.js';
 import { resolveContactPersonFields } from './campContactPersons.js';
 import {
   extractManualPastePreview,
@@ -826,6 +830,25 @@ router.get(
 
     await scanCollection('camp_ops_camps', {
       filter,
+      projection: {
+        status: 1,
+        clientId: 1,
+        campaignId: 1,
+        campaignName: 1,
+        clientName: 1,
+        state: 1,
+        campaignType: 1,
+        campDate: 1,
+        submittedOffHours: 1,
+        submittedWeekendAttention: 1,
+        // fields used by isCampOverdue
+        startTime: 1,
+        endTime: 1,
+        lifecycleStage: 1,
+        assignmentDecision: 1,
+        executionCompletedAt: 1,
+        isDeleted: 1,
+      },
       forEach: (camp) => {
         total += 1;
       byStatus[camp.status] = (byStatus[camp.status] || 0) + 1;
@@ -919,14 +942,32 @@ router.get(
   asyncHandler(async (req, res) => {
     const filter = await scopeCampFilter(req, buildCampFilter(req.query));
     const { scanCollection } = await import('../../store/filedb.js');
-    const camps = [];
+    const state = createOperationsBoardState();
     await scanCollection('camp_ops_camps', {
       filter,
+      projection: {
+        status: 1,
+        lifecycleStage: 1,
+        assignmentStatus: 1,
+        assignmentDecision: 1,
+        executionStatus: 1,
+        effectiveExecutionStatus: 1,
+        financePaymentStatus: 1,
+        paymentSubmitStatus: 1,
+        cancellationSource: 1,
+        cancelledBy: 1,
+        campDate: 1,
+        startTime: 1,
+        endTime: 1,
+        submittedAt: 1,
+        requestReviewStatus: 1,
+        isDeleted: 1,
+      },
       forEach: (camp) => {
-        camps.push(camp);
+        addCampToOperationsBoard(state, camp);
       },
     });
-    const board = buildOperationsBoard(camps);
+    const board = finalizeOperationsBoard(state);
     res.json({
       dateRange: {
         from: req.query.dateFrom || null,

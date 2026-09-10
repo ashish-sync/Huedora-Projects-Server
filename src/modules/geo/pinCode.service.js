@@ -2,7 +2,6 @@ import { randomUUID } from 'crypto';
 import { AppError } from '../../utils/helpers.js';
 import { bulkUpsertDocuments } from '../../store/persistence.js';
 import { assignPreservingExisting } from '../../store/dataIntegrity.js';
-import { scanCollection } from '../../store/filedb.js';
 import { resolveZoneNameForState } from './geo.zones.js';
 import { GeoCity, GeoDistrict, GeoPinCode, GeoState } from './geo.model.js';
 import {
@@ -274,10 +273,26 @@ export function formatPinPreview({ count, preview, more }) {
 }
 
 export async function countPinsGrouped(groupField) {
+  const { aggregateCollection, getPersistenceMode } = await import('../../store/persistence.js');
+  if (getPersistenceMode() === 'mongo') {
+    // Native $group — never load India PIN master into the Node heap.
+    const rows = await aggregateCollection('geo_pin_codes', [
+      { $match: { isDeleted: false, isActive: true } },
+      { $group: { _id: `$${groupField}`, count: { $sum: 1 } } },
+    ]);
+    const counts = new Map();
+    for (const row of rows || []) {
+      if (row?._id == null || row._id === '') continue;
+      counts.set(String(row._id), Number(row.count) || 0);
+    }
+    return counts;
+  }
+
   const counts = new Map();
-  // Scan without cloning every PIN doc (India master can be 100k+).
+  const { scanCollection } = await import('../../store/filedb.js');
   await scanCollection('geo_pin_codes', {
     filter: { isDeleted: false, isActive: true },
+    projection: { [groupField]: 1 },
     forEach: (pin) => {
       const key = String(pin[groupField] || '');
       if (!key) return;

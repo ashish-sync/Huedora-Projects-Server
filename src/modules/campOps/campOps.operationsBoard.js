@@ -94,7 +94,8 @@ function emptyStatusCounts(statuses) {
   return Object.fromEntries(statuses.map((row) => [row.value, 0]));
 }
 
-export function buildOperationsBoard(camps = [], now = new Date()) {
+/** Mutable board accumulator — avoids holding every camp doc in an array (Render heap). */
+export function createOperationsBoardState(now = new Date()) {
   const stages = OPERATIONS_BOARD_STAGES.map((stage) => ({
     id: stage.id,
     label: stage.label,
@@ -102,31 +103,42 @@ export function buildOperationsBoard(camps = [], now = new Date()) {
     statuses: stage.statuses.map((row) => ({ ...row, count: 0 })),
     byStatus: emptyStatusCounts(stage.statuses),
   }));
-  const stageMap = Object.fromEntries(stages.map((stage) => [stage.id, stage]));
+  return {
+    now,
+    total: 0,
+    stages,
+    stageMap: Object.fromEntries(stages.map((stage) => [stage.id, stage])),
+  };
+}
 
-  let total = 0;
-  for (const camp of camps) {
-    total += 1;
-    const stageId = resolveOperationsBoardStage(camp);
-    const stage = stageMap[stageId];
-    if (!stage) continue;
-    stage.total += 1;
-    const statusValue = resolveOperationsBoardStatus(camp, stageId, now);
-    if (statusValue && Object.prototype.hasOwnProperty.call(stage.byStatus, statusValue)) {
-      stage.byStatus[statusValue] += 1;
-    }
+export function addCampToOperationsBoard(state, camp) {
+  state.total += 1;
+  const stageId = resolveOperationsBoardStage(camp);
+  const stage = state.stageMap[stageId];
+  if (!stage) return;
+  stage.total += 1;
+  const statusValue = resolveOperationsBoardStatus(camp, stageId, state.now);
+  if (statusValue && Object.prototype.hasOwnProperty.call(stage.byStatus, statusValue)) {
+    stage.byStatus[statusValue] += 1;
   }
+}
 
-  for (const stage of stages) {
+export function finalizeOperationsBoard(state) {
+  for (const stage of state.stages) {
     stage.statuses = stage.statuses.map((row) => ({
       ...row,
       count: stage.byStatus[row.value] || 0,
     }));
   }
-
   return {
-    total,
-    stages,
-    generatedAt: now.toISOString(),
+    total: state.total,
+    stages: state.stages,
+    generatedAt: state.now.toISOString(),
   };
+}
+
+export function buildOperationsBoard(camps = [], now = new Date()) {
+  const state = createOperationsBoardState(now);
+  for (const camp of camps) addCampToOperationsBoard(state, camp);
+  return finalizeOperationsBoard(state);
 }

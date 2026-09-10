@@ -6,11 +6,14 @@ import {
   bulkUpsertDocuments,
   deleteDocument,
   getPersistenceMode,
+  getMongoDb,
+  mongoCollectionName,
   resetAllCollections,
   registerCollection,
   getRegisteredCollections,
   mergeDocumentFields,
   queryCollection,
+  aggregateCollection,
 } from './persistence.js';
 import { entityIdMapKey, idsEqual } from '../utils/entityIds.js';
 
@@ -321,16 +324,69 @@ async function idIndexFor(name) {
   return entry.map;
 }
 
+/**
+ * Load only the requested ids — never full-hydrate contacts/users/assets for populate.
+ * Full idIndexFor() was retaining entire collections in the process cache (Render heap growth).
+ */
+async function loadDocsByIds(name, ids = []) {
+  const unique = [
+    ...new Set(
+      (ids || [])
+        .map((id) => String(id?._id || id || '').trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (!unique.length) return new Map();
+
+  if (getPersistenceMode() === 'mongo') {
+    const { data } = await queryCollection(name, {
+      filter: { _id: { $in: unique } },
+      limit: unique.length,
+    });
+    const map = new Map();
+    for (const row of data) {
+      const raw = String(row._id ?? '');
+      if (raw) map.set(raw, row);
+      const key = entityIdMapKey(row._id);
+      if (key && key !== raw) map.set(key, row);
+    }
+    // Retry missing ids as strings vs normalized forms already covered by $in unique list.
+    return map;
+  }
+
+  const byId = await idIndexFor(name);
+  const map = new Map();
+  for (const id of unique) {
+    const found = byId.get(entityIdMapKey(id)) || byId.get(id);
+    if (found) map.set(id, found);
+  }
+  return map;
+}
+
 export function invalidateIdIndex(name) {
   if (name) idIndexByCollection.delete(name);
   else idIndexByCollection.clear();
 }
 
 /**
- * Scan a collection without cloning. Callback receives live cache refs — do not mutate.
+ * Scan a collection without cloning and without retaining a process-wide full cache in Mongo mode.
  * @returns {Promise<number>} number of matching docs visited
  */
-export async function scanCollection(name, { filter = {}, forEach } = {}) {
+export async function scanCollection(name, { filter = {}, forEach, projection = null } = {}) {
+  if (getPersistenceMode() === 'mongo') {
+    const db = getMongoDb();
+    if (!db) throw new Error('MongoDB persistence is not configured');
+    const cursor = db.collection(mongoCollectionName(name)).find(filter || {});
+    if (projection && typeof projection === 'object') cursor.project(projection);
+    cursor.batchSize(250);
+    let n = 0;
+    for await (const doc of cursor) {
+      n += 1;
+      if (forEach) forEach(doc);
+    }
+    return n;
+  }
+
   const all = await loadCollection(name);
   let n = 0;
   for (const d of all) {
@@ -384,24 +440,36 @@ export function defineCollection(name, defaults = {}) {
     async _populateMany(rows, field, select) {
       if (!rows?.length) return;
       if (field === 'roleIds') {
-        const byId = await idIndexFor('roles');
+        const allIds = [];
+        for (const row of rows) {
+          if (!Array.isArray(row.roleIds)) continue;
+          for (const id of row.roleIds) allIds.push(id?._id || id);
+        }
+        const byId = await loadDocsByIds('roles', allIds);
         for (const row of rows) {
           if (!Array.isArray(row.roleIds)) continue;
           row.roleIds = row.roleIds.map((id) => {
-            const found = byId.get(entityIdMapKey(id?._id || id)) || byId.get(String(id?._id || id));
+            const key = entityIdMapKey(id?._id || id) || String(id?._id || id);
+            const found = byId.get(key) || byId.get(String(id?._id || id));
             return found ? project(found, select, { sanitize: true }) : id;
           });
         }
         return;
       }
       if (field === 'assets' || field === 'assets.assetId') {
-        const byId = await idIndexFor('assets');
+        const allIds = [];
+        for (const row of rows) {
+          if (!Array.isArray(row.assets)) continue;
+          for (const a of row.assets) allIds.push(a.assetId?._id || a.assetId);
+        }
+        const byId = await loadDocsByIds('assets', allIds);
         for (const row of rows) {
           if (!Array.isArray(row.assets)) continue;
           row.assets = row.assets.map((a) => ({
             ...a,
             assetId: (() => {
-              const found = byId.get(String(a.assetId?._id || a.assetId));
+              const key = String(a.assetId?._id || a.assetId);
+              const found = byId.get(key);
               return found ? project(found, select, { sanitize: true }) : a.assetId;
             })(),
           }));
@@ -409,10 +477,12 @@ export function defineCollection(name, defaults = {}) {
         return;
       }
       if (field === 'to.hcwId') {
-        const byId = await idIndexFor('hcws');
+        const allIds = rows.map((row) => row.to?.hcwId?._id || row.to?.hcwId).filter(Boolean);
+        const byId = await loadDocsByIds('hcws', allIds);
         for (const row of rows) {
           if (!row.to) continue;
-          const found = byId.get(String(row.to.hcwId?._id || row.to.hcwId));
+          const key = String(row.to.hcwId?._id || row.to.hcwId);
+          const found = byId.get(key);
           if (found) row.to = { ...row.to, hcwId: project(found, select, { sanitize: true }) };
         }
         return;
@@ -439,7 +509,8 @@ export function defineCollection(name, defaults = {}) {
       };
       const col = map[field];
       if (!col) return;
-      const byId = await idIndexFor(col);
+      const allIds = rows.map((row) => row[field]?._id || row[field]).filter((id) => id != null);
+      const byId = await loadDocsByIds(col, allIds);
       for (const row of rows) {
         const val = row[field];
         if (val == null) continue;
@@ -467,6 +538,19 @@ export function defineCollection(name, defaults = {}) {
       return model.findOne({ _id: String(id) });
     },
     async findOneAndUpdate(filter, update, opts = {}) {
+      if (getPersistenceMode() === 'mongo') {
+        const { data } = await queryCollection(name, { filter, limit: 1 });
+        if (!data[0]) {
+          if (opts.upsert) {
+            return model.create({ ...filter, ...(update.$set || update) });
+          }
+          return null;
+        }
+        const next = applyUpdate(clone(data[0]), update);
+        await upsertDocument(name, next);
+        invalidateIdIndex(name);
+        return model._wrap(next);
+      }
       const rows = await model._all();
       const idx = rows.findIndex((d) => match(d, filter));
       if (idx < 0) {
@@ -581,7 +665,12 @@ export function defineCollection(name, defaults = {}) {
       invalidateIdIndex(name);
     },
     async aggregate(pipeline = []) {
-      // Aggregate over refs until $group; only clone grouped result docs.
+      // Mongo: push down to native aggregate — never loadCollection (dashboard OOM root cause).
+      if (getPersistenceMode() === 'mongo') {
+        const rows = await aggregateCollection(name, pipeline);
+        return Array.isArray(rows) ? rows : [];
+      }
+      // File fallback: aggregate over refs until $group; only clone grouped result docs.
       let rows = await model._all();
       for (const stage of pipeline) {
         if (stage.$match) rows = rows.filter((d) => match(d, stage.$match));

@@ -70,8 +70,10 @@ export async function relieveMemoryPressure(label = 'relieve') {
   if (before.rssMb < RSS_DROP_CACHE_MB) return { relieved: false, ...before };
   try {
     const { clearPersistenceCache, getCacheStats } = await import('../store/persistence.js');
+    const { invalidateIdIndex } = await import('../store/filedb.js');
     const stats = getCacheStats();
     clearPersistenceCache();
+    invalidateIdIndex();
     if (typeof global.gc === 'function') {
       try {
         global.gc();
@@ -85,8 +87,11 @@ export async function relieveMemoryPressure(label = 'relieve') {
       JSON.stringify({
         droppedCollections: stats.collectionCount,
         droppedDocs: stats.totalDocs,
+        top: stats.collections?.slice(0, 8),
         beforeRssMb: before.rssMb,
         afterRssMb: after.rssMb,
+        beforeHeapMb: before.heapUsedMb,
+        afterHeapMb: after.heapUsedMb,
       }),
     );
     return { relieved: true, ...after, droppedDocs: stats.totalDocs };
@@ -120,6 +125,22 @@ export function startMemoryWatch({ intervalMs = 120_000, rssWarnMb = RSS_WARN_MB
   if (!enabled) return () => {};
   const timer = setInterval(() => {
     const snap = warnIfHighMemory('watch', { rssWarnMb });
+    import('../store/persistence.js')
+      .then(({ getCacheStats }) => {
+        const stats = getCacheStats();
+        if (stats.totalDocs > 0 || snap.rssMb >= rssWarnMb) {
+          console.warn(
+            '[memory:cache]',
+            JSON.stringify({
+              rssMb: snap.rssMb,
+              heapUsedMb: snap.heapUsedMb,
+              totalDocs: stats.totalDocs,
+              collections: stats.collections?.slice(0, 10),
+            }),
+          );
+        }
+      })
+      .catch(() => {});
     if (snap.rssMb >= RSS_DROP_CACHE_MB) {
       relieveMemoryPressure('watch').catch(() => {});
     }

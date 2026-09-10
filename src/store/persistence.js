@@ -30,12 +30,24 @@ const ALWAYS_COMPACT = new Set(['audit_logs', 'finance_commercial_documents', 'g
 /**
  * Never retain these in the process-local Map on Render (~512MB).
  * Login/audit writes and PIN masters previously full-hydrated here and OOM'd the instance.
+ * Operational masters (camps/assets/…) must not stay forever either — dashboards used to
+ * Model.aggregate → loadCollection and pin 150–250MB heapUsed before Sharp ran.
  */
 const NEVER_CACHE_COLLECTIONS = new Set([
   'audit_logs',
   'geo_pin_codes',
   'finance_commercial_documents',
   'refresh_tokens',
+  'camp_ops_camps',
+  'contacts',
+  'assets',
+  'asset_requests',
+  'movements',
+  'agreements',
+  'verification_records',
+  'notifications',
+  'finance_expenses',
+  'finance_invoices',
 ]);
 
 export function isCacheableCollection(name) {
@@ -578,15 +590,21 @@ export function clearPersistenceCache({ keep = [] } = {}) {
     cache.clear();
     fileMtime.clear();
     cacheLoadedAt.clear();
-    return;
-  }
-  for (const name of [...cache.keys()]) {
-    if (!retain.has(name)) {
-      cache.delete(name);
-      fileMtime.delete(name);
-      cacheLoadedAt.delete(name);
+  } else {
+    for (const name of [...cache.keys()]) {
+      if (!retain.has(name)) {
+        cache.delete(name);
+        fileMtime.delete(name);
+        cacheLoadedAt.delete(name);
+      }
     }
   }
+  // idIndexByCollection holds refs into cached row arrays — must drop or relief is a no-op.
+  import('./filedb.js')
+    .then((m) => {
+      if (typeof m.invalidateIdIndex === 'function') m.invalidateIdIndex();
+    })
+    .catch(() => {});
 }
 
 /** Hard-delete a single document by _id (mongo + file) without wiping sibling docs. */
