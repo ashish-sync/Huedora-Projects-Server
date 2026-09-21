@@ -25,6 +25,7 @@ import {
   EXEC_DOC_MAX_FILES_PER_REQUEST,
   SHARP_LIMIT_INPUT_PIXELS,
 } from './media/uploadLimits.js';
+import { classifyUploadKind } from './media/mediaKinds.js';
 import { AppError } from '../utils/helpers.js';
 import sharp from 'sharp';
 
@@ -167,12 +168,13 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
 
   const startMem = warnIfHighMemory('finalize:exec-docs', { rssWarnMb: 350 });
   let rssMb = startMem?.rssMb;
-  if (rssMb >= RSS_DROP_CACHE_MB) {
+  // Always try to free caches before deciding to refuse Sharp work.
+  if (rssMb != null && rssMb >= RSS_DROP_CACHE_MB - 20) {
     const after = await relieveMemoryPressure('finalize:exec-docs');
     rssMb = after?.rssMb ?? rssMb;
   }
-  const memoryPressure = rssMb != null && rssMb >= 350;
-  const refuseSharp = rssMb != null && rssMb >= RSS_REFUSE_IMAGE_MB;
+  let memoryPressure = rssMb != null && rssMb >= 350;
+  let refuseSharp = rssMb != null && rssMb >= RSS_REFUSE_IMAGE_MB;
 
   for (const file of files) {
     if (!file?.path || file.mediaFinalized) continue;
@@ -180,6 +182,10 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
 
     assertUploadByteLimit(file.size || fs.statSync(file.path).size, EXEC_DOC_MAX_BYTES);
     const sourceKey = toUploadObjectKey(file.path);
+    const kind = classifyUploadKind({
+      originalName: file.originalname,
+      mimetype: file.mimetype,
+    });
 
     // High RSS: GPS WebP = byte-copy only (no Sharp / no gate). This is what OOM'd at ~540MB before.
     if (isGpsSelfie && memoryPressure && isWebpFileByMagic(file.path)) {
@@ -191,7 +197,41 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
       }
     }
 
+    // Under hard RSS pressure: prefer a light encode / passthrough over a hard 503 so Camp One
+    // uploads still succeed on Render free-tier instances that sit near ~420MB RSS.
     if (refuseSharp) {
+      logMemory('finalize:light-fallback', { rssMb, docType, kind });
+      if (kind === 'image' || isGpsSelfie) {
+        try {
+          if (isGpsSelfie || isWebpFileByMagic(file.path)) {
+            const optimized = await optimizeGpsSelfieFile(file.path, { lightOnly: true });
+            if (optimizedByteLength(optimized) > 0) {
+              await writeOptimizedUpload(file, optimized, sourceKey);
+              continue;
+            }
+          }
+          const light = await optimizeWebpResizeOnly(file.path);
+          if (optimizedByteLength(light) > 0) {
+            await writeOptimizedUpload(
+              file,
+              { ...light, kind: 'image', reductionRatio: null },
+              sourceKey,
+            );
+            continue;
+          }
+        } catch (err) {
+          console.warn(
+            `[media:finalize] light fallback failed (${err?.message || err}); keeping original bytes`,
+          );
+        }
+        // Last resort: accept original bytes so the upload is not blocked.
+        file.mediaFinalized = true;
+        continue;
+      }
+      if (kind === 'pdf' || kind === 'other') {
+        file.mediaFinalized = true;
+        continue;
+      }
       throw new AppError(
         `Server memory is too high (${rssMb} MB) for image processing. Upload a WebP GPS selfie or try again shortly.`,
         503,

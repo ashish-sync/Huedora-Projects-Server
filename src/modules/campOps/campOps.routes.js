@@ -182,6 +182,7 @@ import {
   CampDuplicateError,
   DUPLICATE_CAMP_MESSAGE,
   DUPLICATE_IDENTITY_FIELDS,
+  REQUEST_STAGE_PRESERVE_FIELDS,
 } from './campDuplicate.js';
 import {
   resolveCampClientScope,
@@ -304,12 +305,14 @@ function enrichCamp(camp) {
   return withSignedCampFiles(obj);
 }
 
-/** Projection for list queries — exclude heavy blobs. */
+/** Projection for list queries — exclude heavy blobs.
+ * Keep contactPersons: copy-details / assignment text needs name+phone when
+ * legacy fieldPerson* columns are empty.
+ */
 const CAMP_LIST_PROJECTION = {
   executionDocuments: 0,
   executionCaptured: 0,
   consumablesUsed: 0,
-  contactPersons: 0,
   whatsappRaw: 0,
   emailRaw: 0,
   emailBody: 0,
@@ -333,7 +336,6 @@ async function paginateCampsInMemory(filter, { page, limit, skip }, predicate = 
           executionDocuments: 0,
           executionCaptured: 0,
           consumablesUsed: 0,
-          contactPersons: 0,
           whatsappRaw: 0,
           emailRaw: 0,
           emailBody: 0,
@@ -1670,6 +1672,7 @@ router.put(
     // and false-positive the duplicate check (c9b9993 + follow-up).
     if (lifecycleOnly || stage !== 'request') {
       DUPLICATE_IDENTITY_FIELDS.forEach((key) => { delete payload[key]; });
+      REQUEST_STAGE_PRESERVE_FIELDS.forEach((key) => { delete payload[key]; });
     }
     // paymentSubmitStatus / financePaymentStatus are never free-select via Camp PUT:
     // Confirm Payment / Hold / Release Hold endpoints + Finance One Payment Done only.

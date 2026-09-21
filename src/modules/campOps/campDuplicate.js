@@ -28,6 +28,46 @@ export const DUPLICATE_IDENTITY_FIELDS = [
   'startTime',
 ];
 
+/**
+ * Request-stage fields that Assignment / Execution / Finance saves must not rewrite.
+ * Full forms still POST these (often blank/defaulted) and would wipe address,
+ * expected patients, and contact-person details after assignment.
+ */
+export const REQUEST_STAGE_PRESERVE_FIELDS = [
+  'campAddress',
+  'hospitalName',
+  'clinicName',
+  'googlePlaceId',
+  'addressManualEntry',
+  'city',
+  'state',
+  'district',
+  'pincode',
+  'latitude',
+  'longitude',
+  'stateId',
+  'districtId',
+  'cityId',
+  'expectedPatients',
+  'doctorCode',
+  'speciality',
+  'scCode',
+  'mslNo',
+  'campaignName',
+  'campaignId',
+  'endTime',
+  'durationHours',
+  'campSlot',
+  'fieldPersonName',
+  'fieldPersonPhone',
+  'contactPersonLevel',
+  'contactPersons',
+  'hq',
+  'zone',
+  'source',
+  'requestDate',
+];
+
 export class CampDuplicateError extends Error {
   constructor(existingCamp) {
     super(DUPLICATE_CAMP_MESSAGE);

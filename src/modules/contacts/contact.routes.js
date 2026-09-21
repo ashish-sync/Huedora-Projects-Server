@@ -417,6 +417,19 @@ router.patch(
     if (!stillProvider && !clearKeys.includes('providerEmployees')) {
       delete payload.providerEmployees;
     }
+    // Staying provider: empty [] without clearProviderEmployees is treated as accidental
+    // (stale form / LocationCascade merge) and must not wipe a persisted roster.
+    if (
+      stillProvider
+      && Array.isArray(payload.providerEmployees)
+      && payload.providerEmployees.length === 0
+      && Array.isArray(contact.providerEmployees)
+      && contact.providerEmployees.length > 0
+      && req.body.clearProviderEmployees !== true
+      && req.body.clearProviderEmployees !== 'true'
+    ) {
+      delete payload.providerEmployees;
+    }
 
     assignPreservingExisting(contact, payload, clearKeys.length ? { clearKeys } : undefined);
     contact.updatedBy = req.user._id;

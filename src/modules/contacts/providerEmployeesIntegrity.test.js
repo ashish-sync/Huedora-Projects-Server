@@ -54,6 +54,35 @@ test('empty providerEmployees array would wipe if sent — callers must omit ins
   assert.deepEqual(contact.providerEmployees, []);
 });
 
+test('Service Provider empty roster without clear flag must be omitted before merge', () => {
+  const contact = {
+    contactCategory: 'Healthcare Worker',
+    resourceType: 'Service Provider',
+    providerEmployees: [{ id: '1', name: 'Ravi', mobile: '9123456789', profession: '' }],
+  };
+  const body = {
+    name: 'Agency',
+    contactCategory: 'Healthcare Worker',
+    resourceType: 'Service Provider',
+    contact: '9876543210',
+    state: 'Maharashtra',
+    providerEmployees: [],
+  };
+  const payload = normalizeContactPayload(body, { validate: true });
+  // Mimic route guard: drop accidental empty wipe.
+  if (
+    Array.isArray(payload.providerEmployees)
+    && payload.providerEmployees.length === 0
+    && contact.providerEmployees.length > 0
+    && body.clearProviderEmployees !== true
+  ) {
+    delete payload.providerEmployees;
+  }
+  assignPreservingExisting(contact, payload);
+  assert.equal(contact.providerEmployees.length, 1);
+  assert.equal(contact.providerEmployees[0].name, 'Ravi');
+});
+
 test('PATCH blank city/state must not wipe persisted location', () => {
   const contact = {
     name: 'Vendor Co',

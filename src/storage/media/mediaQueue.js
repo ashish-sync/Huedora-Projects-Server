@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { warnIfHighMemory } from '../../utils/memory.js';
+import { warnIfHighMemory, relieveMemoryPressure } from '../../utils/memory.js';
 import { toUploadObjectKey, absoluteUploadPath } from '../uploadKeys.js';
 import {
   markStoredFileFailed,
@@ -145,7 +145,11 @@ async function pump() {
     while (queue.length) {
       const job = queue.shift();
       if (!job) break;
-      const mem = warnIfHighMemory('media:queue', { rssWarnMb: 380 });
+      let mem = warnIfHighMemory('media:queue', { rssWarnMb: 380 });
+      if (mem?.rssMb >= 400) {
+        await relieveMemoryPressure('media:queue');
+        mem = warnIfHighMemory('media:queue:after-relieve', { rssWarnMb: 380 });
+      }
       if (mem?.rssMb >= 400) {
         job.memoryDefers = (job.memoryDefers || 0) + 1;
         if (job.memoryDefers < MAX_MEMORY_DEFERS) {
@@ -156,12 +160,19 @@ async function pump() {
           await delay(15_000);
           continue;
         }
-        // Do not force past ~400MB — that regularly OOMs Render free (512MB).
-        // Leave the job out of the in-process queue; requeueStuckMediaJobs recovers later.
+        // After max defers, try one more relieve then run once (r2Put is cheap; process may
+        // still OOM — mark failed via catch). Skipping forever left Camp uploads stuck.
+        await relieveMemoryPressure('media:queue:final');
+        mem = warnIfHighMemory('media:queue:final', { rssWarnMb: 380 });
+        if (mem?.rssMb >= 460 && job.type !== 'r2Put') {
+          console.warn(
+            `[media] skipping ${job.id}: RSS still ${mem.rssMb}MB after ${MAX_MEMORY_DEFERS} defers — will recover on requeue`,
+          );
+          continue;
+        }
         console.warn(
-          `[media] skipping ${job.id}: RSS still ${mem.rssMb}MB after ${MAX_MEMORY_DEFERS} defers — will recover on requeue`,
+          `[media] forcing ${job.id} after ${MAX_MEMORY_DEFERS} defers (rss=${mem?.rssMb}MB type=${job.type})`,
         );
-        continue;
       }
       try {
         await runJob(job);
