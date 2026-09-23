@@ -18,14 +18,18 @@ describe('camp list DTO', () => {
       durationHours: 3,
       status: 'pending_review',
       lifecycleStage: 'request',
+      expectedPatients: 40,
+      hospitalName: 'City Clinic',
       executionDocuments: [{ url: '/uploads/camp-ops/x.webp', docType: 'doctor_form' }],
       inTimeSelfieUrl: '/uploads/camp-ops/s.webp',
-      contactPersons: [{ name: 'X' }],
+      contactPersons: [{ name: 'X', phone: '9876543210' }],
     });
     assert.equal(row.clientName, 'Acme');
     assert.equal(row.executionDocuments, undefined);
     assert.equal(row.inTimeSelfieUrl, undefined);
-    assert.equal(row.contactPersons, undefined);
+    assert.deepEqual(row.contactPersons, [{ name: 'X', phone: '9876543210' }]);
+    assert.equal(row.expectedPatients, 40);
+    assert.equal(row.hospitalName, 'City Clinic');
     assert.ok(Array.isArray(row.approvalBlockers));
     assert.equal(typeof row.canApprove, 'boolean');
   });
