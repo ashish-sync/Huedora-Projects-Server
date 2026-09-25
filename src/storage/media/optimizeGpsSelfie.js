@@ -257,7 +257,7 @@ export async function optimizeGpsSelfieFile(absPath, opts = {}) {
   const before = fs.statSync(absPath).size;
   const outPath = opts.outPath || tmpWebpPath('gs');
 
-  // Under memory pressure: NEVER decode/resize. WebP → byte copy; anything else refuses.
+  // Under memory pressure: prefer zero/low Sharp work so Camp One uploads still succeed.
   if (opts.lightOnly) {
     if (isWebpFileByMagic(absPath)) {
       logMemory('optimize:webp-passthrough-light', { bytes: before });
@@ -269,12 +269,45 @@ export async function optimizeGpsSelfieFile(absPath, opts = {}) {
         originalBytes: before,
       };
     }
-    const err = new Error(
-      'Server memory is too high to convert this image. Upload a WebP (≤1280px) or try again shortly.',
-    );
-    err.code = 'UPLOAD_MEMORY_PRESSURE';
-    err.status = 503;
-    throw err;
+    // JPEG/PNG under pressure: one cheap resize-to-WebP, then accept original bytes.
+    try {
+      logMemory('optimize:light-resize-fallback', { bytes: before });
+      const light = await optimizeWebpResizeOnly(absPath, { outPath });
+      return {
+        ...light,
+        kind: 'image',
+        reductionRatio: before > 0 ? (fs.statSync(light.filePath).size / before) : null,
+        originalBytes: before,
+      };
+    } catch (err) {
+      console.warn(
+        `[media] light resize failed under memory pressure (${err?.message || err}); keeping original bytes`,
+      );
+      const ext = path.extname(absPath) || '.jpg';
+      const passthroughPath = outPath.replace(/\.webp$/i, ext);
+      fs.copyFileSync(absPath, passthroughPath);
+      const mime = ext.toLowerCase() === '.png'
+        ? 'image/png'
+        : ext.toLowerCase() === '.webp'
+          ? 'image/webp'
+          : 'image/jpeg';
+      return {
+        filePath: passthroughPath,
+        buffer: null,
+        contentType: mime,
+        ext,
+        width: 0,
+        height: 0,
+        pageCount: 1,
+        bytesPerPage: before,
+        paletteColors: null,
+        indexed: false,
+        encodeMode: 'original-passthrough-light',
+        kind: 'image',
+        reductionRatio: 1,
+        originalBytes: before,
+      };
+    }
   }
 
   const result = await optimizeGpsSelfieToIndexedWebp(absPath, { outPath });

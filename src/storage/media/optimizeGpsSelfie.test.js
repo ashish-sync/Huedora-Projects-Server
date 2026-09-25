@@ -193,9 +193,13 @@ describe('GPS selfie indexed WebP', () => {
     })
       .jpeg()
       .toFile(jpeg);
-    await assert.rejects(
-      () => optimizeGpsSelfieFile(jpeg, { lightOnly: true }),
-      (err) => err.code === 'UPLOAD_MEMORY_PRESSURE' && err.status === 503,
+    const jpegResult = await optimizeGpsSelfieFile(jpeg, { lightOnly: true });
+    assert.ok(jpegResult.filePath);
+    assert.ok(fs.existsSync(jpegResult.filePath));
+    assert.ok(
+      jpegResult.encodeMode === 'webp-resize'
+        || jpegResult.encodeMode === 'original-passthrough-light'
+        || String(jpegResult.contentType || '').startsWith('image/'),
     );
 
     fs.rmSync(dir, { recursive: true, force: true });

@@ -255,19 +255,16 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
             return;
           }
         } catch (err) {
-          if (err?.code === 'UPLOAD_MEMORY_PRESSURE' || err?.status === 503) {
-            throw mapOptimizeError(err);
+          // Memory pressure must not block Camp One — fall through to resize / accept original.
+          if (err?.code !== 'UPLOAD_MEMORY_PRESSURE' && err?.status !== 503) {
+            console.warn(
+              `[media:gps-selfie] indexed WebP failed (${err?.message || err}); falling back to resize-only WebP`,
+            );
+          } else {
+            console.warn(
+              `[media:gps-selfie] memory pressure during optimize; falling back (${err?.message || err})`,
+            );
           }
-          console.warn(
-            `[media:gps-selfie] indexed WebP failed (${err?.message || err}); falling back to resize-only WebP`,
-          );
-        }
-        if (lightOnly) {
-          throw new AppError(
-            'Server memory is too high to process this GPS selfie. Upload a WebP or try again shortly.',
-            503,
-            'UPLOAD_MEMORY_PRESSURE',
-          );
         }
         try {
           const light = await optimizeWebpResizeOnly(file.path);
@@ -281,11 +278,12 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
           }
         } catch (fallbackErr) {
           console.warn(
-            `[media:gps-selfie] resize-only fallback failed (${fallbackErr?.message || fallbackErr})`,
+            `[media:gps-selfie] resize-only fallback failed (${fallbackErr?.message || fallbackErr}); keeping original`,
           );
-          throw mapOptimizeError(fallbackErr);
         }
-        throw new AppError('GPS Selfie optimize failed', 500, 'UPLOAD_OPTIMIZE_FAILED');
+        // Last resort: keep original bytes so the upload succeeds on a busy free-tier instance.
+        file.mediaFinalized = true;
+        return;
       }
 
       const optimized = await optimizeExecutionDocumentFile(file.path, {

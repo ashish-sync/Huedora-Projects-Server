@@ -47,15 +47,35 @@ export function imageProcessGateStats() {
  * @returns {Promise<T>}
  */
 export async function withImageProcessGate(label, fn, extra = {}) {
-  const snap = warnIfHighMemory(`gate:wait:${label}`, { rssWarnMb: 360 });
+  let snap = warnIfHighMemory(`gate:wait:${label}`, { rssWarnMb: 360 });
   if (snap.rssMb >= RSS_DROP_CACHE_MB) {
     await relieveMemoryPressure(`gate:${label}`);
+    snap = warnIfHighMemory(`gate:wait:${label}:after-relieve`, { rssWarnMb: 360 });
   }
-  assertSafeRssForImageProcess(`gate:${label}`);
+  try {
+    assertSafeRssForImageProcess(`gate:${label}`);
+  } catch (err) {
+    // One more relieve+retry — free-tier RSS often sits just above the refuse line.
+    if (err?.code === 'UPLOAD_MEMORY_PRESSURE') {
+      await relieveMemoryPressure(`gate:${label}:retry`);
+      assertSafeRssForImageProcess(`gate:${label}:retry`);
+    } else {
+      throw err;
+    }
+  }
   logMemory(`gate:queue:${label}`, { ...extra, ...imageProcessGateStats() });
   await acquire();
   try {
-    assertSafeRssForImageProcess(`gate:run:${label}`);
+    try {
+      assertSafeRssForImageProcess(`gate:run:${label}`);
+    } catch (err) {
+      if (err?.code === 'UPLOAD_MEMORY_PRESSURE') {
+        await relieveMemoryPressure(`gate:run:${label}`);
+        assertSafeRssForImageProcess(`gate:run:${label}:retry`);
+      } else {
+        throw err;
+      }
+    }
     return await withMemoryLog(`gate:run:${label}`, fn, {
       ...extra,
       ...imageProcessGateStats(),
