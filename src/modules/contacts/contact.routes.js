@@ -190,9 +190,8 @@ router.get(
       || String(req.query.profession || '').trim()
       || String(req.query.q || '').trim(),
     );
-    // Bare assign browse: 100. State/profession filtered assign: up to 2000 so
-    // large state cohorts (e.g. ~96 West Bengal Dieticians) are not truncated.
-    const assignMax = allowFullDirectory ? 2000 : (hasAssignFilters ? 2000 : 100);
+    // Assign picker: client asks for 75; server allows up to 100 per request.
+    const assignMax = allowFullDirectory ? 2000 : 100;
     const { page, limit, skip, sort } = parsePagination(req.query, {
       maxLimit: assignLight
         ? assignMax
