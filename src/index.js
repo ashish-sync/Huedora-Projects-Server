@@ -388,16 +388,33 @@ async function main() {
   try {
     const { ensureListIndexes } = await import('./store/persistence.js');
     const idx = await ensureListIndexes();
-    if (idx?.results?.length) {
-      const failed = idx.results.filter((r) => !r.ok);
-      if (failed.length) {
-        console.warn('[db] list index ensure issues:', failed.map((f) => f.index).join(', '));
-      } else {
-        console.log('[db] list indexes ensured');
+    if (idx?.skipped) {
+      console.log('[db] list indexes skipped (non-mongo)');
+    } else if (idx?.failed?.length) {
+      console.error(
+        '[db] REQUIRED list indexes failed:',
+        idx.failed.map((f) => `${f.collection}.${f.index}`).join(', '),
+      );
+      if (env.isProd && String(process.env.INDEX_ENSURE_STRICT || 'true').toLowerCase() !== 'false') {
+        throw new Error(
+          `List index ensure failed (${idx.failed.length}). Fix Mongo indexes or set INDEX_ENSURE_STRICT=false to boot degraded.`,
+        );
       }
+      console.warn('[db] continuing with degraded index status — /ready will report not_ready in production');
+    } else if (idx?.results?.length) {
+      console.log('[db] list indexes ensured');
     }
   } catch (err) {
     console.error('[db] ensureListIndexes failed:', err.message);
+    try {
+      const { markListIndexesFailed } = await import('./store/persistence.js');
+      markListIndexesFailed(err.message);
+    } catch {
+      /* ignore */
+    }
+    if (env.isProd && String(process.env.INDEX_ENSURE_STRICT || 'true').toLowerCase() !== 'false') {
+      throw err;
+    }
   }
   try {
     const {

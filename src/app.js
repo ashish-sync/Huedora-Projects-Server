@@ -53,14 +53,10 @@ export function createApp(options = {}) {
   }
 
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-  // Brotli when available via reverse proxy; gzip/deflate for JSON/API payloads.
+  // Gzip/deflate for JSON/API payloads (Brotli when available via reverse proxy).
   app.use(
     compression({
       threshold: 1024,
-      filter: (req, res) => {
-        if (req.headers['x-no-compression']) return false;
-        return compression.filter(req, res);
-      },
     }),
   );
   app.use(
@@ -136,25 +132,47 @@ export function createApp(options = {}) {
   app.get('/api/v1/ready', async (_req, res) => {
     const check = await checkReady();
     const objectStorage = check.objectStorage || undefined;
-    if (!check.ready) {
+    let indexes;
+    try {
+      const { getListIndexStatus } = await import('./store/persistence.js');
+      indexes = getListIndexStatus();
+    } catch {
+      indexes = { ok: false, failed: [{ index: 'status_unavailable' }], ensuredAt: null };
+    }
+    const indexesBlocking =
+      env.isProd
+      && String(process.env.INDEX_ENSURE_STRICT || 'true').toLowerCase() !== 'false'
+      && indexes
+      && indexes.skipped !== true
+      && indexes.ok === false;
+
+    if (!check.ready || indexesBlocking) {
       return res.status(503).json({
         data: {
           status: 'not_ready',
           ready: false,
-          reason: check.reason,
+          reason: !check.ready
+            ? check.reason
+            : `Required Mongo list indexes unavailable: ${(indexes.failed || [])
+              .map((f) => f.index)
+              .join(', ')}`,
           persistence: check.persistence,
           objectStorage,
+          indexes,
           ts: new Date().toISOString(),
         },
       });
     }
+    const degraded = indexes && indexes.skipped !== true && indexes.ok === false;
     res.status(200).json({
       data: {
-        status: 'ok',
+        status: degraded ? 'degraded' : 'ok',
         ready: true,
+        degraded: degraded || undefined,
         persistence: check.persistence,
         mongoHost: check.mongoHost || undefined,
         objectStorage,
+        indexes,
         ts: new Date().toISOString(),
       },
     });

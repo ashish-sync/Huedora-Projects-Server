@@ -157,7 +157,7 @@ export async function syncImapMailbox(options = {}) {
       const dateTo = parseDateFilter(options.dateTo, true);
 
       const emails = await fetchEmailsForIngest();
-      const synced = [];
+      const messageIds = [];
       const errors = [];
 
       for (const email of emails) {
@@ -167,7 +167,8 @@ export async function syncImapMailbox(options = {}) {
 
         try {
           const stored = await upsertInboundEmail(email, 'imap');
-          synced.push(stored);
+          const id = stored?._id != null ? String(stored._id) : null;
+          if (id) messageIds.push(id);
         } catch (error) {
           console.error(`[email] Failed to store message ${email.messageId || email.uid}:`, error.message);
           errors.push({
@@ -178,13 +179,14 @@ export async function syncImapMailbox(options = {}) {
         }
       }
 
+      // Do not return full message bodies — list/get endpoints are the read path.
       return {
         fetched: emails.length,
-        synced: synced.length,
-        filtered: emails.length - synced.length - errors.length,
+        synced: messageIds.length,
+        filtered: emails.length - messageIds.length - errors.length,
         failed: errors.length,
-        errors,
-        messages: synced,
+        errors: errors.slice(0, 20),
+        messageIds,
         mailbox: process.env.EMAIL_IMAP_MAILBOX || 'INBOX',
         mailboxUser: process.env.EMAIL_IMAP_USER || '',
         dateFrom: dateFrom?.toISOString() || null,

@@ -333,8 +333,39 @@ function projectRow(row, projection) {
 }
 
 /** Ensure common list indexes (non-blocking; safe to call on boot). */
+/** @type {{ ok: boolean, skipped?: boolean, failed: Array<{ collection: string, index: string, error?: string }>, ensuredAt: string | null }} */
+let listIndexStatus = {
+  ok: true,
+  skipped: true,
+  failed: [],
+  ensuredAt: null,
+};
+
+export function getListIndexStatus() {
+  return { ...listIndexStatus, failed: [...listIndexStatus.failed] };
+}
+
+/** Mark indexes degraded when ensure throws before returning. */
+export function markListIndexesFailed(errorMessage = 'ensureListIndexes failed') {
+  listIndexStatus = {
+    ok: false,
+    skipped: false,
+    failed: [{ collection: '*', index: 'ensure', error: String(errorMessage).slice(0, 200) }],
+    ensuredAt: new Date().toISOString(),
+  };
+  return getListIndexStatus();
+}
+
 export async function ensureListIndexes() {
-  if (mode !== 'mongo' || !mongoDb) return { skipped: true };
+  if (mode !== 'mongo' || !mongoDb) {
+    listIndexStatus = {
+      ok: true,
+      skipped: true,
+      failed: [],
+      ensuredAt: new Date().toISOString(),
+    };
+    return { skipped: true, ok: true, results: [] };
+  }
   const specs = [
     {
       name: 'camp_ops_camps',
@@ -442,7 +473,18 @@ export async function ensureListIndexes() {
       }
     }
   }
-  return { ok: true, results };
+  const failed = results.filter((r) => !r.ok).map((r) => ({
+    collection: r.collection,
+    index: r.index,
+    error: r.error,
+  }));
+  listIndexStatus = {
+    ok: failed.length === 0,
+    skipped: false,
+    failed,
+    ensuredAt: new Date().toISOString(),
+  };
+  return { ok: failed.length === 0, results, failed };
 }
 
 /**
