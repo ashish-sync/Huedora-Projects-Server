@@ -28,7 +28,8 @@ import { escapeRegex } from '../../utils/escapeRegex.js';
 import { uploadDir } from '../../config/paths.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
 import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
-import { assignPreservingExisting } from '../../store/dataIntegrity.js';
+import { assignPreservingExisting, resolveClearKeys } from '../../store/dataIntegrity.js';
+import { assertEntityNotStale } from '../../utils/mutationGuards.js';
 import {
   assertSpreadsheetUpload,
   discardUploadBuffer,
@@ -181,8 +182,8 @@ router.get(
   asyncHandler(async (req, res) => {
     const isHcwDirectory = String(req.query.contactCategory || '').trim() === 'Healthcare Worker';
     const { page, limit, skip, sort } = parsePagination(req.query, {
-      // Assignment needs the full HCW directory; default list pages stay capped at 200.
-      maxLimit: isHcwDirectory ? 2000 : 200,
+      // Assignment picker needs the full HCW directory; other lists stay capped.
+      maxLimit: isHcwDirectory ? 2000 : 100,
     });
     const filter = { isDeleted: false };
     if (req.query.q) {
@@ -226,6 +227,10 @@ router.get(
     }
     if (req.query.serviceProviderContactId) {
       filter.serviceProviderContactId = String(req.query.serviceProviderContactId).trim();
+    }
+    if (String(req.query.hasServiceProvider || '') === '1') {
+      // Staff linked under a Service Provider agency (assignment SP employee path).
+      filter.serviceProviderContactId = { $ne: null, $exists: true };
     }
     const [rawData, total] = await Promise.all([
       Contact.find(filter).sort(sort || 'name').skip(skip).limit(limit),
@@ -349,6 +354,16 @@ router.patch(
   asyncHandler(async (req, res) => {
     const contact = await Contact.findOne({ _id: req.params.id, isDeleted: false });
     if (!contact) throw new AppError('Contact not found', 404);
+
+    try {
+      assertEntityNotStale(contact, req.body, 'Contact');
+    } catch (err) {
+      if (err?.code === 'STALE_UPDATE' || err?.status === 409) {
+        throw new AppError(err.message || 'Contact was changed elsewhere', 409, 'STALE_UPDATE');
+      }
+      throw err;
+    }
+
     const payload = normalizeContactPayload(
       {
         name: req.body.name !== undefined ? req.body.name : contact.name,
@@ -407,11 +422,22 @@ router.patch(
 
     const wasProvider = isServiceProviderContact(contact);
     const stillProvider = isServiceProviderContact(payload);
-    const clearKeys = [];
-    // Leaving Service Provider → clear embedded roster intentionally.
-    if (wasProvider && !stillProvider) {
+    const clearKeys = resolveClearKeys(req.body, {
+      clearProviderEmployees: 'providerEmployees',
+    });
+    const roster = Array.isArray(contact.providerEmployees) ? contact.providerEmployees : [];
+    const wantsLeaveProvider = wasProvider && !stillProvider;
+
+    // Leaving Service Provider with an existing roster requires an explicit clear flag.
+    if (wantsLeaveProvider && roster.length > 0 && !clearKeys.includes('providerEmployees')) {
+      throw new AppError(
+        'This Service Provider has employees. Confirm clearing the employee roster before changing category/type.',
+        409,
+        'PROVIDER_ROSTER_CLEAR_REQUIRED',
+      );
+    }
+    if (wantsLeaveProvider && clearKeys.includes('providerEmployees')) {
       payload.providerEmployees = [];
-      clearKeys.push('providerEmployees');
     }
     // Staying non-provider: never let a missing/empty roster field wipe history.
     if (!stillProvider && !clearKeys.includes('providerEmployees')) {
@@ -427,6 +453,7 @@ router.patch(
       && contact.providerEmployees.length > 0
       && req.body.clearProviderEmployees !== true
       && req.body.clearProviderEmployees !== 'true'
+      && !clearKeys.includes('providerEmployees')
     ) {
       delete payload.providerEmployees;
     }

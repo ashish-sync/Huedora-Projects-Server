@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "npm run build:parsers && node --watch src/index.js",
     "start": "node --max-old-space-size=384 src/index.js",
+    "worker": "node --max-old-space-size=384 src/worker.js",
     "postinstall": "npm run build:parsers",
     "prestart": "npm run build:parsers",
     "seed": "node src/seed.js",
@@ -49,6 +50,7 @@
     "@aws-sdk/client-s3": "^3.1126.0",
     "@aws-sdk/s3-request-presigner": "^3.1127.0",
     "bcryptjs": "^2.4.3",
+    "compression": "^1.8.2",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

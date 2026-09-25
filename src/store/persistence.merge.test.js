@@ -31,10 +31,19 @@ test('mergeDocumentFields preserves existing when incoming blank', () => {
   assert.ok(isBlankValue(merged.pan));
 });
 
-test('mergeDocumentFields applies empty array when key is present', () => {
+test('mergeDocumentFields preserves non-empty array when incoming [] without clearKeys', () => {
   const merged = mergeDocumentFields(
     { mappedConsumables: [{ productId: '1' }] },
     { mappedConsumables: [] }
+  );
+  assert.deepEqual(merged.mappedConsumables, [{ productId: '1' }]);
+});
+
+test('mergeDocumentFields applies empty array when clearKeys lists the field', () => {
+  const merged = mergeDocumentFields(
+    { mappedConsumables: [{ productId: '1' }] },
+    { mappedConsumables: [] },
+    { clearKeys: ['mappedConsumables'] }
   );
   assert.deepEqual(merged.mappedConsumables, []);
 });

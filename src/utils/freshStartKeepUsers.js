@@ -10,7 +10,7 @@ import {
 import { invalidateIdIndex } from '../store/filedb.js';
 import { uploadsRoot } from '../config/paths.js';
 
-/** Collections preserved so existing logins and role assignments keep working. */
+/** Collections preserved so existing logins, role assignments, and Contact Directory keep working. */
 export const FRESH_START_KEEP_COLLECTIONS = new Set([
   'users',
   'roles',
@@ -21,6 +21,8 @@ export const FRESH_START_KEEP_COLLECTIONS = new Set([
   'geo_cities',
   'geo_zones',
   'geo_pin_codes',
+  // Master One Contact Directory — shared enterprise reference data (never wipe on fresh-start)
+  'contacts',
 ]);
 
 function clearDirectory(dir) {
@@ -88,7 +90,7 @@ export async function freshStartKeepUsers({ clearUploads = true } = {}) {
 
   cleared.sort();
   console.warn(
-    `[fresh-start] Cleared ${cleared.length} collection(s); kept users/roles/refresh_tokens and geo city masters`,
+    `[fresh-start] Cleared ${cleared.length} collection(s); kept users/roles/refresh_tokens, geo masters, and contacts`,
   );
   return { cleared, kept: [...FRESH_START_KEEP_COLLECTIONS] };
 }

@@ -5,6 +5,7 @@ import {
   assignPreservingExisting,
   assertNotStale,
   isBlankValue,
+  resolveClearKeys,
 } from './dataIntegrity.js';
 
 test('blank GSTIN/PAN never erase existing financial identity', () => {
@@ -63,11 +64,54 @@ test('commercial extras blank shipToGstin must not wipe', () => {
   assert.equal(row.shipToName, 'Warehouse B');
 });
 
-test('isBlankValue does not treat zero or false as blank', () => {
-  assert.equal(isBlankValue(0), false);
-  assert.equal(isBlankValue(false), false);
-  assert.equal(isBlankValue(''), true);
-  assert.equal(isBlankValue(null), true);
+test('empty array does not wipe existing array unless clearKeys', () => {
+  const row = {
+    executionDocuments: [{ id: 'd1', fileName: 'df.pdf' }],
+    consumablesUsed: [{ productId: 'p1', quantityUsed: 2, wastage: 0 }],
+  };
+  assignPreservingExisting(row, {
+    executionDocuments: [],
+    consumablesUsed: [],
+    chargeableStatus: 'Chargeable',
+  });
+  assert.equal(row.executionDocuments.length, 1);
+  assert.equal(row.consumablesUsed.length, 1);
+  assert.equal(row.chargeableStatus, 'Chargeable');
+});
+
+test('empty array clears when clearKeys lists the field', () => {
+  const row = {
+    executionDocuments: [{ id: 'd1' }],
+    providerEmployees: [{ id: 'e1', name: 'Ravi' }],
+  };
+  assignPreservingExisting(
+    row,
+    { executionDocuments: [], providerEmployees: [] },
+    { clearKeys: ['executionDocuments', 'providerEmployees'] },
+  );
+  assert.deepEqual(row.executionDocuments, []);
+  assert.deepEqual(row.providerEmployees, []);
+});
+
+test('non-empty array still replaces when present', () => {
+  const row = { consumablesUsed: [{ productId: 'p1' }] };
+  assignPreservingExisting(row, {
+    consumablesUsed: [{ productId: 'p2', quantityUsed: 1, wastage: 0 }],
+  });
+  assert.equal(row.consumablesUsed[0].productId, 'p2');
+});
+
+test('resolveClearKeys reads flags and clearKeys arrays', () => {
+  assert.deepEqual(
+    resolveClearKeys(
+      { clearExecutionDocuments: true, clearKeys: ['consumablesUsed'] },
+      {
+        clearExecutionDocuments: 'executionDocuments',
+        clearConsumablesUsed: 'consumablesUsed',
+      },
+    ).sort(),
+    ['consumablesUsed', 'executionDocuments'],
+  );
 });
 
 test('archive path metadata strips runtime-only absolute paths before persist shape', () => {

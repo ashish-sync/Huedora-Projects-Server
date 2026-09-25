@@ -15,8 +15,11 @@ export function isBlankValue(value) {
  * - `undefined` keys are skipped (partial update).
  * - Blank strings/`null` do not erase a non-blank existing value unless
  *   `allowBlankClear` or the key is listed in `clearKeys`.
- * - Arrays (including `[]`) are applied when present — callers must omit the
- *   key to leave existing arrays untouched.
+ * - Non-empty arrays replace when present.
+ * - Empty arrays `[]` are treated as blank: they do **not** wipe a non-empty
+ *   existing array unless `clearKeys` / `allowBlankClear` (explicit clear).
+ *   Callers that intend a destructive clear must pass `clearKeys` (or omit
+ *   the key entirely to leave the existing array untouched).
  */
 export function mergeDocumentFields(existing = {}, incoming = {}, options = {}) {
   const allowBlankClear = options.allowBlankClear === true;
@@ -25,6 +28,15 @@ export function mergeDocumentFields(existing = {}, incoming = {}, options = {}) 
   for (const [key, value] of Object.entries(incoming || {})) {
     if (value === undefined) continue;
     if (Array.isArray(value)) {
+      const explicitClear = allowBlankClear || clearKeys.has(key);
+      if (
+        value.length === 0
+        && !explicitClear
+        && Array.isArray(out[key])
+        && out[key].length > 0
+      ) {
+        continue;
+      }
       out[key] = value;
       continue;
     }
@@ -39,6 +51,34 @@ export function mergeDocumentFields(existing = {}, incoming = {}, options = {}) 
     out[key] = value;
   }
   return out;
+}
+
+/**
+ * Normalize clearKeys from a request body (array, comma string, or nested clearKeys).
+ * Also accepts boolean flags like clearExecutionDocuments / clearConsumablesUsed /
+ * clearProviderEmployees mapped to field names.
+ */
+export function resolveClearKeys(body = {}, flagToKey = {}) {
+  const keys = new Set();
+  const raw = body?.clearKeys;
+  if (Array.isArray(raw)) {
+    raw.forEach((k) => {
+      const key = String(k || '').trim();
+      if (key) keys.add(key);
+    });
+  } else if (typeof raw === 'string' && raw.trim()) {
+    raw.split(',').forEach((k) => {
+      const key = k.trim();
+      if (key) keys.add(key);
+    });
+  }
+  for (const [flag, field] of Object.entries(flagToKey || {})) {
+    const v = body?.[flag];
+    if (v === true || v === 'true' || v === 1 || v === '1') {
+      keys.add(field);
+    }
+  }
+  return [...keys];
 }
 
 /** Assign only defined keys onto a mutable target (same blank-preserve rules). */

@@ -18,14 +18,73 @@ configureSharpForLowMemory();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const freshStartTrigger = path.resolve(__dirname, '../.fresh-start');
 
+async function runOneShotBootJob({
+  envFlag,
+  lockId,
+  job,
+  run,
+  forceEnv = '',
+}) {
+  const flag = String(process.env[envFlag] || '').trim().toLowerCase();
+  if (!flag || flag === 'false' || flag === '0' || flag === 'off') return null;
+
+  const force = forceEnv
+    ? String(process.env[forceEnv] || '').toLowerCase() === 'true'
+    : flag === 'true';
+  const { loadCollection, upsertDocument } = await import('./store/persistence.js');
+  const locks = await loadCollection('system_boot_locks');
+  const existing = locks.find((row) => String(row._id) === lockId) || null;
+  if (!force && existing?.status === 'completed') {
+    console.warn(
+      `[boot] ${envFlag} skipped — already completed (${lockId}). Set ${forceEnv || `${envFlag}_FORCE`}=true to re-run.`,
+    );
+    return null;
+  }
+
+  await upsertDocument('system_boot_locks', {
+    _id: lockId,
+    ...(existing || {}),
+    job,
+    status: 'running',
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+
+  try {
+    const result = await run();
+    await upsertDocument('system_boot_locks', {
+      _id: lockId,
+      job,
+      status: 'completed',
+      completedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      result: result || null,
+    });
+    console.warn(`[boot] ${envFlag} completed — set ${envFlag}=false after this deploy`);
+    return result;
+  } catch (err) {
+    await upsertDocument('system_boot_locks', {
+      _id: lockId,
+      job,
+      status: 'failed',
+      error: String(err?.message || err),
+      updatedAt: new Date().toISOString(),
+    });
+    throw err;
+  }
+}
+
 async function maybeFreshStart() {
   const keepUsersBoot =
     String(process.env.FRESH_START_KEEP_USERS_ON_BOOT || '').toLowerCase() === 'true';
   if (keepUsersBoot) {
-    await freshStartKeepUsers();
-    console.warn(
-      '[fresh-start] FRESH_START_KEEP_USERS_ON_BOOT=true — set it back to false after this deploy',
-    );
+    await runOneShotBootJob({
+      envFlag: 'FRESH_START_KEEP_USERS_ON_BOOT',
+      forceEnv: 'FRESH_START_KEEP_USERS_ON_BOOT_FORCE',
+      lockId: 'fresh_start_keep_users:v1',
+      job: 'fresh_start_keep_users',
+      run: async () => freshStartKeepUsers(),
+    });
     return;
   }
 
@@ -53,10 +112,16 @@ async function maybePurgeAllCampsOnBoot() {
     );
     return;
   }
-  const { purgeAllCamps } = await import('./utils/purgeAllCamps.js');
-  const result = await purgeAllCamps({ actorId: 'boot:PURGE_ALL_CAMPS_ON_BOOT' });
-  console.warn('[camps] PURGE_ALL_CAMPS_ON_BOOT=true — soft-deleted camps:', result);
-  console.warn('[camps] Set PURGE_ALL_CAMPS_ON_BOOT=false after this deploy');
+  await runOneShotBootJob({
+    envFlag: 'PURGE_ALL_CAMPS_ON_BOOT',
+    forceEnv: 'PURGE_ALL_CAMPS_ON_BOOT_FORCE',
+    lockId: 'purge_all_camps:v1',
+    job: 'purge_all_camps',
+    run: async () => {
+      const { purgeAllCamps } = await import('./utils/purgeAllCamps.js');
+      return purgeAllCamps({ actorId: 'boot:PURGE_ALL_CAMPS_ON_BOOT' });
+    },
+  });
 }
 
 /**

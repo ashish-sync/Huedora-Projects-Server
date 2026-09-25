@@ -9,7 +9,14 @@ import {
   normalizeEntityId,
 } from '../utils/entityIds.js';
 
-export { mergeDocumentFields, assignPreservingExisting, isBlankValue, pickDefinedPatch, assertNotStale } from './dataIntegrity.js';
+export {
+  mergeDocumentFields,
+  assignPreservingExisting,
+  isBlankValue,
+  pickDefinedPatch,
+  assertNotStale,
+  resolveClearKeys,
+} from './dataIntegrity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -345,6 +352,76 @@ export async function ensureListIndexes() {
       name: 'contacts',
       indexes: [
         { key: { isDeleted: 1, contactCategory: 1, name: 1 }, name: 'list_deleted_category_name' },
+        { key: { isDeleted: 1, email: 1 }, name: 'list_deleted_email' },
+        { key: { isDeleted: 1, contact: 1 }, name: 'list_deleted_contact_phone' },
+      ],
+    },
+    {
+      name: 'assets',
+      indexes: [
+        { key: { isDeleted: 1, agreementStatus: 1 }, name: 'dash_deleted_agreement_status' },
+        { key: { isDeleted: 1, status: 1 }, name: 'dash_deleted_status' },
+        { key: { isDeleted: 1, updatedAt: -1 }, name: 'list_deleted_updated' },
+        { key: { isDeleted: 1, purchaseDate: 1 }, name: 'list_deleted_purchase_date' },
+        { key: { isDeleted: 1, createdAt: 1 }, name: 'list_deleted_created' },
+        { key: { isDeleted: 1, serialNumber: 1 }, name: 'list_deleted_serial' },
+      ],
+    },
+    {
+      name: 'agreements',
+      indexes: [
+        { key: { isDeleted: 1, status: 1, endDate: 1 }, name: 'dash_deleted_status_end' },
+      ],
+    },
+    {
+      name: 'movements',
+      indexes: [
+        { key: { isDeleted: 1, status: 1 }, name: 'dash_deleted_status' },
+      ],
+    },
+    {
+      name: 'verification_records',
+      indexes: [
+        { key: { isDeleted: 1, status: 1 }, name: 'dash_deleted_status' },
+        { key: { campaignId: 1, assetId: 1, isDeleted: 1 }, name: 'lookup_campaign_asset' },
+        { key: { periodKey: 1, isDeleted: 1 }, name: 'list_period_deleted' },
+      ],
+    },
+    {
+      name: 'verification_campaigns',
+      indexes: [
+        { key: { periodKey: 1, isDeleted: 1 }, name: 'lookup_period_deleted' },
+      ],
+    },
+    {
+      name: 'finance_expenses',
+      indexes: [
+        { key: { isDeleted: 1, status: 1 }, name: 'dash_deleted_status' },
+      ],
+    },
+    {
+      name: 'finance_invoices',
+      indexes: [
+        { key: { isDeleted: 1, status: 1 }, name: 'dash_deleted_status' },
+      ],
+    },
+    {
+      name: 'finance_commercial_documents',
+      indexes: [
+        { key: { isDeleted: 1, documentType: 1, status: 1 }, name: 'dash_deleted_type_status' },
+      ],
+    },
+    {
+      name: 'asset_requests',
+      indexes: [
+        { key: { isDeleted: 1, status: 1 }, name: 'dash_deleted_status' },
+        { key: { isDeleted: 1, requestType: 1 }, name: 'dash_deleted_type' },
+      ],
+    },
+    {
+      name: 'repair_tickets',
+      indexes: [
+        { key: { isDeleted: 1, status: 1, slaDueAt: 1 }, name: 'dash_deleted_status_sla' },
       ],
     },
   ];

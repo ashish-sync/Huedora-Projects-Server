@@ -53,22 +53,25 @@ export function getConsumablesCompletionBlockers(mapped = [], rows = []) {
 
 export function normalizeConsumablesUsed(rows = [], { requiredProductIds = [] } = {}) {
   if (!Array.isArray(rows)) return [];
-  const required = new Set((requiredProductIds || []).map(String));
+  void requiredProductIds;
   return rows
     .filter((row) => !row?.excluded)
-    .map((row) => ({
-      productId: String(row?.productId || '').trim(),
-      itemName: String(row?.itemName || '').trim(),
-      quantityUsed: Math.max(0, Number(row?.quantityUsed) || 0),
-      wastage: Math.max(0, Number(row?.wastage) || 0),
-      unit: String(row?.unit || '').trim(),
-      uomId: String(row?.uomId || '').trim(),
-    }))
-    .filter((row) => {
-      if (!row.productId) return false;
-      if (required.has(row.productId)) return isConsumableRowComplete(row);
-      return row.quantityUsed > 0 || row.wastage > 0;
-    });
+    .map((row) => {
+      const productId = String(row?.productId || '').trim();
+      if (!productId) return null;
+      const qtyFilled = isConsumableQuantityFilled(row?.quantityUsed);
+      const wasteFilled = isConsumableQuantityFilled(row?.wastage);
+      return {
+        productId,
+        itemName: String(row?.itemName || '').trim(),
+        // Preserve unfilled quantities as '' so incomplete rows are not coerced away.
+        quantityUsed: qtyFilled ? Math.max(0, Number(row.quantityUsed)) : '',
+        wastage: wasteFilled ? Math.max(0, Number(row.wastage)) : '',
+        unit: String(row?.unit || '').trim(),
+        uomId: String(row?.uomId || '').trim(),
+      };
+    })
+    .filter(Boolean);
 }
 
 export function formatConsumablesUsedSummary(rows = []) {

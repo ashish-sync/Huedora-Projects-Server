@@ -5,7 +5,7 @@ import { importAppError } from '../../utils/importErrors.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { ImportJob } from './importJob.model.js';
 import { Contact } from '../contacts/contact.model.js';
-import { findContactByIdentity, resolveOrCreateContact } from '../contacts/contactIdentity.js';
+import { findContactByIdentity, findContactForCustodian, resolveOrCreateContact } from '../contacts/contactIdentity.js';
 import { DeviceMaster } from '../devices/device.model.js';
 import { Asset } from '../assets/asset.model.js';
 import { createAsset } from '../assets/asset.service.js';
@@ -113,28 +113,39 @@ async function processInventory(rows, mode, user) {
           contact = await Contact.findOne({ _id: custodianKey, isDeleted: false });
         }
         if (!contact) {
-          if (!email && !phone) {
+          // Asset import must not create incomplete Contact Directory rows.
+          // Custodian must match an existing contact (name/email/phone/_id).
+          try {
+            contact = await findContactForCustodian(custodianKey || email || phone, {
+              requireMatch: true,
+            });
+          } catch (custodianErr) {
             errors.push({
               row: rowNum,
-              field: 'Email/Contact',
-              message: 'Email or phone required to create or match a contact',
+              field: 'Custodian Contact',
+              message:
+                custodianErr.message
+                || 'Custodian Contact must match an existing Contact Directory record. Create the contact in Master One first.',
             });
             continue;
           }
-          const resolved = await resolveOrCreateContact(
+        } else {
+          // Merge any non-blank identity fields from the asset row into the existing contact.
+          const merged = await resolveOrCreateContact(
             {
-              name,
-              email,
-              contact: phone,
-              mobile: phone,
-              city: city || undefined,
-              resourceType: String(normKey(row, ['HCW Type', 'Resource Type']) || 'Full Timer'),
-              profession: String(normKey(row, ['Profession']) || ''),
+              name: name || contact.name,
+              email: email || contact.email,
+              contact: phone || contact.contact || contact.mobile,
+              mobile: phone || contact.mobile || contact.contact,
+              city: city || contact.city,
+              contactCategory: contact.contactCategory || 'Resource',
+              resourceType:
+                String(normKey(row, ['HCW Type', 'Resource Type']) || contact.resourceType || 'Full Timer'),
+              profession: String(normKey(row, ['Profession']) || contact.profession || ''),
             },
-            user._id
+            user._id,
           );
-          contact = resolved.contact;
-          if (resolved.created) summary.contacts += 1;
+          contact = merged.contact;
         }
 
         const agreementStatus =

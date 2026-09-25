@@ -19,23 +19,27 @@ import {
   FinanceCommercialDocument,
 } from '../finance/finance.model.js';
 import { sendExcel, sendMultiSheetExcel } from '../../utils/excelExport.js';
-import {
-  ASSET_STATUS_OPTIONS,
-  isVerificationOneEligibleAsset,
-} from '../devices/device.constants.js';
+import { ASSET_STATUS_OPTIONS } from '../devices/device.constants.js';
 import {
   computeDeviceCondition,
   periodKeyFromDate,
 } from '../verifications/verification.condition.js';
+import {
+  expenseOverviewPipeline,
+  invoiceOverviewPipeline,
+  commercialDocOverviewPipeline,
+  summarizeCommercialAggregates,
+  firstGroupRow,
+  trackingInventoryByStatusPipeline,
+  trackingEligibleAssetsPipeline,
+  formatTrackingInventoryBuckets,
+  assetValueOf,
+} from './dashboard.aggregations.js';
 import { VerificationCampaign, VerificationRecord } from '../verifications/verification.model.js';
 import { listReviewModulesForUser, runModuleReview } from './moduleReview.js';
 
 function countMap(rows) {
   return Object.fromEntries((rows || []).map((x) => [x._id || 'Unknown', x.count]));
-}
-
-function sumAmount(rows, key = 'amount') {
-  return (rows || []).reduce((s, r) => s + (Number(r[key]) || 0), 0);
 }
 
 function healthFromSignals({ alerts, pendingTotal }) {
@@ -101,42 +105,8 @@ router.get(
   })
 );
 
-async function ensureCampaign(periodKey, userId) {
-  let campaign = await VerificationCampaign.findOne({ periodKey, isDeleted: false });
-  if (!campaign) {
-    campaign = await VerificationCampaign.create({
-      periodKey,
-      label: periodKey,
-      status: 'OPEN',
-      requireRound2: true,
-      createdBy: userId,
-    });
-  }
-  return campaign;
-}
-
-async function ensureRecord(campaign, asset, userId) {
-  let record = await VerificationRecord.findOne({
-    campaignId: campaign._id,
-    assetId: asset._id,
-    isDeleted: false,
-  });
-  if (!record) {
-    record = await VerificationRecord.create({
-      campaignId: campaign._id,
-      periodKey: campaign.periodKey,
-      assetId: asset._id,
-      serialNumber: asset.serialNumber || null,
-      brandModelTest: asset.deviceNameSnapshot || null,
-      custodianName: null,
-      status: 'IN_PROGRESS',
-      round1: {},
-      round2: {},
-      createdBy: userId,
-      updatedBy: userId,
-    });
-  }
-  return record;
+async function findCampaignReadOnly(periodKey) {
+  return VerificationCampaign.findOne({ periodKey, isDeleted: false });
 }
 
 /**
@@ -144,7 +114,7 @@ async function ensureRecord(campaign, asset, userId) {
  */
 router.get(
   '/overview',
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
     const now = new Date();
     const in30 = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
@@ -167,11 +137,9 @@ router.get(
       pendingRequests,
       campsByStatusRows,
       campTotal,
-      expenses,
-      invoices,
-      proformas,
-      purchaseOrders,
-      commercialGstDocs,
+      expenseAgg,
+      invoiceAgg,
+      commercialAgg,
     ] = await Promise.all([
       Asset.countDocuments({ isDeleted: false }),
       Contact.countDocuments({ isDeleted: false }),
@@ -221,48 +189,36 @@ router.get(
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
       CampOpsCamp.countDocuments({ isDeleted: false }),
-      FinanceExpense.find({ isDeleted: false }).select('amount status'),
-      FinanceInvoice.find({ isDeleted: false }).select('totalAmount status'),
-      FinanceCommercialDocument.find({ isDeleted: false, documentType: 'proforma' }).select('status'),
-      FinanceCommercialDocument.find({ isDeleted: false, documentType: 'purchase_order' }).select(
-        'status'
+      FinanceExpense.aggregate(expenseOverviewPipeline()),
+      FinanceInvoice.aggregate(invoiceOverviewPipeline()),
+      FinanceCommercialDocument.aggregate(
+        commercialDocOverviewPipeline(['proforma', 'purchase_order', 'client_invoice', 'credit_note']),
       ),
-      FinanceCommercialDocument.find({
-        isDeleted: false,
-        documentType: { $in: ['client_invoice', 'credit_note'] },
-      }).select('documentType status grandTotal'),
     ]);
 
     const slaBreached = (repairOpenItems || []).filter(
       (t) => t.slaDueAt && new Date(t.slaDueAt) < now
     ).length;
 
-    const expenseTotal = sumAmount(expenses, 'amount');
-    const expenseOpen = expenses.filter((r) =>
-      ['Draft', 'Submitted', 'Approved'].includes(r.status)
-    ).length;
-    const invoiceTotal = sumAmount(invoices, 'totalAmount');
-    const invoiceOpen = invoices.filter(
-      (r) => r.status === 'Open' || r.status === 'Partially paid'
-    ).length;
-    const proformaDraft = proformas.filter(
-      (r) => r.status === 'Draft' || r.status === 'Uploaded'
-    ).length;
-    const poDraft = purchaseOrders.filter(
-      (r) => r.status === 'Draft' || r.status === 'Uploaded'
-    ).length;
-    const commercialDraft = (commercialGstDocs || []).filter((r) =>
-      ['Draft', 'Uploaded', 'Submitted', 'Approved'].includes(r.status)
-    ).length;
-    const commercialSubmitted = [...proformas, ...purchaseOrders, ...(commercialGstDocs || [])].filter(
-      (r) => r.status === 'Submitted'
-    ).length;
-    const clientInvoiceTotal = (commercialGstDocs || [])
-      .filter((r) => r.documentType === 'client_invoice')
-      .reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
-    const clientInvoiceCount = (commercialGstDocs || []).filter(
-      (r) => r.documentType === 'client_invoice'
-    ).length;
+    const expenseStats = firstGroupRow(expenseAgg);
+    const invoiceStats = firstGroupRow(invoiceAgg);
+    const commercial = summarizeCommercialAggregates(commercialAgg);
+    const expenseTotal = expenseStats.total;
+    const expenseOpen = expenseStats.open;
+    const expenseCount = expenseStats.count;
+    const invoiceTotal = invoiceStats.total;
+    const invoiceOpen = invoiceStats.open;
+    const invoiceCount = invoiceStats.count;
+    const {
+      proformaDraft,
+      proformaCount,
+      poDraft,
+      purchaseOrderCount,
+      commercialDraft,
+      commercialSubmitted,
+      clientInvoiceTotal,
+      clientInvoiceCount,
+    } = commercial;
 
     const assetsByStatus = countMap(assetsByStatusRows);
     const agreementsByStatus = countMap(agreementsByStatusRows);
@@ -453,7 +409,7 @@ router.get(
         href: '/finance',
         primary: invoiceOpen + expenseOpen,
         primaryLabel: 'Open items',
-        secondary: expenses.length + invoices.length,
+        secondary: expenseCount + invoiceCount,
         secondaryLabel: 'Docs',
         status: invoiceOpen + expenseOpen > 15 ? 'warn' : 'ok',
       },
@@ -469,6 +425,7 @@ router.get(
       },
     ];
 
+    res.set('Cache-Control', 'private, max-age=30');
     res.json({
       data: {
         generatedAt: now.toISOString(),
@@ -491,15 +448,15 @@ router.get(
         pending,
         alerts,
         financials: {
-          expenseCount: expenses.length,
+          expenseCount,
           expenseTotal: Math.round(expenseTotal * 100) / 100,
           expenseOpen,
-          invoiceCount: invoices.length,
+          invoiceCount,
           invoiceTotal: Math.round(invoiceTotal * 100) / 100,
           invoiceOpen,
-          proformaCount: proformas.length,
+          proformaCount,
           proformaDraft,
-          purchaseOrderCount: purchaseOrders.length,
+          purchaseOrderCount,
           purchaseOrderDraft: poDraft,
           clientInvoiceCount,
           clientInvoiceTotal: Math.round(clientInvoiceTotal * 100) / 100,
@@ -613,73 +570,33 @@ router.get(
     const [py, pm] = periodKey.split('-').map(Number);
     const periodAnchor = toDate || new Date(py, (pm || 1) - 1, Math.min(new Date().getDate(), 28));
 
-    const assetOnboardDate = (a) => {
-      if (a.purchaseDate) {
-        const d = new Date(a.purchaseDate);
-        if (!Number.isNaN(d.getTime())) return d;
-      }
-      const added = String(a.addedMonth || '');
-      if (/^(0[1-9]|1[0-2])\/\d{4}$/.test(added)) {
-        const [mm, yyyy] = added.split('/');
-        return new Date(Number(yyyy), Number(mm) - 1, 1);
-      }
-      if (a.createdAt) {
-        const d = new Date(a.createdAt);
-        if (!Number.isNaN(d.getTime())) return d;
-      }
-      return null;
-    };
+    // Inventory + eligible assets computed in Mongo (onboard date includes addedMonth).
+    const [inventoryRows, signed, campaign] = await Promise.all([
+      Asset.aggregate(trackingInventoryByStatusPipeline(fromDate, toDate)),
+      Asset.aggregate(trackingEligibleAssetsPipeline(fromDate, toDate)),
+      findCampaignReadOnly(periodKey),
+    ]);
 
-    const inRange = (a) => {
-      if (!fromDate && !toDate) return true;
-      const onboard = assetOnboardDate(a);
-      if (!onboard) return false;
-      if (fromDate && onboard.getTime() < fromDate.getTime()) return false;
-      if (toDate && onboard.getTime() > toDate.getTime()) return false;
-      return true;
-    };
-
-    const assets = (await Asset.find({ isDeleted: false }).sort('-updatedAt')).filter(inRange);
-
-    const assetValue = (a) => {
-      const n = Number(a.deviceValue);
-      return Number.isFinite(n) && n >= 0 ? n : 0;
-    };
-
-    const statusBuckets = Object.fromEntries(
-      ASSET_STATUS_OPTIONS.map((status) => [status, { status, qty: 0, value: 0 }])
+    const { inventoryQty, inventoryValue, assetStatus } = formatTrackingInventoryBuckets(
+      inventoryRows,
+      ASSET_STATUS_OPTIONS,
     );
-    let inventoryQty = 0;
-    let inventoryValue = 0;
 
-    for (const asset of assets) {
-      const raw = String(asset.agreementStatus || 'Not Initiated').trim();
-      const status =
-        raw.toLowerCase() === 'active'
-          ? 'Agreement Signed'
-          : ASSET_STATUS_OPTIONS.includes(raw)
-            ? raw
-            : raw || 'Not Initiated';
-      const qty = 1;
-      const value = assetValue(asset);
-      inventoryQty += qty;
-      inventoryValue += value;
-      if (!statusBuckets[status]) {
-        statusBuckets[status] = { status, qty: 0, value: 0 };
-      }
-      statusBuckets[status].qty += qty;
-      statusBuckets[status].value += value;
-    }
+    // Read-only: never create campaigns/records on dashboard GET (was N+1 writes).
+    const signedIds = signed.map((a) => a._id).filter(Boolean);
+    const existingRecords = campaign && signedIds.length
+      ? await VerificationRecord.find({
+        campaignId: campaign._id,
+        assetId: { $in: signedIds },
+        isDeleted: false,
+      })
+        .select('assetId round1 round2')
+        .lean()
+      : [];
+    const recordByAssetId = Object.fromEntries(
+      (existingRecords || []).map((r) => [String(r.assetId), r]),
+    );
 
-    // Canonical 8 statuses first, then any legacy extras
-    const assetStatus = [
-      ...ASSET_STATUS_OPTIONS.map((status) => statusBuckets[status]),
-      ...Object.values(statusBuckets).filter((b) => !ASSET_STATUS_OPTIONS.includes(b.status)),
-    ];
-
-    const signed = assets.filter(isVerificationOneEligibleAsset);
-
-    const campaign = await ensureCampaign(periodKey, req.user._id);
     const verificationMap = {
       SAFE: { key: 'SAFE', label: 'Safe', qty: 0, value: 0 },
       CAUTION: { key: 'CAUTION', label: 'Caution', qty: 0, value: 0 },
@@ -687,11 +604,11 @@ router.get(
     };
 
     for (const asset of signed) {
-      const record = await ensureRecord(campaign, asset, req.user._id);
+      const record = recordByAssetId[String(asset._id)] || null;
       const condition = computeDeviceCondition(asset, record, periodAnchor);
       const bucket = verificationMap[condition.condition] || verificationMap.DANGER;
       bucket.qty += 1;
-      bucket.value += assetValue(asset);
+      bucket.value += assetValueOf(asset);
     }
 
     const verification = ['SAFE', 'CAUTION', 'DANGER'].map((k) => verificationMap[k]);
@@ -708,6 +625,7 @@ router.get(
         ? row
         : { key: row.key, label: row.label, qty: row.qty };
 
+    res.set('Cache-Control', 'private, max-age=30');
     res.json({
       data: {
         periodKey,

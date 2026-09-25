@@ -162,11 +162,29 @@ export function resolveEffectiveExecutionStatus(camp = {}, now = new Date()) {
   return resolveScheduledExecutionStatus(camp, now);
 }
 
+/**
+ * Derive execution status on Save without thrashing.
+ * Aligns with client campLifecycle.syncExecutionStatusForSave:
+ * - Never demote Camp Completed / closed-out / Marked Executed / Ongoing
+ * - Auto-promote to Marked Executed when chargeable + inTime + attire are set
+ * - Otherwise keep Scheduled (or preserve an already-known Planned status)
+ */
 export function syncExecutionStatusForSave(camp = {}, now = new Date()) {
+  void now;
   const normalized = normalizeExecutionStatus(camp.executionStatus);
   if (normalized === EXECUTION_STATUS.CAMP_COMPLETED) return EXECUTION_STATUS.CAMP_COMPLETED;
   if (isExecutionClosedOut(normalized)) return normalized;
-  return resolveScheduledExecutionStatus(camp, now);
+  if (normalized === EXECUTION_STATUS.MARKED_EXECUTED) return EXECUTION_STATUS.MARKED_EXECUTED;
+  if (normalized === EXECUTION_STATUS.CAMP_ONGOING) return EXECUTION_STATUS.CAMP_ONGOING;
+  if (
+    localTrim(camp.chargeableStatus)
+    && localTrim(camp.inTime)
+    && localTrim(camp.attire)
+  ) {
+    return EXECUTION_STATUS.MARKED_EXECUTED;
+  }
+  if (normalized === EXECUTION_STATUS.CAMP_SCHEDULED) return EXECUTION_STATUS.CAMP_SCHEDULED;
+  return EXECUTION_STATUS.CAMP_SCHEDULED;
 }
 
 /** Execution is complete enough to open Finance & Settlement. */
@@ -540,6 +558,18 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
     ? String(requestDateRaw).slice(0, 10)
     : existing?.requestDate || '';
 
+  const FINANCE_NUMERIC_KEYS = [
+    'campRevenue',
+    'travelRevenue',
+    'overtimeRevenue',
+    'otherRevenue',
+    'campAmount',
+    'travelling',
+    'overtimeExpense',
+    'otherExpenses',
+    'paidAmount',
+  ];
+
   const payload = {
     lifecycleStage,
     requestDate,
@@ -566,15 +596,6 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
     attire,
     labCoat,
     rxCount: Math.max(0, Math.floor(pickNum('rxCount'))),
-    campRevenue: pickNum('campRevenue'),
-    travelRevenue: pickNum('travelRevenue'),
-    overtimeRevenue: pickNum('overtimeRevenue'),
-    otherRevenue: pickNum('otherRevenue'),
-    campAmount: pickNum('campAmount'),
-    travelling: pickNum('travelling'),
-    overtimeExpense: pickNum('overtimeExpense'),
-    otherExpenses: pickNum('otherExpenses'),
-    paidAmount: pickNum('paidAmount'),
     transactionId: pickStr('transactionId'),
     paymentRemark: pickStr('paymentRemark'),
     paymentSubmitStatus:
@@ -599,40 +620,50 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
     })(),
   };
 
+  // Finance numerics: only apply when the client explicitly sent the key.
+  // Untouched form defaults of 0 must not overwrite persisted values.
+  for (const key of FINANCE_NUMERIC_KEYS) {
+    if (body[key] !== undefined && body[key] !== '') {
+      payload[key] = pickNum(key);
+    }
+  }
+
   if (body.patientsCount !== undefined) {
     payload.actualPatients = Math.max(0, Math.floor(pickNum('patientsCount')));
   } else if (body.actualPatients !== undefined) {
     payload.actualPatients = Math.max(0, Math.floor(pickNum('actualPatients')));
   }
 
-  if (Array.isArray(body.executionDocuments)) {
-    payload.executionDocuments = body.executionDocuments;
-  } else if (existing?.executionDocuments) {
-    payload.executionDocuments = existing.executionDocuments;
-  } else {
-    payload.executionDocuments = [];
+  // Arrays: omit when not sent so assignPreservingExisting keeps existing.
+  // Empty [] is only applied when clearKeys / explicit clear flags are set (route layer).
+  if (Object.prototype.hasOwnProperty.call(body, 'executionDocuments')) {
+    if (Array.isArray(body.executionDocuments)) {
+      payload.executionDocuments = body.executionDocuments;
+    }
   }
 
-  if (Array.isArray(body.consumablesUsed)) {
-    payload.consumablesUsed = normalizeConsumablesUsed(body.consumablesUsed);
-  } else if (existing?.consumablesUsed) {
-    payload.consumablesUsed = existing.consumablesUsed;
-  } else {
-    payload.consumablesUsed = [];
+  if (Object.prototype.hasOwnProperty.call(body, 'consumablesUsed')) {
+    if (Array.isArray(body.consumablesUsed)) {
+      payload.consumablesUsed = normalizeConsumablesUsed(body.consumablesUsed);
+    }
   }
 
   const derived = computeLifecycleDerived({ ...existing, ...body, ...payload }, { pricing });
   const next = { ...payload, ...derived };
-  // Never let formula-derived fields overwrite explicit revenue edits from the client.
-  next.campRevenue = payload.campRevenue;
-  next.travelRevenue = payload.travelRevenue;
-  next.overtimeRevenue = payload.overtimeRevenue;
-  next.otherRevenue = payload.otherRevenue;
+  // Prefer explicit body revenue; otherwise keep existing-derived payload values when sent;
+  // never invent zeros for omitted finance keys in the merge patch.
+  for (const key of ['campRevenue', 'travelRevenue', 'overtimeRevenue', 'otherRevenue']) {
+    if (payload[key] !== undefined) {
+      next[key] = payload[key];
+    } else {
+      delete next[key];
+    }
+  }
 
   const bodyTouchedRevenue = ['campRevenue', 'travelRevenue', 'overtimeRevenue', 'otherRevenue']
     .some((key) => body[key] !== undefined && body[key] !== '');
-  const revenueEmpty = [next.campRevenue, next.travelRevenue, next.overtimeRevenue, next.otherRevenue]
-    .every((value) => num(value) === 0);
+  const revenueEmpty = ['campRevenue', 'travelRevenue', 'overtimeRevenue', 'otherRevenue']
+    .every((key) => num(next[key] ?? existing?.[key]) === 0);
   if (pricing && derived.revenueAutoCalculated && !bodyTouchedRevenue && revenueEmpty) {
     next.campRevenue = derived.formulaCampRevenue;
     next.travelRevenue = derived.formulaTravelRevenue;
@@ -642,15 +673,32 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
 
   if (body.totalRevenue !== undefined && body.totalRevenue !== '') {
     next.totalRevenue = Math.max(0, num(body.totalRevenue));
-  } else {
+  } else if (bodyTouchedRevenue || ['campRevenue', 'travelRevenue', 'overtimeRevenue', 'otherRevenue']
+    .some((key) => next[key] !== undefined)) {
     next.totalRevenue = Math.round((
-      num(next.campRevenue) + num(next.travelRevenue) + num(next.overtimeRevenue) + num(next.otherRevenue)
+      num(next.campRevenue ?? existing?.campRevenue)
+      + num(next.travelRevenue ?? existing?.travelRevenue)
+      + num(next.overtimeRevenue ?? existing?.overtimeRevenue)
+      + num(next.otherRevenue ?? existing?.otherRevenue)
     ) * 100) / 100;
+  } else {
+    delete next.totalRevenue;
   }
   if (body.totalPayout !== undefined && body.totalPayout !== '') {
     next.totalPayout = Math.max(0, num(body.totalPayout));
+  } else if (!Object.prototype.hasOwnProperty.call(body, 'totalPayout')
+    && next.totalPayout === undefined
+    && existing?.totalPayout !== undefined) {
+    delete next.totalPayout;
   }
-  next.netContribution = Math.round((num(next.totalRevenue) - num(next.totalPayout)) * 100) / 100;
+  if (next.totalRevenue !== undefined || next.totalPayout !== undefined) {
+    next.netContribution = Math.round((
+      num(next.totalRevenue ?? existing?.totalRevenue)
+      - num(next.totalPayout ?? existing?.totalPayout)
+    ) * 100) / 100;
+  } else {
+    delete next.netContribution;
+  }
   // Don't persist transient breakdown / flag fields on the camp document.
   delete next.otherRevenuePatients;
   delete next.otherRevenueDistance;

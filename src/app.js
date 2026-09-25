@@ -2,10 +2,12 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import { env } from './config/env.js';
 import { checkPersistenceReady as defaultCheckPersistenceReady } from './config/db.js';
 import { correlationId, errorHandler, notFound } from './middleware/error.js';
+import { responseSizeGuard } from './middleware/responseSizeGuard.js';
 
 import authRoutes from './modules/auth/auth.routes.js';
 import userRoutes from './modules/users/user.routes.js';
@@ -51,6 +53,16 @@ export function createApp(options = {}) {
   }
 
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+  // Brotli when available via reverse proxy; gzip/deflate for JSON/API payloads.
+  app.use(
+    compression({
+      threshold: 1024,
+      filter: (req, res) => {
+        if (req.headers['x-no-compression']) return false;
+        return compression.filter(req, res);
+      },
+    }),
+  );
   app.use(
     cors({
       origin: env.clientOrigin,
@@ -64,6 +76,7 @@ export function createApp(options = {}) {
   app.use(express.urlencoded({ extended: true }));
   app.use(cookieParser());
   app.use(correlationId);
+  app.use(responseSizeGuard({ warnBytes: 750_000 }));
   // Request product images are only available through authenticated request routes.
   app.use('/uploads/asset-requests', (_req, res) => {
     res.status(404).json({ error: { code: 'NOT_FOUND', message: 'File not found' } });

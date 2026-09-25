@@ -46,11 +46,20 @@ test('PATCH merge does not wipe providerEmployees when key omitted', () => {
   assert.equal(contact.name, 'Agency Updated');
 });
 
-test('empty providerEmployees array would wipe if sent — callers must omit instead', () => {
+test('PATCH empty providerEmployees without clearKeys does not wipe', () => {
   const contact = {
     providerEmployees: [{ id: '1', name: 'Ravi', mobile: '9123456789', profession: '' }],
   };
   assignPreservingExisting(contact, { providerEmployees: [] });
+  assert.equal(contact.providerEmployees.length, 1);
+  assert.equal(contact.providerEmployees[0].name, 'Ravi');
+});
+
+test('empty providerEmployees array wipes only with clearKeys', () => {
+  const contact = {
+    providerEmployees: [{ id: '1', name: 'Ravi', mobile: '9123456789', profession: '' }],
+  };
+  assignPreservingExisting(contact, { providerEmployees: [] }, { clearKeys: ['providerEmployees'] });
   assert.deepEqual(contact.providerEmployees, []);
 });
 

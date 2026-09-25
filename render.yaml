@@ -14,6 +14,12 @@ services:
         value: production
       - key: MEMORY_LOG
         value: "true"
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=384"
+      - key: HEAVY_JOB_CONCURRENCY
+        value: "1"
+      - key: HEAVY_JOB_MAX_QUEUE
+        value: "20"
       - key: CLIENT_ORIGIN
         value: https://huedora-projects.onrender.com
       - key: USE_MONGOOSE
@@ -41,3 +47,24 @@ services:
         value: tylo-one-files
       - key: R2_REQUIRED
         sync: false
+
+  # Optional paid worker — enable when upgrading off free plan to isolate IMAP/media.
+  # Disabled by default so free-tier blueprint still deploys a single web service.
+  # - type: worker
+  #   name: huedora-projects-worker
+  #   runtime: docker
+  #   plan: starter
+  #   dockerfilePath: ./Dockerfile
+  #   dockerContext: .
+  #   dockerCommand: node src/worker.js
+  #   envVars:
+  #     - key: NODE_ENV
+  #       value: production
+  #     - key: SERVICE_ROLE
+  #       value: worker
+  #     - key: NODE_OPTIONS
+  #       value: "--max-old-space-size=384"
+  #     - fromService:
+  #         type: web
+  #         name: huedora-projects-server
+  #         envVarKey: MONGODB_URI

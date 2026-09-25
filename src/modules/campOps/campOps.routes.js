@@ -1,4 +1,5 @@
-import { assignPreservingExisting, assertNotStale } from '../../store/dataIntegrity.js';
+import { assignPreservingExisting, assertNotStale, resolveClearKeys } from '../../store/dataIntegrity.js';
+import { assertEntityNotStale } from '../../utils/mutationGuards.js';
 import { Router } from 'express';
 import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
@@ -988,8 +989,17 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const filter = await scopeEntityIdFilter(req, { isDeleted: false }, '_id');
-    const clients = await CampOpsClient.find(filter).sort('name');
-    res.json({ data: clients });
+    const { page, limit, skip } = parsePagination(req.query);
+    const [clients, total] = await Promise.all([
+      CampOpsClient.find(filter)
+        .select('name clientCode isActive displayName')
+        .sort('name')
+        .skip(skip)
+        .limit(limit),
+      CampOpsClient.countDocuments(filter),
+    ]);
+    res.set('Cache-Control', 'private, max-age=60');
+    res.json(paginated(clients, total, page, limit));
   })
 );
 
@@ -1628,6 +1638,16 @@ router.put(
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
 
+    // Optimistic concurrency — reject stale tabs before any merge.
+    try {
+      assertEntityNotStale(camp, req.body, 'Camp');
+    } catch (err) {
+      if (err?.code === 'STALE_UPDATE' || err?.status === 409) {
+        throw new AppError(err.message || 'Camp was changed elsewhere', 409, 'STALE_UPDATE');
+      }
+      throw err;
+    }
+
     // Normalize dirty title-cased stages from older saves before edit checks.
     camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
     const stage = normalizeLifecycleStage(
@@ -1689,6 +1709,32 @@ router.put(
     delete payload.financePaymentIdempotencyKey;
     if (stage !== 'financial') {
       delete payload.paymentRemark;
+      // Execution / assignment saves must not overwrite finance amounts with form zeros.
+      [
+        'campRevenue', 'travelRevenue', 'overtimeRevenue', 'otherRevenue',
+        'campAmount', 'travelling', 'overtimeExpense', 'otherExpenses',
+        'totalRevenue', 'totalPayout', 'netContribution', 'balance',
+      ].forEach((key) => { delete payload[key]; });
+    }
+
+    const clearKeys = resolveClearKeys(req.body, {
+      clearExecutionDocuments: 'executionDocuments',
+      clearConsumablesUsed: 'consumablesUsed',
+    });
+    // Accidental empty arrays from full-form Save must not wipe — omit unless explicit clear.
+    if (Array.isArray(payload.executionDocuments) && payload.executionDocuments.length === 0
+      && !clearKeys.includes('executionDocuments')) {
+      delete payload.executionDocuments;
+    }
+    if (Array.isArray(payload.consumablesUsed) && payload.consumablesUsed.length === 0
+      && !clearKeys.includes('consumablesUsed')) {
+      delete payload.consumablesUsed;
+    }
+    if (clearKeys.includes('executionDocuments')) {
+      payload.executionDocuments = [];
+    }
+    if (clearKeys.includes('consumablesUsed')) {
+      payload.consumablesUsed = [];
     }
 
     if (stage === 'request' || !lifecycleOnly) {
@@ -1703,21 +1749,27 @@ router.put(
       );
     }
 
-    // Client may send lifecycleStage=financial + markComplete while still editing Execution.
-    // Apply Mark Complete from execution context — do not pre-advance lifecycle on merge.
+    // Mark Complete is an explicit user action only — never infer from lifecycleStage or field completeness.
     const markCompleteIntent = stage === 'execution' && (
       req.body?.markComplete === true
       || req.body?.markComplete === 'true'
-      || normalizeLifecycleStage(trimStr(req.body.lifecycleStage), '') === 'financial'
     );
     if (markCompleteIntent) {
       delete payload.lifecycleStage;
       if (normalizeExecutionStatus(payload.executionStatus) === EXECUTION_STATUS.CAMP_COMPLETED) {
         delete payload.executionStatus;
       }
+    } else if (stage === 'execution') {
+      // Ordinary Save must not advance to Camp Completed via status field alone.
+      if (normalizeExecutionStatus(payload.executionStatus) === EXECUTION_STATUS.CAMP_COMPLETED) {
+        payload.executionStatus = EXECUTION_STATUS.MARKED_EXECUTED;
+      }
+      if (normalizeLifecycleStage(payload.lifecycleStage, '') === 'financial') {
+        delete payload.lifecycleStage;
+      }
     }
 
-    assignPreservingExisting(camp, payload);
+    assignPreservingExisting(camp, payload, clearKeys.length ? { clearKeys } : undefined);
 
     if (!lifecycleOnly || stage === 'request') {
       try {
@@ -1791,25 +1843,15 @@ router.put(
         throw new AppError(err.message || 'Invalid execution stage', 400, 'VALIDATION_ERROR');
       }
 
-      const wantsMarkComplete =
-        markCompleteIntent
-        || camp.executionStatus === EXECUTION_STATUS.CAMP_COMPLETED;
-
       if (isExecutionCancellationForFinance(camp)) {
         camp.lifecycleStage = 'financial';
         camp.paymentSubmitStatus = camp.paymentSubmitStatus || 'payment_not_checked';
-      } else if (wantsMarkComplete) {
+      } else if (markCompleteIntent) {
         try {
           applyMarkCompleteTransition(camp, mappedConsumables);
         } catch (err) {
-          // If client only saved execution fields without completing Mark Complete, keep Executed.
-          if (camp.executionStatus === EXECUTION_STATUS.CAMP_COMPLETED) {
-            throw new AppError(err.message || 'Cannot mark complete', 400, 'VALIDATION_ERROR');
-          }
           const blockers = getMarkCompleteBlockers(camp, mappedConsumables);
-          if (req.body?.markComplete === true || req.body?.markComplete === 'true') {
-            throw new AppError(blockers[0] || err.message, 400, 'VALIDATION_ERROR');
-          }
+          throw new AppError(blockers[0] || err.message || 'Cannot mark complete', 400, 'VALIDATION_ERROR');
         }
       }
     }

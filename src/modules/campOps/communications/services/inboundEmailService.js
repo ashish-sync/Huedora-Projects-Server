@@ -138,47 +138,64 @@ export async function upsertInboundEmail(email, channel = 'imap') {
   );
 }
 
+let imapSyncInFlight = null;
+
 export async function syncImapMailbox(options = {}) {
   if (!isImapConfigured()) {
     throw new Error('Gmail/IMAP is not configured. Set EMAIL_IMAP_* variables in server .env');
   }
 
-  const dateFrom = parseDateFilter(options.dateFrom);
-  const dateTo = parseDateFilter(options.dateTo, true);
-
-  const emails = await fetchEmailsForIngest();
-  const synced = [];
-  const errors = [];
-
-  for (const email of emails) {
-    const receivedAt = email.receivedAt ? new Date(email.receivedAt) : new Date();
-    if (dateFrom && receivedAt < dateFrom) continue;
-    if (dateTo && receivedAt > dateTo) continue;
-
-    try {
-      const stored = await upsertInboundEmail(email, 'imap');
-      synced.push(stored);
-    } catch (error) {
-      console.error(`[email] Failed to store message ${email.messageId || email.uid}:`, error.message);
-      errors.push({
-        messageId: email.messageId || null,
-        uid: email.uid || null,
-        error: error.message,
-      });
-    }
+  // Bound concurrent IMAP syncs — overlapping HTTP handlers must not stack connections.
+  if (imapSyncInFlight) {
+    return imapSyncInFlight;
   }
 
-  return {
-    fetched: emails.length,
-    synced: synced.length,
-    filtered: emails.length - synced.length - errors.length,
-    failed: errors.length,
-    errors,
-    mailbox: process.env.EMAIL_IMAP_MAILBOX || 'INBOX',
-    mailboxUser: process.env.EMAIL_IMAP_USER || '',
-    dateFrom: dateFrom?.toISOString() || null,
-    dateTo: dateTo?.toISOString() || null,
-  };
+  imapSyncInFlight = (async () => {
+    const { withHeavyJobGate } = await import('../../../../jobs/heavyJobGate.js');
+    return withHeavyJobGate('imap-sync', async () => {
+      const dateFrom = parseDateFilter(options.dateFrom);
+      const dateTo = parseDateFilter(options.dateTo, true);
+
+      const emails = await fetchEmailsForIngest();
+      const synced = [];
+      const errors = [];
+
+      for (const email of emails) {
+        const receivedAt = email.receivedAt ? new Date(email.receivedAt) : new Date();
+        if (dateFrom && receivedAt < dateFrom) continue;
+        if (dateTo && receivedAt > dateTo) continue;
+
+        try {
+          const stored = await upsertInboundEmail(email, 'imap');
+          synced.push(stored);
+        } catch (error) {
+          console.error(`[email] Failed to store message ${email.messageId || email.uid}:`, error.message);
+          errors.push({
+            messageId: email.messageId || null,
+            uid: email.uid || null,
+            error: error.message,
+          });
+        }
+      }
+
+      return {
+        fetched: emails.length,
+        synced: synced.length,
+        filtered: emails.length - synced.length - errors.length,
+        failed: errors.length,
+        errors,
+        messages: synced,
+        mailbox: process.env.EMAIL_IMAP_MAILBOX || 'INBOX',
+        mailboxUser: process.env.EMAIL_IMAP_USER || '',
+        dateFrom: dateFrom?.toISOString() || null,
+        dateTo: dateTo?.toISOString() || null,
+      };
+    });
+  })().finally(() => {
+    imapSyncInFlight = null;
+  });
+
+  return imapSyncInFlight;
 }
 
 export async function listInboundEmails(query = {}) {
