@@ -1,0 +1,745 @@
+import fs from 'fs';
+import { Router } from 'express';
+import multer from 'multer';
+import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
+import { PERMISSIONS } from '../../config/constants.js';
+import { Contact, normalizeContactPayload } from './contact.model.js';
+import {
+  CONTACT_CATEGORIES,
+  RESOURCE_TYPES,
+  HCW_RESOURCE_TYPES,
+  PROFESSIONS,
+  CLIENT_PROFESSIONS,
+  VENDOR_PROFESSIONS,
+  SUPPLY_CATEGORIES,
+  isServiceProviderContact,
+} from './contact.constants.js';
+import { writeAudit } from '../../utils/audit.js';
+import { sendExcel, sendCsv } from '../../utils/excelExport.js';
+import { notifyImportFailures } from '../imports/importErrorReport.js';
+import {
+  assertContactIdentityAvailable,
+  findContactByIdentity,
+  resolveOrCreateContact,
+} from './contactIdentity.js';
+import { normalizePhone } from '../../utils/identityNormalize.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
+import { uploadDir } from '../../config/paths.js';
+import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
+import { assignPreservingExisting, resolveClearKeys } from '../../store/dataIntegrity.js';
+import { assertEntityNotStale } from '../../utils/mutationGuards.js';
+import {
+  assertSpreadsheetUpload,
+  discardUploadBuffer,
+  excelUpload,
+  parseSheetRows,
+  sampleCsvFilename,
+} from '../../utils/masterExcel.js';
+import { importRateLimiter } from '../../middleware/importRateLimit.js';
+import { loadCappedRowsFromUpload } from '../imports/streaming/loadCappedRows.js';
+import {
+  CONTACT_KYC_ACCEPT_EXTENSIONS,
+  CONTACT_KYC_MAX_BYTES,
+  CONTACT_KYC_REJECT_MESSAGE,
+  isAllowedContactKycFile,
+  withSignedContactKyc,
+  storageContactKycUrl,
+} from './contactKycUpload.js';
+import { requireSafeUploads } from '../../utils/rejectUnsafeUpload.js';
+
+const contactUploadRoot = uploadDir('contacts');
+
+const router = Router();
+router.use(authenticate);
+
+const canReadContacts = requirePermission(
+  PERMISSIONS.AGREEMENTS_READ,
+  PERMISSIONS.AGREEMENTS_WRITE,
+  PERMISSIONS.CAMPS_READ,
+  PERMISSIONS.CAMPS_REQUEST,
+  PERMISSIONS.CAMPS_APPROVE,
+  PERMISSIONS.FINANCE_READ,
+  PERMISSIONS.FINANCE_WRITE,
+  PERMISSIONS.ASSET_REQUESTS_READ,
+  PERMISSIONS.ASSET_REQUESTS_REQUEST,
+  PERMISSIONS.ASSET_REQUESTS_APPROVE
+);
+router.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  return canReadContacts(req, res, next);
+});
+
+import { CONTACT_HEADERS, CONTACT_SAMPLE_ROWS } from './contact.excel.js';
+
+async function validateServiceProviderLink(payload, contactId = null) {
+  if (payload.contactCategory !== 'Healthcare Worker') return;
+  const spId = payload.serviceProviderContactId;
+  if (!spId) return;
+  if (contactId && String(spId) === String(contactId)) {
+    throw new AppError('A contact cannot be their own service provider', 400, 'VALIDATION_ERROR');
+  }
+  const provider = await Contact.findOne({ _id: spId, isDeleted: false });
+  if (!provider) {
+    throw new AppError('Service provider contact not found', 404, 'NOT_FOUND');
+  }
+  if (!isServiceProviderContact(provider)) {
+    throw new AppError(
+      'Linked service provider must be a Healthcare Worker with Resource Type Service Provider',
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+}
+
+async function enrichContactsWithProviders(contacts = [], { signKyc = true } = {}) {
+  const ids = [
+    ...new Set(
+      contacts.map((c) => c.serviceProviderContactId).filter(Boolean).map(String)
+    ),
+  ];
+  const attachProviderName = (c, byId = {}) => ({
+    ...(c.toObject ? c.toObject() : c),
+    serviceProviderName: c.serviceProviderContactId
+      ? byId[String(c.serviceProviderContactId)] || ''
+      : '',
+  });
+  if (!ids.length) {
+    return contacts.map((c) => (signKyc ? withSignedContactKyc(c) : attachProviderName(c)));
+  }
+  const providers = await Contact.find({ _id: { $in: ids }, isDeleted: false });
+  const byId = Object.fromEntries(providers.map((p) => [String(p._id), p.name || '']));
+  return contacts.map((c) => {
+    const row = attachProviderName(c, byId);
+    return signKyc ? withSignedContactKyc(row) : row;
+  });
+}
+
+const kycUpload = multer({
+  storage: createUploadStorage({
+    destination: (_req, _file, cb) => {
+      try {
+        fs.mkdirSync(contactUploadRoot, { recursive: true });
+        cb(null, contactUploadRoot);
+      } catch (err) {
+        cb(err);
+      }
+    },
+  }),
+  limits: { fileSize: CONTACT_KYC_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    const allowed = isAllowedContactKycFile({
+      mimetype: file.mimetype,
+      originalname: file.originalname,
+    });
+    cb(allowed ? null : new Error(CONTACT_KYC_REJECT_MESSAGE), allowed);
+  },
+});
+
+const KYC_DOC_TYPES = {
+  passbook: 'passbookCopyUrl',
+  pan_card: 'panCardCopyUrl',
+};
+
+function sheetRows(buffer) {
+  return parseSheetRows(buffer);
+}
+
+function cell(row, names) {
+  for (const n of names) {
+    if (row[n] !== undefined && String(row[n]).trim() !== '') return String(row[n]).trim();
+  }
+  const keys = Object.keys(row);
+  for (const n of names) {
+    const found = keys.find(
+      (k) => k.toLowerCase().replace(/[\s_]+/g, '') === n.toLowerCase().replace(/[\s_]+/g, '')
+    );
+    if (found && String(row[found]).trim() !== '') return String(row[found]).trim();
+  }
+  return '';
+}
+
+router.get(
+  '/meta/picklists',
+  asyncHandler(async (_req, res) => {
+    res.json({
+      data: {
+        contactCategories: CONTACT_CATEGORIES,
+        resourceTypes: RESOURCE_TYPES,
+        hcwResourceTypes: HCW_RESOURCE_TYPES,
+        professions: PROFESSIONS,
+        clientProfessions: CLIENT_PROFESSIONS,
+        vendorProfessions: VENDOR_PROFESSIONS,
+        supplyCategories: SUPPLY_CATEGORIES,
+      },
+    });
+  })
+);
+
+router.get(
+  '/',
+  asyncHandler(async (req, res) => {
+    const isHcwDirectory = String(req.query.contactCategory || '').trim() === 'Healthcare Worker';
+    const assignLight = String(req.query.assign || '') === '1';
+    const allowFullDirectory =
+      String(req.query.fullDirectory || '') === '1' || String(req.query.exportMode || '') === '1';
+    const hasAssignFilters = Boolean(
+      String(req.query.state || '').trim()
+      || String(req.query.city || '').trim()
+      || String(req.query.profession || '').trim()
+      || String(req.query.q || '').trim(),
+    );
+    // Bare assign browse: 100. State/profession filtered assign: up to 2000 so
+    // large state cohorts (e.g. ~96 West Bengal Dieticians) are not truncated.
+    const assignMax = allowFullDirectory ? 2000 : (hasAssignFilters ? 2000 : 100);
+    const { page, limit, skip, sort } = parsePagination(req.query, {
+      maxLimit: assignLight
+        ? assignMax
+        : isHcwDirectory
+          ? (allowFullDirectory ? 2000 : 100)
+          : 100,
+    });
+    const filter = { isDeleted: false };
+    if (req.query.q) {
+      const q = escapeRegex(String(req.query.q));
+      filter.$or = [
+        { name: new RegExp(q, 'i') },
+        { email: new RegExp(q, 'i') },
+        { contact: new RegExp(q, 'i') },
+        { mobile: new RegExp(q, 'i') },
+        { resourceType: new RegExp(q, 'i') },
+        { contactCategory: new RegExp(q, 'i') },
+        { organization: new RegExp(q, 'i') },
+        { supplyCategory: new RegExp(q, 'i') },
+        { profession: new RegExp(q, 'i') },
+        { panNumber: new RegExp(q, 'i') },
+        { bankName: new RegExp(q, 'i') },
+        { ifscCode: new RegExp(q, 'i') },
+        { city: new RegExp(q, 'i') },
+        { state: new RegExp(q, 'i') },
+        { pinCode: new RegExp(q, 'i') },
+        { address: new RegExp(q, 'i') },
+        { 'providerEmployees.name': new RegExp(q, 'i') },
+        { 'providerEmployees.mobile': new RegExp(q, 'i') },
+      ];
+    }
+    if (req.query.state) {
+      const state = String(req.query.state).trim();
+      if (state) {
+        const escaped = state.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        filter.state = new RegExp(`^\\s*${escaped}\\s*$`, 'i');
+      }
+    }
+    if (req.query.city) {
+      const city = String(req.query.city).trim();
+      if (city) {
+        const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        filter.city = new RegExp(`^\\s*${escaped}\\s*$`, 'i');
+      }
+    }
+    if (req.query.profession) {
+      const roles = String(req.query.profession)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (roles.length) {
+        const roleClauses = [];
+        for (const role of roles) {
+          const key = role.toLowerCase();
+          if (key === 'dietician' || key === 'dietitian') {
+            roleClauses.push({ profession: /^\s*dieti[cs]ian\s*$/i });
+          } else if (key === 'phlebotomist' || key === 'phlebotomy') {
+            roleClauses.push({ profession: /^\s*phlebotom(ist|y)\s*$/i });
+          } else if (key === 'technician' || key === 'lab technician') {
+            roleClauses.push({ profession: /^\s*(lab\s+)?technician\s*$/i });
+          } else {
+            const escaped = role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            roleClauses.push({ profession: new RegExp(`^\\s*${escaped}\\s*$`, 'i') });
+          }
+        }
+        // Do NOT include blank/Other — those diluted the page and hid Dieticians.
+        filter.$and = [...(filter.$and || []), { $or: roleClauses }];
+      }
+    }
+    if (req.query.stateId) {
+      filter.stateId = String(req.query.stateId);
+    }
+    if (req.query.contactCategory) {
+      filter.contactCategory = String(req.query.contactCategory).trim();
+    }
+    if (req.query.resourceType) {
+      filter.resourceType = String(req.query.resourceType).trim();
+    }
+    if (req.query.serviceProviderContactId) {
+      filter.serviceProviderContactId = String(req.query.serviceProviderContactId).trim();
+    }
+    if (String(req.query.hasServiceProvider || '') === '1') {
+      filter.serviceProviderContactId = { $ne: null, $exists: true };
+    }
+
+    const ASSIGN_PROJECTION =
+      'name email contact mobile resourceType contactCategory profession organization city state district pinCode serviceProviderContactId providerEmployees';
+
+    let query = Contact.find(filter).sort(sort || 'name').skip(skip).limit(limit);
+    if (assignLight) {
+      query = query.select(ASSIGN_PROJECTION).lean();
+    }
+    const [rawData, total] = await Promise.all([
+      query,
+      Contact.countDocuments(filter),
+    ]);
+    const data = await enrichContactsWithProviders(rawData, { signKyc: !assignLight });
+    res.json(paginated(data, total, page, limit));
+  })
+);
+
+router.get(
+  '/export',
+  asyncHandler(async (_req, res) => {
+    const rows = await Contact.find({ isDeleted: false }).sort('name');
+    const enriched = await enrichContactsWithProviders(rows);
+    sendExcel(
+      res,
+      'Contact_Directory.xlsx',
+      CONTACT_HEADERS,
+      enriched.map((c) => [
+        c.name,
+        c.email,
+        c.contactCategory,
+        c.resourceType,
+        c.profession,
+        c.organization,
+        c.supplyCategory,
+        c.contact || c.mobile,
+        c.city,
+        c.state,
+        c.address,
+        c.pinCode,
+        c.panNumber,
+        c.ifscCode,
+        c.bankName,
+        c.accountNumber,
+        c.serviceProviderName || '',
+      ]),
+      { sheetName: 'Contacts' }
+    );
+  })
+);
+
+router.get(
+  '/sample',
+  asyncHandler(async (_req, res) => {
+    sendCsv(
+      res,
+      sampleCsvFilename('Contact_Directory'),
+      CONTACT_HEADERS,
+      CONTACT_SAMPLE_ROWS
+    );
+  })
+);
+
+router.get(
+  '/:id/staff',
+  asyncHandler(async (req, res) => {
+    const provider = await Contact.findOne({ _id: req.params.id, isDeleted: false });
+    if (!provider) throw new AppError('Contact not found', 404);
+    if (!isServiceProviderContact(provider)) {
+      throw new AppError('Contact is not a Service Provider', 400, 'VALIDATION_ERROR');
+    }
+    const staff = await Contact.find({
+      isDeleted: false,
+      contactCategory: 'Healthcare Worker',
+      serviceProviderContactId: provider._id,
+    }).sort('name');
+    res.json({
+      data: staff.map((row) => withSignedContactKyc(row)),
+      meta: {
+        count: staff.length,
+        employeeCount: (provider.providerEmployees || []).length,
+        providerId: provider._id,
+        providerEmployees: provider.providerEmployees || [],
+      },
+    });
+  })
+);
+
+router.get(
+  '/:id',
+  asyncHandler(async (req, res) => {
+    const contact = await Contact.findOne({ _id: req.params.id, isDeleted: false });
+    if (!contact) throw new AppError('Contact not found', 404);
+    const [enriched] = await enrichContactsWithProviders([contact]);
+    res.json({ data: enriched });
+  })
+);
+
+router.post(
+  '/',
+  requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  asyncHandler(async (req, res) => {
+    const payload = normalizeContactPayload(req.body, { validate: true });
+    await validateServiceProviderLink(payload);
+    const { contact, created, reused } = await resolveOrCreateContact(payload, req.user._id);
+
+    if (created) {
+      await writeAudit({
+        actorId: req.user._id,
+        actorEmail: req.user.email,
+        action: 'CONTACT.CREATE',
+        entityType: 'Contact',
+        entityId: contact._id,
+        after: contact.toObject(),
+        requestId: req.requestId,
+      });
+      return res.status(201).json({ data: withSignedContactKyc(contact) });
+    }
+
+    res.status(200).json({ data: withSignedContactKyc(contact), meta: { reused: Boolean(reused) } });
+  })
+);
+
+router.patch(
+  '/:id',
+  requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  asyncHandler(async (req, res) => {
+    const contact = await Contact.findOne({ _id: req.params.id, isDeleted: false });
+    if (!contact) throw new AppError('Contact not found', 404);
+
+    try {
+      assertEntityNotStale(contact, req.body, 'Contact');
+    } catch (err) {
+      if (err?.code === 'STALE_UPDATE' || err?.status === 409) {
+        throw new AppError(err.message || 'Contact was changed elsewhere', 409, 'STALE_UPDATE');
+      }
+      throw err;
+    }
+
+    const payload = normalizeContactPayload(
+      {
+        name: req.body.name !== undefined ? req.body.name : contact.name,
+        email: req.body.email !== undefined ? req.body.email : contact.email,
+        contactCategory:
+          req.body.contactCategory !== undefined ? req.body.contactCategory : contact.contactCategory,
+        resourceType: req.body.resourceType !== undefined ? req.body.resourceType : contact.resourceType,
+        profession: req.body.profession !== undefined ? req.body.profession : contact.profession,
+        contact:
+          req.body.contact !== undefined
+            ? req.body.contact
+            : req.body.mobile !== undefined
+              ? req.body.mobile
+              : contact.contact || contact.mobile,
+        city: req.body.city !== undefined ? req.body.city : contact.city,
+        state: req.body.state !== undefined ? req.body.state : contact.state,
+        district: req.body.district !== undefined ? req.body.district : contact.district,
+        pinCode: req.body.pinCode !== undefined ? req.body.pinCode : contact.pinCode,
+        address: req.body.address !== undefined ? req.body.address : contact.address,
+        organization: req.body.organization !== undefined ? req.body.organization : contact.organization,
+        supplyCategory:
+          req.body.supplyCategory !== undefined ? req.body.supplyCategory : contact.supplyCategory,
+        panNumber: req.body.panNumber !== undefined ? req.body.panNumber : contact.panNumber,
+        ifscCode: req.body.ifscCode !== undefined ? req.body.ifscCode : contact.ifscCode,
+        bankName: req.body.bankName !== undefined ? req.body.bankName : contact.bankName,
+        accountNumber:
+          req.body.accountNumber !== undefined ? req.body.accountNumber : contact.accountNumber,
+        passbookCopyUrl: storageContactKycUrl(
+          req.body.passbookCopyUrl !== undefined ? req.body.passbookCopyUrl : undefined,
+          contact.passbookCopyUrl,
+        ),
+        panCardCopyUrl: storageContactKycUrl(
+          req.body.panCardCopyUrl !== undefined ? req.body.panCardCopyUrl : undefined,
+          contact.panCardCopyUrl,
+        ),
+        notes: req.body.notes !== undefined ? req.body.notes : contact.notes,
+        stateId: req.body.stateId !== undefined ? req.body.stateId : contact.stateId,
+        districtId: req.body.districtId !== undefined ? req.body.districtId : contact.districtId,
+        cityId: req.body.cityId !== undefined ? req.body.cityId : contact.cityId,
+        serviceProviderContactId:
+          req.body.serviceProviderContactId !== undefined
+            ? req.body.serviceProviderContactId
+            : contact.serviceProviderContactId,
+        ...(Object.prototype.hasOwnProperty.call(req.body, 'providerEmployees')
+          ? { providerEmployees: req.body.providerEmployees }
+          : {}),
+      },
+      { validate: true }
+    );
+    await validateServiceProviderLink(payload, contact._id);
+    await assertContactIdentityAvailable({
+      email: payload.email,
+      phone: payload.contact,
+      excludeId: contact._id,
+    });
+
+    const wasProvider = isServiceProviderContact(contact);
+    const stillProvider = isServiceProviderContact(payload);
+    const clearKeys = resolveClearKeys(req.body, {
+      clearProviderEmployees: 'providerEmployees',
+    });
+    const roster = Array.isArray(contact.providerEmployees) ? contact.providerEmployees : [];
+    const wantsLeaveProvider = wasProvider && !stillProvider;
+
+    // Leaving Service Provider with an existing roster requires an explicit clear flag.
+    if (wantsLeaveProvider && roster.length > 0 && !clearKeys.includes('providerEmployees')) {
+      throw new AppError(
+        'This Service Provider has employees. Confirm clearing the employee roster before changing category/type.',
+        409,
+        'PROVIDER_ROSTER_CLEAR_REQUIRED',
+      );
+    }
+    if (wantsLeaveProvider && clearKeys.includes('providerEmployees')) {
+      payload.providerEmployees = [];
+    }
+    // Staying non-provider: never let a missing/empty roster field wipe history.
+    if (!stillProvider && !clearKeys.includes('providerEmployees')) {
+      delete payload.providerEmployees;
+    }
+    // Staying provider: empty [] without clearProviderEmployees is treated as accidental
+    // (stale form / LocationCascade merge) and must not wipe a persisted roster.
+    if (
+      stillProvider
+      && Array.isArray(payload.providerEmployees)
+      && payload.providerEmployees.length === 0
+      && Array.isArray(contact.providerEmployees)
+      && contact.providerEmployees.length > 0
+      && req.body.clearProviderEmployees !== true
+      && req.body.clearProviderEmployees !== 'true'
+      && !clearKeys.includes('providerEmployees')
+    ) {
+      delete payload.providerEmployees;
+    }
+
+    assignPreservingExisting(contact, payload, clearKeys.length ? { clearKeys } : undefined);
+    contact.updatedBy = req.user._id;
+    await contact.save();
+    res.json({ data: withSignedContactKyc(contact) });
+  })
+);
+
+router.post(
+  '/:id/kyc-document',
+  requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  kycUpload.single('file'),
+  ensureUploadCommit(),
+  requireSafeUploads({ allowedExt: CONTACT_KYC_ACCEPT_EXTENSIONS }),
+  asyncHandler(async (req, res) => {
+    const docType = String(req.body?.docType || '').trim();
+    const field = KYC_DOC_TYPES[docType];
+    if (!field) {
+      throw new AppError('docType must be passbook or pan_card', 400, 'VALIDATION_ERROR');
+    }
+    if (!req.file) throw new AppError('Select a file to upload', 400, 'VALIDATION_ERROR');
+
+    const contact = await Contact.findOne({ _id: req.params.id, isDeleted: false });
+    if (!contact) throw new AppError('Contact not found', 404, 'NOT_FOUND');
+    if (contact.contactCategory === 'Client') {
+      throw new AppError('KYC documents are not applicable for Client contacts', 400, 'VALIDATION_ERROR');
+    }
+
+    const before = contact.toObject();
+    contact[field] = `/uploads/contacts/${req.file.filename}`;
+    contact.updatedBy = req.user._id;
+    await contact.save();
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'CONTACT.KYC_UPLOAD',
+      entityType: 'Contact',
+      entityId: contact._id,
+      before,
+      after: contact.toObject(),
+      requestId: req.requestId,
+    });
+
+    res.json({ data: withSignedContactKyc(contact) });
+  })
+);
+
+router.post(
+  '/import',
+  requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  importRateLimiter,
+  excelUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    const mode = req.body.mode === 'DRY_RUN' ? 'DRY_RUN' : 'COMMIT';
+    const { rows, fileName } = await loadCappedRowsFromUpload(req.file);
+    const errors = [];
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+    const seenEmails = new Set();
+    const seenPhones = new Set();
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNum = i + 2;
+      let payload;
+      try {
+        payload = normalizeContactPayload(
+          {
+            name: cell(row, ['Name', 'name']),
+            email: cell(row, ['Email', 'email']),
+            contactCategory: cell(row, [
+              'Contact Category',
+              'ContactCategory',
+              'contactCategory',
+              'Category',
+            ]),
+            resourceType: cell(row, ['Resource Type', 'ResourceType', 'resourceType']),
+            profession: cell(row, ['Profession / Role', 'Profession', 'profession']),
+            organization: cell(row, [
+              'Organization Name',
+              'Organization',
+              'organization',
+              'Org',
+            ]),
+            supplyCategory: cell(row, [
+              'Supply Category',
+              'SupplyCategory',
+              'supplyCategory',
+            ]),
+            contact: cell(row, ['Contact', 'contact', 'Mobile', 'Phone']),
+            city: cell(row, ['City', 'city']),
+            state: cell(row, ['State', 'state']),
+            address: cell(row, ['Address', 'address']),
+            pinCode: cell(row, ['PIN Code', 'Pin Code', 'pinCode', 'PIN']),
+            panNumber: cell(row, ['PAN Number', 'PAN', 'panNumber']),
+            ifscCode: cell(row, ['IFSC Code', 'IFSC', 'ifscCode']),
+            bankName: cell(row, ['Bank Name', 'bankName']),
+            accountNumber: cell(row, ['Account Number', 'accountNumber', 'Account']),
+            serviceProvider: cell(row, [
+              'Service Provider (agency)',
+              'Service Provider',
+              'serviceProvider',
+              'ServiceProvider',
+            ]),
+          },
+          { validate: true }
+        );
+        const spName = cell(row, [
+          'Service Provider (agency)',
+          'Service Provider',
+          'serviceProvider',
+          'ServiceProvider',
+        ]);
+        if (spName && payload.contactCategory === 'Healthcare Worker') {
+          const provider = await Contact.findOne({
+            isDeleted: false,
+            contactCategory: 'Healthcare Worker',
+            resourceType: 'Service Provider',
+            name: new RegExp(`^${spName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+          });
+          if (!provider) {
+            errors.push({
+              row: rowNum,
+              field: 'Service Provider',
+              message: `Service provider not found: ${spName}`,
+            });
+            continue;
+          }
+          payload.serviceProviderContactId = provider._id;
+        }
+        await validateServiceProviderLink(payload);
+      } catch (err) {
+        errors.push({ row: rowNum, field: 'import', message: err.message });
+        continue;
+      }
+
+      const emailKey = payload.email;
+      const phoneKey = normalizePhone(payload.contact);
+      if (emailKey && seenEmails.has(emailKey)) {
+        errors.push({
+          row: rowNum,
+          field: 'Email',
+          message: 'Duplicate email in this file',
+        });
+        continue;
+      }
+      if (phoneKey && seenPhones.has(phoneKey)) {
+        errors.push({
+          row: rowNum,
+          field: 'Contact',
+          message: 'Duplicate phone number in this file',
+        });
+        continue;
+      }
+      if (emailKey) seenEmails.add(emailKey);
+      if (phoneKey) seenPhones.add(phoneKey);
+
+      try {
+        if (mode === 'COMMIT') {
+          const existing = await findContactByIdentity({
+            email: payload.email,
+            phone: payload.contact,
+          });
+          if (existing) {
+            await assertContactIdentityAvailable({
+              email: payload.email,
+              phone: payload.contact,
+              excludeId: existing._id,
+            });
+            assignPreservingExisting(existing, payload);
+            existing.updatedBy = req.user._id;
+            await existing.save();
+            updated += 1;
+          } else {
+            const resolved = await resolveOrCreateContact(payload, req.user._id);
+            if (resolved.created) created += 1;
+            else updated += 1;
+          }
+        } else {
+          skipped += 1;
+        }
+      } catch (err) {
+        errors.push({ row: rowNum, field: 'import', message: err.message });
+      }
+      rows[i] = null;
+    }
+
+    if (mode === 'COMMIT') {
+      await writeAudit({
+        actorId: req.user._id,
+        actorEmail: req.user.email,
+        action: 'CONTACT.IMPORT',
+        entityType: 'Contact',
+        after: { created, updated, errors: errors.length, fileName },
+        requestId: req.requestId,
+      });
+    }
+
+    let errorReport = null;
+    if (errors.length) {
+      errorReport = await notifyImportFailures({
+        userId: req.user._id,
+        importType: `CONTACT_${mode}`,
+        sourceFileName: fileName,
+        totalRows: rows.length,
+        successRows: mode === 'DRY_RUN' ? rows.length - errors.length : created + updated,
+        errors,
+        entityType: 'Contact',
+      });
+    }
+
+    res.json({
+      data: {
+        mode,
+        totalRows: rows.length,
+        created,
+        updated,
+        validated: mode === 'DRY_RUN' ? rows.length - errors.length : created + updated,
+        errorRows: errors.length,
+        errors: errors.slice(0, 200),
+        errorReport: errorReport
+          ? {
+              fileName: errorReport.fileName,
+              downloadPath: errorReport.downloadPath,
+              notificationId: errorReport.notificationId,
+            }
+          : null,
+      },
+    });
+  })
+);
+
+export default router;
