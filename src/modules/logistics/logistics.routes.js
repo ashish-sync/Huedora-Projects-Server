@@ -2729,6 +2729,102 @@ function computeKpis(items) {
   };
 }
 
+/** Inventory KPIs via Mongo $group — never hydrate 50k stock rows. */
+function inventoryKpiPipeline(match = { isDeleted: false }) {
+  return [
+    { $match: match },
+    {
+      $group: {
+        _id: null,
+        totalQty: { $sum: { $ifNull: ['$quantity', 0] } },
+        totalValue: {
+          $sum: {
+            $multiply: [{ $ifNull: ['$unitValue', 0] }, { $ifNull: ['$quantity', 0] }],
+          },
+        },
+        availableQty: {
+          $sum: {
+            $cond: [{ $eq: ['$status', 'Available'] }, { $ifNull: ['$quantity', 0] }, 0],
+          },
+        },
+        reservedQty: {
+          $sum: {
+            $cond: [
+              { $in: ['$status', ['Reserved', 'Allocated']] },
+              { $ifNull: ['$quantity', 0] },
+              0,
+            ],
+          },
+        },
+        damagedQty: {
+          $sum: {
+            $cond: [{ $eq: ['$status', 'Damaged'] }, { $ifNull: ['$quantity', 0] }, 0],
+          },
+        },
+        repairQty: {
+          $sum: {
+            $cond: [{ $eq: ['$status', 'Repair'] }, { $ifNull: ['$quantity', 0] }, 0],
+          },
+        },
+        pendingDispatch: {
+          $sum: {
+            $cond: [
+              { $in: ['$status', ['Picked', 'Packed', 'Allocated']] },
+              { $ifNull: ['$quantity', 0] },
+              0,
+            ],
+          },
+        },
+        lowStock: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$status', 'Available'] },
+                  { $gt: [{ $ifNull: ['$lowStockThreshold', 0] }, 0] },
+                  {
+                    $lte: [
+                      { $ifNull: ['$quantity', 0] },
+                      { $ifNull: ['$lowStockThreshold', 0] },
+                    ],
+                  },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
+        },
+      },
+    },
+  ];
+}
+
+function inventoryKpisFromAggRow(row) {
+  if (!row) {
+    return {
+      totalQty: 0,
+      totalValue: 0,
+      availableQty: 0,
+      reservedQty: 0,
+      damagedQty: 0,
+      repairQty: 0,
+      lowStock: 0,
+      pendingDispatch: 0,
+    };
+  }
+  return {
+    totalQty: Number(row.totalQty) || 0,
+    totalValue: Number(row.totalValue) || 0,
+    availableQty: Number(row.availableQty) || 0,
+    reservedQty: Number(row.reservedQty) || 0,
+    damagedQty: Number(row.damagedQty) || 0,
+    repairQty: Number(row.repairQty) || 0,
+    lowStock: Number(row.lowStock) || 0,
+    pendingDispatch: Number(row.pendingDispatch) || 0,
+  };
+}
+
 router.get(
   '/dashboard',
   canRead,
@@ -2900,8 +2996,8 @@ router.get(
   '/inventory/summary',
   canRead,
   asyncHandler(async (_req, res) => {
-    const items = await LogisticsStockItem.find({ isDeleted: false }).limit(50_000);
-    res.json({ data: computeKpis(items) });
+    const rows = await LogisticsStockItem.aggregate(inventoryKpiPipeline());
+    res.json({ data: inventoryKpisFromAggRow(rows?.[0]) });
   })
 );
 
@@ -2960,23 +3056,14 @@ router.get(
         { batchNumber: re },
       ];
     }
-    const [data, total] = await Promise.all([
+    const [data, total, kpiRows] = await Promise.all([
       LogisticsStockItem.find(filter).sort(sort || '-updatedAt').skip(skip).limit(limit),
       LogisticsStockItem.countDocuments(filter),
+      LogisticsStockItem.aggregate(inventoryKpiPipeline(filter)),
     ]);
-    // KPI over cache refs — no second find()+clone of up to 50k rows.
-    const { scanCollection } = await import('../../store/filedb.js');
-    const kpiItems = [];
-    await scanCollection('logistics_stock_items', {
-      filter,
-      forEach: (item) => {
-        if (kpiItems.length < 50_000) kpiItems.push(item);
-      },
-    });
-    const summary = computeKpis(kpiItems);
     res.json({
       ...paginated(data, total, page, limit),
-      summary,
+      summary: inventoryKpisFromAggRow(kpiRows?.[0]),
     });
   })
 );

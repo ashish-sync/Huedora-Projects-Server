@@ -15,7 +15,6 @@ import { FinanceExpense, FinanceInvoice, FinanceCommercialDocument } from './fin
 import financeCommercialRoutes from './financeCommercial.routes.js';
 import vendorBillRoutes from './vendorBill.routes.js';
 import { CampOpsCamp } from '../campOps/campOps.model.js';
-import { VENDOR_BILL_ACTIVE_STATUSES, normalizeVendorBillStatus } from './vendorBill.constants.js';
 import {
   computeLifecycleDerived,
   normalizeFinancePaymentStatus,
@@ -85,91 +84,146 @@ router.get(
   '/summary',
   canRead,
   asyncHandler(async (_req, res) => {
-    const [expenses, invoices, proformas, purchaseOrders, clientInvoices, creditNotes, deliveryChallans, billsOfSupply] =
-      await Promise.all([
-        FinanceExpense.find({ isDeleted: false }).select('amount status'),
-        FinanceInvoice.find({ isDeleted: false }).select('totalAmount status'),
-        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'proforma' }).select(
-          'status grandTotal'
-        ),
-        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'purchase_order' }).select(
-          'status grandTotal'
-        ),
-        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'client_invoice' }).select(
-          'status grandTotal'
-        ),
-        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'credit_note' }).select(
-          'status grandTotal'
-        ),
-        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'delivery_challan' }).select(
-          'status grandTotal'
-        ),
-        FinanceCommercialDocument.find({ isDeleted: false, documentType: 'bill_of_supply' }).select(
-          'status grandTotal'
-        ),
+    const openExpenseStatuses = ['Draft', 'Submitted', 'Approved'];
+    const draftLike = ['Draft', 'Uploaded'];
+    const clientDraftLike = ['Draft', 'Uploaded', 'Submitted', 'Approved'];
+
+    const commercialTypes = [
+      'proforma',
+      'purchase_order',
+      'client_invoice',
+      'credit_note',
+      'delivery_challan',
+      'bill_of_supply',
+    ];
+
+    const [expenseAgg, invoiceAgg, commercialAgg] = await Promise.all([
+      FinanceExpense.aggregate([
+        { $match: { isDeleted: false } },
+        {
+          $group: {
+            _id: null,
+            count: { $sum: 1 },
+            total: { $sum: { $ifNull: ['$amount', 0] } },
+            open: {
+              $sum: {
+                $cond: [{ $in: ['$status', openExpenseStatuses] }, 1, 0],
+              },
+            },
+          },
+        },
+      ]),
+      FinanceInvoice.aggregate([
+        { $match: { isDeleted: false } },
+        {
+          $group: {
+            _id: null,
+            count: { $sum: 1 },
+            total: { $sum: { $ifNull: ['$totalAmount', 0] } },
+            open: {
+              $sum: {
+                $cond: [
+                  {
+                    $not: {
+                      $in: [
+                        { $toLower: { $ifNull: ['$status', ''] } },
+                        ['paid', 'cancelled'],
+                      ],
+                    },
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]),
+      FinanceCommercialDocument.aggregate([
+        {
+          $match: {
+            isDeleted: false,
+            documentType: { $in: commercialTypes },
+          },
+        },
+        {
+          $group: {
+            _id: { documentType: '$documentType', status: '$status' },
+            count: { $sum: 1 },
+            grandTotal: { $sum: { $ifNull: ['$grandTotal', 0] } },
+          },
+        },
+      ]),
     ]);
 
-    const expenseTotal = expenses.reduce((s, r) => s + (Number(r.amount) || 0), 0);
-    const expenseOpen = expenses.filter((r) =>
-      ['Draft', 'Submitted', 'Approved'].includes(r.status)
-    ).length;
-    const invoiceTotal = invoices.reduce((s, r) => s + (Number(r.totalAmount) || 0), 0);
-    const invoiceOpen = invoices.filter((r) =>
-      VENDOR_BILL_ACTIVE_STATUSES.has(normalizeVendorBillStatus(r.status))
-    ).length;
-    const proformaDraft = proformas.filter((r) => r.status === 'Draft' || r.status === 'Uploaded').length;
-    const proformaIssued = proformas.filter((r) => r.status === 'Issued').length;
-    const proformaTotal = proformas.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
-    const poDraft = purchaseOrders.filter((r) => r.status === 'Draft' || r.status === 'Uploaded').length;
-    const poIssued = purchaseOrders.filter((r) => r.status === 'Issued').length;
-    const poTotal = purchaseOrders.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
-    const clientInvoiceDraft = clientInvoices.filter((r) =>
-      ['Draft', 'Uploaded', 'Submitted', 'Approved'].includes(r.status)
-    ).length;
-    const clientInvoiceIssued = clientInvoices.filter((r) => r.status === 'Issued').length;
-    const clientInvoiceTotal = clientInvoices.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
-    const creditNoteCount = creditNotes.length;
-    const creditNoteTotal = creditNotes.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
-    const deliveryChallanCount = deliveryChallans.length;
-    const deliveryChallanTotal = deliveryChallans.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
-    const billOfSupplyCount = billsOfSupply.length;
-    const billOfSupplyTotal = billsOfSupply.reduce((s, r) => s + (Number(r.grandTotal) || 0), 0);
-    const commercialSubmitted = [
-      ...proformas,
-      ...purchaseOrders,
-      ...clientInvoices,
-      ...creditNotes,
-      ...deliveryChallans,
-      ...billsOfSupply,
-    ].filter((r) => r.status === 'Submitted').length;
+    const expense = expenseAgg[0] || { count: 0, total: 0, open: 0 };
+    const invoice = invoiceAgg[0] || { count: 0, total: 0, open: 0 };
+
+    const roll = {
+      proformaCount: 0,
+      proformaTotal: 0,
+      proformaDraft: 0,
+      proformaIssued: 0,
+      purchaseOrderCount: 0,
+      purchaseOrderTotal: 0,
+      purchaseOrderDraft: 0,
+      purchaseOrderIssued: 0,
+      clientInvoiceCount: 0,
+      clientInvoiceTotal: 0,
+      clientInvoiceDraft: 0,
+      clientInvoiceIssued: 0,
+      creditNoteCount: 0,
+      creditNoteTotal: 0,
+      deliveryChallanCount: 0,
+      deliveryChallanTotal: 0,
+      billOfSupplyCount: 0,
+      billOfSupplyTotal: 0,
+      commercialSubmitted: 0,
+    };
+
+    for (const row of commercialAgg || []) {
+      const type = row?._id?.documentType || '';
+      const status = row?._id?.status || '';
+      const count = Number(row.count) || 0;
+      const grandTotal = Number(row.grandTotal) || 0;
+      if (status === 'Submitted') roll.commercialSubmitted += count;
+
+      if (type === 'proforma') {
+        roll.proformaCount += count;
+        roll.proformaTotal += grandTotal;
+        if (draftLike.includes(status)) roll.proformaDraft += count;
+        if (status === 'Issued') roll.proformaIssued += count;
+      } else if (type === 'purchase_order') {
+        roll.purchaseOrderCount += count;
+        roll.purchaseOrderTotal += grandTotal;
+        if (draftLike.includes(status)) roll.purchaseOrderDraft += count;
+        if (status === 'Issued') roll.purchaseOrderIssued += count;
+      } else if (type === 'client_invoice') {
+        roll.clientInvoiceCount += count;
+        roll.clientInvoiceTotal += grandTotal;
+        if (clientDraftLike.includes(status)) roll.clientInvoiceDraft += count;
+        if (status === 'Issued') roll.clientInvoiceIssued += count;
+      } else if (type === 'credit_note') {
+        roll.creditNoteCount += count;
+        roll.creditNoteTotal += grandTotal;
+      } else if (type === 'delivery_challan') {
+        roll.deliveryChallanCount += count;
+        roll.deliveryChallanTotal += grandTotal;
+      } else if (type === 'bill_of_supply') {
+        roll.billOfSupplyCount += count;
+        roll.billOfSupplyTotal += grandTotal;
+      }
+    }
 
     res.json({
       data: {
-        expenseCount: expenses.length,
-        expenseTotal,
-        expenseOpen,
-        invoiceCount: invoices.length,
-        invoiceTotal,
-        invoiceOpen,
-        proformaCount: proformas.length,
-        proformaTotal,
-        proformaDraft,
-        proformaIssued,
-        purchaseOrderCount: purchaseOrders.length,
-        purchaseOrderTotal: poTotal,
-        purchaseOrderDraft: poDraft,
-        purchaseOrderIssued: poIssued,
-        clientInvoiceCount: clientInvoices.length,
-        clientInvoiceTotal,
-        clientInvoiceDraft,
-        clientInvoiceIssued,
-        creditNoteCount,
-        creditNoteTotal,
-        deliveryChallanCount,
-        deliveryChallanTotal,
-        billOfSupplyCount,
-        billOfSupplyTotal,
-        commercialSubmitted,
+        expenseCount: Number(expense.count) || 0,
+        expenseTotal: Number(expense.total) || 0,
+        expenseOpen: Number(expense.open) || 0,
+        invoiceCount: Number(invoice.count) || 0,
+        invoiceTotal: Number(invoice.total) || 0,
+        invoiceOpen: Number(invoice.open) || 0,
+        ...roll,
       },
     });
   })

@@ -181,9 +181,16 @@ router.get(
   '/',
   asyncHandler(async (req, res) => {
     const isHcwDirectory = String(req.query.contactCategory || '').trim() === 'Healthcare Worker';
+    const assignLight = String(req.query.assign || '') === '1';
+    const allowFullDirectory =
+      String(req.query.fullDirectory || '') === '1' || String(req.query.exportMode || '') === '1';
+    // Assignment: hard-cap 100. Full HCW dump only with explicit fullDirectory/exportMode.
     const { page, limit, skip, sort } = parsePagination(req.query, {
-      // Assignment picker needs the full HCW directory; other lists stay capped.
-      maxLimit: isHcwDirectory ? 2000 : 100,
+      maxLimit: assignLight
+        ? (allowFullDirectory ? 2000 : 100)
+        : isHcwDirectory
+          ? (allowFullDirectory ? 2000 : 100)
+          : 100,
     });
     const filter = { isDeleted: false };
     if (req.query.q) {
@@ -205,7 +212,6 @@ router.get(
         { state: new RegExp(q, 'i') },
         { pinCode: new RegExp(q, 'i') },
         { address: new RegExp(q, 'i') },
-        // Service Provider embedded employees (name / mobile)
         { 'providerEmployees.name': new RegExp(q, 'i') },
         { 'providerEmployees.mobile': new RegExp(q, 'i') },
       ];
@@ -214,6 +220,12 @@ router.get(
       const state = String(req.query.state).trim();
       if (state) {
         filter.state = new RegExp(`^${state.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+      }
+    }
+    if (req.query.city) {
+      const city = String(req.query.city).trim();
+      if (city) {
+        filter.city = new RegExp(`^${city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
       }
     }
     if (req.query.stateId) {
@@ -229,15 +241,20 @@ router.get(
       filter.serviceProviderContactId = String(req.query.serviceProviderContactId).trim();
     }
     if (String(req.query.hasServiceProvider || '') === '1') {
-      // Staff linked under a Service Provider agency (assignment SP employee path).
       filter.serviceProviderContactId = { $ne: null, $exists: true };
     }
+
+    const ASSIGN_PROJECTION =
+      'name email contact mobile resourceType contactCategory profession organization city state district pinCode serviceProviderContactId providerEmployees';
+
+    let query = Contact.find(filter).sort(sort || 'name').skip(skip).limit(limit);
+    if (assignLight) {
+      query = query.select(ASSIGN_PROJECTION).lean();
+    }
     const [rawData, total] = await Promise.all([
-      Contact.find(filter).sort(sort || 'name').skip(skip).limit(limit),
+      query,
       Contact.countDocuments(filter),
     ]);
-    // Assignment pickers only need identity/geo/profession — skip KYC URL signing.
-    const assignLight = String(req.query.assign || '') === '1';
     const data = await enrichContactsWithProviders(rawData, { signKyc: !assignLight });
     res.json(paginated(data, total, page, limit));
   })

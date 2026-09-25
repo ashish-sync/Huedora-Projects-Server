@@ -91,6 +91,12 @@ import {
   addCampToOperationsBoard,
   finalizeOperationsBoard,
 } from './campOps.operationsBoard.js';
+import {
+  campDashboardStatsPipeline,
+  formatCampDashboardStats,
+  campOperationsBoardPipeline,
+  formatOperationsBoardFromGroups,
+} from './campOps.dashboardAggregations.js';
 import { resolveContactPersonFields } from './campContactPersons.js';
 import {
   extractManualPastePreview,
@@ -810,126 +816,102 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const filter = await scopeCampFilter(req, buildCampFilter(req.query));
-    const { scanCollection } = await import('../../store/filedb.js');
-
-    const byStatus = Object.fromEntries(CAMP_OPS_STATUSES.map((s) => [s, 0]));
-    let overdueNotExecuted = 0;
-    let offHoursPending = 0;
-    let weekendAttentionPending = 0;
-    let total = 0;
-    const brandCounts = new Map();
-    const campaignCounts = new Map();
-    const campaignNameCounts = new Map();
-    const clientNameCounts = new Map();
-    const stateCounts = new Map();
-    const campaignTypeCounts = new Map();
-    const monthlyMap = new Map();
-
-    const bump = (map, key) => {
-      if (key == null || key === '') return;
-      const k = String(key);
-      map.set(k, (map.get(k) || 0) + 1);
-    };
-
-    await scanCollection('camp_ops_camps', {
-      filter,
-      projection: {
-        status: 1,
-        clientId: 1,
-        campaignId: 1,
-        campaignName: 1,
-        clientName: 1,
-        state: 1,
-        campaignType: 1,
-        campDate: 1,
-        submittedOffHours: 1,
-        submittedWeekendAttention: 1,
-        // fields used by isCampOverdue
-        startTime: 1,
-        endTime: 1,
-        lifecycleStage: 1,
-        assignmentDecision: 1,
-        executionCompletedAt: 1,
-        isDeleted: 1,
-      },
-      forEach: (camp) => {
-        total += 1;
-      byStatus[camp.status] = (byStatus[camp.status] || 0) + 1;
-        if (camp.status === 'approved' && isCampOverdue(camp)) overdueNotExecuted += 1;
-        if (camp.status === 'pending_review' && camp.submittedOffHours) offHoursPending += 1;
-        if (camp.status === 'pending_review' && camp.submittedWeekendAttention) {
-          weekendAttentionPending += 1;
-        }
-        bump(brandCounts, camp.clientId);
-        bump(campaignCounts, camp.campaignId);
-        bump(campaignNameCounts, camp.campaignName);
-        bump(clientNameCounts, camp.clientName);
-        if (trimStr(camp.state)) bump(stateCounts, camp.state);
-        bump(campaignTypeCounts, camp.campaignType);
-        const d = parseLocalDateInput(camp.campDate) || String(camp.campDate || '').slice(0, 10);
-        if (d && d.length >= 7) bump(monthlyMap, d.slice(0, 7));
-      },
-    });
+    const { getPersistenceMode, aggregateCollection } = await import('../../store/persistence.js');
 
     const [clients, campaigns] = await Promise.all([
-      CampOpsClient.find({ isDeleted: false }).sort('name').limit(500),
-      CampOpsCampaign.find({ isDeleted: false }).sort('name').limit(500),
+      CampOpsClient.find({ isDeleted: false }).select('name').sort('name').limit(500),
+      CampOpsCampaign.find({ isDeleted: false }).select('name clientName division').sort('name').limit(500),
     ]);
 
-    const brandBreakdown = clients
-      .map((brand) => ({
-        id: brand._id,
-        label: brand.name,
-        value: brandCounts.get(String(brand._id)) || 0,
-      }))
-      .filter((item) => item.value > 0);
-
-    const campaignBreakdown = campaigns
-      .map((item) => ({
-        id: item._id,
-        label: `${item.clientName || 'Brand'} — ${item.division || item.name}`,
-        division: item.division || item.name,
-        value:
-          (campaignCounts.get(String(item._id)) || 0) +
-          (campaignNameCounts.get(String(item.name)) || 0),
-      }))
-      .filter((entry) => entry.value > 0);
-
-    const topFromMap = (map, n = 10) =>
-      [...map.entries()]
-        .map(([label, value]) => ({ label, value }))
-        .sort((a, b) => b.value - a.value)
-        .slice(0, n);
+    let statsPayload;
+    if (getPersistenceMode() === 'mongo') {
+      const facetRows = await aggregateCollection(
+        'camp_ops_camps',
+        campDashboardStatsPipeline(filter, { todayIso: localTodayIso() }),
+      );
+      const bucket = Array.isArray(facetRows) && facetRows[0] ? facetRows[0] : {};
+      statsPayload = formatCampDashboardStats(bucket, { clients, campaigns });
+    } else {
+      const { scanCollection } = await import('../../store/filedb.js');
+      const byStatus = Object.fromEntries(CAMP_OPS_STATUSES.map((s) => [s, 0]));
+      let overdueNotExecuted = 0;
+      let offHoursPending = 0;
+      let weekendAttentionPending = 0;
+      let total = 0;
+      const brandCounts = new Map();
+      const campaignCounts = new Map();
+      const campaignNameCounts = new Map();
+      const clientNameCounts = new Map();
+      const stateCounts = new Map();
+      const campaignTypeCounts = new Map();
+      const monthlyMap = new Map();
+      const bump = (map, key) => {
+        if (key == null || key === '') return;
+        map.set(String(key), (map.get(String(key)) || 0) + 1);
+      };
+      await scanCollection('camp_ops_camps', {
+        filter,
+        projection: {
+          status: 1,
+          clientId: 1,
+          campaignId: 1,
+          campaignName: 1,
+          clientName: 1,
+          state: 1,
+          campaignType: 1,
+          campDate: 1,
+          submittedOffHours: 1,
+          submittedWeekendAttention: 1,
+          startTime: 1,
+          endTime: 1,
+          lifecycleStage: 1,
+          assignmentDecision: 1,
+          executionCompletedAt: 1,
+          isDeleted: 1,
+        },
+        forEach: (camp) => {
+          total += 1;
+          byStatus[camp.status] = (byStatus[camp.status] || 0) + 1;
+          if (camp.status === 'approved' && isCampOverdue(camp)) overdueNotExecuted += 1;
+          if (camp.status === 'pending_review' && camp.submittedOffHours) offHoursPending += 1;
+          if (camp.status === 'pending_review' && camp.submittedWeekendAttention) {
+            weekendAttentionPending += 1;
+          }
+          bump(brandCounts, camp.clientId);
+          bump(campaignCounts, camp.campaignId);
+          bump(campaignNameCounts, camp.campaignName);
+          bump(clientNameCounts, camp.clientName);
+          if (trimStr(camp.state)) bump(stateCounts, camp.state);
+          bump(campaignTypeCounts, camp.campaignType);
+          const d = parseLocalDateInput(camp.campDate) || String(camp.campDate || '').slice(0, 10);
+          if (d && d.length >= 7) bump(monthlyMap, d.slice(0, 7));
+        },
+      });
+      statsPayload = formatCampDashboardStats(
+        {
+          total: [{ n: total }],
+          byStatus: Object.entries(byStatus).map(([_id, count]) => ({ _id, count })),
+          byClientId: [...brandCounts.entries()].map(([_id, count]) => ({ _id, count })),
+          byCampaignId: [...campaignCounts.entries()].map(([_id, count]) => ({ _id, count })),
+          byCampaignName: [...campaignNameCounts.entries()].map(([_id, count]) => ({ _id, count })),
+          byClientName: [...clientNameCounts.entries()].map(([_id, count]) => ({ _id, count })),
+          byState: [...stateCounts.entries()].map(([_id, count]) => ({ _id, count })),
+          byCampaignType: [...campaignTypeCounts.entries()].map(([_id, count]) => ({ _id, count })),
+          monthly: [...monthlyMap.entries()].map(([_id, count]) => ({ _id, count })),
+          offHoursPending: [{ n: offHoursPending }],
+          weekendAttentionPending: [{ n: weekendAttentionPending }],
+          overdueApproved: [{ n: overdueNotExecuted }],
+        },
+        { clients, campaigns },
+      );
+    }
 
     res.json({
       dateRange: {
         from: req.query.dateFrom || null,
         to: req.query.dateTo || null,
       },
-      hierarchy: {
-        brands: { total: clients.length, items: brandBreakdown },
-        campaigns: { total: campaigns.length, items: campaignBreakdown },
-      },
-      camps: {
-        total,
-        byStatus: {
-          ...byStatus,
-          overdue_not_executed: overdueNotExecuted,
-        },
-        alerts: {
-          reaction_required: 0,
-          off_hours_pending: offHoursPending,
-          weekend_attention_pending: weekendAttentionPending,
-        },
-      },
-      charts: {
-        byClient: topFromMap(clientNameCounts, 10),
-        byState: topFromMap(stateCounts, 10),
-        byCampaignType: topFromMap(campaignTypeCounts, 50),
-        monthlyTrends: [...monthlyMap.entries()]
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([label, value]) => ({ label, value })),
-      },
+      ...statsPayload,
       meta: {
         statuses: CAMP_OPS_STATUSES,
         campNames: CAMP_NAME_OPTIONS,
@@ -944,33 +926,41 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const filter = await scopeCampFilter(req, buildCampFilter(req.query));
-    const { scanCollection } = await import('../../store/filedb.js');
-    const state = createOperationsBoardState();
-    await scanCollection('camp_ops_camps', {
-      filter,
-      projection: {
-        status: 1,
-        lifecycleStage: 1,
-        assignmentStatus: 1,
-        assignmentDecision: 1,
-        executionStatus: 1,
-        effectiveExecutionStatus: 1,
-        financePaymentStatus: 1,
-        paymentSubmitStatus: 1,
-        cancellationSource: 1,
-        cancelledBy: 1,
-        campDate: 1,
-        startTime: 1,
-        endTime: 1,
-        submittedAt: 1,
-        requestReviewStatus: 1,
-        isDeleted: 1,
-      },
-      forEach: (camp) => {
-        addCampToOperationsBoard(state, camp);
-      },
-    });
-    const board = finalizeOperationsBoard(state);
+    const { getPersistenceMode, aggregateCollection } = await import('../../store/persistence.js');
+    let board;
+    if (getPersistenceMode() === 'mongo') {
+      const groups = await aggregateCollection('camp_ops_camps', campOperationsBoardPipeline(filter));
+      board = formatOperationsBoardFromGroups(groups || []);
+    } else {
+      const { scanCollection } = await import('../../store/filedb.js');
+      const state = createOperationsBoardState();
+      await scanCollection('camp_ops_camps', {
+        filter,
+        projection: {
+          status: 1,
+          lifecycleStage: 1,
+          assignmentStatus: 1,
+          assignmentDecision: 1,
+          executionStatus: 1,
+          effectiveExecutionStatus: 1,
+          financePaymentStatus: 1,
+          paymentSubmitStatus: 1,
+          cancellationSource: 1,
+          cancelledBy: 1,
+          assignmentRefusalReason: 1,
+          campDate: 1,
+          startTime: 1,
+          endTime: 1,
+          submittedAt: 1,
+          requestReviewStatus: 1,
+          isDeleted: 1,
+        },
+        forEach: (camp) => {
+          addCampToOperationsBoard(state, camp);
+        },
+      });
+      board = finalizeOperationsBoard(state);
+    }
     res.json({
       dateRange: {
         from: req.query.dateFrom || null,
