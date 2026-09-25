@@ -140,59 +140,76 @@ export async function upsertInboundEmail(email, channel = 'imap') {
 
 let imapSyncInFlight = null;
 
+/** Core IMAP work — used by durable heavy-job queue (no HTTP response bodies). */
+export async function syncImapMailboxWork(options = {}) {
+  if (!isImapConfigured()) {
+    throw new Error('Gmail/IMAP is not configured. Set EMAIL_IMAP_* variables in server .env');
+  }
+
+  const dateFrom = parseDateFilter(options.dateFrom);
+  const dateTo = parseDateFilter(options.dateTo, true);
+
+  const emails = await fetchEmailsForIngest();
+  const messageIds = [];
+  const errors = [];
+
+  for (const email of emails) {
+    const receivedAt = email.receivedAt ? new Date(email.receivedAt) : new Date();
+    if (dateFrom && receivedAt < dateFrom) continue;
+    if (dateTo && receivedAt > dateTo) continue;
+
+    try {
+      const stored = await upsertInboundEmail(email, 'imap');
+      const id = stored?._id != null ? String(stored._id) : null;
+      if (id) messageIds.push(id);
+    } catch (error) {
+      console.error(`[email] Failed to store message ${email.messageId || email.uid}:`, error.message);
+      errors.push({
+        messageId: email.messageId || null,
+        uid: email.uid || null,
+        error: error.message,
+      });
+    }
+  }
+
+  return {
+    fetched: emails.length,
+    synced: messageIds.length,
+    filtered: emails.length - messageIds.length - errors.length,
+    failed: errors.length,
+    errors: errors.slice(0, 20),
+    messageIds,
+    mailbox: process.env.EMAIL_IMAP_MAILBOX || 'INBOX',
+    mailboxUser: process.env.EMAIL_IMAP_USER || '',
+    dateFrom: dateFrom?.toISOString() || null,
+    dateTo: dateTo?.toISOString() || null,
+  };
+}
+
 export async function syncImapMailbox(options = {}) {
   if (!isImapConfigured()) {
     throw new Error('Gmail/IMAP is not configured. Set EMAIL_IMAP_* variables in server .env');
   }
 
-  // Bound concurrent IMAP syncs — overlapping HTTP handlers must not stack connections.
+  // Bound concurrent IMAP syncs — overlapping HTTP handlers share one in-flight promise.
   if (imapSyncInFlight) {
     return imapSyncInFlight;
   }
 
   imapSyncInFlight = (async () => {
-    const { withHeavyJobGate } = await import('../../../../jobs/heavyJobGate.js');
-    return withHeavyJobGate('imap-sync', async () => {
-      const dateFrom = parseDateFilter(options.dateFrom);
-      const dateTo = parseDateFilter(options.dateTo, true);
-
-      const emails = await fetchEmailsForIngest();
-      const messageIds = [];
-      const errors = [];
-
-      for (const email of emails) {
-        const receivedAt = email.receivedAt ? new Date(email.receivedAt) : new Date();
-        if (dateFrom && receivedAt < dateFrom) continue;
-        if (dateTo && receivedAt > dateTo) continue;
-
-        try {
-          const stored = await upsertInboundEmail(email, 'imap');
-          const id = stored?._id != null ? String(stored._id) : null;
-          if (id) messageIds.push(id);
-        } catch (error) {
-          console.error(`[email] Failed to store message ${email.messageId || email.uid}:`, error.message);
-          errors.push({
-            messageId: email.messageId || null,
-            uid: email.uid || null,
-            error: error.message,
-          });
-        }
-      }
-
-      // Do not return full message bodies — list/get endpoints are the read path.
-      return {
-        fetched: emails.length,
-        synced: messageIds.length,
-        filtered: emails.length - messageIds.length - errors.length,
-        failed: errors.length,
-        errors: errors.slice(0, 20),
-        messageIds,
-        mailbox: process.env.EMAIL_IMAP_MAILBOX || 'INBOX',
-        mailboxUser: process.env.EMAIL_IMAP_USER || '',
-        dateFrom: dateFrom?.toISOString() || null,
-        dateTo: dateTo?.toISOString() || null,
-      };
+    const { enqueueHeavyJob, awaitHeavyJob, ensureHeavyJobPump } = await import(
+      '../../../../jobs/heavyJobQueue.js'
+    );
+    ensureHeavyJobPump();
+    const { jobId } = await enqueueHeavyJob({
+      type: 'imap-sync',
+      label: 'imap-sync',
+      payload: {
+        dateFrom: options.dateFrom || null,
+        dateTo: options.dateTo || null,
+      },
     });
+    return awaitHeavyJob(jobId, { timeoutMs: 180_000 });
   })().finally(() => {
     imapSyncInFlight = null;
   });

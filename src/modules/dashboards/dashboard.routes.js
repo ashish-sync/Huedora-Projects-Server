@@ -20,10 +20,7 @@ import {
 } from '../finance/finance.model.js';
 import { sendExcel, sendMultiSheetExcel } from '../../utils/excelExport.js';
 import { ASSET_STATUS_OPTIONS } from '../devices/device.constants.js';
-import {
-  computeDeviceCondition,
-  periodKeyFromDate,
-} from '../verifications/verification.condition.js';
+import { periodKeyFromDate } from '../verifications/verification.condition.js';
 import {
   expenseOverviewPipeline,
   invoiceOverviewPipeline,
@@ -31,11 +28,11 @@ import {
   summarizeCommercialAggregates,
   firstGroupRow,
   trackingInventoryByStatusPipeline,
-  trackingEligibleAssetsPipeline,
+  trackingVerificationByConditionPipeline,
   formatTrackingInventoryBuckets,
-  assetValueOf,
+  formatTrackingVerificationBuckets,
 } from './dashboard.aggregations.js';
-import { VerificationCampaign, VerificationRecord } from '../verifications/verification.model.js';
+import { VerificationCampaign } from '../verifications/verification.model.js';
 import { listReviewModulesForUser, runModuleReview } from './moduleReview.js';
 
 function countMap(rows) {
@@ -570,52 +567,25 @@ router.get(
     const [py, pm] = periodKey.split('-').map(Number);
     const periodAnchor = toDate || new Date(py, (pm || 1) - 1, Math.min(new Date().getDate(), 28));
 
-    // Inventory + eligible assets computed in Mongo (onboard date includes addedMonth).
-    const [inventoryRows, signed, campaign] = await Promise.all([
+    // Inventory + verification buckets computed entirely in Mongo — no full asset hydrate.
+    const campaign = await findCampaignReadOnly(periodKey);
+    const [inventoryRows, verificationRows] = await Promise.all([
       Asset.aggregate(trackingInventoryByStatusPipeline(fromDate, toDate)),
-      Asset.aggregate(trackingEligibleAssetsPipeline(fromDate, toDate)),
-      findCampaignReadOnly(periodKey),
+      Asset.aggregate(
+        trackingVerificationByConditionPipeline(
+          fromDate,
+          toDate,
+          campaign?._id || null,
+          periodAnchor,
+        ),
+      ),
     ]);
 
     const { inventoryQty, inventoryValue, assetStatus } = formatTrackingInventoryBuckets(
       inventoryRows,
       ASSET_STATUS_OPTIONS,
     );
-
-    // Read-only: never create campaigns/records on dashboard GET (was N+1 writes).
-    const signedIds = signed.map((a) => a._id).filter(Boolean);
-    const existingRecords = campaign && signedIds.length
-      ? await VerificationRecord.find({
-        campaignId: campaign._id,
-        assetId: { $in: signedIds },
-        isDeleted: false,
-      })
-        .select('assetId round1 round2')
-        .lean()
-      : [];
-    const recordByAssetId = Object.fromEntries(
-      (existingRecords || []).map((r) => [String(r.assetId), r]),
-    );
-
-    const verificationMap = {
-      SAFE: { key: 'SAFE', label: 'Safe', qty: 0, value: 0 },
-      CAUTION: { key: 'CAUTION', label: 'Caution', qty: 0, value: 0 },
-      DANGER: { key: 'DANGER', label: 'Danger', qty: 0, value: 0 },
-    };
-
-    for (const asset of signed) {
-      const record = recordByAssetId[String(asset._id)] || null;
-      const condition = computeDeviceCondition(asset, record, periodAnchor);
-      const bucket = verificationMap[condition.condition] || verificationMap.DANGER;
-      bucket.qty += 1;
-      bucket.value += assetValueOf(asset);
-    }
-
-    const verification = ['SAFE', 'CAUTION', 'DANGER'].map((k) => verificationMap[k]);
-    const verificationTotals = {
-      qty: verification.reduce((s, r) => s + r.qty, 0),
-      value: verification.reduce((s, r) => s + r.value, 0),
-    };
+    const { verification, verificationTotals } = formatTrackingVerificationBuckets(verificationRows);
 
     const showValue = hasPermission(req, PERMISSIONS.ASSETS_VIEW_VALUE);
     const mapStatus = (row) =>

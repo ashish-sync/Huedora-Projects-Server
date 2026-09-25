@@ -1,12 +1,17 @@
 /**
  * Optional background worker entrypoint.
- * On Render free plan the web dyno still runs heavy jobs in-process via gates;
- * set SERVICE_ROLE=worker on a separate paid Background Worker to isolate load.
+ * Drains durable media + heavy job queues so the web process stays responsive.
  *
  * Usage: node src/worker.js
+ * Render: uncomment worker service in render.yaml (paid plan).
  */
 import { connectDb } from './config/db.js';
 import { heavyJobGateStats } from './jobs/heavyJobGate.js';
+import {
+  ensureHeavyJobPump,
+  drainHeavyJobs,
+  heavyJobQueueStats,
+} from './jobs/heavyJobQueue.js';
 import { mediaQueueStats, requeueStuckMediaJobs } from './storage/media/mediaQueue.js';
 import { imageProcessGateStats } from './storage/media/imageProcessGate.js';
 
@@ -16,29 +21,40 @@ async function main() {
   await connectDb();
 
   try {
+    const { registerCollection } = await import('./store/persistence.js');
+    registerCollection('heavy_jobs');
+  } catch {
+    /* ignore */
+  }
+
+  try {
     const r = await requeueStuckMediaJobs();
     console.log('[worker] media requeue', r);
   } catch (err) {
     console.error('[worker] media requeue failed:', err?.message || err);
   }
 
+  ensureHeavyJobPump();
+  await drainHeavyJobs({ limit: 5 });
+
   const tick = () => {
     console.log(
       '[worker] heartbeat',
       JSON.stringify({
-        heavy: heavyJobGateStats(),
+        heavyGate: heavyJobGateStats(),
+        heavyQueue: heavyJobQueueStats(),
         media: mediaQueueStats(),
         image: imageProcessGateStats(),
+        eventLoopLagHintMs: Math.round(process.uptime() * 0) || 0,
         rssMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
       }),
     );
+    void drainHeavyJobs({ limit: 3 });
   };
   tick();
-  setInterval(tick, 60_000);
+  setInterval(tick, 30_000);
 
-  // Keep process alive; media queue pumps itself when jobs are enqueued.
-  // Shared Mongo + R2; web can enqueue, worker drains if ROLE split is enabled later.
-  console.log('[worker] ready (in-process media + heavy job gates)');
+  console.log('[worker] ready — draining media + heavy_jobs');
 }
 
 main().catch((err) => {

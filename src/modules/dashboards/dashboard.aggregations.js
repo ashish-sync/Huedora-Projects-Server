@@ -296,6 +296,7 @@ export function trackingInventoryByStatusPipeline(fromDate, toDate) {
 
 /**
  * Lean projection of Verification One–eligible assets for condition bucketing.
+ * Prefer trackingVerificationByConditionPipeline so Node never sees the full set.
  */
 export function trackingEligibleAssetsPipeline(fromDate, toDate) {
   return [
@@ -331,6 +332,201 @@ export function trackingEligibleAssetsPipeline(fromDate, toDate) {
       },
     },
   ];
+}
+
+/**
+ * Aggregate SAFE/CAUTION/DANGER buckets in Mongo (no full eligible-asset hydrate).
+ * Mirrors computeDeviceCondition rules for the given campaign + periodAnchor.
+ */
+export function trackingVerificationByConditionPipeline(fromDate, toDate, campaignId, periodAnchor) {
+  const now = periodAnchor instanceof Date ? periodAnchor : new Date(periodAnchor || Date.now());
+  const dim = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+
+  const stages = [
+    ...trackingOnboardDateStages(fromDate, toDate),
+    {
+      $addFields: {
+        _status: trackingStatusExpression(),
+        _productType: { $trim: { input: { $ifNull: ['$productType', ''] } } },
+        _value: {
+          $let: {
+            vars: {
+              n: {
+                $convert: {
+                  input: '$deviceValue',
+                  to: 'double',
+                  onError: 0,
+                  onNull: 0,
+                },
+              },
+            },
+            in: {
+              $cond: [
+                { $and: [{ $ne: ['$$n', null] }, { $gte: ['$$n', 0] }] },
+                '$$n',
+                0,
+              ],
+            },
+          },
+        },
+      },
+    },
+    {
+      $match: {
+        $and: [
+          {
+            $or: [
+              { _productType: '' },
+              { _productType: 'Medical Device' },
+            ],
+          },
+          { _status: { $in: VERIFICATION_ONE_ELIGIBLE_STATUSES } },
+        ],
+      },
+    },
+  ];
+
+  if (campaignId) {
+    stages.push({
+      $lookup: {
+        from: 'tylo_verification_records',
+        let: { assetId: '$_id' },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ['$campaignId', campaignId] },
+                  { $eq: ['$assetId', '$$assetId'] },
+                  { $ne: ['$isDeleted', true] },
+                ],
+              },
+            },
+          },
+          { $project: { round1: 1, round2: 1 } },
+          { $limit: 1 },
+        ],
+        as: '_vr',
+      },
+    });
+  } else {
+    stages.push({ $addFields: { _vr: [] } });
+  }
+
+  stages.push(
+    {
+      $addFields: {
+        _record: { $arrayElemAt: ['$_vr', 0] },
+      },
+    },
+    {
+      $addFields: {
+        _r1: {
+          $cond: [
+            { $ne: [{ $ifNull: ['$_record.round1.verifiedOn', null] }, null] },
+            1,
+            0,
+          ],
+        },
+        _r2: {
+          $cond: [
+            { $ne: [{ $ifNull: ['$_record.round2.verifiedOn', null] }, null] },
+            1,
+            0,
+          ],
+        },
+        _last: {
+          $max: [
+            {
+              $convert: {
+                input: '$_record.round1.verifiedOn',
+                to: 'date',
+                onError: null,
+                onNull: null,
+              },
+            },
+            {
+              $convert: {
+                input: '$_record.round2.verifiedOn',
+                to: 'date',
+                onError: null,
+                onNull: null,
+              },
+            },
+            {
+              $convert: {
+                input: '$lastVerifiedAt',
+                to: 'date',
+                onError: null,
+                onNull: null,
+              },
+            },
+          ],
+        },
+      },
+    },
+    {
+      $addFields: {
+        _done: { $add: ['$_r1', '$_r2'] },
+        _daysSince: {
+          $cond: [
+            { $eq: ['$_last', null] },
+            999999,
+            {
+              $floor: {
+                $divide: [{ $subtract: [now, '$_last'] }, 86400000],
+              },
+            },
+          ],
+        },
+      },
+    },
+    {
+      $addFields: {
+        _condition: {
+          $switch: {
+            branches: [
+              { case: { $gte: ['$_done', 2] }, then: 'SAFE' },
+              { case: { $eq: ['$_done', 1] }, then: 'CAUTION' },
+              { case: { $gte: ['$_daysSince', dim] }, then: 'DANGER' },
+            ],
+            default: 'CAUTION',
+          },
+        },
+      },
+    },
+    {
+      $group: {
+        _id: '$_condition',
+        qty: { $sum: 1 },
+        value: { $sum: '$_value' },
+      },
+    },
+  );
+
+  return stages;
+}
+
+export function formatTrackingVerificationBuckets(rows = []) {
+  const map = {
+    SAFE: { key: 'SAFE', label: 'Safe', qty: 0, value: 0 },
+    CAUTION: { key: 'CAUTION', label: 'Caution', qty: 0, value: 0 },
+    DANGER: { key: 'DANGER', label: 'Danger', qty: 0, value: 0 },
+  };
+  for (const row of rows) {
+    const key = row?._id;
+    if (!map[key]) continue;
+    map[key].qty += Number(row.qty) || 0;
+    map[key].value += Number(row.value) || 0;
+  }
+  const verification = ['SAFE', 'CAUTION', 'DANGER'].map((k) => map[k]);
+  return {
+    verification,
+    verificationTotals: {
+      qty: verification.reduce((s, r) => s + r.qty, 0),
+      value: verification.reduce((s, r) => s + r.value, 0),
+    },
+  };
 }
 
 /**

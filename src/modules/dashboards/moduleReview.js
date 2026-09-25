@@ -1,6 +1,5 @@
 import { hasPermission } from '../../middleware/auth.js';
 import { AppError } from '../../utils/helpers.js';
-import { formatDateTime } from '../../utils/dateFormat.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { Asset } from '../assets/asset.model.js';
 import { Agreement } from '../agreements/agreement.model.js';
@@ -15,6 +14,15 @@ import { ImportJob } from '../imports/importJob.model.js';
 import { Notification } from '../notifications/notification.model.js';
 import { AuditLog } from '../audit/audit.model.js';
 import { User } from '../users/user.model.js';
+import {
+  reviewLimit,
+  reviewFacetPipeline,
+  facetTotal,
+  facetCounts,
+  fmtReviewDate,
+  reviewDateExpression,
+  dateRangeMatch,
+} from './moduleReview.aggregations.js';
 
 export const REVIEW_MODULES = [
   {
@@ -129,7 +137,6 @@ export function parseReviewRange(query = {}) {
 }
 
 function canAccessModule(req, _mod) {
-  // Dashboard read is the reporting gate: any module can be reviewed from the dashboard.
   return (
     hasPermission(req, PERMISSIONS.ALL) || hasPermission(req, PERMISSIONS.DASHBOARDS_READ)
   );
@@ -143,57 +150,51 @@ export function listReviewModulesForUser(req) {
   }));
 }
 
-function getDateValue(row, fields) {
-  for (const field of fields) {
-    const v = row?.[field];
-    if (v) return v;
-  }
-  return null;
-}
-
-function inRange(iso, fromDate, toDate) {
-  if (!fromDate && !toDate) return true;
-  if (!iso) return false;
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return false;
-  if (fromDate && t < fromDate.getTime()) return false;
-  if (toDate && t > toDate.getTime()) return false;
-  return true;
-}
-
-function countBy(rows, field) {
-  const out = {};
-  for (const row of rows) {
-    const key = String(row?.[field] ?? 'Unknown') || 'Unknown';
-    out[key] = (out[key] || 0) + 1;
-  }
-  return out;
-}
-
-function fmtDate(iso) {
-  if (!iso) return '-';
-  return formatDateTime(iso);
-}
-
-function activeOnly(rows) {
-  return (rows || []).filter((r) => !r.isDeleted);
+async function runFacet(Model, opts) {
+  const pipeline = reviewFacetPipeline(opts);
+  const out = await Model.aggregate(pipeline);
+  return Array.isArray(out) && out[0] ? out[0] : { total: [], rows: [], byField: [] };
 }
 
 async function loadModuleRows(moduleId, req, fromDate, toDate) {
-  const limit = Math.min(Number(req.query.limit) || 200, 500);
+  const limit = reviewLimit(req.query);
 
   switch (moduleId) {
     case 'assets': {
-      const all = activeOnly(await Asset.find({ isDeleted: false }).limit(2000));
-      const filtered = all.filter((r) =>
-        inRange(getDateValue(r, ['createdAt', 'purchaseDate', 'addedMonth']), fromDate, toDate)
-      );
+      const bucket = await runFacet(Asset, {
+        baseMatch: { isDeleted: false },
+        dateFields: ['createdAt', 'purchaseDate'],
+        fromDate,
+        toDate,
+        limit,
+        groupField: 'agreementStatus',
+        rowProject: {
+          _id: 1,
+          deviceNameSnapshot: 1,
+          name: 1,
+          serialNumber: 1,
+          status: 1,
+          agreementStatus: 1,
+          custody: 1,
+          _reviewDate: 1,
+        },
+      });
+      const byAgreement = facetCounts(bucket);
+      const statusBucket = await runFacet(Asset, {
+        baseMatch: { isDeleted: false },
+        dateFields: ['createdAt', 'purchaseDate'],
+        fromDate,
+        toDate,
+        limit: 1,
+        groupField: 'status',
+        rowProject: { _id: 1 },
+      });
       return {
         dateFieldLabel: 'Created / onboarded',
         summary: {
-          total: filtered.length,
-          byStatus: countBy(filtered, 'status'),
-          byAgreementStatus: countBy(filtered, 'agreementStatus'),
+          total: facetTotal(bucket),
+          byStatus: facetCounts(statusBucket),
+          byAgreementStatus: byAgreement,
         },
         columns: [
           { key: 'name', label: 'Asset' },
@@ -203,24 +204,38 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
           { key: 'custody', label: 'Custody' },
           { key: 'when', label: 'Date' },
         ],
-        rows: filtered.slice(0, limit).map((r) => ({
+        rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           name: r.deviceNameSnapshot || r.name || '-',
           serialNumber: r.serialNumber || '-',
           status: r.status || '-',
           agreementStatus: r.agreementStatus || '-',
           custody: r.custody || '-',
-          when: fmtDate(getDateValue(r, ['createdAt', 'purchaseDate'])),
+          when: fmtReviewDate(r._reviewDate),
         })),
-        total: filtered.length,
+        total: facetTotal(bucket),
       };
     }
     case 'agreements': {
-      const all = activeOnly(await Agreement.find({ isDeleted: false }).limit(2000));
-      const filtered = all.filter((r) => inRange(getDateValue(r, ['createdAt', 'sentAt']), fromDate, toDate));
+      const bucket = await runFacet(Agreement, {
+        baseMatch: { isDeleted: false },
+        dateFields: ['createdAt', 'sentAt'],
+        fromDate,
+        toDate,
+        limit,
+        groupField: 'status',
+        rowProject: {
+          _id: 1,
+          agreementNumber: 1,
+          title: 1,
+          partyName: 1,
+          status: 1,
+          _reviewDate: 1,
+        },
+      });
       return {
         dateFieldLabel: 'Created / sent',
-        summary: { total: filtered.length, byStatus: countBy(filtered, 'status') },
+        summary: { total: facetTotal(bucket), byStatus: facetCounts(bucket) },
         columns: [
           { key: 'agreementNumber', label: 'Agreement #' },
           { key: 'title', label: 'Title' },
@@ -228,25 +243,41 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
           { key: 'status', label: 'Status' },
           { key: 'when', label: 'Date' },
         ],
-        rows: filtered.slice(0, limit).map((r) => ({
+        rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           agreementNumber: r.agreementNumber || '-',
           title: r.title || '-',
           partyName: r.partyName || '-',
           status: r.status || '-',
-          when: fmtDate(getDateValue(r, ['createdAt', 'sentAt'])),
+          when: fmtReviewDate(r._reviewDate),
         })),
-        total: filtered.length,
+        total: facetTotal(bucket),
       };
     }
     case 'contacts': {
-      const all = activeOnly(await Contact.find({ isDeleted: false }).limit(2000));
-      const filtered = all.filter((r) => inRange(r.createdAt, fromDate, toDate));
+      const bucket = await runFacet(Contact, {
+        baseMatch: { isDeleted: false },
+        dateFields: ['createdAt'],
+        fromDate,
+        toDate,
+        limit,
+        groupField: 'resourceType',
+        rowProject: {
+          _id: 1,
+          name: 1,
+          email: 1,
+          contact: 1,
+          mobile: 1,
+          city: 1,
+          state: 1,
+          _reviewDate: 1,
+        },
+      });
       return {
         dateFieldLabel: 'Created',
         summary: {
-          total: filtered.length,
-          byResourceType: countBy(filtered, 'resourceType'),
+          total: facetTotal(bucket),
+          byResourceType: facetCounts(bucket),
         },
         columns: [
           { key: 'name', label: 'Name' },
@@ -256,26 +287,38 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
           { key: 'state', label: 'State' },
           { key: 'when', label: 'Date' },
         ],
-        rows: filtered.slice(0, limit).map((r) => ({
+        rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           name: r.name || '-',
           email: r.email || '-',
           contact: r.contact || r.mobile || '-',
           city: r.city || '-',
           state: r.state || '-',
-          when: fmtDate(r.createdAt),
+          when: fmtReviewDate(r._reviewDate),
         })),
-        total: filtered.length,
+        total: facetTotal(bucket),
       };
     }
     case 'verifications': {
-      const all = activeOnly(await VerificationRecord.find({ isDeleted: false }).limit(2000));
-      const filtered = all.filter((r) =>
-        inRange(getDateValue(r, ['updatedAt', 'createdAt']), fromDate, toDate)
-      );
+      const bucket = await runFacet(VerificationRecord, {
+        baseMatch: { isDeleted: false },
+        dateFields: ['updatedAt', 'createdAt'],
+        fromDate,
+        toDate,
+        limit,
+        groupField: 'status',
+        rowProject: {
+          _id: 1,
+          periodKey: 1,
+          serialNumber: 1,
+          brandModelTest: 1,
+          status: 1,
+          _reviewDate: 1,
+        },
+      });
       return {
         dateFieldLabel: 'Updated / created',
-        summary: { total: filtered.length, byStatus: countBy(filtered, 'status') },
+        summary: { total: facetTotal(bucket), byStatus: facetCounts(bucket) },
         columns: [
           { key: 'periodKey', label: 'Period' },
           { key: 'serialNumber', label: 'Serial' },
@@ -283,25 +326,39 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
           { key: 'status', label: 'Status' },
           { key: 'when', label: 'Date' },
         ],
-        rows: filtered.slice(0, limit).map((r) => ({
+        rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           periodKey: r.periodKey || '-',
           serialNumber: r.serialNumber || '-',
           brandModelTest: r.brandModelTest || '-',
           status: r.status || '-',
-          when: fmtDate(getDateValue(r, ['updatedAt', 'createdAt'])),
+          when: fmtReviewDate(r._reviewDate),
         })),
-        total: filtered.length,
+        total: facetTotal(bucket),
       };
     }
     case 'camps': {
-      const all = activeOnly(await CampOpsCamp.find({ isDeleted: false }).limit(2000));
-      const filtered = all.filter((r) =>
-        inRange(getDateValue(r, ['submittedAt', 'campDate', 'createdAt']), fromDate, toDate)
-      );
+      const bucket = await runFacet(CampOpsCamp, {
+        baseMatch: { isDeleted: false },
+        dateFields: ['submittedAt', 'campDate', 'createdAt'],
+        fromDate,
+        toDate,
+        limit,
+        groupField: 'status',
+        rowProject: {
+          _id: 1,
+          campId: 1,
+          clientName: 1,
+          campaignName: 1,
+          campDate: 1,
+          city: 1,
+          status: 1,
+          _reviewDate: 1,
+        },
+      });
       return {
         dateFieldLabel: 'Submitted / camp date',
-        summary: { total: filtered.length, byStatus: countBy(filtered, 'status') },
+        summary: { total: facetTotal(bucket), byStatus: facetCounts(bucket) },
         columns: [
           { key: 'campId', label: 'Camp ID' },
           { key: 'clientName', label: 'Client' },
@@ -311,7 +368,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
           { key: 'status', label: 'Status' },
           { key: 'when', label: 'Submitted' },
         ],
-        rows: filtered.slice(0, limit).map((r) => ({
+        rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           campId: r.campId || '-',
           clientName: r.clientName || '-',
@@ -319,24 +376,49 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
           campDate: r.campDate || '-',
           city: r.city || '-',
           status: r.status || '-',
-          when: fmtDate(getDateValue(r, ['submittedAt', 'createdAt'])),
+          when: fmtReviewDate(r._reviewDate),
         })),
-        total: filtered.length,
+        total: facetTotal(bucket),
       };
     }
     case 'asset-requests': {
-      const all = activeOnly(await AssetRequest.find({ isDeleted: false }).limit(2000));
-      const filtered = all.filter((r) => inRange(r.createdAt, fromDate, toDate));
+      const bucket = await runFacet(AssetRequest, {
+        baseMatch: { isDeleted: false },
+        dateFields: ['createdAt'],
+        fromDate,
+        toDate,
+        limit,
+        groupField: 'status',
+        rowProject: {
+          _id: 1,
+          requestNumber: 1,
+          requestType: 1,
+          status: 1,
+          assetName: 1,
+          trainingTopic: 1,
+          hiringName: 1,
+          reason: 1,
+          _reviewDate: 1,
+        },
+      });
+      const typeBucket = await runFacet(AssetRequest, {
+        baseMatch: { isDeleted: false },
+        dateFields: ['createdAt'],
+        fromDate,
+        toDate,
+        limit: 1,
+        groupField: 'requestType',
+        rowProject: { _id: 1 },
+      });
       const byType = {};
-      for (const r of filtered) {
-        const label = REQUEST_TYPE_LABELS[r.requestType] || r.requestType || 'Unknown';
-        byType[label] = (byType[label] || 0) + 1;
+      for (const [k, v] of Object.entries(facetCounts(typeBucket))) {
+        byType[REQUEST_TYPE_LABELS[k] || k || 'Unknown'] = v;
       }
       return {
         dateFieldLabel: 'Created',
         summary: {
-          total: filtered.length,
-          byStatus: countBy(filtered, 'status'),
+          total: facetTotal(bucket),
+          byStatus: facetCounts(bucket),
           byType,
         },
         columns: [
@@ -347,33 +429,52 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
           { key: 'reason', label: 'Reason' },
           { key: 'when', label: 'Date' },
         ],
-        rows: filtered.slice(0, limit).map((r) => ({
+        rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           requestNumber: r.requestNumber || '-',
           requestType: REQUEST_TYPE_LABELS[r.requestType] || r.requestType || '-',
           status: r.status || '-',
           assetName: r.assetName || r.trainingTopic || r.hiringName || '-',
           reason: r.reason || '-',
-          when: fmtDate(r.createdAt),
+          when: fmtReviewDate(r._reviewDate),
         })),
-        total: filtered.length,
+        total: facetTotal(bucket),
       };
     }
     case 'logistics': {
-      const all = activeOnly(await LogisticsInOutEntry.find({ isDeleted: false }).limit(2000));
-      const filtered = all.filter((r) =>
-        inRange(
-          getDateValue(r, ['transactionDateTime', 'transactionDate', 'createdAt']),
-          fromDate,
-          toDate
-        )
-      );
+      const bucket = await runFacet(LogisticsInOutEntry, {
+        baseMatch: { isDeleted: false },
+        dateFields: ['transactionDateTime', 'transactionDate', 'createdAt'],
+        fromDate,
+        toDate,
+        limit,
+        groupField: 'status',
+        rowProject: {
+          _id: 1,
+          uniqueKey: 1,
+          entryType: 1,
+          productName: 1,
+          name: 1,
+          status: 1,
+          city: 1,
+          _reviewDate: 1,
+        },
+      });
+      const entryBucket = await runFacet(LogisticsInOutEntry, {
+        baseMatch: { isDeleted: false },
+        dateFields: ['transactionDateTime', 'transactionDate', 'createdAt'],
+        fromDate,
+        toDate,
+        limit: 1,
+        groupField: 'entryType',
+        rowProject: { _id: 1 },
+      });
       return {
         dateFieldLabel: 'Transaction date',
         summary: {
-          total: filtered.length,
-          byStatus: countBy(filtered, 'status'),
-          byEntryType: countBy(filtered, 'entryType'),
+          total: facetTotal(bucket),
+          byStatus: facetCounts(bucket),
+          byEntryType: facetCounts(entryBucket),
         },
         columns: [
           { key: 'uniqueKey', label: 'Txn ID' },
@@ -383,56 +484,102 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
           { key: 'city', label: 'City' },
           { key: 'when', label: 'Date' },
         ],
-        rows: filtered.slice(0, limit).map((r) => ({
+        rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           uniqueKey: r.uniqueKey || '-',
           entryType: r.entryType || '-',
           productName: r.productName || r.name || '-',
           status: r.status || '-',
           city: r.city || '-',
-          when: fmtDate(getDateValue(r, ['transactionDateTime', 'transactionDate', 'createdAt'])),
+          when: fmtReviewDate(r._reviewDate),
         })),
-        total: filtered.length,
+        total: facetTotal(bucket),
       };
     }
     case 'finance': {
-      const [expenses, invoices] = await Promise.all([
-        activeOnly(await FinanceExpense.find({ isDeleted: false }).limit(2000)),
-        activeOnly(await FinanceInvoice.find({ isDeleted: false }).limit(2000)),
+      // Two lean aggregations — never hydrate 2k+2k docs into Node.
+      const expensePipe = [
+        { $match: { isDeleted: false } },
+        { $addFields: { _reviewDate: reviewDateExpression(['expenseDate', 'createdAt']) } },
+        ...(dateRangeMatch(fromDate, toDate) ? [{ $match: dateRangeMatch(fromDate, toDate) }] : []),
+        {
+          $facet: {
+            total: [{ $count: 'n' }],
+            byStatus: [{ $group: { _id: { $ifNull: ['$status', 'Unknown'] }, count: { $sum: 1 } } }],
+            rows: [
+              { $sort: { _reviewDate: -1 } },
+              { $limit: limit },
+              {
+                $project: {
+                  kind: { $literal: 'Expense' },
+                  ref: { $ifNull: ['$expenseKey', '-'] },
+                  party: { $ifNull: ['$payeeName', { $ifNull: ['$title', '-'] }] },
+                  amount: 1,
+                  status: 1,
+                  _reviewDate: 1,
+                },
+              },
+            ],
+          },
+        },
+      ];
+      const invoicePipe = [
+        { $match: { isDeleted: false } },
+        { $addFields: { _reviewDate: reviewDateExpression(['invoiceDate', 'createdAt']) } },
+        ...(dateRangeMatch(fromDate, toDate) ? [{ $match: dateRangeMatch(fromDate, toDate) }] : []),
+        {
+          $facet: {
+            total: [{ $count: 'n' }],
+            byStatus: [{ $group: { _id: { $ifNull: ['$status', 'Unknown'] }, count: { $sum: 1 } } }],
+            rows: [
+              { $sort: { _reviewDate: -1 } },
+              { $limit: limit },
+              {
+                $project: {
+                  kind: { $literal: 'Invoice' },
+                  ref: { $ifNull: ['$invoiceNumber', { $ifNull: ['$invoiceKey', '-'] }] },
+                  party: { $ifNull: ['$vendorName', '-'] },
+                  amount: '$totalAmount',
+                  status: 1,
+                  _reviewDate: 1,
+                },
+              },
+            ],
+          },
+        },
+      ];
+      const [expenseOut, invoiceOut] = await Promise.all([
+        FinanceExpense.aggregate(expensePipe),
+        FinanceInvoice.aggregate(invoicePipe),
       ]);
-      const expenseFiltered = expenses.filter((r) =>
-        inRange(getDateValue(r, ['expenseDate', 'createdAt']), fromDate, toDate)
-      );
-      const invoiceFiltered = invoices.filter((r) =>
-        inRange(getDateValue(r, ['invoiceDate', 'createdAt']), fromDate, toDate)
-      );
-      const combined = [
-        ...expenseFiltered.map((r) => ({
+      const e = expenseOut[0] || {};
+      const i = invoiceOut[0] || {};
+      const expenseTotal = Number(e.total?.[0]?.n) || 0;
+      const invoiceTotal = Number(i.total?.[0]?.n) || 0;
+      const byStatus = {};
+      for (const row of [...(e.byStatus || []), ...(i.byStatus || [])]) {
+        const key = String(row._id ?? 'Unknown');
+        byStatus[key] = (byStatus[key] || 0) + (Number(row.count) || 0);
+      }
+      const merged = [...(e.rows || []), ...(i.rows || [])]
+        .sort((a, b) => new Date(b._reviewDate || 0) - new Date(a._reviewDate || 0))
+        .slice(0, limit)
+        .map((r) => ({
           id: r._id,
-          kind: 'Expense',
-          ref: r.expenseKey || '-',
-          party: r.payeeName || r.title || '-',
+          kind: r.kind,
+          ref: r.ref || '-',
+          party: r.party || '-',
           amount: r.amount,
           status: r.status || '-',
-          when: fmtDate(getDateValue(r, ['expenseDate', 'createdAt'])),
-        })),
-        ...invoiceFiltered.map((r) => ({
-          id: r._id,
-          kind: 'Invoice',
-          ref: r.invoiceNumber || r.invoiceKey || '-',
-          party: r.vendorName || '-',
-          amount: r.totalAmount,
-          status: r.status || '-',
-          when: fmtDate(getDateValue(r, ['invoiceDate', 'createdAt'])),
-        })),
-      ];
+          when: fmtReviewDate(r._reviewDate),
+        }));
       return {
         dateFieldLabel: 'Expense / invoice date',
         summary: {
-          total: combined.length,
-          expenses: expenseFiltered.length,
-          invoices: invoiceFiltered.length,
-          byStatus: countBy(combined, 'status'),
+          total: expenseTotal + invoiceTotal,
+          expenses: expenseTotal,
+          invoices: invoiceTotal,
+          byStatus,
         },
         columns: [
           { key: 'kind', label: 'Type' },
@@ -442,40 +589,67 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
           { key: 'status', label: 'Status' },
           { key: 'when', label: 'Date' },
         ],
-        rows: combined.slice(0, limit),
-        total: combined.length,
+        rows: merged,
+        total: expenseTotal + invoiceTotal,
       };
     }
     case 'movements': {
-      const all = activeOnly(await Movement.find({ isDeleted: false }).limit(2000));
-      const filtered = all.filter((r) => inRange(r.createdAt, fromDate, toDate));
+      const bucket = await runFacet(Movement, {
+        baseMatch: { isDeleted: false },
+        dateFields: ['createdAt'],
+        fromDate,
+        toDate,
+        limit,
+        groupField: 'status',
+        rowProject: {
+          _id: 1,
+          movementNumber: 1,
+          status: 1,
+          reason: 1,
+          _reviewDate: 1,
+        },
+      });
       return {
         dateFieldLabel: 'Created',
-        summary: { total: filtered.length, byStatus: countBy(filtered, 'status') },
+        summary: { total: facetTotal(bucket), byStatus: facetCounts(bucket) },
         columns: [
           { key: 'movementNumber', label: 'Number' },
           { key: 'status', label: 'Status' },
           { key: 'reason', label: 'Reason' },
           { key: 'when', label: 'Date' },
         ],
-        rows: filtered.slice(0, limit).map((r) => ({
+        rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           movementNumber: r.movementNumber || '-',
           status: r.status || '-',
           reason: r.reason || '-',
-          when: fmtDate(r.createdAt),
+          when: fmtReviewDate(r._reviewDate),
         })),
-        total: filtered.length,
+        total: facetTotal(bucket),
       };
     }
     case 'imports': {
-      const all = await ImportJob.find({}).limit(1000);
-      const filtered = all.filter((r) =>
-        inRange(getDateValue(r, ['startedAt', 'createdAt']), fromDate, toDate)
-      );
+      const bucket = await runFacet(ImportJob, {
+        baseMatch: {},
+        dateFields: ['startedAt', 'createdAt'],
+        fromDate,
+        toDate,
+        limit,
+        groupField: 'status',
+        rowProject: {
+          _id: 1,
+          type: 1,
+          importType: 1,
+          status: 1,
+          totalRows: 1,
+          successRows: 1,
+          errorRows: 1,
+          _reviewDate: 1,
+        },
+      });
       return {
         dateFieldLabel: 'Started',
-        summary: { total: filtered.length, byStatus: countBy(filtered, 'status') },
+        summary: { total: facetTotal(bucket), byStatus: facetCounts(bucket) },
         columns: [
           { key: 'type', label: 'Type' },
           { key: 'status', label: 'Status' },
@@ -484,16 +658,16 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
           { key: 'errorRows', label: 'Errors' },
           { key: 'when', label: 'Date' },
         ],
-        rows: filtered.slice(0, limit).map((r) => ({
+        rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           type: r.type || r.importType || '-',
           status: r.status || '-',
           totalRows: r.totalRows ?? 0,
           successRows: r.successRows ?? 0,
           errorRows: r.errorRows ?? 0,
-          when: fmtDate(getDateValue(r, ['startedAt', 'createdAt'])),
+          when: fmtReviewDate(r._reviewDate),
         })),
-        total: filtered.length,
+        total: facetTotal(bucket),
       };
     }
     case 'notifications': {
@@ -501,42 +675,82 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
       if (!hasPermission(req, PERMISSIONS.ALL) && !hasPermission(req, PERMISSIONS.AUDIT_READ)) {
         filter.userId = req.user._id;
       }
-      const all = await Notification.find(filter).limit(1000);
-      const filtered = all.filter((r) => inRange(r.createdAt, fromDate, toDate));
-      const unread = filtered.filter((r) => !r.readAt).length;
+      const stages = [
+        { $match: filter },
+        { $addFields: { _reviewDate: reviewDateExpression(['createdAt']) } },
+        ...(dateRangeMatch(fromDate, toDate) ? [{ $match: dateRangeMatch(fromDate, toDate) }] : []),
+        {
+          $facet: {
+            total: [{ $count: 'n' }],
+            byType: [{ $group: { _id: { $ifNull: ['$type', 'Unknown'] }, count: { $sum: 1 } } }],
+            unread: [{ $match: { readAt: null } }, { $count: 'n' }],
+            rows: [
+              { $sort: { _reviewDate: -1 } },
+              { $limit: limit },
+              { $project: { _id: 1, title: 1, type: 1, readAt: 1, _reviewDate: 1 } },
+            ],
+          },
+        },
+      ];
+      const out = await Notification.aggregate(stages);
+      const bucket = out[0] || {};
+      const total = Number(bucket.total?.[0]?.n) || 0;
+      const unread = Number(bucket.unread?.[0]?.n) || 0;
+      const byType = {};
+      for (const row of bucket.byType || []) {
+        byType[String(row._id ?? 'Unknown')] = Number(row.count) || 0;
+      }
       return {
         dateFieldLabel: 'Created',
-        summary: {
-          total: filtered.length,
-          byType: countBy(filtered, 'type'),
-          unread,
-          read: filtered.length - unread,
-        },
+        summary: { total, byType, unread, read: total - unread },
         columns: [
           { key: 'title', label: 'Title' },
           { key: 'type', label: 'Type' },
           { key: 'read', label: 'Read' },
           { key: 'when', label: 'Date' },
         ],
-        rows: filtered.slice(0, limit).map((r) => ({
+        rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           title: r.title || '-',
           type: r.type || '-',
           read: r.readAt ? 'Yes' : 'No',
-          when: fmtDate(r.createdAt),
+          when: fmtReviewDate(r._reviewDate),
         })),
-        total: filtered.length,
+        total,
       };
     }
     case 'audit': {
-      const all = await AuditLog.find({}).limit(2000);
-      const filtered = all.filter((r) => inRange(getDateValue(r, ['at', 'createdAt']), fromDate, toDate));
+      const bucket = await runFacet(AuditLog, {
+        baseMatch: {},
+        dateFields: ['at', 'createdAt'],
+        fromDate,
+        toDate,
+        limit,
+        groupField: 'action',
+        rowProject: {
+          _id: 1,
+          action: 1,
+          entityType: 1,
+          actorEmail: 1,
+          result: 1,
+          _reviewDate: 1,
+        },
+      });
+      const resultBucket = await runFacet(AuditLog, {
+        baseMatch: {},
+        dateFields: ['at', 'createdAt'],
+        fromDate,
+        toDate,
+        limit: 1,
+        groupField: 'result',
+        rowProject: { _id: 1 },
+      });
       return {
         dateFieldLabel: 'At',
         summary: {
-          total: filtered.length,
-          byAction: countBy(filtered, 'action'),
-          byResult: countBy(filtered, 'result'),
+          total: facetTotal(bucket),
+          byAction: facetCounts(bucket),
+          byResult: facetCounts(resultBucket),
         },
         columns: [
           { key: 'action', label: 'Action' },
@@ -545,26 +759,53 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
           { key: 'result', label: 'Result' },
           { key: 'when', label: 'Date' },
         ],
-        rows: filtered.slice(0, limit).map((r) => ({
+        rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           action: r.action || '-',
           entityType: r.entityType || '-',
           actorEmail: r.actorEmail || '-',
           result: r.result || '-',
-          when: fmtDate(getDateValue(r, ['at', 'createdAt'])),
+          when: fmtReviewDate(r._reviewDate),
         })),
-        total: filtered.length,
+        total: facetTotal(bucket),
       };
     }
     case 'users': {
-      const all = activeOnly(await User.find({ isDeleted: false }).limit(1000));
-      const filtered = all.filter((r) => inRange(r.createdAt, fromDate, toDate));
+      const stages = [
+        { $match: { isDeleted: false } },
+        { $addFields: { _reviewDate: reviewDateExpression(['createdAt']) } },
+        ...(dateRangeMatch(fromDate, toDate) ? [{ $match: dateRangeMatch(fromDate, toDate) }] : []),
+        {
+          $facet: {
+            total: [{ $count: 'n' }],
+            active: [{ $match: { isActive: { $ne: false } } }, { $count: 'n' }],
+            inactive: [{ $match: { isActive: false } }, { $count: 'n' }],
+            rows: [
+              { $sort: { _reviewDate: -1 } },
+              { $limit: limit },
+              {
+                $project: {
+                  _id: 1,
+                  fullName: 1,
+                  email: 1,
+                  username: 1,
+                  isActive: 1,
+                  _reviewDate: 1,
+                },
+              },
+            ],
+          },
+        },
+      ];
+      const out = await User.aggregate(stages);
+      const bucket = out[0] || {};
+      const total = Number(bucket.total?.[0]?.n) || 0;
       return {
         dateFieldLabel: 'Created',
         summary: {
-          total: filtered.length,
-          active: filtered.filter((r) => r.isActive !== false).length,
-          inactive: filtered.filter((r) => r.isActive === false).length,
+          total,
+          active: Number(bucket.active?.[0]?.n) || 0,
+          inactive: Number(bucket.inactive?.[0]?.n) || 0,
         },
         columns: [
           { key: 'fullName', label: 'Name' },
@@ -573,17 +814,25 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
           { key: 'active', label: 'Active' },
           { key: 'when', label: 'Date' },
         ],
-        rows: filtered.slice(0, limit).map((r) => ({
+        rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           fullName: r.fullName || '-',
           email: r.email || '-',
           username: r.username || '-',
           active: r.isActive === false ? 'No' : 'Yes',
-          when: fmtDate(r.createdAt),
+          when: fmtReviewDate(r._reviewDate),
         })),
-        total: filtered.length,
+        total,
       };
     }
+    case 'master-data':
+      return {
+        dateFieldLabel: 'N/A',
+        summary: { total: 0, note: 'Open Master One for entity-level lists' },
+        columns: [{ key: 'note', label: 'Note' }],
+        rows: [{ id: 'master', note: 'Use Master One screens for products, expense types, and geography.' }],
+        total: 0,
+      };
     default:
       throw new AppError('Unknown module', 400, 'VALIDATION_ERROR');
   }

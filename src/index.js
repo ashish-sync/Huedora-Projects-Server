@@ -454,6 +454,18 @@ async function main() {
     import('./utils/memory.js')
       .then(({ startMemoryWatch }) => startMemoryWatch({ intervalMs: 180_000, rssWarnMb: 400 }))
       .catch(() => {});
+    import('./jobs/heavyJobQueue.js')
+      .then(async ({ ensureHeavyJobPump }) => {
+        try {
+          const { registerCollection } = await import('./store/persistence.js');
+          registerCollection('heavy_jobs');
+        } catch {
+          /* ignore */
+        }
+        ensureHeavyJobPump();
+        console.log('[heavy-queue] pump started on web process');
+      })
+      .catch((err) => console.warn('[heavy-queue] pump failed to start:', err?.message || err));
     import('./modules/imports/streaming/tempUpload.js')
       .then(({ cleanupStaleImportTemps }) => {
         cleanupStaleImportTemps();

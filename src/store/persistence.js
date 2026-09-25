@@ -396,6 +396,7 @@ export async function ensureListIndexes() {
         { key: { isDeleted: 1, purchaseDate: 1 }, name: 'list_deleted_purchase_date' },
         { key: { isDeleted: 1, createdAt: 1 }, name: 'list_deleted_created' },
         { key: { isDeleted: 1, serialNumber: 1 }, name: 'list_deleted_serial' },
+        { key: { isDeleted: 1, createdAt: -1 }, name: 'review_deleted_created' },
       ],
     },
     {
