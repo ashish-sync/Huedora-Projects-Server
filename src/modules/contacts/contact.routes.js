@@ -184,10 +184,18 @@ router.get(
     const assignLight = String(req.query.assign || '') === '1';
     const allowFullDirectory =
       String(req.query.fullDirectory || '') === '1' || String(req.query.exportMode || '') === '1';
-    // Assignment: hard-cap 100. Full HCW dump only with explicit fullDirectory/exportMode.
+    const hasAssignFilters = Boolean(
+      String(req.query.state || '').trim()
+      || String(req.query.city || '').trim()
+      || String(req.query.profession || '').trim()
+      || String(req.query.q || '').trim(),
+    );
+    // Bare assign browse: 100. Filtered assign (state/profession/q): up to 500 so
+    // e.g. 96 West Bengal Dieticians are not truncated after client-side role filter.
+    const assignMax = allowFullDirectory ? 2000 : (hasAssignFilters ? 500 : 100);
     const { page, limit, skip, sort } = parsePagination(req.query, {
       maxLimit: assignLight
-        ? (allowFullDirectory ? 2000 : 100)
+        ? assignMax
         : isHcwDirectory
           ? (allowFullDirectory ? 2000 : 100)
           : 100,
@@ -226,6 +234,33 @@ router.get(
       const city = String(req.query.city).trim();
       if (city) {
         filter.city = new RegExp(`^${city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+      }
+    }
+    if (req.query.profession) {
+      const roles = String(req.query.profession)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (roles.length) {
+        const roleClauses = [];
+        for (const role of roles) {
+          const key = role.toLowerCase();
+          if (key === 'dietician' || key === 'dietitian') {
+            roleClauses.push({ profession: /^dieti[cs]ian$/i });
+          } else {
+            const escaped = role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            roleClauses.push({ profession: new RegExp(`^${escaped}$`, 'i') });
+            // Soft match (e.g. "Lab Technician" ↔ "Technician") — same idea as Camp Assignment.
+            roleClauses.push({ profession: new RegExp(escaped, 'i') });
+          }
+        }
+        // Blank / Other profession stays assignable (Client Master fills role on select).
+        roleClauses.push(
+          { profession: null },
+          { profession: '' },
+          { profession: /^other$/i },
+        );
+        filter.$and = [...(filter.$and || []), { $or: roleClauses }];
       }
     }
     if (req.query.stateId) {
