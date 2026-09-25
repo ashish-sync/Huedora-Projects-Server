@@ -160,60 +160,6 @@ function cell(row, names) {
   return '';
 }
 
-function buildProfessionRoleClauses(professionQuery = '') {
-  const roles = String(professionQuery || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (!roles.length) return null;
-  const roleClauses = [];
-  for (const role of roles) {
-    const key = role.toLowerCase();
-    if (key === 'dietician' || key === 'dietitian') {
-      roleClauses.push({ profession: /^\s*dieti[cs]ian\s*$/i });
-    } else if (key === 'phlebotomist' || key === 'phlebotomy') {
-      roleClauses.push({ profession: /^\s*phlebotom(ist|y)\s*$/i });
-    } else if (key === 'technician' || key === 'lab technician') {
-      roleClauses.push({ profession: /^\s*(lab\s+)?technician\s*$/i });
-    } else {
-      const escaped = role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      roleClauses.push({ profession: new RegExp(`^\\s*${escaped}\\s*$`, 'i') });
-    }
-  }
-  return roleClauses.length ? roleClauses : null;
-}
-
-function applyAssignProfessionFilter(filter, professionQuery = '') {
-  const roleClauses = buildProfessionRoleClauses(professionQuery);
-  if (!roleClauses) return filter;
-  filter.$and = [...(filter.$and || []), { $or: roleClauses }];
-  return filter;
-}
-
-/** Distinct non-empty geo labels from Contact Directory (case-preserved first seen). */
-async function distinctContactGeoLabels(filter, field) {
-  const rows = await Contact.aggregate([
-    { $match: filter },
-    {
-      $project: {
-        label: {
-          $trim: { input: { $ifNull: [`$${field}`, ''] } },
-        },
-      },
-    },
-    { $match: { label: { $ne: '' } } },
-    {
-      $group: {
-        _id: { $toLower: '$label' },
-        label: { $first: '$label' },
-      },
-    },
-    { $sort: { label: 1 } },
-    { $limit: 200 },
-  ]);
-  return (rows || []).map((row) => String(row.label || '').trim()).filter(Boolean);
-}
-
 router.get(
   '/meta/picklists',
   asyncHandler(async (_req, res) => {
@@ -228,45 +174,6 @@ router.get(
         supplyCategories: SUPPLY_CATEGORIES,
       },
     });
-  })
-);
-
-/**
- * Assignment picker facets — states/cities that actually exist in Contact Directory
- * for the selected HCW resource type (+ optional profession / state).
- */
-router.get(
-  '/assign-facets',
-  asyncHandler(async (req, res) => {
-    const resourceType = String(req.query.resourceType || '').trim();
-    const state = String(req.query.state || '').trim();
-    const profession = String(req.query.profession || '').trim();
-
-    const filter = {
-      isDeleted: false,
-      contactCategory: 'Healthcare Worker',
-    };
-
-    if (resourceType === 'Service Provider') {
-      filter.$or = [
-        { resourceType: 'Service Provider' },
-        { serviceProviderContactId: { $nin: [null, ''] } },
-      ];
-    } else if (resourceType) {
-      filter.resourceType = resourceType;
-    }
-
-    applyAssignProfessionFilter(filter, profession);
-
-    if (state) {
-      const escaped = state.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      filter.state = new RegExp(`^\\s*${escaped}\\s*$`, 'i');
-      const cities = await distinctContactGeoLabels(filter, 'city');
-      return res.json({ data: { states: [], cities } });
-    }
-
-    const states = await distinctContactGeoLabels(filter, 'state');
-    res.json({ data: { states, cities: [] } });
   })
 );
 
@@ -331,7 +238,28 @@ router.get(
       }
     }
     if (req.query.profession) {
-      applyAssignProfessionFilter(filter, req.query.profession);
+      const roles = String(req.query.profession)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (roles.length) {
+        const roleClauses = [];
+        for (const role of roles) {
+          const key = role.toLowerCase();
+          if (key === 'dietician' || key === 'dietitian') {
+            roleClauses.push({ profession: /^\s*dieti[cs]ian\s*$/i });
+          } else if (key === 'phlebotomist' || key === 'phlebotomy') {
+            roleClauses.push({ profession: /^\s*phlebotom(ist|y)\s*$/i });
+          } else if (key === 'technician' || key === 'lab technician') {
+            roleClauses.push({ profession: /^\s*(lab\s+)?technician\s*$/i });
+          } else {
+            const escaped = role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            roleClauses.push({ profession: new RegExp(`^\\s*${escaped}\\s*$`, 'i') });
+          }
+        }
+        // Do NOT include blank/Other — those diluted the page and hid Dieticians.
+        filter.$and = [...(filter.$and || []), { $or: roleClauses }];
+      }
     }
     if (req.query.stateId) {
       filter.stateId = String(req.query.stateId);
@@ -356,11 +284,21 @@ router.get(
     if (assignLight) {
       query = query.select(ASSIGN_PROJECTION).lean();
     }
+    // Assignment picker only needs one page — skip countDocuments (expensive with
+    // profession/state regex) so free-tier requests finish before the connection drops.
+    if (assignLight) {
+      const rawData = await query;
+      const data = await enrichContactsWithProviders(rawData, { signKyc: false });
+      const hasMore = data.length >= limit;
+      const total = skip + data.length + (hasMore ? 1 : 0);
+      res.set('Cache-Control', 'private, max-age=30');
+      return res.json(paginated(data, total, page, limit));
+    }
     const [rawData, total] = await Promise.all([
       query,
       Contact.countDocuments(filter),
     ]);
-    const data = await enrichContactsWithProviders(rawData, { signKyc: !assignLight });
+    const data = await enrichContactsWithProviders(rawData, { signKyc: true });
     res.json(paginated(data, total, page, limit));
   })
 );
