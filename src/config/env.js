@@ -50,16 +50,16 @@ export const env = {
   mongoUri: mongoUriRaw || 'mongodb://127.0.0.1:27017/tylo-one',
   jwtAccessSecret: strongSecret('JWT_ACCESS_SECRET', process.env.JWT_ACCESS_SECRET),
   jwtRefreshSecret: strongSecret('JWT_REFRESH_SECRET', process.env.JWT_REFRESH_SECRET),
-  jwtAccessExpires: process.env.JWT_ACCESS_EXPIRES || '15m',
+  /** Access JWT lifetime — default 24h so one login lasts a full work day. */
+  jwtAccessExpires: process.env.JWT_ACCESS_EXPIRES || '24h',
   jwtRefreshExpiresDays: (() => {
     const n = Number(process.env.JWT_REFRESH_EXPIRES_DAYS || 7);
     if (!Number.isFinite(n) || n < 1 || n > 90) {
       if (isProd) {
         throw new Error('[config] JWT_REFRESH_EXPIRES_DAYS must be a number between 1 and 90 in production');
       }
-      return 7;
     }
-    return n;
+    return Number.isFinite(n) && n >= 1 && n <= 90 ? n : 7;
   })(),
   /** Optional first-run admin. both must be set; never defaults to a public demo password */
   bootstrapAdminEmail: String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase(),
