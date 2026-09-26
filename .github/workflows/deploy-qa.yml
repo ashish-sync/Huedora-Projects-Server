@@ -47,6 +47,9 @@ jobs:
       - name: Run unit tests
         run: |
           set -euo pipefail
+          # Some unit tests write through the default file store under ./data.
+          # The directory is gitignored, so create it on the CI runner.
+          mkdir -p data
           mapfile -t tests < <(find src scripts -type f -name '*.test.js' ! -name 'runAtomic.mongo.test.js' | sort)
           if [[ ${#tests[@]} -eq 0 ]]; then
             echo "No unit tests found."
