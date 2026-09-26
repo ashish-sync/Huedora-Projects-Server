@@ -59,37 +59,37 @@ jobs:
 
       - name: Configure SSH
         env:
-          QA_SERVER_HOST: ${{ secrets.QA_SERVER_HOST }}
-          QA_SERVER_USER: ${{ secrets.QA_SERVER_USER }}
-          QA_SERVER_SSH_KEY: ${{ secrets.QA_SERVER_SSH_KEY }}
+          QA_SSH_HOST: ${{ secrets.QA_SSH_HOST }}
+          QA_SSH_USER: ${{ secrets.QA_SSH_USER }}
+          QA_SSH_PRIVATE_KEY: ${{ secrets.QA_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           missing=()
-          [[ -n "${QA_SERVER_HOST}" ]] || missing+=("QA_SERVER_HOST")
-          [[ -n "${QA_SERVER_USER}" ]] || missing+=("QA_SERVER_USER")
-          [[ -n "${QA_SERVER_SSH_KEY}" ]] || missing+=("QA_SERVER_SSH_KEY")
+          [[ -n "${QA_SSH_HOST}" ]] || missing+=("QA_SSH_HOST")
+          [[ -n "${QA_SSH_USER}" ]] || missing+=("QA_SSH_USER")
+          [[ -n "${QA_SSH_PRIVATE_KEY}" ]] || missing+=("QA_SSH_PRIVATE_KEY")
           if [[ ${#missing[@]} -gt 0 ]]; then
             echo "Missing GitHub secret(s): ${missing[*]}"
             echo "Add them to the qa environment (or as repository secrets) on ashish-sync/Huedora-Projects-Server."
             exit 1
           fi
           install -m 700 -d "${HOME}/.ssh"
-          printf '%s\n' "${QA_SERVER_SSH_KEY}" | tr -d '\r' > "${HOME}/.ssh/qa_deploy_key"
+          printf '%s\n' "${QA_SSH_PRIVATE_KEY}" | tr -d '\r' > "${HOME}/.ssh/qa_deploy_key"
           chmod 600 "${HOME}/.ssh/qa_deploy_key"
-          ssh-keyscan -H "${QA_SERVER_HOST}" >> "${HOME}/.ssh/known_hosts"
+          ssh-keyscan -H "${QA_SSH_HOST}" >> "${HOME}/.ssh/known_hosts"
           chmod 600 "${HOME}/.ssh/known_hosts"
 
       - name: Check QA env file on VPS
         env:
-          QA_SERVER_HOST: ${{ secrets.QA_SERVER_HOST }}
-          QA_SERVER_USER: ${{ secrets.QA_SERVER_USER }}
+          QA_SSH_HOST: ${{ secrets.QA_SSH_HOST }}
+          QA_SSH_USER: ${{ secrets.QA_SSH_USER }}
         run: |
           set -euo pipefail
           ssh -i "${HOME}/.ssh/qa_deploy_key" \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             -o BatchMode=yes \
-            "${QA_SERVER_USER}@${QA_SERVER_HOST}" 'bash -s' << 'REMOTE'
+            "${QA_SSH_USER}@${QA_SSH_HOST}" 'bash -s' << 'REMOTE'
           set -eo pipefail
           ENV_FILE=/var/www/tylo-one/qa/server/.env
           mkdir -p /var/www/tylo-one/qa/server
@@ -204,8 +204,8 @@ jobs:
 
       - name: Rsync release to VPS
         env:
-          QA_SERVER_HOST: ${{ secrets.QA_SERVER_HOST }}
-          QA_SERVER_USER: ${{ secrets.QA_SERVER_USER }}
+          QA_SSH_HOST: ${{ secrets.QA_SSH_HOST }}
+          QA_SSH_USER: ${{ secrets.QA_SSH_USER }}
         run: |
           set -euo pipefail
           rsync -az --delete --stats \
@@ -218,19 +218,19 @@ jobs:
             --exclude 'tmp/' \
             --exclude '.fresh-start' \
             -e "ssh -i ${HOME}/.ssh/qa_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes" \
-            ./ "${QA_SERVER_USER}@${QA_SERVER_HOST}:/var/www/tylo-one/qa/server/"
+            ./ "${QA_SSH_USER}@${QA_SSH_HOST}:/var/www/tylo-one/qa/server/"
 
       - name: Install, restart PM2, and verify
         env:
-          QA_SERVER_HOST: ${{ secrets.QA_SERVER_HOST }}
-          QA_SERVER_USER: ${{ secrets.QA_SERVER_USER }}
+          QA_SSH_HOST: ${{ secrets.QA_SSH_HOST }}
+          QA_SSH_USER: ${{ secrets.QA_SSH_USER }}
         run: |
           set -euo pipefail
           ssh -i "${HOME}/.ssh/qa_deploy_key" \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             -o BatchMode=yes \
-            "${QA_SERVER_USER}@${QA_SERVER_HOST}" 'bash -s' << 'REMOTE'
+            "${QA_SSH_USER}@${QA_SSH_HOST}" 'bash -s' << 'REMOTE'
           set -eo pipefail
           export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
           if [[ ! -s "${NVM_DIR}/nvm.sh" ]]; then
