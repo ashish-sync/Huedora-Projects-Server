@@ -14,6 +14,7 @@ import {
   ASSET_REQUIRED_TYPES,
   LOGISTICS_KINDS,
   LOGISTICS_MODES,
+  LOGISTICS_PRIORITIES,
   OTHER_REQUEST_OPTIONS,
   HIRING_TYPES,
   HIRING_HCW_TYPES,
@@ -21,6 +22,8 @@ import {
   HIRING_METHODS,
   normalizeRequestType,
   normalizeLogisticsKind,
+  normalizeLogisticsMode,
+  normalizeLogisticsPriority,
   typeLabel,
 } from './assetRequest.model.js';
 import { Asset } from '../assets/asset.model.js';
@@ -511,9 +514,18 @@ function validateTypeDetails(requestType, details) {
         'VALIDATION_ERROR'
       );
     }
+    details.transportMode = normalizeLogisticsMode(details.transportMode);
     if (!LOGISTICS_MODES.includes(details.transportMode)) {
       throw new AppError(
         `Delivery mode must be one of: ${LOGISTICS_MODES.join(', ')}`,
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    details.priority = normalizeLogisticsPriority(details.priority);
+    if (!LOGISTICS_PRIORITIES.includes(details.priority)) {
+      throw new AppError(
+        `Priority must be one of: ${LOGISTICS_PRIORITIES.join(', ')}`,
         400,
         'VALIDATION_ERROR'
       );

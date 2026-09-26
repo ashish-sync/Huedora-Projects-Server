@@ -91,13 +91,49 @@ export const LOGISTICS_KIND_ALIASES = {
   Delivery: 'Fresh Dispatch',
 };
 export const LOGISTICS_MODES = [
-  'Fragile',
-  'Air Delivery',
+  'Courier',
   'Porter',
   'Hand Delivery',
-  'Blue Dart',
-  'DTDC',
 ];
+
+/** Legacy Request One delivery modes → canonical Courier / Porter / Hand Delivery */
+export const LOGISTICS_MODE_ALIASES = {
+  Fragile: 'Courier',
+  'Air Delivery': 'Courier',
+  'Blue Dart': 'Courier',
+  DTDC: 'Courier',
+  'Regular Courier': 'Courier',
+  'Other Courier': 'Courier',
+  'Hand-carry': 'Hand Delivery',
+};
+
+export const LOGISTICS_PRIORITIES = ['High', 'Medium', 'Low'];
+
+export function normalizeLogisticsMode(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if (LOGISTICS_MODES.includes(s)) return s;
+  if (LOGISTICS_MODE_ALIASES[s]) return LOGISTICS_MODE_ALIASES[s];
+  const aliasHit = Object.entries(LOGISTICS_MODE_ALIASES).find(
+    ([k]) => k.toLowerCase() === s.toLowerCase()
+  );
+  if (aliasHit) return aliasHit[1];
+  const canon = LOGISTICS_MODES.find((m) => m.toLowerCase() === s.toLowerCase());
+  return canon || s;
+}
+
+export function normalizeLogisticsPriority(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const aliases = {
+    urgent: 'High',
+    'not urgent': 'Medium',
+  };
+  const aliased = aliases[s.toLowerCase()];
+  if (aliased) return aliased;
+  const canon = LOGISTICS_PRIORITIES.find((p) => p.toLowerCase() === s.toLowerCase());
+  return canon || s;
+}
 
 export function normalizeLogisticsKind(raw) {
   const s = String(raw || '').trim();

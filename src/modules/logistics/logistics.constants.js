@@ -356,32 +356,28 @@ export function requiresShortExpiryApproval(expiryDate, fromDate = new Date()) {
   return months < SHORT_EXPIRY_APPROVAL_MONTHS;
 }
 
-/** Delivery Mode */
+/** Delivery Mode — aligned with Request One → Goods Issuance */
 export const DELIVERY_MODES = [
-  'Hand Delivery',
-  'Regular Courier',
-  'Apex',
+  'Courier',
   'Porter',
-  'Other',
-  'Blue Dart',
-  'DTDC',
-  'Other Courier',
+  'Hand Delivery',
 ];
 
 export const DELIVERY_MODE_ALIASES = {
-  Courier: 'Regular Courier',
+  'Regular Courier': 'Courier',
+  Apex: 'Courier',
+  Other: 'Courier',
+  'Blue Dart': 'Courier',
+  DTDC: 'Courier',
+  'Other Courier': 'Courier',
+  Fragile: 'Courier',
+  'Air Delivery': 'Courier',
   'Hand-carry': 'Hand Delivery',
-  Road: 'Other',
+  Road: 'Courier',
 };
 
 /** Modes that require AWB */
-export const COURIER_DELIVERY_MODES = [
-  'Regular Courier',
-  'Apex',
-  'Blue Dart',
-  'DTDC',
-  'Other Courier',
-];
+export const COURIER_DELIVERY_MODES = ['Courier'];
 
 /**
  * Outward / goods-issue lifecycle (separate from product stock `status`).
