@@ -61,6 +61,7 @@ export async function createCampFromRow({
     startTime: schedule.startTime,
     endTime: schedule.endTime,
     durationHours: schedule.durationHours,
+    campSlot: schedule.campSlot || '',
     expectedPatients: row.expectedPatients,
     actualPatients: row.actualPatients,
     fieldPersonName: trimStr(row.fieldPersonName),

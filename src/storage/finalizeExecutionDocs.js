@@ -138,21 +138,10 @@ async function assertSafeImagePixels(absPath) {
   return meta;
 }
 
-function mapOptimizeError(err) {
-  if (err instanceof AppError) return err;
-  const code = err?.code || 'UPLOAD_OPTIMIZE_FAILED';
-  const status = err?.status || (code === 'UPLOAD_TOO_MANY_PIXELS' || code === 'UPLOAD_TOO_LARGE' ? 413 : 500);
-  return new AppError(
-    err?.message || 'Image processing failed. Try a smaller image.',
-    status,
-    code,
-  );
-}
-
 /**
  * Camp One execution-document finalize (local optimize only; R2 after rename).
  * DF/PF/Other: 8-bit L grayscale WebP/PDF.
- * GPS Selfie: indexed-color WebP (8–16 palette) or passthrough.
+ * GPS Selfie: indexed-color WebP (8–16 palette) or passthrough — never 503 on memory pressure.
  */
 export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {}) {
   const files = collectUploadedFiles(req);
@@ -173,8 +162,8 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
     const after = await relieveMemoryPressure('finalize:exec-docs');
     rssMb = after?.rssMb ?? rssMb;
   }
-  let memoryPressure = rssMb != null && rssMb >= 350;
-  let refuseSharp = rssMb != null && rssMb >= RSS_REFUSE_IMAGE_MB;
+  const memoryPressure = rssMb != null && rssMb >= 350;
+  const refuseSharp = rssMb != null && rssMb >= RSS_REFUSE_IMAGE_MB;
 
   for (const file of files) {
     if (!file?.path || file.mediaFinalized) continue;
@@ -187,23 +176,53 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
       mimetype: file.mimetype,
     });
 
-    // High RSS: GPS WebP = byte-copy only (no Sharp / no gate). This is what OOM'd at ~540MB before.
-    if (isGpsSelfie && memoryPressure && isWebpFileByMagic(file.path)) {
-      logMemory('finalize:gps-webp-passthrough', { rssMb });
-      const optimized = await optimizeGpsSelfieFile(file.path, { lightOnly: true });
-      if (optimizedByteLength(optimized) > 0) {
-        await writeOptimizedUpload(file, optimized, sourceKey);
-        continue;
+    // GPS Selfie: never 503 on Render free-tier memory pressure.
+    if (isGpsSelfie) {
+      logMemory('finalize:gps-safe-path', { rssMb, memoryPressure, refuseSharp });
+      const lightOnly = memoryPressure || refuseSharp;
+      try {
+        if (!lightOnly) {
+          await withImageProcessGate(
+            'finalize:gps_selfie',
+            async () => {
+              try {
+                await assertSafeImagePixels(file.path);
+              } catch (pixelErr) {
+                console.warn(
+                  `[media:gps-selfie] pixel check skipped: ${pixelErr?.message || pixelErr}`,
+                );
+              }
+              const optimized = await optimizeGpsSelfieFile(file.path, { lightOnly: false });
+              if (optimizedByteLength(optimized) > 0) {
+                await writeOptimizedUpload(file, optimized, sourceKey);
+              }
+            },
+            { rssMb },
+            { skipRssAssert: true },
+          );
+          if (file.mediaFinalized) continue;
+        }
+
+        const optimized = await optimizeGpsSelfieFile(file.path, { lightOnly: true });
+        if (optimizedByteLength(optimized) > 0) {
+          await writeOptimizedUpload(file, optimized, sourceKey);
+          continue;
+        }
+      } catch (err) {
+        console.warn(
+          `[media:gps-selfie] safe-path optimize failed (${err?.message || err}); keeping original`,
+        );
       }
+      file.mediaFinalized = true;
+      continue;
     }
 
-    // Under hard RSS pressure: prefer a light encode / passthrough over a hard 503 so Camp One
-    // uploads still succeed on Render free-tier instances that sit near ~420MB RSS.
+    // Under hard RSS pressure: prefer light encode / passthrough over a hard 503.
     if (refuseSharp) {
       logMemory('finalize:light-fallback', { rssMb, docType, kind });
-      if (kind === 'image' || isGpsSelfie) {
+      if (kind === 'image') {
         try {
-          if (isGpsSelfie || isWebpFileByMagic(file.path)) {
+          if (isWebpFileByMagic(file.path)) {
             const optimized = await optimizeGpsSelfieFile(file.path, { lightOnly: true });
             if (optimizedByteLength(optimized) > 0) {
               await writeOptimizedUpload(file, optimized, sourceKey);
@@ -224,66 +243,17 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
             `[media:finalize] light fallback failed (${err?.message || err}); keeping original bytes`,
           );
         }
-        // Last resort: accept original bytes so the upload is not blocked.
         file.mediaFinalized = true;
         continue;
       }
-      if (kind === 'pdf' || kind === 'other') {
-        file.mediaFinalized = true;
-        continue;
-      }
-      throw new AppError(
-        `Server memory is too high (${rssMb} MB) for image processing. Upload a WebP GPS selfie or try again shortly.`,
-        503,
-        'UPLOAD_MEMORY_PRESSURE',
-      );
+      // PDF / other / unknown — accept bytes rather than block Camp One.
+      file.mediaFinalized = true;
+      continue;
     }
 
     await withImageProcessGate(`finalize:${docType}`, async () => {
-      const lightOnly = isGpsSelfie && memoryPressure;
-
-      // Sharp metadata itself can OOM when RSS is already high — skip under lightOnly.
-      if (!lightOnly && (isGpsSelfie || String(file.mimetype || '').startsWith('image/'))) {
+      if (String(file.mimetype || '').startsWith('image/')) {
         await assertSafeImagePixels(file.path);
-      }
-
-      if (isGpsSelfie) {
-        try {
-          const optimized = await optimizeGpsSelfieFile(file.path, { lightOnly });
-          if (optimizedByteLength(optimized) > 0) {
-            await writeOptimizedUpload(file, optimized, sourceKey);
-            return;
-          }
-        } catch (err) {
-          // Memory pressure must not block Camp One — fall through to resize / accept original.
-          if (err?.code !== 'UPLOAD_MEMORY_PRESSURE' && err?.status !== 503) {
-            console.warn(
-              `[media:gps-selfie] indexed WebP failed (${err?.message || err}); falling back to resize-only WebP`,
-            );
-          } else {
-            console.warn(
-              `[media:gps-selfie] memory pressure during optimize; falling back (${err?.message || err})`,
-            );
-          }
-        }
-        try {
-          const light = await optimizeWebpResizeOnly(file.path);
-          if (optimizedByteLength(light) > 0) {
-            await writeOptimizedUpload(
-              file,
-              { ...light, kind: 'image', reductionRatio: null },
-              sourceKey,
-            );
-            return;
-          }
-        } catch (fallbackErr) {
-          console.warn(
-            `[media:gps-selfie] resize-only fallback failed (${fallbackErr?.message || fallbackErr}); keeping original`,
-          );
-        }
-        // Last resort: keep original bytes so the upload succeeds on a busy free-tier instance.
-        file.mediaFinalized = true;
-        return;
       }
 
       const optimized = await optimizeExecutionDocumentFile(file.path, {

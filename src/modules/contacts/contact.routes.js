@@ -20,6 +20,7 @@ import { sendExcel, sendCsv } from '../../utils/excelExport.js';
 import { notifyImportFailures } from '../imports/importErrorReport.js';
 import {
   assertContactIdentityAvailable,
+  buildContactReuseMerge,
   findContactByIdentity,
   resolveOrCreateContact,
 } from './contactIdentity.js';
@@ -268,7 +269,10 @@ router.get(
     }
 
     // Soft profession match for facets so state list is not empty when roles differ slightly.
-    applyAssignProfessionFilter(filter, profession, { includeBlank: true });
+    // Service Provider agencies rarely store Profession — skip role filter so their states appear.
+    if (resourceType !== 'Service Provider') {
+      applyAssignProfessionFilter(filter, profession, { includeBlank: true });
+    }
 
     if (state) {
       const escaped = state.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -280,17 +284,12 @@ router.get(
 
     let states = await distinctContactGeoLabels(filter, 'state');
     // Fallback: if role filter yields nothing, still show states for the resource type.
-    if (!states.length && profession) {
+    if (!states.length && profession && resourceType !== 'Service Provider') {
       const loose = {
         isDeleted: false,
         contactCategory: 'Healthcare Worker',
       };
-      if (resourceType === 'Service Provider') {
-        loose.$or = [
-          { resourceType: 'Service Provider' },
-          { serviceProviderContactId: { $nin: [null, ''] } },
-        ];
-      } else if (resourceType) {
+      if (resourceType) {
         loose.resourceType = resourceType;
       }
       states = await distinctContactGeoLabels(loose, 'state');
@@ -361,7 +360,13 @@ router.get(
       }
     }
     if (req.query.profession) {
-      applyAssignProfessionFilter(filter, req.query.profession, { includeBlank: false });
+      const rt = String(req.query.resourceType || '').trim();
+      // Service Provider agencies rarely store Profession on the org row — roles live on
+      // embedded providerEmployees / linked staff. Applying the role filter here would
+      // drop agencies and hide their employee roster in Camp Assignment.
+      if (rt !== 'Service Provider') {
+        applyAssignProfessionFilter(filter, req.query.profession, { includeBlank: false });
+      }
     }
     if (req.query.stateId) {
       filter.stateId = String(req.query.stateId);
@@ -376,7 +381,8 @@ router.get(
       filter.serviceProviderContactId = String(req.query.serviceProviderContactId).trim();
     }
     if (String(req.query.hasServiceProvider || '') === '1') {
-      filter.serviceProviderContactId = { $ne: null, $exists: true };
+      // Linked staff only — exclude blank / missing provider links.
+      filter.serviceProviderContactId = { $nin: [null, ''] };
     }
 
     const ASSIGN_PROJECTION =
@@ -586,6 +592,7 @@ router.patch(
     const stillProvider = isServiceProviderContact(payload);
     const clearKeys = resolveClearKeys(req.body, {
       clearProviderEmployees: 'providerEmployees',
+      clearServiceProviderContactId: 'serviceProviderContactId',
     });
     const roster = Array.isArray(contact.providerEmployees) ? contact.providerEmployees : [];
     const wantsLeaveProvider = wasProvider && !stillProvider;
@@ -604,6 +611,18 @@ router.patch(
     // Staying non-provider: never let a missing/empty roster field wipe history.
     if (!stillProvider && !clearKeys.includes('providerEmployees')) {
       delete payload.providerEmployees;
+    }
+    // Accidental blank must not unlink staff from their Service Provider.
+    if (
+      !clearKeys.includes('serviceProviderContactId')
+      && Object.prototype.hasOwnProperty.call(payload, 'serviceProviderContactId')
+      && !String(payload.serviceProviderContactId || '').trim()
+      && String(contact.serviceProviderContactId || '').trim()
+    ) {
+      delete payload.serviceProviderContactId;
+    }
+    if (clearKeys.includes('serviceProviderContactId')) {
+      payload.serviceProviderContactId = '';
     }
     // Staying provider: empty [] without clearProviderEmployees is treated as accidental
     // (stale form / LocationCascade merge) and must not wipe a persisted roster.
@@ -676,9 +695,11 @@ router.post(
     const mode = req.body.mode === 'DRY_RUN' ? 'DRY_RUN' : 'COMMIT';
     const { rows, fileName } = await loadCappedRowsFromUpload(req.file);
     const errors = [];
+    const warnings = [];
     let created = 0;
     let updated = 0;
     let skipped = 0;
+    let classificationPreserved = 0;
     const seenEmails = new Set();
     const seenPhones = new Set();
 
@@ -790,14 +811,47 @@ router.post(
               phone: payload.contact,
               excludeId: existing._id,
             });
-            assignPreservingExisting(existing, payload);
+            // Never silently reclassify SP ↔ Individual (or clear roster) via import identity match.
+            const { mergePayload, preservedClassification } = buildContactReuseMerge(
+              existing,
+              payload,
+              { allowReclassify: false },
+            );
+            assignPreservingExisting(existing, mergePayload);
             existing.updatedBy = req.user._id;
             await existing.save();
             updated += 1;
+            if (preservedClassification.length) {
+              classificationPreserved += 1;
+              warnings.push({
+                row: rowNum,
+                field: preservedClassification.join(', '),
+                message:
+                  `Matched existing contact “${existing.name || existing.email || existing._id}” `
+                  + `(${existing.contactCategory || '—'}/${existing.resourceType || '—'}). `
+                  + 'Category, resource type, provider link, and employee roster were left unchanged; other fields were updated.',
+                code: 'CLASSIFICATION_PRESERVED',
+              });
+            }
           } else {
-            const resolved = await resolveOrCreateContact(payload, req.user._id);
+            const resolved = await resolveOrCreateContact(payload, req.user._id, {
+              rejectClassificationConflict: false,
+            });
             if (resolved.created) created += 1;
-            else updated += 1;
+            else {
+              updated += 1;
+              if (resolved.preservedClassification?.length) {
+                classificationPreserved += 1;
+                warnings.push({
+                  row: rowNum,
+                  field: resolved.preservedClassification.join(', '),
+                  message:
+                    `Matched existing contact; classification preserved `
+                    + `(${resolved.contact.contactCategory || '—'}/${resolved.contact.resourceType || '—'}).`,
+                  code: 'CLASSIFICATION_PRESERVED',
+                });
+              }
+            }
           }
         } else {
           skipped += 1;
@@ -814,7 +868,13 @@ router.post(
         actorEmail: req.user.email,
         action: 'CONTACT.IMPORT',
         entityType: 'Contact',
-        after: { created, updated, errors: errors.length, fileName },
+        after: {
+          created,
+          updated,
+          errors: errors.length,
+          classificationPreserved,
+          fileName,
+        },
         requestId: req.requestId,
       });
     }
@@ -838,9 +898,11 @@ router.post(
         totalRows: rows.length,
         created,
         updated,
+        classificationPreserved,
         validated: mode === 'DRY_RUN' ? rows.length - errors.length : created + updated,
         errorRows: errors.length,
         errors: errors.slice(0, 200),
+        warnings: warnings.slice(0, 200),
         errorReport: errorReport
           ? {
               fileName: errorReport.fileName,

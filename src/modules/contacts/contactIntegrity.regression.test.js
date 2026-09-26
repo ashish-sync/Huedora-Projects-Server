@@ -14,6 +14,7 @@ import { assertNotStale, assignPreservingExisting, resolveClearKeys } from '../.
 import {
   findContactByIdentity,
   resolveOrCreateContact,
+  buildContactReuseMerge,
 } from './contactIdentity.js';
 import { normalizeContactPayload } from './contact.model.js';
 import { FRESH_START_KEEP_COLLECTIONS, freshStartKeepUsers } from '../../utils/freshStartKeepUsers.js';
@@ -112,6 +113,101 @@ test('existing contact import merges new fields instead of silent reuse', async 
   assert.equal(contact.city, 'Mumbai');
   assert.equal(contact.profession, 'Technician');
   assert.equal(String(contact._id), 'c-merge');
+});
+
+test('identity reuse rejects silent SP → Individual reclassification', async () => {
+  await seedContacts([
+    {
+      _id: 'c-sp',
+      name: 'Care Agency',
+      email: 'agency@example.com',
+      contact: '9111000001',
+      mobile: '9111000001',
+      contactCategory: 'Healthcare Worker',
+      resourceType: 'Service Provider',
+      providerEmployees: [{ id: 'e1', name: 'Ravi', mobile: '9111000002', profession: 'Nurse' }],
+      isDeleted: false,
+    },
+  ]);
+
+  await assert.rejects(
+    () => resolveOrCreateContact(
+      {
+        name: 'Ravi Solo',
+        email: 'agency@example.com',
+        contact: '9111000001',
+        contactCategory: 'Healthcare Worker',
+        resourceType: 'Individual',
+        profession: 'Nurse',
+      },
+      'actor-1',
+    ),
+    (err) => err?.code === 'IDENTITY_RECLASSIFY_BLOCKED' && err?.status === 409,
+  );
+
+  const still = await findContactByIdentity({ email: 'agency@example.com' });
+  assert.equal(still.resourceType, 'Service Provider');
+  assert.equal(still.providerEmployees.length, 1);
+});
+
+test('import-style reuse preserves classification when conflict is not rejected', async () => {
+  await seedContacts([
+    {
+      _id: 'c-sp-import',
+      name: 'Care Agency',
+      email: 'agency-import@example.com',
+      contact: '9111000003',
+      mobile: '9111000003',
+      contactCategory: 'Healthcare Worker',
+      resourceType: 'Service Provider',
+      city: 'Pune',
+      providerEmployees: [{ id: 'e1', name: 'Ravi', mobile: '9111000004', profession: 'Nurse' }],
+      isDeleted: false,
+    },
+  ]);
+
+  const { contact, preservedClassification } = await resolveOrCreateContact(
+    {
+      name: 'Care Agency Updated',
+      email: 'agency-import@example.com',
+      contact: '9111000003',
+      city: 'Mumbai',
+      contactCategory: 'Healthcare Worker',
+      resourceType: 'Individual',
+      providerEmployees: [],
+    },
+    'actor-1',
+    { rejectClassificationConflict: false },
+  );
+
+  assert.equal(contact.resourceType, 'Service Provider');
+  assert.equal(contact.city, 'Mumbai');
+  assert.equal(contact.name, 'Care Agency Updated');
+  assert.equal(contact.providerEmployees.length, 1);
+  assert.ok(preservedClassification.includes('resourceType'));
+});
+
+test('buildContactReuseMerge omits conflicting classification and empty roster', () => {
+  const existing = {
+    contactCategory: 'Healthcare Worker',
+    resourceType: 'Service Provider',
+    serviceProviderContactId: '',
+    providerEmployees: [{ id: '1', name: 'A', mobile: '9111000005', profession: '' }],
+  };
+  const { mergePayload, preservedClassification } = buildContactReuseMerge(
+    existing,
+    {
+      name: 'X',
+      contactCategory: 'Healthcare Worker',
+      resourceType: 'Individual',
+      providerEmployees: [],
+      city: 'Delhi',
+    },
+  );
+  assert.equal(mergePayload.resourceType, undefined);
+  assert.equal(mergePayload.providerEmployees, undefined);
+  assert.equal(mergePayload.city, 'Delhi');
+  assert.ok(preservedClassification.includes('resourceType'));
 });
 
 test('findContactByIdentity uses targeted lookup by email', async () => {

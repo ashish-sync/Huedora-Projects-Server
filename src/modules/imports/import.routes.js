@@ -131,6 +131,8 @@ async function processInventory(rows, mode, user) {
           }
         } else {
           // Merge any non-blank identity fields from the asset row into the existing contact.
+          // Preserve Contact Directory classification — asset HCW Type must not
+          // silently turn a Service Provider into Individual (or vice versa).
           const merged = await resolveOrCreateContact(
             {
               name: name || contact.name,
@@ -140,10 +142,12 @@ async function processInventory(rows, mode, user) {
               city: city || contact.city,
               contactCategory: contact.contactCategory || 'Resource',
               resourceType:
-                String(normKey(row, ['HCW Type', 'Resource Type']) || contact.resourceType || 'Full Timer'),
+                contact.resourceType
+                || String(normKey(row, ['HCW Type', 'Resource Type']) || 'Full Timer'),
               profession: String(normKey(row, ['Profession']) || contact.profession || ''),
             },
             user._id,
+            { rejectClassificationConflict: false },
           );
           contact = merged.contact;
         }

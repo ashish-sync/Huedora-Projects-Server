@@ -41,12 +41,50 @@ export function escapeRegex(value) {
 }
 
 export function parseTimeToMinutes(timeStr) {
-  if (!timeStr) return null;
-  const parts = String(timeStr).trim().split(':');
-  const hours = Number(parts[0]);
-  const minutes = Number(parts[1] || 0);
-  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
-  return hours * 60 + minutes;
+  if (timeStr == null || timeStr === '') return null;
+  const raw = String(timeStr).trim();
+  if (!raw) return null;
+
+  const ampm = raw.match(/^(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)\b/i);
+  if (ampm) {
+    let hours = Number(ampm[1]);
+    const minutes = Number(ampm[2] || 0);
+    const period = ampm[3].toLowerCase();
+    if (Number.isNaN(hours) || Number.isNaN(minutes) || minutes > 59) return null;
+    if (period === 'pm' && hours < 12) hours += 12;
+    if (period === 'am' && hours === 12) hours = 0;
+    if (hours > 23) return null;
+    return hours * 60 + minutes;
+  }
+
+  const hm = raw.match(/(\d{1,2})[:.](\d{2})/);
+  if (hm) {
+    const hours = Number(hm[1]);
+    const minutes = Number(hm[2]);
+    if (Number.isNaN(hours) || Number.isNaN(minutes) || hours > 23 || minutes > 59) return null;
+    return hours * 60 + minutes;
+  }
+
+  const hourOnly = raw.match(/^(\d{1,2})\b/);
+  if (hourOnly) {
+    const hours = Number(hourOnly[1]);
+    if (Number.isNaN(hours) || hours > 23) return null;
+    return hours * 60;
+  }
+  return null;
+}
+
+/**
+ * Camp slot from start time:
+ * 06:00–12:59 → Morning, 13:00–16:59 → Noon, 17:00–21:00 → Evening
+ */
+export function resolveCampSlot(startTime) {
+  const mins = parseTimeToMinutes(startTime);
+  if (mins == null) return '';
+  if (mins >= 6 * 60 && mins < 13 * 60) return 'Morning';
+  if (mins >= 13 * 60 && mins < 17 * 60) return 'Noon';
+  if (mins >= 17 * 60 && mins <= 21 * 60) return 'Evening';
+  return '';
 }
 
 export function formatMinutes(totalMinutes) {
@@ -87,6 +125,7 @@ export function resolveCampSchedule({
       startTime: start,
       endTime: end,
       durationHours: computedDuration ?? (Number(durationHours) || 4),
+      campSlot: resolveCampSlot(start),
     };
   }
 
@@ -95,6 +134,7 @@ export function resolveCampSchedule({
     startTime: start,
     endTime: computeEndTime(start, duration),
     durationHours: duration,
+    campSlot: resolveCampSlot(start),
   };
 }
 
@@ -166,6 +206,12 @@ export function withCampSchedule(camp) {
   const obj = camp.toObject ? camp.toObject() : { ...camp };
   if (!obj.endTime && obj.startTime && obj.durationHours) {
     obj.endTime = computeEndTime(obj.startTime, obj.durationHours);
+  }
+  // Always derive Morning/Noon/Evening from startTime when parseable.
+  // Do not keep blank/"—"/stale stored campSlot that would hide the shift in lists.
+  if (obj.startTime) {
+    const derivedSlot = resolveCampSlot(obj.startTime);
+    if (derivedSlot) obj.campSlot = derivedSlot;
   }
   const endsAt = getCampEndDateTime(obj);
   obj.endsAt = endsAt ? endsAt.toISOString() : null;
