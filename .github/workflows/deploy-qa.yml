@@ -1,0 +1,322 @@
+# QA backend deploy for Tylo One.
+# Push to the qa branch only. Production is a separate future workflow.
+#
+# Official actions: checkout + setup-node.
+# Deploy itself is ssh/rsync so the VPS does not need GitHub credentials.
+#
+# The API loads secrets from the VPS file /var/www/tylo-one/qa/server/.env
+# (dotenv). That file is never copied, deleted, or replaced.
+# PM2 defaults NODE_ENV to production when it is unset, and dotenv will not
+# override an existing NODE_ENV, so the remote script exports NODE_ENV from
+# the VPS .env before start/restart.
+
+name: Deploy QA API
+
+on:
+  push:
+    branches:
+      - qa
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tylo-one-qa-api
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Test and deploy QA API
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: qa
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: |
+          set -euo pipefail
+          mapfile -t tests < <(find src scripts -type f -name '*.test.js' ! -name 'runAtomic.mongo.test.js' | sort)
+          if [[ ${#tests[@]} -eq 0 ]]; then
+            echo "No unit tests found."
+            exit 1
+          fi
+          node --test --test-timeout=120000 "${tests[@]}"
+
+      - name: Configure SSH
+        env:
+          QA_SERVER_HOST: ${{ secrets.QA_SERVER_HOST }}
+          QA_SERVER_USER: ${{ secrets.QA_SERVER_USER }}
+          QA_SERVER_SSH_KEY: ${{ secrets.QA_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -n "${QA_SERVER_HOST}" ]] || missing+=("QA_SERVER_HOST")
+          [[ -n "${QA_SERVER_USER}" ]] || missing+=("QA_SERVER_USER")
+          [[ -n "${QA_SERVER_SSH_KEY}" ]] || missing+=("QA_SERVER_SSH_KEY")
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "Missing GitHub secret(s): ${missing[*]}"
+            echo "Add them to the qa environment (or as repository secrets) on ashish-sync/Huedora-Projects-Server."
+            exit 1
+          fi
+          install -m 700 -d "${HOME}/.ssh"
+          printf '%s\n' "${QA_SERVER_SSH_KEY}" | tr -d '\r' > "${HOME}/.ssh/qa_deploy_key"
+          chmod 600 "${HOME}/.ssh/qa_deploy_key"
+          ssh-keyscan -H "${QA_SERVER_HOST}" >> "${HOME}/.ssh/known_hosts"
+          chmod 600 "${HOME}/.ssh/known_hosts"
+
+      - name: Check QA env file on VPS
+        env:
+          QA_SERVER_HOST: ${{ secrets.QA_SERVER_HOST }}
+          QA_SERVER_USER: ${{ secrets.QA_SERVER_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i "${HOME}/.ssh/qa_deploy_key" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            "${QA_SERVER_USER}@${QA_SERVER_HOST}" 'bash -s' << 'REMOTE'
+          set -eo pipefail
+          ENV_FILE=/var/www/tylo-one/qa/server/.env
+          mkdir -p /var/www/tylo-one/qa/server
+          if [[ ! -f "${ENV_FILE}" ]]; then
+            echo "Refusing to deploy: ${ENV_FILE} is missing."
+            echo "Create it on the VPS. This workflow will not copy or replace it."
+            exit 1
+          fi
+
+          env_get() {
+            local key="$1"
+            local line val
+            line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "${ENV_FILE}" | tail -n 1 || true)
+            [[ -n "${line}" ]] || return 1
+            val="${line#*=}"
+            val="${val#"${val%%[![:space:]]*}"}"
+            val="${val%"${val##*[![:space:]]}"}"
+            if [[ "${val}" == \"*\" && "${val}" == *\" ]]; then
+              val="${val:1:$((${#val}-2))}"
+            elif [[ "${val}" == \'*\' && "${val}" == *\' ]]; then
+              val="${val:1:$((${#val}-2))}"
+            else
+              val="${val%%#*}"
+              val="${val%"${val##*[![:space:]]}"}"
+            fi
+            printf '%s' "${val}"
+          }
+
+          require_exact() {
+            local key="$1"
+            local expected="$2"
+            local actual
+            actual=$(env_get "${key}" || true)
+            if [[ "${actual}" != "${expected}" ]]; then
+              if [[ "${key}" == "PORT" || "${key}" == "NODE_ENV" ]]; then
+                echo "VPS .env ${key} is '${actual:-<missing>}', expected '${expected}'."
+              else
+                echo "VPS .env ${key} must be ${expected}."
+              fi
+              exit 1
+            fi
+          }
+
+          require_not_true() {
+            local key="$1"
+            local actual
+            actual=$(env_get "${key}" || true)
+            actual=$(printf '%s' "${actual}" | tr '[:upper:]' '[:lower:]')
+            if [[ "${actual}" == "true" || "${actual}" == "1" || "${actual}" == "yes" ]]; then
+              echo "VPS .env ${key} must not be enabled."
+              exit 1
+            fi
+          }
+
+          require_secret_length() {
+            local key="$1"
+            local actual
+            actual=$(env_get "${key}" || true)
+            if ((${#actual} < 32)); then
+              echo "VPS .env ${key} must be at least 32 characters."
+              exit 1
+            fi
+            unset actual
+          }
+
+          require_exact PORT 3001
+          require_exact NODE_ENV qa
+          require_exact USE_MONGOOSE true
+          require_exact SEED_CAMP_ONE_DEMO false
+          require_not_true SEED_DEMO_USERS
+          require_not_true SEED_AGREEMENT_SAMPLES
+          require_not_true USE_MEMORY_DB
+          require_not_true RESET_ALL_DATA_ON_BOOT
+          require_not_true FRESH_START_KEEP_USERS_ON_BOOT
+          require_not_true PURGE_ALL_CAMPS_ON_BOOT
+
+          campaign_purge=$(env_get PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT || true)
+          campaign_purge=$(printf '%s' "${campaign_purge}" | tr '[:upper:]' '[:lower:]')
+          if [[ -n "${campaign_purge}" && "${campaign_purge}" != "false" ]]; then
+            echo "VPS .env PURGE_CAMPS_BY_CAMPAIGN_TYPE_ON_BOOT must be unset or false."
+            exit 1
+          fi
+          unset campaign_purge
+
+          client_origin=$(env_get CLIENT_ORIGIN || true)
+          if [[ -z "${client_origin}" ]]; then
+            echo "VPS .env CLIENT_ORIGIN must be set (QA frontend origin)."
+            exit 1
+          fi
+          unset client_origin
+
+          require_secret_length JWT_ACCESS_SECRET
+          require_secret_length JWT_REFRESH_SECRET
+
+          mongo_uri=$(env_get MONGODB_URI || true)
+          if [[ -z "${mongo_uri}" ]]; then
+            echo "VPS .env MONGODB_URI is missing."
+            exit 1
+          fi
+          if [[ "${mongo_uri}" != *127.0.0.1* && "${mongo_uri}" != *localhost* ]]; then
+            echo "VPS .env MONGODB_URI must point at local MongoDB (127.0.0.1)."
+            exit 1
+          fi
+          if [[ "${mongo_uri}" != *tylo_one_qa* ]]; then
+            echo "VPS .env MONGODB_URI must use the tylo_one_qa database."
+            exit 1
+          fi
+          unset mongo_uri
+
+          echo "QA .env checks passed. The file will be left in place."
+          REMOTE
+
+      - name: Rsync release to VPS
+        env:
+          QA_SERVER_HOST: ${{ secrets.QA_SERVER_HOST }}
+          QA_SERVER_USER: ${{ secrets.QA_SERVER_USER }}
+        run: |
+          set -euo pipefail
+          rsync -az --delete --stats \
+            --exclude '.git/' \
+            --exclude 'node_modules/' \
+            --exclude '.env' \
+            --exclude '.env.*' \
+            --exclude 'data/' \
+            --exclude 'uploads/' \
+            --exclude 'tmp/' \
+            --exclude '.fresh-start' \
+            -e "ssh -i ${HOME}/.ssh/qa_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes" \
+            ./ "${QA_SERVER_USER}@${QA_SERVER_HOST}:/var/www/tylo-one/qa/server/"
+
+      - name: Install, restart PM2, and verify
+        env:
+          QA_SERVER_HOST: ${{ secrets.QA_SERVER_HOST }}
+          QA_SERVER_USER: ${{ secrets.QA_SERVER_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i "${HOME}/.ssh/qa_deploy_key" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            "${QA_SERVER_USER}@${QA_SERVER_HOST}" 'bash -s' << 'REMOTE'
+          set -eo pipefail
+          export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+          if [[ ! -s "${NVM_DIR}/nvm.sh" ]]; then
+            echo "nvm not found at ${NVM_DIR}/nvm.sh"
+            exit 1
+          fi
+          # nvm.sh reads unset variables; do not use set -u around it.
+          # shellcheck disable=SC1091
+          . "${NVM_DIR}/nvm.sh"
+          nvm use 24
+          hash -r
+          node_version=$(node -v)
+          if [[ "${node_version}" != v24.* ]]; then
+            echo "Node 24.x is required on the VPS. Found ${node_version}."
+            exit 1
+          fi
+          if ! command -v pm2 >/dev/null 2>&1; then
+            echo "pm2 is not on PATH for ${node_version}. Install it for this Node with: npm install -g pm2"
+            exit 1
+          fi
+
+          cd /var/www/tylo-one/qa/server
+          if [[ ! -f .env ]]; then
+            echo "Refusing to continue: /var/www/tylo-one/qa/server/.env disappeared."
+            exit 1
+          fi
+
+          npm ci
+
+          # Read NODE_ENV from the VPS file. Do not source the whole file into
+          # the shell, so secret values are not exported into the PM2 env dump.
+          node_env=$(grep -E '^[[:space:]]*(export[[:space:]]+)?NODE_ENV=' .env | tail -n 1 || true)
+          node_env="${node_env#*=}"
+          node_env="${node_env%\"}"
+          node_env="${node_env#\"}"
+          node_env="${node_env%\'}"
+          node_env="${node_env#\'}"
+          node_env="${node_env%%#*}"
+          node_env=$(printf '%s' "${node_env}" | tr -d '[:space:]')
+          if [[ "${node_env}" != "qa" ]]; then
+            echo "Refusing to start: NODE_ENV in the VPS .env must be qa."
+            exit 1
+          fi
+          export NODE_ENV="${node_env}"
+
+          app_exists=0
+          if pm2 jlist | node --input-type=module -e 'import fs from "node:fs"; const list = JSON.parse(fs.readFileSync(0, "utf8")); process.exit(list.some((p) => p.name === "tylo-one-qa-api") ? 0 : 1)'; then
+            app_exists=1
+          fi
+          if [[ "${app_exists}" == "1" ]]; then
+            pm2 restart tylo-one-qa-api --update-env
+          else
+            pm2 start npm --name tylo-one-qa-api --cwd /var/www/tylo-one/qa/server -- start
+          fi
+
+          echo "Waiting for http://127.0.0.1:3001/api/v1/health"
+          check_health() {
+            if command -v curl >/dev/null 2>&1; then
+              curl -fsS --max-time 3 "http://127.0.0.1:3001/api/v1/health" >/dev/null
+              return
+            fi
+            node --input-type=module -e 'const res = await fetch("http://127.0.0.1:3001/api/v1/health"); if (!res.ok) process.exit(1);'
+          }
+          healthy=0
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if check_health; then
+              healthy=1
+              break
+            fi
+            sleep 3
+          done
+          pm2 status
+          if [[ "${healthy}" != "1" ]]; then
+            echo "tylo-one-qa-api did not respond on 127.0.0.1:3001/api/v1/health"
+            exit 1
+          fi
+
+          node --input-type=module << 'JS'
+          import { execFileSync } from 'node:child_process';
+          const raw = execFileSync('pm2', ['jlist'], { encoding: 'utf8' });
+          const list = JSON.parse(raw);
+          const proc = list.find((p) => p.name === 'tylo-one-qa-api');
+          if (!proc || proc.pm2_env?.status !== 'online') {
+            console.error(`tylo-one-qa-api status=${proc?.pm2_env?.status || 'missing'}`);
+            process.exit(1);
+          }
+          console.log(`tylo-one-qa-api online pid=${proc.pid}`);
+          JS
+
+          pm2 save
+          echo "QA API deploy finished."
+          REMOTE

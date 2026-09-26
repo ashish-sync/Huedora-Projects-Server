@@ -22,12 +22,21 @@ import {
 import { createCampFromRow } from './communications/campCreation.service.js';
 
 const CLIENT = { _id: 'client-1', name: 'Acme Pharma' };
+
+function localIsoToday() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 const BASE_ROW = {
   clientName: 'Acme Pharma',
   doctorName: 'Dr. Rajesh Kumar',
   campaignName: 'BMD',
   campaignType: 'Screening',
-  campDate: '2026-09-15',
+  campDate: localIsoToday(),
   startTime: '09:00',
 };
 
