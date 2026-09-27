@@ -10,10 +10,10 @@
 # override an existing NODE_ENV, so the remote script exports NODE_ENV from
 # the VPS .env before start/restart.
 #
-# Required prod environment SSH secrets (mirror of QA names):
+# Required prod environment SSH secrets (names already configured on this repo):
 #   PROD_SSH_HOST
-#   PROD_SSH_USER
-#   PROD_SSH_PRIVATE_KEY
+#   PROD_SERVER_USER
+#   PROD_SERVER_SSH_KEY
 
 name: Deploy Prod API
 
@@ -65,21 +65,21 @@ jobs:
       - name: Configure SSH
         env:
           PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
-          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          PROD_SERVER_USER: ${{ secrets.PROD_SERVER_USER }}
+          PROD_SERVER_SSH_KEY: ${{ secrets.PROD_SERVER_SSH_KEY }}
         run: |
           set -euo pipefail
           missing=()
           [[ -n "${PROD_SSH_HOST}" ]] || missing+=("PROD_SSH_HOST")
-          [[ -n "${PROD_SSH_USER}" ]] || missing+=("PROD_SSH_USER")
-          [[ -n "${PROD_SSH_PRIVATE_KEY}" ]] || missing+=("PROD_SSH_PRIVATE_KEY")
+          [[ -n "${PROD_SERVER_USER}" ]] || missing+=("PROD_SERVER_USER")
+          [[ -n "${PROD_SERVER_SSH_KEY}" ]] || missing+=("PROD_SERVER_SSH_KEY")
           if [[ ${#missing[@]} -gt 0 ]]; then
             echo "Missing GitHub secret(s): ${missing[*]}"
-            echo "Add them to the prod environment on ashish-sync/Huedora-Projects-Server."
+            echo "Add them to the prod environment on ashish-sync/Huedora-Projects-Server (PROD_SSH_HOST, PROD_SERVER_USER, PROD_SERVER_SSH_KEY)."
             exit 1
           fi
           install -m 700 -d "${HOME}/.ssh"
-          printf '%s\n' "${PROD_SSH_PRIVATE_KEY}" | tr -d '\r' > "${HOME}/.ssh/prod_deploy_key"
+          printf '%s\n' "${PROD_SERVER_SSH_KEY}" | tr -d '\r' > "${HOME}/.ssh/prod_deploy_key"
           chmod 600 "${HOME}/.ssh/prod_deploy_key"
           ssh-keyscan -H "${PROD_SSH_HOST}" >> "${HOME}/.ssh/known_hosts"
           chmod 600 "${HOME}/.ssh/known_hosts"
@@ -87,14 +87,14 @@ jobs:
       - name: Check Prod env file on VPS
         env:
           PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          PROD_SERVER_USER: ${{ secrets.PROD_SERVER_USER }}
         run: |
           set -euo pipefail
           ssh -i "${HOME}/.ssh/prod_deploy_key" \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             -o BatchMode=yes \
-            "${PROD_SSH_USER}@${PROD_SSH_HOST}" 'bash -s' << 'REMOTE'
+            "${PROD_SERVER_USER}@${PROD_SSH_HOST}" 'bash -s' << 'REMOTE'
           set -eo pipefail
           ENV_FILE=/var/www/tylo-one/prod/server/.env
           mkdir -p /var/www/tylo-one/prod/server
@@ -211,7 +211,7 @@ jobs:
       - name: Rsync release to VPS
         env:
           PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          PROD_SERVER_USER: ${{ secrets.PROD_SERVER_USER }}
         run: |
           set -euo pipefail
           rsync -az --delete --stats \
@@ -224,19 +224,19 @@ jobs:
             --exclude 'tmp/' \
             --exclude '.fresh-start' \
             -e "ssh -i ${HOME}/.ssh/prod_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes" \
-            ./ "${PROD_SSH_USER}@${PROD_SSH_HOST}:/var/www/tylo-one/prod/server/"
+            ./ "${PROD_SERVER_USER}@${PROD_SSH_HOST}:/var/www/tylo-one/prod/server/"
 
       - name: Install, restart PM2, and verify
         env:
           PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          PROD_SERVER_USER: ${{ secrets.PROD_SERVER_USER }}
         run: |
           set -euo pipefail
           ssh -i "${HOME}/.ssh/prod_deploy_key" \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             -o BatchMode=yes \
-            "${PROD_SSH_USER}@${PROD_SSH_HOST}" 'bash -s' << 'REMOTE'
+            "${PROD_SERVER_USER}@${PROD_SSH_HOST}" 'bash -s' << 'REMOTE'
           set -eo pipefail
           export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
           if [[ ! -s "${NVM_DIR}/nvm.sh" ]]; then
