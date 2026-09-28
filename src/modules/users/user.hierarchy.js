@@ -7,6 +7,11 @@ function managerIdOf(user = {}) {
   return String(raw?._id || raw);
 }
 
+function asId(value) {
+  if (value == null || value === '') return null;
+  return String(value?._id || value).trim() || null;
+}
+
 export async function assertReportingManager({ userId, reportingManagerId }) {
   const nextId =
     reportingManagerId == null || reportingManagerId === ''
@@ -49,6 +54,76 @@ export async function clearReportingManagerForUser(userId) {
     report.reportingManagerId = null;
     await report.save();
   }
+}
+
+/** Active users who report directly to this manager. */
+export async function listDirectReportIds(managerId) {
+  const id = asId(managerId);
+  if (!id) return [];
+  const rows = await User.find({
+    isDeleted: false,
+    isActive: true,
+    reportingManagerId: id,
+  });
+  return rows.map((row) => String(row._id));
+}
+
+/**
+ * Walk reportingManagerId upward from a user (excludes self).
+ * @returns {Promise<string[]>} manager ids, closest first
+ */
+export async function resolveManagerChainIds(userId, { maxDepth = 16 } = {}) {
+  const start = asId(userId);
+  if (!start) return [];
+  const chain = [];
+  const seen = new Set([start]);
+  let cursor = start;
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    const row = await User.findOne({ _id: cursor, isDeleted: false });
+    if (!row) break;
+    const parentId = managerIdOf(row);
+    if (!parentId || seen.has(parentId)) break;
+    const manager = await User.findOne({ _id: parentId, isDeleted: false, isActive: true });
+    if (!manager) break;
+    chain.push(parentId);
+    seen.add(parentId);
+    cursor = parentId;
+  }
+  return chain;
+}
+
+/**
+ * All active users under a manager (direct + nested reports).
+ */
+export async function listSubtreeUserIds(managerId, { maxDepth = 16 } = {}) {
+  const root = asId(managerId);
+  if (!root) return [];
+  const out = [];
+  const seen = new Set([root]);
+  let frontier = [root];
+  for (let depth = 0; depth < maxDepth && frontier.length; depth += 1) {
+    const nextFrontier = [];
+    for (const parentId of frontier) {
+      const kids = await listDirectReportIds(parentId);
+      for (const kid of kids) {
+        if (seen.has(kid)) continue;
+        seen.add(kid);
+        out.push(kid);
+        nextFrontier.push(kid);
+      }
+    }
+    frontier = nextFrontier;
+  }
+  return out;
+}
+
+/** True when managerId is in subject's reporting chain (direct or higher). */
+export async function isInManagerChain(managerId, subjectUserId) {
+  const mid = asId(managerId);
+  const sid = asId(subjectUserId);
+  if (!mid || !sid || mid === sid) return false;
+  const chain = await resolveManagerChainIds(sid);
+  return chain.includes(mid);
 }
 
 export function buildHierarchyTree(people = []) {

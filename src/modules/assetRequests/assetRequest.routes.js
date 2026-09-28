@@ -33,14 +33,17 @@ import {
   LogisticsExpenseCategory,
   LogisticsExpenseSubCategory,
   LogisticsProduct,
+  LogisticsUom,
 } from '../logistics/logistics.model.js';
 import { CampOpsCamp, CampOpsClient, CampOpsClientMaster } from '../campOps/campOps.model.js';
 import {
   IN_OUT_PRODUCT_TYPES,
   IN_OUT_PRODUCT_TYPE_ALIASES,
+  DOCUMENT_PRODUCT_NAMES,
 } from '../logistics/logistics.constants.js';
 import { nextSequence } from '../../utils/counters.js';
 import { notifyEvent, notifyUser } from '../notifications/notifyEvent.js';
+import { scopeApproversToSubjectManagers } from '../notifications/notificationRecipients.js';
 import { User } from '../users/user.model.js';
 import { Role } from '../users/role.model.js';
 import { sendExcel } from '../../utils/excelExport.js';
@@ -63,6 +66,7 @@ import {
 import {
   assertCanApproveRequestType,
   filterApproverUsers,
+  isAdminApprover,
 } from './requestApproval.js';
 import fs from 'fs';
 
@@ -73,14 +77,15 @@ const canRead = requirePermission(
   PERMISSIONS.ASSET_REQUESTS_READ,
   PERMISSIONS.ASSET_REQUESTS_REQUEST,
   PERMISSIONS.ASSET_REQUESTS_APPROVE,
-  PERMISSIONS.MOVEMENTS_READ,
-  PERMISSIONS.REPAIRS_READ
+  PERMISSIONS.REPAIRS_READ,
+  // Deprecated aliases (kept for existing roles until catalog cleanup settles)
+  PERMISSIONS.MOVEMENTS_READ
 );
 const canRequest = requirePermission(
   PERMISSIONS.ASSET_REQUESTS_REQUEST,
-  PERMISSIONS.MOVEMENTS_REQUEST,
   PERMISSIONS.REPAIRS_WRITE,
-  PERMISSIONS.MAINTENANCE_WRITE
+  PERMISSIONS.MAINTENANCE_WRITE,
+  PERMISSIONS.MOVEMENTS_REQUEST
 );
 const canApprove = requirePermission(
   PERMISSIONS.ASSET_REQUESTS_APPROVE,
@@ -98,7 +103,7 @@ function assertCreatePermission(req, requestType) {
   const permissions = [PERMISSIONS.ASSET_REQUESTS_REQUEST];
   if (requestType === 'REPAIR') permissions.push(PERMISSIONS.REPAIRS_WRITE);
   else if (requestType === 'MAINTENANCE') permissions.push(PERMISSIONS.MAINTENANCE_WRITE);
-  else if (requestType === 'LOGISTICS') permissions.push(PERMISSIONS.MOVEMENTS_REQUEST);
+  // LOGISTICS / Goods Issuance: asset-requests:request only (movements:* retired for create)
   if (!hasAnyPermission(req, permissions)) {
     throw new AppError('Forbidden for this request type', 403, 'FORBIDDEN');
   }
@@ -332,6 +337,7 @@ async function normalizeLogisticsProducts(rawProducts) {
     let productType;
     let productName;
     let canonicalProductId = null;
+    let productUomId = null;
     if (productId) {
       const product = await LogisticsProduct.findOne({
         _id: productId,
@@ -348,6 +354,7 @@ async function normalizeLogisticsProducts(rawProducts) {
       canonicalProductId = product._id;
       productType = normalizeLogisticsProductType(product.productType);
       productName = trim(product.name);
+      productUomId = product.uomId || null;
     } else {
       productType = normalizeLogisticsProductType(input.productType);
       productName = trim(input.productName);
@@ -363,6 +370,13 @@ async function normalizeLogisticsProducts(rawProducts) {
     if (!productName) {
       throw new AppError(
         `Goods issue product ${index + 1} requires a product name or valid productId`,
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    if (productType === 'Document' && !DOCUMENT_PRODUCT_NAMES.includes(productName)) {
+      throw new AppError(
+        `Document model/name must be one of: ${DOCUMENT_PRODUCT_NAMES.join(', ')}`,
         400,
         'VALIDATION_ERROR'
       );
@@ -389,12 +403,33 @@ async function normalizeLogisticsProducts(rawProducts) {
       );
     }
     lineIds.add(lineId);
+
+    let uomId = trim(input.uomId) || (productUomId ? String(productUomId) : null);
+    if (uomId) {
+      const uom = await LogisticsUom.findOne({ _id: uomId, isDeleted: false });
+      if (!uom) {
+        throw new AppError(
+          `Goods issue product ${index + 1} has an invalid UOM`,
+          400,
+          'VALIDATION_ERROR'
+        );
+      }
+      uomId = uom._id;
+    } else {
+      throw new AppError(
+        `Goods issue product ${index + 1} requires a UOM`,
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+
     products.push({
       lineId,
       productType,
       productId: canonicalProductId,
       productName,
       qty,
+      uomId,
     });
   }
   return products;
@@ -530,6 +565,23 @@ function validateTypeDetails(requestType, details) {
         'VALIDATION_ERROR'
       );
     }
+    if (!details.clientId && !details.clientName) {
+      throw new AppError(
+        'Client name is required for Goods Issuance Request',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    if (!details.divisionTherapy) {
+      throw new AppError(
+        'Division / Therapy is required for Goods Issuance Request',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    if (!details.hiringMethod) {
+      throw new AppError('Method is required for Goods Issuance Request', 400, 'VALIDATION_ERROR');
+    }
   }
   if (requestType === 'TRAINING') {
     if (!details.trainingTopic) {
@@ -652,8 +704,12 @@ async function notifyApprovers({ request, actorId, reason }) {
     return { ...u, roleIds, roles: roleIds };
   });
 
-  const approvers = filterApproverUsers(withRoles, request.requestType, {
+  const allApprovers = filterApproverUsers(withRoles, request.requestType, {
     excludeUserId: actorId,
+  });
+  const subjectId = request.requestorId || actorId;
+  const approvers = await scopeApproversToSubjectManagers(allApprovers, subjectId, {
+    isPlatformAdmin: (user) => isAdminApprover(user),
   });
 
   const label = typeLabel(request.requestType);
@@ -1553,7 +1609,10 @@ router.post(
     if (row.status !== 'REQUESTED') {
       throw new AppError('Only REQUESTED items can be approved', 400, 'INVALID_STATUS');
     }
-    if (String(row.requestorId) === String(req.user._id)) {
+    if (
+      String(row.requestorId) === String(req.user._id)
+      && !isAdminApprover(req.user, req.permissions)
+    ) {
       throw new AppError('Segregation of duties: requestor cannot approve', 403, 'SOD_VIOLATION');
     }
     if (row.requestType === 'REIMBURSEMENT' && !row.billAttachment) {
@@ -1686,6 +1745,7 @@ router.post(
           entityType: 'AssetRequest',
           entityId: row._id,
           includeWatchers: true,
+          includeReportingManagers: 'chain',
           module: 'assets',
           meta: { kind: 'update' },
         });
@@ -1743,6 +1803,7 @@ router.post(
         entityType: 'AssetRequest',
         entityId: row._id,
         includeWatchers: true,
+        includeReportingManagers: 'chain',
         module: 'assets',
         meta: { kind: 'update' },
       });
@@ -1762,7 +1823,10 @@ router.post(
     if (row.status !== 'REQUESTED') {
       throw new AppError('Only REQUESTED items can be rejected', 400, 'INVALID_STATUS');
     }
-    if (String(row.requestorId) === String(req.user._id)) {
+    if (
+      String(row.requestorId) === String(req.user._id)
+      && !isAdminApprover(req.user, req.permissions)
+    ) {
       throw new AppError('Segregation of duties: requestor cannot reject', 403, 'SOD_VIOLATION');
     }
 
@@ -1800,6 +1864,7 @@ router.post(
         entityType: 'AssetRequest',
         entityId: row._id,
         includeWatchers: true,
+        includeReportingManagers: 'chain',
         module: 'assets',
         priority: 'critical',
         meta: { kind: 'update' },
@@ -1988,7 +2053,7 @@ router.post(
             hcwId: null,
             hcwBusinessId: null,
             status: 'Warehouse',
-            custody: 'Warehouse',
+            custody: 'Tylo Office',
             custodianName: '',
             custodianContact: '',
             custodianCity: '',
@@ -2075,7 +2140,10 @@ router.post(
         'INVALID_STATUS'
       );
     }
-    if (String(row.requestorId) === String(req.user._id)) {
+    if (
+      String(row.requestorId) === String(req.user._id)
+      && !isAdminApprover(req.user, req.permissions)
+    ) {
       throw new AppError('Segregation of duties: requestor cannot fulfill', 403, 'SOD_VIOLATION');
     }
 
@@ -2156,6 +2224,7 @@ router.post(
         entityType: 'AssetRequest',
         entityId: row._id,
         includeWatchers: true,
+        includeReportingManagers: 'chain',
         module: 'assets',
         meta: { kind: 'update' },
       });

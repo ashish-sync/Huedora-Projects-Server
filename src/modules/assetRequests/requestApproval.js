@@ -1,6 +1,7 @@
 /**
  * Request One approval matrix (designation / role name).
  * Repair & Service: either Operations Leader OR Training Manager — one approval completes.
+ * Admin (role, designation, or `*` permission) may approve every request type.
  */
 
 import { AppError } from '../../utils/helpers.js';
@@ -13,6 +14,7 @@ export const DESIGNATION_TRAINING_MANAGER = 'Training Manager';
 export const APPROVER_KEYS = Object.freeze({
   OPERATIONS_LEADER: 'operations leader',
   TRAINING_MANAGER: 'training manager',
+  ADMIN: 'admin',
 });
 
 /**
@@ -30,6 +32,13 @@ const TRAINING_MANAGER_ALIASES = new Set([
   'training head',
 ]);
 
+const ADMIN_ALIASES = new Set([
+  'admin',
+  'administrator',
+  'super admin',
+  'superadmin',
+]);
+
 export function normalizeApproverKey(value) {
   return String(value || '')
     .trim()
@@ -43,6 +52,10 @@ export function isOperationsLeaderKey(key) {
 
 export function isTrainingManagerKey(key) {
   return TRAINING_MANAGER_ALIASES.has(normalizeApproverKey(key));
+}
+
+export function isAdminKey(key) {
+  return ADMIN_ALIASES.has(normalizeApproverKey(key));
 }
 
 /**
@@ -74,15 +87,15 @@ export function approvalRuleLabel(requestType) {
   switch (t) {
     case 'REPAIR':
     case 'MAINTENANCE':
-      return 'Operations Leader or Training Manager';
+      return 'Operations Leader, Training Manager, or Admin';
     case 'LOGISTICS':
     case 'MOVEMENT':
     case 'HIRING':
-      return 'Operations Leader';
+      return 'Operations Leader or Admin';
     case 'TRAINING':
-      return 'Training Manager';
+      return 'Training Manager or Admin';
     default:
-      return 'an authorized approver';
+      return 'an authorized approver or Admin';
   }
 }
 
@@ -125,13 +138,34 @@ export function isAdminPermissions(permissions) {
   return perms.has(PERMISSIONS.ALL) || perms.has('*');
 }
 
+function collectRolePermissions(user) {
+  const set = new Set();
+  for (const role of user?.roleIds || user?.roles || []) {
+    for (const p of role?.permissions || []) set.add(p);
+  }
+  for (const p of user?.grantedPermissions || user?.permissions || []) set.add(p);
+  return set;
+}
+
+/** Admin role / designation / global `*` — may approve every Request One type. */
+export function isAdminApprover(user, permissions) {
+  if (isAdminPermissions(permissions)) return true;
+  const have = userApproverKeys(user);
+  for (const h of have) {
+    if (isAdminKey(h)) return true;
+  }
+  // Populated role docs may carry `*` even when permissions Set was not passed.
+  if (isAdminPermissions(collectRolePermissions(user))) return true;
+  return false;
+}
+
 /**
  * Whether this user may approve/reject/fulfill this request type.
  * Matrix types: designation/role OR Admin.
  * Other types: asset-requests:approve / movements:approve OR Admin.
  */
 export function canApproveRequestType(user, permissions, requestType) {
-  if (isAdminPermissions(permissions)) return true;
+  if (isAdminApprover(user, permissions)) return true;
   const required = requiredApproverKeysForType(requestType);
   if (required.length) {
     return userMatchesApproverKeys(user, required);
@@ -158,6 +192,7 @@ export function filterApproverUsers(users, requestType, { excludeUserId = null }
   return (users || []).filter((u) => {
     if (excludeUserId && String(u._id) === String(excludeUserId)) return false;
     if (!u || u.isDeleted || u.isActive === false) return false;
+    if (isAdminApprover(u, collectRolePermissions(u))) return true;
     if (required.length) {
       return userMatchesApproverKeys(u, required);
     }

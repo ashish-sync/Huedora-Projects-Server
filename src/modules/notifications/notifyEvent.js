@@ -8,6 +8,8 @@ import {
   resolveEventMeta,
   NOTIFICATION_PRIORITIES,
 } from './notificationCatalog.js';
+import { resolveNotificationKind } from './notificationQuery.js';
+import { expandWithReportingManagers } from './notificationRecipients.js';
 import { isArchived } from '../retention/archivePolicy.js';
 
 function dedupeIds(ids = []) {
@@ -100,6 +102,8 @@ export async function notifyEvent({
   groupKey: groupKeyOverride,
   group = true,
   includeWatchers = true,
+  /** When set, also notify reporting managers of each primary recipient. */
+  includeReportingManagers = false,
   excludeUserIds = [],
   excludeActor = false,
   meta = undefined,
@@ -123,13 +127,19 @@ export async function notifyEvent({
   const exclude = [...(excludeUserIds || [])];
   if (excludeActor && actorId) exclude.push(actorId);
 
-  const userIds = await resolveNotificationRecipients({
+  let userIds = await resolveNotificationRecipients({
     recipients,
     entityType,
     entityId,
     includeWatchers,
     excludeUserIds: exclude,
   });
+
+  if (includeReportingManagers) {
+    const mode = includeReportingManagers === true ? 'chain' : includeReportingManagers;
+    userIds = await expandWithReportingManagers(userIds, mode);
+    userIds = userIds.filter((id) => !exclude.map(String).includes(String(id)));
+  }
 
   if (!userIds.length) return [];
 
@@ -144,6 +154,17 @@ export async function notifyEvent({
   const nowIso = new Date().toISOString();
   const nowMs = Date.parse(nowIso);
   const results = [];
+
+  const kindSeed = {
+    type: eventType,
+    title: String(title || eventType),
+    meta,
+  };
+  const kind = resolveNotificationKind(kindSeed);
+  const metaWithKind =
+    meta !== undefined
+      ? { ...(meta && typeof meta === 'object' ? meta : {}), kind: meta?.kind || kind }
+      : { kind };
 
   for (const userId of userIds) {
     let row = null;
@@ -162,10 +183,16 @@ export async function notifyEvent({
           ? priority
           : row.priority || priority;
       row.module = module || row.module;
+      row.kind = resolveNotificationKind({
+        type: row.type || eventType,
+        title: row.title,
+        meta: metaWithKind,
+        kind: row.kind,
+      });
       row.changes = mergeChangeLists(row.changes || [], changeList);
       if (actorId) row.actorId = actorId;
       if (actorEmail) row.actorEmail = actorEmail;
-      if (meta !== undefined) row.meta = meta;
+      row.meta = metaWithKind;
       await row.save();
       results.push(row);
       continue;
@@ -186,13 +213,14 @@ export async function notifyEvent({
       cancelledAt,
       priority,
       module,
+      kind,
       groupKey: groupKey || null,
       groupCount: 1,
       groupedAt: null,
       actorId: actorId || null,
       actorEmail: actorEmail || null,
       changes: changeList,
-      ...(meta !== undefined ? { meta } : {}),
+      meta: metaWithKind,
     });
     results.push(created);
   }

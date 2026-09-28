@@ -68,7 +68,7 @@ export const REVIEW_MODULES = [
   {
     id: 'logistics',
     label: 'Movement One',
-    linkTo: '/logistics',
+    linkTo: '/movement-one',
     permissions: [PERMISSIONS.LOGISTICS_READ, PERMISSIONS.LOGISTICS_WRITE, PERMISSIONS.LOGISTICS_MASTER],
   },
   {

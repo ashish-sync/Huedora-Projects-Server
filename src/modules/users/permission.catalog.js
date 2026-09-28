@@ -89,24 +89,19 @@ export const MODULE_ACCESS_CATALOG = [
     description:
       'Repair & Service, Goods Issuance, Training, Finance One, Hiring, Master One, and Other requests',
     actions: withAll({
-      view: [
-        PERMISSIONS.ASSET_REQUESTS_READ,
-        PERMISSIONS.MOVEMENTS_READ,
-        PERMISSIONS.REPAIRS_READ,
-      ],
+      view: [PERMISSIONS.ASSET_REQUESTS_READ, PERMISSIONS.REPAIRS_READ],
       request: [
         PERMISSIONS.ASSET_REQUESTS_REQUEST,
-        PERMISSIONS.MOVEMENTS_REQUEST,
         PERMISSIONS.REPAIRS_WRITE,
         PERMISSIONS.MAINTENANCE_WRITE,
       ],
-      approve: [PERMISSIONS.ASSET_REQUESTS_APPROVE, PERMISSIONS.MOVEMENTS_APPROVE],
+      approve: [PERMISSIONS.ASSET_REQUESTS_APPROVE],
     }),
   },
   {
     id: 'logistics',
     label: 'Movement One',
-    description: 'Goods receipt, goods issue, consumption, and output',
+    description: 'Goods receipt, goods issue, consumption, and output (stock execution)',
     actions: {
       ...withAll({
         view: [PERMISSIONS.LOGISTICS_READ],

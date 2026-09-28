@@ -5,141 +5,124 @@ import { asyncHandler, AppError, parsePagination, paginated } from '../../utils/
 import { PERMISSIONS } from '../../config/constants.js';
 import { Notification } from './notification.model.js';
 import { resolveImportErrorReport } from '../imports/importErrorReport.js';
-import { isArchived } from '../retention/archivePolicy.js';
-import { archiveExpiredForUser, archiveExpiredNotifications } from './notificationArchive.js';
-import { isApprovalRequestNotification } from './notificationCatalog.js';
+import { archiveExpiredNotifications } from './notificationArchive.js';
+import {
+  LIST_SELECT,
+  PREVIEW_SELECT,
+  buildCategoryClause,
+  buildInboxBaseFilter,
+  buildListFilter,
+  passesCategorySafety,
+  serializeNotification,
+} from './notificationQuery.js';
 
 const router = Router();
 router.use(authenticate);
 router.use(requirePermission(PERMISSIONS.NOTIFICATIONS_READ));
 
-function isDue(n, nowMs) {
-  if (!n.scheduledFor) return true;
-  return new Date(n.scheduledFor).getTime() <= nowMs;
-}
-
-function isActive(n) {
-  return !n.cancelledAt;
-}
-
-async function deliverDueForUser(userId) {
-  const nowIso = new Date().toISOString();
-  const nowMs = Date.parse(nowIso);
-  const pending = await Notification.find({ userId }).limit(500);
-
-  for (const n of pending) {
-    if (!isActive(n) || n.deliveredAt) continue;
-    if (n.scheduledFor && isDue(n, nowMs)) {
-      n.deliveredAt = nowIso;
-      await n.save();
-    }
-  }
-}
-
-function matchesFilters(n, query) {
-  if (query.priority) {
-    if (String(n.priority || 'informational').toLowerCase() !== String(query.priority).toLowerCase()) {
-      return false;
-    }
-  }
-  if (query.module) {
-    if (String(n.module || '').toLowerCase() !== String(query.module).toLowerCase()) {
-      return false;
-    }
-  }
-  if (query.type) {
-    if (String(n.type || '') !== String(query.type)) return false;
-  }
-  if (query.category) {
-    const cat = String(query.category).toLowerCase();
-    const module = String(n.module || 'system').toLowerCase();
-    const type = String(n.type || '').toLowerCase();
-    const isApproval = isApprovalRequestNotification(n);
-    if (cat === 'approvals') {
-      if (!isApproval) return false;
-    } else if (cat === 'updates') {
-      if (isApproval) return false;
-    } else if (cat === 'workflow' && !/camp_|asset_|movement_|agreement_|picklist_|commercial_/i.test(type)) {
-      return false;
-    } else if (cat === 'system' && module !== 'system') {
-      return false;
-    } else if (cat === 'alerts' && String(n.priority || '') !== 'critical') {
-      return false;
-    } else if (!['workflow', 'system', 'alerts', 'approvals', 'updates', ''].includes(cat) && module !== cat) {
-      return false;
-    }
-  }
-  if (query.q) {
-    const q = String(query.q).trim().toLowerCase();
-    if (q) {
-      const hay = `${n.title || ''} ${n.body || ''} ${n.type || ''} ${n.actorEmail || ''}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-  }
-  return true;
-}
-
-function serializeNotification(n) {
-  const row = typeof n.toObject === 'function' ? n.toObject() : { ...n };
-  if (row.meta?.errors) {
-    row.meta = { ...row.meta, errors: undefined, errorsOmitted: true };
-  }
-  return row;
+async function countForCategory(userId, category, query = {}) {
+  const filter = buildListFilter(userId, { ...query, category, unread: 'true' });
+  return Notification.countDocuments(filter);
 }
 
 router.get(
   '/',
   asyncHandler(async (req, res) => {
-    await archiveExpiredForUser(req.user._id);
-    await deliverDueForUser(req.user._id);
-
-    const nowMs = Date.now();
     const { page, limit } = parsePagination(req.query, { maxLimit: 100 });
-    const filter = { userId: req.user._id };
-    if (req.query.unread === 'true') filter.readAt = null;
-    const showArchived =
-      req.query.archive === '1'
-      || req.query.archive === 'true'
-      || req.query.archived === '1';
+    const category = String(req.query.category || '').trim().toLowerCase();
+    const filter = buildListFilter(req.user._id, req.query);
 
-    // Latest → oldest; fetch a bounded window then filter/paginate in memory
-    // (scheduled / archive flags are not pure Mongo predicates across file + mongo backends).
-    const fetchCap = Math.min(2000, Math.max(limit * page + limit, 400));
-    const all = await Notification.find(filter).sort({ createdAt: -1 }).limit(fetchCap);
-    const filtered = all
-      .filter((n) => isActive(n) && isDue(n, nowMs))
-      .filter((n) => (showArchived ? isArchived(n) : !isArchived(n)))
-      .filter((n) => matchesFilters(n, req.query));
+    // Over-fetch a small buffer so title-based legacy approvals can be safety-filtered
+    // without hydrating hundreds of docs (old path fetched 400–2000).
+    const safetyBuffer = category === 'approvals' || category === 'updates' ? Math.min(limit, 10) : 0;
+    const fetchLimit = limit + safetyBuffer;
+    const skip = (page - 1) * limit;
 
-    const total = filtered.length;
-    const start = (page - 1) * limit;
-    const data = filtered.slice(start, start + limit).map(serializeNotification);
+    const [rows, total] = await Promise.all([
+      Notification.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(fetchLimit)
+        .select(LIST_SELECT),
+      Notification.countDocuments(filter),
+    ]);
 
-    res.json(paginated(data, total, page, limit));
+    const filtered = rows
+      .map((n) => serializeNotification(n, { lean: true }))
+      .filter((n) => passesCategorySafety(n, category))
+      .slice(0, limit);
+
+    res.json(paginated(filtered, total, page, limit));
   })
 );
 
-/** Lightweight poll for Layout badge — no notification bodies or meta. */
+/**
+ * Lightweight poll for Layout badge.
+ * Badge `count` = actionable Approvals only (Updates/FYI do not inflate the red number).
+ * Archive/delivery run on boot — not on every 90s poll.
+ */
 router.get(
   '/unread-count',
   asyncHandler(async (req, res) => {
-    await archiveExpiredForUser(req.user._id);
-    await deliverDueForUser(req.user._id);
-    const nowMs = Date.now();
-    const pending = await Notification.find({
-      userId: req.user._id,
-      readAt: null,
-    })
+    const userId = req.user._id;
+    const baseQuery = { unread: 'true' };
+
+    const [approvals, fyi] = await Promise.all([
+      countForCategory(userId, 'approvals', baseQuery),
+      // FYI bucket includes informational notices (bell “FYI / Notifications”).
+      countForCategory(userId, 'updates', { ...baseQuery, informational: '1' }),
+    ]);
+
+    const sample = await Notification.find(
+      buildListFilter(userId, { ...baseQuery, category: 'approvals' })
+    )
       .sort({ createdAt: -1 })
-      .limit(200);
-    let count = 0;
-    const ids = [];
-    for (const n of pending) {
-      if (!isActive(n) || !isDue(n, nowMs) || isArchived(n)) continue;
-      count += 1;
-      if (ids.length < 20) ids.push(String(n._id));
-    }
-    res.json({ data: { count, sampleIds: ids } });
+      .limit(20)
+      .select('_id');
+
+    const sampleIds = sample.map((n) => String(n._id));
+
+    res.json({
+      data: {
+        count: approvals,
+        approvals,
+        updates: fyi,
+        fyi,
+        total: approvals + fyi,
+        sampleIds,
+      },
+    });
+  })
+);
+
+/** Single round-trip for the header bell dropdown. */
+router.get(
+  '/preview',
+  asyncHandler(async (req, res) => {
+    const userId = req.user._id;
+    const limit = Math.min(10, Math.max(1, Number(req.query.limit) || 5));
+
+    const [approvalRows, updateRows] = await Promise.all([
+      Notification.find(buildListFilter(userId, { unread: 'true', category: 'approvals' }))
+        .sort({ createdAt: -1 })
+        .limit(limit + 5)
+        .select(PREVIEW_SELECT),
+      Notification.find(buildListFilter(userId, { unread: 'true', category: 'updates' }))
+        .sort({ createdAt: -1 })
+        .limit(limit + 5)
+        .select(PREVIEW_SELECT),
+    ]);
+
+    const approvals = approvalRows
+      .map((n) => serializeNotification(n, { lean: true }))
+      .filter((n) => passesCategorySafety(n, 'approvals'))
+      .slice(0, limit);
+    const updates = updateRows
+      .map((n) => serializeNotification(n, { lean: true }))
+      .filter((n) => passesCategorySafety(n, 'updates'))
+      .slice(0, limit);
+
+    res.json({ data: { approvals, updates } });
   })
 );
 
@@ -189,7 +172,7 @@ router.post(
     if (!n || n.cancelledAt) throw new AppError('Notification not found', 404);
     n.readAt = new Date();
     await n.save();
-    res.json({ data: n });
+    res.json({ data: serializeNotification(n, { lean: true }) });
   })
 );
 
@@ -198,27 +181,15 @@ router.post(
   asyncHandler(async (req, res) => {
     const category = String(req.body?.category || req.query?.category || '').trim().toLowerCase();
     const now = new Date();
-    if (!category || category === 'all') {
-      await Notification.updateMany(
-        { userId: req.user._id, readAt: null },
-        { $set: { readAt: now } }
-      );
-      return res.json({ data: { ok: true } });
+    const filter = buildInboxBaseFilter(req.user._id, { unread: 'true' });
+
+    if (category && category !== 'all') {
+      const clause = buildCategoryClause(category);
+      if (clause) filter.$and = [...(filter.$and || []), clause];
     }
 
-    // Scope mark-read to Approvals / Updates so inbox tabs don't wipe the other bucket.
-    const pending = await Notification.find({
-      userId: req.user._id,
-      readAt: null,
-    }).limit(2000);
-    let marked = 0;
-    for (const n of pending) {
-      if (n.cancelledAt || isArchived(n)) continue;
-      if (!matchesFilters(n, { category })) continue;
-      n.readAt = now;
-      await n.save();
-      marked += 1;
-    }
+    const result = await Notification.updateMany(filter, { $set: { readAt: now } });
+    const marked = Number(result?.modifiedCount ?? result?.nModified ?? 0);
     res.json({ data: { ok: true, marked } });
   })
 );

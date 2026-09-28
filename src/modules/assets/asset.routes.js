@@ -103,7 +103,11 @@ function stripValue(asset, req) {
 
 router.get(
   '/',
-  requirePermission(PERMISSIONS.ASSETS_READ),
+  requirePermission(
+    PERMISSIONS.ASSETS_READ,
+    PERMISSIONS.AGREEMENTS_READ,
+    PERMISSIONS.AGREEMENTS_WRITE
+  ),
   asyncHandler(async (req, res) => {
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
@@ -154,6 +158,35 @@ router.get(
         ...(productIds.length ? [{ productId: { $in: productIds } }] : []),
       ];
     }
+
+    // Document One pickers: hide assets locked by a signed agreement until terminated.
+    const availableFlag = String(req.query.availableForAgreement || '').toLowerCase();
+    if (availableFlag === '1' || availableFlag === 'true') {
+      const lockedLinks = await AgreementAsset.find({ isActive: true });
+      const agreementIds = [
+        ...new Set(lockedLinks.map((l) => String(l.agreementId || '')).filter(Boolean)),
+      ];
+      const signedAgreements = agreementIds.length
+        ? await Agreement.find({
+            _id: { $in: agreementIds },
+            isDeleted: false,
+            status: { $in: ['COMPLETED', 'ACTIVE'] },
+          })
+        : [];
+      const signedIdSet = new Set(signedAgreements.map((a) => String(a._id)));
+      const lockedAssetIds = lockedLinks
+        .filter((l) => signedIdSet.has(String(l.agreementId)))
+        .map((l) => l.assetId)
+        .filter(Boolean);
+      filter.$and = [
+        ...(filter.$and || []),
+        {
+          $or: [{ activeAgreementId: null }, { activeAgreementId: { $exists: false } }],
+        },
+        ...(lockedAssetIds.length ? [{ _id: { $nin: lockedAssetIds } }] : []),
+      ];
+    }
+
     const [rows, total] = await Promise.all([
       Asset.find(filter)
         .populate('deviceMasterId', 'name assetType cost purchaseMonth description productId')
@@ -499,7 +532,11 @@ router.post(
 
 router.get(
   '/:id/placeholder-snapshot',
-  requirePermission(PERMISSIONS.ASSETS_READ),
+  requirePermission(
+    PERMISSIONS.ASSETS_READ,
+    PERMISSIONS.AGREEMENTS_READ,
+    PERMISSIONS.AGREEMENTS_WRITE
+  ),
   asyncHandler(async (req, res) => {
     const asset = await Asset.findOne({ _id: req.params.id, isDeleted: false })
       .populate('deviceMasterId', 'name productId')
@@ -518,7 +555,9 @@ router.get(
       .populate('deviceMasterId')
       .populate('hcwId')
       .populate('contactId')
-      .populate('activeAgreementId');
+      .populate('activeAgreementId')
+      .populate('createdBy', 'fullName email')
+      .populate('updatedBy', 'fullName email');
     if (!asset) throw new AppError('Asset not found', 404);
     res.json({ data: stripValue(asset, req) });
   })
@@ -528,8 +567,37 @@ router.get(
   '/:id/timeline',
   requirePermission(PERMISSIONS.ASSETS_READ),
   asyncHandler(async (req, res) => {
-    const events = await AssetEvent.find({ assetId: req.params.id }).sort({ at: -1 }).limit(200);
-    res.json({ data: events });
+    const events = await AssetEvent.find({ assetId: req.params.id })
+      .sort({ at: -1 })
+      .limit(200)
+      .populate('actorId', 'fullName email');
+    const asset = await Asset.findOne({ _id: req.params.id, isDeleted: false })
+      .populate('createdBy', 'fullName email')
+      .select('createdBy');
+    const creator =
+      asset?.createdBy && typeof asset.createdBy === 'object'
+        ? asset.createdBy.fullName || asset.createdBy.email
+        : '';
+    const data = (events || []).map((ev) => {
+      const row = typeof ev?.toObject === 'function' ? ev.toObject() : { ...ev };
+      const actor = row.actorId && typeof row.actorId === 'object' ? row.actorId : null;
+      if (!row.actorName && actor) {
+        row.actorName = actor.fullName || actor.email || undefined;
+      }
+      if (!row.actorEmail && actor?.email) {
+        row.actorEmail = actor.email;
+      }
+      const reason = String(row.reason || row.message || '').toLowerCase();
+      const isCreate =
+        row.eventType === 'ASSET_CREATED' ||
+        reason.includes('asset created') ||
+        reason.includes('asset registered');
+      if (!row.actorName && isCreate && creator) {
+        row.actorName = creator;
+      }
+      return row;
+    });
+    res.json({ data });
   })
 );
 
@@ -557,6 +625,8 @@ router.patch(
   asyncHandler(async (req, res) => {
     const asset = await Asset.findOne({ _id: req.params.id, isDeleted: false });
     if (!asset) throw new AppError('Asset not found', 404);
+    const previousAgreementStatus = asset.agreementStatus;
+    const previousSerial = asset.serialNumber;
     const previousCustody = asset.custody;
     const previousContactId = asset.contactId ? String(asset.contactId) : '';
 
@@ -827,6 +897,46 @@ router.patch(
         { _id: asset.deviceMasterId, isDeleted: false },
         { $set: masterPatch }
       );
+    }
+
+    const nextContactIdAfterSave = asset.contactId ? String(asset.contactId) : '';
+    const statusChanged =
+      String(asset.agreementStatus || '') !== String(previousAgreementStatus || '');
+    const serialChanged = String(asset.serialNumber || '') !== String(previousSerial || '');
+    const auditBits = [];
+    if (statusChanged) {
+      auditBits.push(`Status: ${previousAgreementStatus || '—'} → ${asset.agreementStatus || '—'}`);
+    }
+    if (custodyChanged) {
+      auditBits.push(`Custody: ${previousCustody || '—'} → ${asset.custody || '—'}`);
+    }
+    if (contactChanged) {
+      auditBits.push('Custodian contact updated');
+    }
+    if (serialChanged) {
+      auditBits.push(`Serial: ${previousSerial || '—'} → ${asset.serialNumber || '—'}`);
+    }
+    if (Object.keys(masterPatch).length && !auditBits.length) {
+      auditBits.push(`Updated: ${Object.keys(masterPatch).join(', ')}`);
+    }
+    if (auditBits.length) {
+      const eventType = custodyChanged || contactChanged ? 'CUSTODY_CHANGE' : 'FIELD_UPDATE';
+      await AssetEvent.create({
+        assetId: asset._id,
+        at: new Date().toISOString(),
+        eventType,
+        fromStatus: statusChanged ? previousAgreementStatus || undefined : undefined,
+        toStatus: statusChanged ? asset.agreementStatus || undefined : undefined,
+        fromCustody: custodyChanged ? previousCustody || undefined : undefined,
+        toCustody: custodyChanged ? asset.custody || undefined : undefined,
+        fromContactId: contactChanged ? previousContactId || undefined : undefined,
+        toContactId: contactChanged ? nextContactIdAfterSave || undefined : undefined,
+        reason: auditBits.join('; '),
+        actorId: req.user._id,
+        actorName: req.user.fullName || req.user.email || undefined,
+        actorEmail: req.user.email || undefined,
+        actorType: 'USER',
+      });
     }
 
     const populated = await Asset.findOne({ _id: asset._id, isDeleted: false })

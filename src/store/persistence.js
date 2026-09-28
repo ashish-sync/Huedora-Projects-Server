@@ -456,6 +456,16 @@ export async function ensureListIndexes() {
         { key: { isDeleted: 1, status: 1, slaDueAt: 1 }, name: 'dash_deleted_status_sla' },
       ],
     },
+    {
+      name: 'notifications',
+      indexes: [
+        { key: { userId: 1, createdAt: -1 }, name: 'list_user_created' },
+        { key: { userId: 1, readAt: 1, createdAt: -1 }, name: 'list_user_read_created' },
+        { key: { userId: 1, kind: 1, readAt: 1, createdAt: -1 }, name: 'list_user_kind_read' },
+        { key: { userId: 1, groupKey: 1, readAt: 1 }, name: 'group_user_key_read' },
+        { key: { userId: 1, archivedAt: 1, createdAt: -1 }, name: 'list_user_archived' },
+      ],
+    },
   ];
   const results = [];
   for (const spec of specs) {

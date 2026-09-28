@@ -45,6 +45,10 @@ export const LogisticsTransporter = defineCollection('logistics_transporters', {
   contactName: '',
   email: '',
   phone: '',
+  /** INR per kg used for Book POD quote (billable weight) */
+  ratePerKg: 0,
+  /** Minimum charge INR regardless of weight */
+  minCharge: 0,
   isActive: true,
 });
 
@@ -68,9 +72,10 @@ export const LogisticsProduct = defineCollection('logistics_products', {
   description: '',
   image: null, // { url, name }
   isActive: true,
-  /** Medical Device | Non-Medical Device | Peripheral | Consumable | Spare Part | Other */
   productType: 'Medical Device',
-  /** Dynamic category within product type */
+  /** Medical | Non-Medical — pairs with category kind for New Product cascade */
+  productClassification: 'Medical',
+  /** Dynamic method / sub-category within product type (e.g. BMD, Diagnostics) */
   productCategory: '',
   /** Asset | Inventory */
   inventoryType: 'Asset',
@@ -241,8 +246,10 @@ export const LogisticsLedgerEntry = defineCollection('logistics_ledger_entries',
  */
 export const LogisticsInOutEntry = defineCollection('logistics_in_out_entries', {
   ...softDelete,
-  /** Transaction ID */
+  /** Transaction ID — canonical nomenclature TXN-##### */
   uniqueKey: '',
+  /** Client idempotency key (UUID / retry token); not shown as TXN */
+  idempotencyKey: '',
   entryType: 'Inward',
   productType: 'Medical Device',
   /** Alias kept for older list filters */
@@ -345,10 +352,29 @@ export const LogisticsInOutEntry = defineCollection('logistics_in_out_entries', 
   deliveredAt: '',
   closedAt: '',
   deliveryMarkedBy: '',
+  /** When POD was booked (ISO) — drives PODs tab date filter */
+  podBookedAt: '',
   /** Matches Request One Goods Issue kinds */
   logisticsKind: '',
   priority: '',
   preferredDate: '',
+  /** Packer confirmation: Package ready | Partially ready | No stock */
+  packageStatus: '',
+  packageNote: '',
+  packageWeight: '',
+  packageLength: '',
+  packageHeight: '',
+  packageWidth: '',
+  applicableWeight: '',
+  volumetricWeight: '',
+  /** Courier booking / POD Excel (non-document) */
+  declaredPrice: '',
+  numberOfPieces: '1',
+  toAddressLine2: '',
+  riskSurcharge: 'NO',
+  contentType: '',
+  serviceType: '',
+  courierType: '',
   fromContactId: null,
   fromName: '',
   fromNumber: '',

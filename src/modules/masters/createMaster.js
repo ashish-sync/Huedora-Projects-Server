@@ -206,7 +206,29 @@ async function createLogisticsRow({
 }
 
 function normalizeProduct(b) {
-  const productType = resolveProductType(b.productType) || 'Other';
+  const classificationRaw = trimStr(b.productClassification || '');
+  const categoryKindRaw = trimStr(b.productCategoryKind || '');
+  let productType = resolveProductType(b.productType) || '';
+  if (categoryKindRaw) {
+    const kindNorm = {
+      Device: 'Device',
+      Peripheral: 'Peripheral',
+      Document: 'Document',
+      Consumable: 'Consumable',
+      Consumables: 'Consumable',
+      'Spare Part': 'Spare Part',
+      Other: 'Other',
+    }[categoryKindRaw] || categoryKindRaw;
+    const cls = classificationRaw === 'Non-Medical' ? 'Non-Medical' : 'Medical';
+    if (kindNorm === 'Device') {
+      productType = cls === 'Non-Medical' ? 'Non-Medical Device' : 'Medical Device';
+    } else if (kindNorm === 'Peripheral') productType = 'Peripheral';
+    else if (kindNorm === 'Document') productType = 'Document';
+    else if (kindNorm === 'Consumable') productType = 'Consumable';
+    else if (kindNorm === 'Spare Part') productType = 'Spare Part';
+    else if (kindNorm === 'Other') productType = 'Other';
+  }
+  productType = resolveProductType(productType) || 'Other';
   if (!IN_OUT_PRODUCT_TYPES.includes(productType)) {
     throw new AppError(
       `productType must be one of: ${IN_OUT_PRODUCT_TYPES.join(', ')}`,
@@ -214,6 +236,10 @@ function normalizeProduct(b) {
       'VALIDATION_ERROR'
     );
   }
+  const productClassification =
+    classificationRaw === 'Non-Medical' || productType === 'Non-Medical Device'
+      ? 'Non-Medical'
+      : 'Medical';
   const defaults = PRODUCT_CATEGORY_DEFAULTS[productType] || {
     expiryApplicable: false,
     trackingKind: 'None',
@@ -240,6 +266,7 @@ function normalizeProduct(b) {
     image: null,
     isActive: b.isActive !== false,
     productType,
+    productClassification,
     inventoryType,
     trackingKind,
     uomId: b.uomId || null,

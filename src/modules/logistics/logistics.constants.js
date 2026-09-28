@@ -8,28 +8,17 @@ export const DEFAULT_WAREHOUSE_CODE = 'WH-MUM';
 export const DEFAULT_STOCK_STATUSES = [
   'Available',
   'Reserved',
-  'Allocated',
-  'Picked',
-  'Packed',
-  'In Transit',
-  'Assigned',
-  'Returned',
-  'Repair',
+  'Issued',
   'Damaged',
-  'Scrapped',
+  'Expired',
   'Disposed',
 ];
 
 export const UNAVAILABLE_STOCK_STATUSES = [
   'Reserved',
-  'Allocated',
-  'Picked',
-  'Packed',
-  'In Transit',
-  'Assigned',
-  'Repair',
+  'Issued',
   'Damaged',
-  'Scrapped',
+  'Expired',
   'Disposed',
 ];
 
@@ -136,6 +125,7 @@ export const IN_OUT_PRODUCT_TYPES = [
   'Peripheral',
   'Consumable',
   'Spare Part',
+  'Document',
   'Other',
 ];
 
@@ -179,6 +169,7 @@ export const PRODUCT_TYPE_CODE_PREFIX = {
   Peripheral: 'PER',
   Consumable: 'CON',
   'Spare Part': 'SP',
+  Document: 'DOC',
   Other: 'OTH',
 };
 
@@ -193,6 +184,7 @@ export const INVENTORY_TYPES_BY_PRODUCT_TYPE = {
   Peripheral: ['Inventory'],
   Consumable: ['Inventory'],
   'Spare Part': ['Inventory'],
+  Document: ['Inventory'],
   Other: ['Inventory'],
 };
 
@@ -219,7 +211,7 @@ export const PRODUCT_INVENTORY_TYPE_ALIASES = {
   'Inventory item': 'Inventory',
 };
 
-export const PRODUCT_COMPATIBILITY_TYPES = ['Spare Part', 'Other'];
+export const PRODUCT_COMPATIBILITY_TYPES = ['Spare Part', 'Document', 'Other'];
 
 export const GST_RATE_PRESETS = [0, 5, 12, 18, 28];
 
@@ -230,16 +222,16 @@ export const IN_OUT_PRODUCT_TYPE_ALIASES = {
   Consumable: 'Consumable',
   Consumables: 'Consumable',
   'Spare Part': 'Spare Part',
+  Document: 'Document',
+  Documents: 'Document',
   Other: 'Other',
   // Legacy catalog values
   Device: 'Medical Device',
   'Peripheral Device': 'Peripheral',
   Accessory: 'Spare Part',
-  Document: 'Other',
   Misc: 'Other',
   Miscellaneous: 'Other',
   'Spare Part / Accessory': 'Spare Part',
-  Documents: 'Other',
   'Devices Parts': 'Spare Part',
   'Device Part': 'Spare Part',
   Others: 'Other',
@@ -283,6 +275,12 @@ export const PRODUCT_CATEGORY_DEFAULTS = {
     inventoryType: 'Inventory',
     calibrationRequired: false,
   },
+  Document: {
+    expiryApplicable: false,
+    trackingKind: 'None',
+    inventoryType: 'Inventory',
+    calibrationRequired: false,
+  },
   Other: {
     expiryApplicable: false,
     trackingKind: 'None',
@@ -299,35 +297,12 @@ export const PRODUCT_TRACKING_TYPE = Object.fromEntries(
 export const IN_OUT_TRACKING_TYPES = PRODUCT_TRACKING_KINDS;
 
 export const PRODUCT_STATUS_OPTIONS = {
-  'Medical Device': [
-    'Available',
-    'Assigned',
-    'In Transit',
-    'Under Repair',
-    'Returned',
-    'Retired',
-    'Disposed',
-  ],
-  'Non-Medical Device': [
-    'Available',
-    'Assigned',
-    'In Transit',
-    'Under Repair',
-    'Returned',
-    'Retired',
-    'Disposed',
-  ],
-  Peripheral: [
-    'Available',
-    'Assigned',
-    'In Transit',
-    'Under Repair',
-    'Returned',
-    'Retired',
-    'Disposed',
-  ],
+  'Medical Device': ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
+  'Non-Medical Device': ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
+  Peripheral: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
   'Spare Part': ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
-  Consumable: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed', 'Expired'],
+  Consumable: ['Available', 'Reserved', 'Issued', 'Damaged', 'Expired', 'Disposed'],
+  Document: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
   Other: ['Available', 'Reserved', 'Issued', 'Damaged', 'Disposed'],
 };
 
@@ -356,6 +331,20 @@ export function requiresShortExpiryApproval(expiryDate, fromDate = new Date()) {
   return months < SHORT_EXPIRY_APPROVAL_MONTHS;
 }
 
+/** Packer confirmation when preparing a package from a Goods Issuance Request */
+export const PACKAGE_STATUSES = [
+  'Package ready',
+  'Partially ready',
+  'No stock',
+];
+
+export function resolvePackageStatus(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  const hit = PACKAGE_STATUSES.find((s) => s.toLowerCase() === value.toLowerCase());
+  return hit || value;
+}
+
 /** Delivery Mode — aligned with Request One → Goods Issuance */
 export const DELIVERY_MODES = [
   'Courier',
@@ -381,12 +370,117 @@ export const COURIER_DELIVERY_MODES = ['Courier'];
 
 /**
  * Outward / goods-issue lifecycle (separate from product stock `status`).
- * Stays Open after dispatch until AWB / delivery is marked Delivered, RTO, or Closed.
+ *
+ * Intermediate (still in progress): Open → Packed → POD Booked
+ * Terminal outcomes: Delivered | RTO | Closed
+ *
+ * List filters must stay mutually exclusive buckets — never offer both a
+ * composite “Active (Packed / POD Booked)” and the individual Packed / POD options.
  */
-export const OUTWARD_DISPATCH_STATUSES = ['Open', 'Delivered', 'RTO', 'Closed'];
+export const OUTWARD_PACKED_DISPATCH_STATUS = 'Packed';
+export const OUTWARD_POD_BOOKED_STATUS = 'POD Booked';
 export const OUTWARD_OPEN_DISPATCH_STATUS = 'Open';
+export const OUTWARD_IN_PROGRESS_DISPATCH_STATUSES = [
+  OUTWARD_OPEN_DISPATCH_STATUS,
+  OUTWARD_PACKED_DISPATCH_STATUS,
+  OUTWARD_POD_BOOKED_STATUS,
+];
 export const OUTWARD_TERMINAL_DISPATCH_STATUSES = ['Delivered', 'RTO', 'Closed'];
-export const OUTWARD_DELIVERY_OUTCOMES = ['Delivered', 'RTO', 'Closed'];
+export const OUTWARD_DELIVERY_OUTCOMES = [...OUTWARD_TERMINAL_DISPATCH_STATUSES];
+export const OUTWARD_DISPATCH_STATUSES = [
+  ...OUTWARD_IN_PROGRESS_DISPATCH_STATUSES,
+  ...OUTWARD_TERMINAL_DISPATCH_STATUSES,
+];
+
+/** Aliases accepted by the list filter for the single “in progress” bucket */
+export const OUTWARD_IN_PROGRESS_FILTER_VALUES = [
+  OUTWARD_OPEN_DISPATCH_STATUS,
+  'Active',
+  'In progress',
+];
+
+export function isOutwardDispatchTerminal(status) {
+  return OUTWARD_TERMINAL_DISPATCH_STATUSES.includes(String(status || '').trim());
+}
+
+export function isOutwardDispatchInProgress(status) {
+  const s = String(status || '').trim();
+  if (!s || s === OUTWARD_OPEN_DISPATCH_STATUS) return true;
+  return OUTWARD_IN_PROGRESS_DISPATCH_STATUSES.includes(s);
+}
+
+/**
+ * Goods Issuance pipeline (request → pack → POD → delivery outcome).
+ * Used by UI steppers; list filters use the coarser in-progress / outcome buckets.
+ */
+export const GOODS_ISSUE_PIPELINE_STAGES = [
+  { id: 'booked', label: 'Booked' },
+  { id: 'approved', label: 'Approved' },
+  { id: 'packed', label: 'Packed' },
+  { id: 'pod', label: 'POD Booked' },
+  { id: 'delivery', label: 'In transit' },
+  { id: 'outcome', label: 'Outcome' },
+];
+
+export function resolveGoodsIssuePipelineStage({
+  requestStatus = '',
+  packageStatus = '',
+  dispatchStatus = '',
+  podBookedAt = '',
+  deliveryOutcome = '',
+  allLinesPacked = false,
+  pipeline = null,
+} = {}) {
+  if (pipeline?.id) {
+    const idx = GOODS_ISSUE_PIPELINE_STAGES.findIndex((s) => s.id === pipeline.id);
+    return {
+      index: idx >= 0 ? idx : 0,
+      id: pipeline.id,
+      label: pipeline.label || GOODS_ISSUE_PIPELINE_STAGES[idx]?.label || '',
+      outcome: pipeline.outcome || '',
+    };
+  }
+
+  const req = String(requestStatus || '').trim().toUpperCase();
+  const pkg = String(packageStatus || '').trim();
+  const dispatch = String(dispatchStatus || '').trim();
+  const outcome = String(deliveryOutcome || dispatch || '').trim();
+
+  if (OUTWARD_TERMINAL_DISPATCH_STATUSES.includes(outcome)) {
+    return {
+      index: 5,
+      id: 'outcome',
+      label: 'Outcome',
+      outcome,
+    };
+  }
+  if (req === 'COMPLETED' || req === 'REJECTED' || req === 'CANCELLED') {
+    return {
+      index: 5,
+      id: 'outcome',
+      label: 'Outcome',
+      outcome: req === 'COMPLETED' ? outcome || 'Completed' : req,
+    };
+  }
+  if (dispatch === OUTWARD_POD_BOOKED_STATUS || podBookedAt) {
+    return { index: 4, id: 'delivery', label: 'In transit', outcome: '' };
+  }
+  if (
+    dispatch === OUTWARD_PACKED_DISPATCH_STATUS ||
+    allLinesPacked ||
+    /^package ready$/i.test(pkg) ||
+    /^partially ready$/i.test(pkg)
+  ) {
+    return { index: 3, id: 'pod', label: 'POD Booked', outcome: '' };
+  }
+  if (req === 'APPROVED') {
+    return { index: 2, id: 'packed', label: 'Packed', outcome: '' };
+  }
+  if (req === 'REQUESTED') {
+    return { index: 1, id: 'approved', label: 'Approved', outcome: '' };
+  }
+  return { index: 0, id: 'booked', label: 'Booked', outcome: '' };
+}
 
 export const IN_OUT_MODES = DELIVERY_MODES;
 
@@ -408,8 +502,12 @@ export const DOCUMENT_TYPES = [
   'Warranty',
   'Manual',
   'Certificate',
+  'Form / Template',
   'Other',
 ];
+
+/** Document product names selectable on Goods Issuance (Model/Variant/Name). */
+export const DOCUMENT_PRODUCT_NAMES = [...DOCUMENT_TYPES];
 
 /** Simplified required rules for new ledger form */
 export const PRODUCT_REQUIRED_FIELDS = {
@@ -418,6 +516,7 @@ export const PRODUCT_REQUIRED_FIELDS = {
   Peripheral: ['qty'],
   Consumable: ['qty'],
   'Spare Part': ['qty'],
+  Document: ['qty'],
   Other: ['qty'],
   // Legacy keys still present on older stock / txn rows
   Device: ['qty'],

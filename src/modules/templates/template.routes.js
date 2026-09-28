@@ -10,6 +10,7 @@ import { PERMISSIONS } from '../../config/constants.js';
 import { env } from '../../config/env.js';
 import { DocumentTemplate } from './template.model.js';
 import { SignatureMaster } from '../signatures/signature.model.js';
+import { writeAudit } from '../../utils/audit.js';
 import {
   analyzeDocx,
   extractPlaceholdersFromText,
@@ -22,7 +23,7 @@ import {
   readDocxBuffer,
   repackDocxDocumentXml,
 } from './docxPlaceholders.js';
-import { rewriteServiceAgreementLineTableXml } from './serviceAgreementLineTable.js';
+import { rewriteServiceAgreementLineTableXml, mergeLineValuesIntoPlaceholders } from './serviceAgreementLineTable.js';
 import { buildTemplatePdf } from './buildTemplatePdf.js';
 import { convertDocxBufferToPdf } from './docxToPdf.js';
 import { PdfEngineUnavailableError } from './pdfEngineErrors.js';
@@ -46,9 +47,74 @@ const upload = multer({
   limits: { fileSize: env.uploadMaxBytes },
 });
 
+function contentDisposition(filename, { attachment = false } = {}) {
+  const safe = String(filename || 'preview')
+    .replace(/[\\/:*?"<>|&]+/g, '-')
+    .replace(/["\r\n]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim() || 'preview';
+  const ascii = safe.replace(/[^\x20-\x7E]+/g, '_');
+  const encoded = encodeURIComponent(safe).replace(/['()]/g, escape);
+  const kind = attachment ? 'attachment' : 'inline';
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+}
+
+function contentDispositionInline(filename) {
+  return contentDisposition(filename, { attachment: false });
+}
+
+function previewFileBase(entry, fallback = 'preview') {
+  return (
+    String(entry?.title || fallback)
+      .replace(/[\\/:*?"<>|&]+/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim() || fallback
+  );
+}
+
+function sendPreviewPdf(req, res) {
+  const entry = previewStore.get(req.params.token);
+  if (!entry || entry.expires < Date.now()) {
+    throw new AppError('Preview expired. Fill placeholders again.', 404, 'PREVIEW_EXPIRED');
+  }
+  if (!fs.existsSync(entry.pdfPath)) throw new AppError('Preview file missing', 404);
+  const fromPath = String(req.params.fileBase || '')
+    .replace(/\.pdf$/i, '')
+    .trim();
+  const base = fromPath || previewFileBase(entry);
+  const asDownload = String(req.query.download || '') === '1';
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', contentDisposition(`${base}.pdf`, { attachment: asDownload }));
+  if (entry.pdfEngine) res.setHeader('X-PDF-Engine', entry.pdfEngine);
+  res.setHeader('Cache-Control', 'private, no-store');
+  fs.createReadStream(entry.pdfPath).pipe(res);
+}
+
+function sendPreviewDocx(req, res) {
+  const entry = previewStore.get(req.params.token);
+  if (!entry || entry.expires < Date.now()) {
+    throw new AppError('Preview expired. Fill placeholders again.', 404, 'PREVIEW_EXPIRED');
+  }
+  if (!entry.filledDocxKey) throw new AppError('Filled Word file not available', 404);
+  const full = path.join(previewRoot, entry.filledDocxKey);
+  if (!fs.existsSync(full)) throw new AppError('Filled Word file missing', 404);
+  const fromPath = String(req.params.fileBase || '')
+    .replace(/\.docx$/i, '')
+    .trim();
+  const base = fromPath || previewFileBase(entry, 'preview-filled');
+  const asDownload = String(req.query.download || '') === '1';
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  );
+  res.setHeader('Content-Disposition', contentDisposition(`${base}.docx`, { attachment: asDownload }));
+  res.setHeader('Cache-Control', 'private, no-store');
+  fs.createReadStream(full).pipe(res);
+}
+
 function sendNativePdf(res, converted, filename = 'preview.pdf') {
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+  res.setHeader('Content-Disposition', contentDispositionInline(filename));
   res.setHeader('X-PDF-Engine', converted.engine);
   res.send(converted.buffer);
 }
@@ -69,6 +135,14 @@ async function docxBufferForNativePdf(buffer) {
 }
 
 const router = Router();
+
+// Token-gated preview files — public so iframe/PDF viewers get Content-Disposition filenames
+// (blob: URLs always download as a UUID in Chrome).
+router.get('/preview/:token/:fileBase.pdf', asyncHandler(async (req, res) => sendPreviewPdf(req, res)));
+router.get('/preview/:token.pdf', asyncHandler(async (req, res) => sendPreviewPdf(req, res)));
+router.get('/preview/:token/:fileBase.docx', asyncHandler(async (req, res) => sendPreviewDocx(req, res)));
+router.get('/preview/:token.docx', asyncHandler(async (req, res) => sendPreviewDocx(req, res)));
+
 router.use(authenticate);
 
 const canReadTemplates = requirePermission(PERMISSIONS.AGREEMENTS_READ, PERMISSIONS.AGREEMENTS_WRITE);
@@ -200,55 +274,23 @@ router.post(
 );
 
 router.get(
-  '/preview/:token.pdf',
-  asyncHandler(async (req, res) => {
-    const entry = previewStore.get(req.params.token);
-    if (!entry || entry.expires < Date.now()) {
-      throw new AppError('Preview expired. Fill placeholders again.', 404, 'PREVIEW_EXPIRED');
-    }
-    if (!fs.existsSync(entry.pdfPath)) throw new AppError('Preview file missing', 404);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'inline; filename="preview.pdf"');
-    if (entry.pdfEngine) res.setHeader('X-PDF-Engine', entry.pdfEngine);
-    fs.createReadStream(entry.pdfPath).pipe(res);
-  })
-);
-
-router.get(
-  '/preview/:token.docx',
-  asyncHandler(async (req, res) => {
-    const entry = previewStore.get(req.params.token);
-    if (!entry || entry.expires < Date.now()) {
-      throw new AppError('Preview expired. Fill placeholders again.', 404, 'PREVIEW_EXPIRED');
-    }
-    if (!entry.filledDocxKey) throw new AppError('Filled Word file not available', 404);
-    const full = path.join(previewRoot, entry.filledDocxKey);
-    if (!fs.existsSync(full)) throw new AppError('Filled Word file missing', 404);
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    );
-    res.setHeader('Content-Disposition', 'inline; filename="preview-filled.docx"');
-    fs.createReadStream(full).pipe(res);
-  })
-);
-
-router.get(
   '/preview-meta/:token',
   asyncHandler(async (req, res) => {
     const entry = previewStore.get(req.params.token);
     if (!entry || entry.expires < Date.now()) {
       throw new AppError('Preview expired', 404, 'PREVIEW_EXPIRED');
     }
+    const base = previewFileBase(entry);
+    const fileSeg = encodeURIComponent(base);
     res.json({
       data: {
         filledText: entry.filledText,
         values: entry.values,
         templateId: entry.templateId,
         title: entry.title,
-        previewUrl: `/api/v1/templates/preview/${req.params.token}.pdf`,
+        previewUrl: `/api/v1/templates/preview/${req.params.token}/${fileSeg}.pdf`,
         filledDocxUrl: entry.filledDocxKey
-          ? `/api/v1/templates/preview/${req.params.token}.docx`
+          ? `/api/v1/templates/preview/${req.params.token}/${fileSeg}.docx`
           : null,
         filledDocxKey: entry.filledDocxKey,
         pdfEngine: entry.pdfEngine || 'pdfkit',
@@ -507,7 +549,6 @@ router.post(
     const tpl = await DocumentTemplate.findOne({ _id: req.params.id, isDeleted: false });
     if (!tpl) throw new AppError('Template not found', 404);
 
-    const values = req.body.values || {};
     const lineRows = req.body.lineRows && typeof req.body.lineRows === 'object' ? req.body.lineRows : {};
     let placeholders = tpl.placeholders || [];
     let repeatableTables = Array.isArray(tpl.repeatableTables) ? tpl.repeatableTables : [];
@@ -531,6 +572,12 @@ router.post(
       await tpl.save();
     }
 
+    const values = mergeLineValuesIntoPlaceholders(
+      req.body.values || {},
+      placeholders,
+      repeatableTables,
+      lineRows
+    );
     const missing = placeholders.filter((p) => {
       const v = values[p.key] ?? values[p.label];
       return v == null || String(v).trim() === '';
@@ -607,6 +654,11 @@ router.post(
     let filledDocxKey = null;
     let filledDocxBuffer = null;
     let blocks = null;
+    const title = req.body.title || tpl.name;
+    const safeTitleBase = String(title || 'document')
+      .replace(/[\\/:*?"<>|]+/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim() || 'document';
 
     if (tpl.sourceType === 'DOCX' && tpl.storageKey) {
       const full = await ensureLocalUpload(path.join(templateRoot, tpl.storageKey));
@@ -619,11 +671,10 @@ router.post(
       filledText = filled.filledText;
       blocks = filled.blocks;
       filledDocxBuffer = filled.filledBuffer;
-      filledDocxKey = buildStoredUploadFileName('filled.docx', { purpose: 'filled' });
+      filledDocxKey = buildStoredUploadFileName(`${safeTitleBase}.docx`, { purpose: 'filled' });
       await writeBufferPersisted(path.join(previewRoot, filledDocxKey), filled.filledBuffer);
     }
 
-    const title = req.body.title || tpl.name;
     const signingType =
       req.body.signingType === 'NON_SIGNING' || tpl.signingType === 'NON_SIGNING'
         ? 'NON_SIGNING'
@@ -667,11 +718,14 @@ router.post(
       expires: Date.now() + 60 * 60 * 1000,
     });
 
+    const fileSeg = encodeURIComponent(previewFileBase({ title }));
     res.json({
       data: {
         previewToken: token,
-        previewUrl: `/api/v1/templates/preview/${token}.pdf`,
-        filledDocxUrl: filledDocxKey ? `/api/v1/templates/preview/${token}.docx` : null,
+        previewUrl: `/api/v1/templates/preview/${token}/${fileSeg}.pdf`,
+        filledDocxUrl: filledDocxKey
+          ? `/api/v1/templates/preview/${token}/${fileSeg}.docx`
+          : null,
         pdfEngine,
         filledText,
         placeholders,
@@ -703,6 +757,40 @@ router.patch(
     await tpl.save();
     res.json({ data: tpl });
   })
+);
+
+async function softDeleteTemplate(req, res) {
+  const tpl = await DocumentTemplate.findOne({ _id: req.params.id, isDeleted: false });
+  if (!tpl) throw new AppError('Template not found', 404);
+  tpl.isDeleted = true;
+  tpl.isActive = false;
+  tpl.updatedBy = req.user._id;
+  await tpl.save();
+
+  await writeAudit({
+    actorId: req.user._id,
+    actorEmail: req.user.email,
+    action: 'DOCUMENT_TEMPLATE.DELETE',
+    entityType: 'DocumentTemplate',
+    entityId: tpl._id,
+    before: { name: tpl.name, documentType: tpl.documentType || tpl.agreementType },
+    requestId: req.requestId,
+  });
+
+  res.json({ data: { ok: true, id: tpl._id } });
+}
+
+// Prefer POST /:id/delete — some hosts/proxies do not forward DELETE reliably.
+router.post(
+  '/:id/delete',
+  requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  asyncHandler(softDeleteTemplate)
+);
+
+router.delete(
+  '/:id',
+  requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  asyncHandler(softDeleteTemplate)
 );
 
 export { previewStore, previewRoot, templateRoot };

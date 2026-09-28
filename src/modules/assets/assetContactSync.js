@@ -25,3 +25,23 @@ export async function syncLinkedAssetsFromAgreement(agreement) {
     await asset.save();
   }
 }
+
+/**
+ * After an agreement is signed (COMPLETED) or activated (ACTIVE), lock linked
+ * assets so their serials cannot be selected on other agreements until terminated.
+ */
+export async function lockAssetsForSignedAgreement(agreement) {
+  if (!agreement || !['COMPLETED', 'ACTIVE'].includes(agreement.status)) return;
+  const links = await AgreementAsset.find({ agreementId: agreement._id, isActive: true });
+  for (const link of links) {
+    const asset = await Asset.findOne({ _id: link.assetId, isDeleted: false });
+    if (!asset) continue;
+    const current = asset.activeAgreementId ? String(asset.activeAgreementId) : '';
+    if (!current || current === String(agreement._id)) {
+      asset.activeAgreementId = agreement._id;
+      asset.agreementStatus = 'Agreement Signed';
+    }
+    await syncAssetContactFromAgreement(asset, agreement);
+    await asset.save();
+  }
+}

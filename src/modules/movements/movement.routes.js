@@ -3,44 +3,52 @@ import { authenticate, requirePermission } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { Movement } from './movement.model.js';
-import { Asset } from '../assets/asset.model.js';
-import { Contact } from '../contacts/contact.model.js';
-import { nextSequence } from '../../utils/counters.js';
-import { writeAudit } from '../../utils/audit.js';
-import { notifyEvent, notifyUser } from '../notifications/notifyEvent.js';
-import { User } from '../users/user.model.js';
-import { Role } from '../users/role.model.js';
 import { sendExcel } from '../../utils/excelExport.js';
-import { runAtomic } from '../../store/runAtomic.js';
-import { assertNotStale } from '../../store/dataIntegrity.js';
-import { v4 as uuid } from 'uuid';
+import { clearStaleLegacyMovementLocks } from './retireLegacyMovements.js';
 
-function plainDoc(row) {
-  if (!row) return row;
-  if (typeof row.toObject === 'function') return row.toObject();
-  return { ...row };
-}
-
-function assertMovementNotStale(movement, body) {
-  assertNotStale(movement, body?.expectedUpdatedAt || body?.updatedAt, { label: 'Movement' });
-}
-
+/**
+ * Legacy ALMS asset-transfer API — read-only after Movement One redesign (1A+2A).
+ * New custody / goods issuance flows use Request One + Movement One Goods Issue.
+ */
 const router = Router();
 router.use(authenticate);
+
+const RETIRED_MESSAGE =
+  'Legacy asset Movement API is retired. Use Request One → Goods Issuance, then Movement One → Goods Issue.';
+
+function retiredWrite(_req, _res, next) {
+  next(new AppError(RETIRED_MESSAGE, 410, 'MOVEMENT_API_RETIRED'));
+}
 
 const canReadMovements = requirePermission(
   PERMISSIONS.MOVEMENTS_READ,
   PERMISSIONS.MOVEMENTS_REQUEST,
-  PERMISSIONS.MOVEMENTS_APPROVE
+  PERMISSIONS.MOVEMENTS_APPROVE,
+  PERMISSIONS.ASSET_REQUESTS_READ,
+  PERMISSIONS.ASSET_REQUESTS_REQUEST,
+  PERMISSIONS.ASSET_REQUESTS_APPROVE
 );
 router.use((req, res, next) => {
   if (req.method !== 'GET') return next();
   return canReadMovements(req, res, next);
 });
 
+/** One-shot cleanup of openMovementId values that pointed at legacy Movement docs */
+let legacyLockCleanupPromise = null;
+function ensureLegacyLockCleanup() {
+  if (!legacyLockCleanupPromise) {
+    legacyLockCleanupPromise = clearStaleLegacyMovementLocks().catch((err) => {
+      console.error('[movements] legacy lock cleanup failed', err?.message || err);
+      legacyLockCleanupPromise = null;
+    });
+  }
+  return legacyLockCleanupPromise;
+}
+
 router.get(
   '/',
   asyncHandler(async (req, res) => {
+    ensureLegacyLockCleanup();
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
     if (req.query.status) filter.status = req.query.status;
@@ -55,7 +63,16 @@ router.get(
         .limit(limit),
       Movement.countDocuments(filter),
     ]);
-    res.json(paginated(data, total, page, limit));
+    res.set('Deprecation', 'true');
+    res.set('Sunset', 'Movement One redesign');
+    res.json({
+      ...paginated(data, total, page, limit),
+      meta: {
+        ...(paginated(data, total, page, limit).meta || {}),
+        deprecated: true,
+        message: RETIRED_MESSAGE,
+      },
+    });
   })
 );
 
@@ -69,7 +86,7 @@ router.get(
       .sort('-createdAt');
     sendExcel(
       res,
-      'Movements.xlsx',
+      'Movements_Legacy.xlsx',
       [
         'Movement Number',
         'Status',
@@ -90,7 +107,7 @@ router.get(
         m.to?.contactId?.city || m.to?.location?.city || '',
         m.createdAt,
       ]),
-      { sheetName: 'Movements' }
+      { sheetName: 'Legacy Movements' }
     );
   })
 );
@@ -103,360 +120,17 @@ router.get(
       .populate('approverId', 'fullName email')
       .populate('assets.assetId');
     if (!movement) throw new AppError('Movement not found', 404);
-    res.json({ data: movement });
+    res.set('Deprecation', 'true');
+    res.json({ data: movement, meta: { deprecated: true, message: RETIRED_MESSAGE } });
   })
 );
 
-router.post(
-  '/',
-  requirePermission(PERMISSIONS.MOVEMENTS_REQUEST),
-  asyncHandler(async (req, res) => {
-    const { assetIds, reason, to, from, idempotencyKey } = req.body;
-    if (!assetIds?.length || !reason) {
-      throw new AppError('assetIds and reason required', 400, 'VALIDATION_ERROR');
-    }
-    if (idempotencyKey) {
-      const existing = await Movement.findOne({ idempotencyKey });
-      if (existing) return res.status(200).json({ data: existing });
-    }
+router.post('/', retiredWrite);
+router.post('/:id/approve', retiredWrite);
+router.post('/:id/reject', retiredWrite);
+router.post('/:id/ship', retiredWrite);
+router.post('/:id/receive', retiredWrite);
+router.post('/:id/cancel', retiredWrite);
 
-    const assets = [];
-    for (const assetId of assetIds) {
-      const asset = await Asset.findOne({ _id: assetId, isDeleted: false });
-      if (!asset) throw new AppError(`Asset ${assetId} not found`, 404);
-      if (asset.openMovementId) {
-        throw new AppError(`Asset ${asset.assetTag} already in transit`, 400, 'ASSET_LOCKED');
-      }
-      if (['Repair', 'Disposed'].includes(asset.status)) {
-        throw new AppError(`Asset ${asset.assetTag} not eligible for movement`, 400, 'INVALID_STATUS');
-      }
-      assets.push({ assetId: asset._id, serialNumber: asset.serialNumber, fromStatus: asset.status });
-    }
-
-    const movement = await Movement.create({
-      movementNumber: await nextSequence('movementNumber', 'MOV'),
-      requestorId: req.user._id,
-      reason,
-      from: from || {},
-      to: to || {},
-      assets,
-      idempotencyKey,
-      status: 'REQUESTED',
-    });
-
-    const approverRole = await Role.findOne({ name: 'Approver' });
-    if (approverRole) {
-      const approvers = await User.find({
-        roleIds: approverRole._id,
-        isDeleted: false,
-        isActive: true,
-        _id: { $ne: req.user._id },
-      });
-      await notifyEvent({
-        type: 'MOVEMENT_APPROVAL',
-        title: `Movement ${movement.movementNumber} needs approval`,
-        body: reason,
-        entityType: 'Movement',
-        entityId: movement._id,
-        recipients: approvers.map((a) => a._id),
-        includeWatchers: true,
-        actor: req.user,
-        excludeActor: true,
-        module: 'assets',
-        meta: { kind: 'approval' },
-      });
-    }
-
-    await writeAudit({
-      actorId: req.user._id,
-      actorEmail: req.user.email,
-      action: 'MOVEMENT.REQUEST',
-      entityType: 'Movement',
-      entityId: movement._id,
-      after: movement.toObject(),
-      requestId: req.requestId,
-    });
-
-    res.status(201).json({ data: movement });
-  })
-);
-
-router.post(
-  '/:id/approve',
-  requirePermission(PERMISSIONS.MOVEMENTS_APPROVE),
-  asyncHandler(async (req, res) => {
-    const movement = await Movement.findOne({ _id: req.params.id, isDeleted: false });
-    if (!movement) throw new AppError('Movement not found', 404);
-    assertMovementNotStale(movement, req.body);
-    if (movement.status !== 'REQUESTED') {
-      throw new AppError('Only REQUESTED movements can be approved', 400, 'INVALID_STATUS');
-    }
-    if (String(movement.requestorId) === String(req.user._id)) {
-      throw new AppError('Segregation of duties: requestor cannot approve', 403, 'SOD_VIOLATION');
-    }
-    const before = plainDoc(movement);
-    movement.status = 'APPROVED';
-    movement.approverId = req.user._id;
-    movement.approvedAt = new Date();
-    await movement.save();
-    await writeAudit({
-      actorId: req.user._id,
-      actorEmail: req.user.email,
-      action: 'MOVEMENT.APPROVE',
-      entityType: 'Movement',
-      entityId: movement._id,
-      before,
-      after: plainDoc(movement),
-      message: `Status ${before.status} → APPROVED`,
-      requestId: req.requestId,
-    });
-    await notifyUser(movement.requestorId, {
-      type: 'MOVEMENT_APPROVAL',
-      title: `Movement ${movement.movementNumber} approved`,
-      entityType: 'Movement',
-      entityId: movement._id,
-      includeWatchers: true,
-      actor: req.user,
-      module: 'assets',
-      meta: { kind: 'update' },
-    });
-    res.json({ data: movement });
-  })
-);
-
-router.post(
-  '/:id/reject',
-  requirePermission(PERMISSIONS.MOVEMENTS_APPROVE),
-  asyncHandler(async (req, res) => {
-    const movement = await Movement.findOne({ _id: req.params.id, isDeleted: false });
-    if (!movement) throw new AppError('Movement not found', 404);
-    assertMovementNotStale(movement, req.body);
-    if (String(movement.requestorId) === String(req.user._id)) {
-      throw new AppError('Segregation of duties: requestor cannot reject', 403, 'SOD_VIOLATION');
-    }
-    const before = plainDoc(movement);
-    const reason = req.body.reason || '';
-    movement.status = 'REJECTED';
-    movement.approverId = req.user._id;
-    movement.rejectedAt = new Date();
-    movement.rejectionReason = reason;
-    await movement.save();
-    await writeAudit({
-      actorId: req.user._id,
-      actorEmail: req.user.email,
-      action: 'MOVEMENT.REJECT',
-      entityType: 'Movement',
-      entityId: movement._id,
-      before,
-      after: plainDoc(movement),
-      message: reason ? `Rejected: ${reason}` : `Status ${before.status} → REJECTED`,
-      requestId: req.requestId,
-    });
-    res.json({ data: movement });
-  })
-);
-
-router.post(
-  '/:id/ship',
-  requirePermission(PERMISSIONS.MOVEMENTS_REQUEST),
-  asyncHandler(async (req, res) => {
-    const movement = await Movement.findOne({ _id: req.params.id, isDeleted: false });
-    if (!movement) throw new AppError('Movement not found', 404);
-    assertMovementNotStale(movement, req.body);
-    if (movement.status !== 'APPROVED') throw new AppError('Must be APPROVED', 400);
-
-    const assetIds = (movement.assets || []).map((item) => item.assetId).filter(Boolean);
-    const assets = [];
-    for (const id of assetIds) {
-      const asset = await Asset.findById(id);
-      if (!asset || asset.isDeleted) {
-        throw new AppError(`Asset ${id} not found for this movement`, 400, 'VALIDATION_ERROR');
-      }
-      if (asset.openMovementId && String(asset.openMovementId) !== String(movement._id)) {
-        throw new AppError(
-          `Asset ${asset.serialNumber || asset._id} is locked by another movement`,
-          409,
-          'CONFLICT'
-        );
-      }
-      assets.push(asset);
-    }
-
-    const before = plainDoc(movement);
-    const shippedAt = new Date();
-    const nextMovement = {
-      ...plainDoc(movement),
-      status: 'IN_TRANSIT',
-      shippedAt,
-    };
-    const nextAssets = assets.map((asset) => ({
-      ...plainDoc(asset),
-      openMovementId: movement._id,
-    }));
-
-    const saved = await runAtomic(async () => ({
-      upserts: [
-        { collection: 'assets', docs: nextAssets },
-        { collection: 'movements', docs: [nextMovement] },
-      ],
-      result: nextMovement,
-    }));
-
-    await writeAudit({
-      actorId: req.user._id,
-      actorEmail: req.user.email,
-      action: 'MOVEMENT.SHIP',
-      entityType: 'Movement',
-      entityId: movement._id,
-      before,
-      after: saved,
-      message: `Status ${before.status} → IN_TRANSIT (${nextAssets.length} asset(s) locked)`,
-      requestId: req.requestId,
-    });
-
-    res.json({ data: saved });
-  })
-);
-
-router.post(
-  '/:id/receive',
-  requirePermission(PERMISSIONS.MOVEMENTS_REQUEST),
-  asyncHandler(async (req, res) => {
-    const movement = await Movement.findOne({ _id: req.params.id, isDeleted: false });
-    if (!movement) throw new AppError('Movement not found', 404);
-    assertMovementNotStale(movement, req.body);
-    if (movement.status !== 'IN_TRANSIT') throw new AppError('Must be IN_TRANSIT', 400);
-
-    let toContact = null;
-    if (movement.to?.contactId) {
-      toContact = await Contact.findById(movement.to.contactId);
-    }
-
-    const nextAssets = [];
-    const nextEvents = [];
-    for (const item of movement.assets || []) {
-      const asset = await Asset.findById(item.assetId);
-      if (!asset || asset.isDeleted) {
-        throw new AppError(`Asset ${item.assetId} not found for this movement`, 400, 'VALIDATION_ERROR');
-      }
-      const fromContactId = asset.contactId;
-      const fromLocation = asset.location;
-      const next = { ...plainDoc(asset) };
-      if (toContact) {
-        next.contactId = toContact._id;
-        next.hcwId = null;
-        next.hcwBusinessId = null;
-        if (!['Assigned', 'Verified'].includes(next.status)) next.status = 'Assigned';
-        if (toContact.city) {
-          next.location = { ...(next.location || {}), city: toContact.city };
-        }
-      }
-      if (movement.to?.location) {
-        next.location = { ...(next.location || {}), ...movement.to.location };
-      }
-      next.openMovementId = null;
-      nextAssets.push(next);
-      nextEvents.push({
-        _id: uuid(),
-        assetId: next._id,
-        eventType: 'CUSTODY_CHANGE',
-        fromContactId,
-        toContactId: next.contactId,
-        fromLocation,
-        toLocation: next.location,
-        relatedEntityType: 'Movement',
-        relatedEntityId: movement._id,
-        actorId: req.user._id,
-        reason: `Received ${movement.movementNumber}`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        isDeleted: false,
-      });
-    }
-
-    const before = plainDoc(movement);
-    const receivedAt = new Date();
-    const nextMovement = {
-      ...plainDoc(movement),
-      status: 'RECEIVED',
-      receivedAt,
-      receivedByUserId: req.user._id,
-    };
-
-    const saved = await runAtomic(async () => ({
-      upserts: [
-        { collection: 'assets', docs: nextAssets },
-        { collection: 'asset_events', docs: nextEvents },
-        { collection: 'movements', docs: [nextMovement] },
-      ],
-      result: nextMovement,
-    }));
-
-    await writeAudit({
-      actorId: req.user._id,
-      actorEmail: req.user.email,
-      action: 'MOVEMENT.RECEIVE',
-      entityType: 'Movement',
-      entityId: movement._id,
-      before,
-      after: saved,
-      message: `Status ${before.status} → RECEIVED (${nextAssets.length} asset(s))`,
-      requestId: req.requestId,
-    });
-
-    res.json({ data: saved });
-  })
-);
-
-router.post(
-  '/:id/cancel',
-  requirePermission(PERMISSIONS.MOVEMENTS_REQUEST),
-  asyncHandler(async (req, res) => {
-    const movement = await Movement.findOne({ _id: req.params.id, isDeleted: false });
-    if (!movement) throw new AppError('Movement not found', 404);
-    assertMovementNotStale(movement, req.body);
-    if (['RECEIVED', 'CANCELLED'].includes(movement.status)) {
-      throw new AppError('Cannot cancel', 400);
-    }
-
-    const before = plainDoc(movement);
-    const nextAssets = [];
-    for (const item of movement.assets || []) {
-      const asset = await Asset.findById(item.assetId);
-      if (!asset || asset.isDeleted) continue;
-      if (String(asset.openMovementId) !== String(movement._id)) continue;
-      nextAssets.push({
-        ...plainDoc(asset),
-        openMovementId: null,
-      });
-    }
-    const nextMovement = {
-      ...plainDoc(movement),
-      status: 'CANCELLED',
-    };
-
-    const saved = await runAtomic(async () => ({
-      upserts: [
-        { collection: 'assets', docs: nextAssets },
-        { collection: 'movements', docs: [nextMovement] },
-      ],
-      result: nextMovement,
-    }));
-
-    await writeAudit({
-      actorId: req.user._id,
-      actorEmail: req.user.email,
-      action: 'MOVEMENT.CANCEL',
-      entityType: 'Movement',
-      entityId: movement._id,
-      before,
-      after: saved,
-      message: `Status ${before.status} → CANCELLED`,
-      requestId: req.requestId,
-    });
-
-    res.json({ data: saved });
-  })
-);
-
+export { RETIRED_MESSAGE };
 export default router;

@@ -14,6 +14,7 @@ import { escapeRegex } from '../../utils/escapeRegex.js';
 import { nextSequence } from '../../utils/counters.js';
 import { toSignedUploadUrl } from '../files/file.routes.js';
 import { AssetRequest } from '../assetRequests/assetRequest.model.js';
+import { idsEqual } from '../../utils/entityIds.js';
 import {
   LOCATION_LEVELS,
   IN_OUT_ENTRY_TYPES,
@@ -49,6 +50,8 @@ import {
   DELIVERY_MODES,
   DELIVERY_MODE_ALIASES,
   COURIER_DELIVERY_MODES,
+  PACKAGE_STATUSES,
+  resolvePackageStatus,
   DEFAULT_WAREHOUSE_NAME,
   requiresShortExpiryApproval,
   SHORT_EXPIRY_APPROVAL_MONTHS,
@@ -56,8 +59,18 @@ import {
   OUTWARD_OPEN_DISPATCH_STATUS,
   OUTWARD_TERMINAL_DISPATCH_STATUSES,
   OUTWARD_DELIVERY_OUTCOMES,
+  OUTWARD_IN_PROGRESS_FILTER_VALUES,
+  OUTWARD_PACKED_DISPATCH_STATUS,
+  OUTWARD_POD_BOOKED_STATUS,
   UOM_LEGACY_CODE_ALIASES,
 } from './logistics.constants.js';
+import {
+  lotBatchKey,
+  lotExpiryKey,
+  lotSerialKey,
+  stockLotIdentityKey,
+  isUnbatchedLot,
+} from './lotIdentity.js';
 import {
   LogisticsWarehouse,
   LogisticsLocation,
@@ -83,6 +96,7 @@ import { applyUsageInventoryEffect } from './logistics.usageInventory.js';
 import { assertActiveMasterRef } from '../../utils/masterIntegrity.js';
 import { assertEntityNotStale, readIdempotencyKey, beginIdempotentCreate } from '../../utils/mutationGuards.js';
 import { attachMasterExcelRoutes } from '../../utils/masterExcel.js';
+import { sendExcel } from '../../utils/excelExport.js';
 import {
   PARTY_HEADERS,
   PARTY_IMPORT_COLUMNS,
@@ -735,13 +749,21 @@ registerMasterCrud({
   searchFields: ['name', 'code', 'email', 'phone', 'contactName'],
   checkIdentity: true,
   codePrefix: 'TRN',
-  normalize: (b) => ({
-    code: trimStr(b.code).toUpperCase(),
-    name: trimStr(b.name),
-    contactName: trimStr(b.contactName),
-    email: trimStr(b.email).toLowerCase(),
-    phone: trimStr(b.phone),
-    isActive: b.isActive !== false,
+  normalize: (b, existing) => ({
+    code: trimStr(b.code ?? existing?.code).toUpperCase(),
+    name: trimStr(b.name ?? existing?.name),
+    contactName: trimStr(b.contactName ?? existing?.contactName ?? ''),
+    email: trimStr(b.email ?? existing?.email ?? '').toLowerCase(),
+    phone: trimStr(b.phone ?? existing?.phone ?? ''),
+    ratePerKg:
+      b.ratePerKg !== undefined && b.ratePerKg !== ''
+        ? Number(b.ratePerKg) || 0
+        : Number(existing?.ratePerKg) || 0,
+    minCharge:
+      b.minCharge !== undefined && b.minCharge !== ''
+        ? Number(b.minCharge) || 0
+        : Number(existing?.minCharge) || 0,
+    isActive: b.isActive !== undefined ? b.isActive !== false : existing?.isActive !== false,
   }),
 });
 
@@ -783,7 +805,16 @@ registerMasterCrud({
   uniqueFields: ['name'],
   serializeRow: withSignedLogisticsFiles,
   normalize: (b, existing) => {
-    const productType = resolveProductType(b.productType ?? existing?.productType) || 'Other';
+    const classificationRaw = trimStr(
+      b.productClassification ?? existing?.productClassification ?? ''
+    );
+    const categoryKindRaw = trimStr(b.productCategoryKind ?? '');
+    let productType = resolveProductType(b.productType ?? existing?.productType) || '';
+    if (categoryKindRaw) {
+      const composed = composeProductTypeFromCascade(classificationRaw || 'Medical', categoryKindRaw);
+      if (composed) productType = composed;
+    }
+    productType = resolveProductType(productType) || 'Other';
     if (!IN_OUT_PRODUCT_TYPES.includes(productType)) {
       throw new AppError(
         `productType must be one of: ${IN_OUT_PRODUCT_TYPES.join(', ')}`,
@@ -791,6 +822,10 @@ registerMasterCrud({
         'VALIDATION_ERROR'
       );
     }
+    const productClassification = resolveProductClassificationValue(
+      classificationRaw,
+      productType
+    );
     const defaults = PRODUCT_CATEGORY_DEFAULTS[productType] || {
       expiryApplicable: false,
       trackingKind: 'None',
@@ -948,6 +983,7 @@ registerMasterCrud({
       image: b.image !== undefined ? asFileRef(b.image) : asFileRef(existing?.image),
       isActive: b.isActive !== undefined ? asBool(b.isActive, true) : existing?.isActive !== false,
       productType,
+      productClassification,
       inventoryType,
       trackingKind,
       uomId: b.uomId !== undefined ? b.uomId || null : existing?.uomId || null,
@@ -1403,6 +1439,15 @@ router.get(
         inOut: {
           entryTypes: IN_OUT_ENTRY_TYPES,
           productTypes: IN_OUT_PRODUCT_TYPES,
+          productClassifications: ['Medical', 'Non-Medical'],
+          productCategoryKinds: [
+            'Device',
+            'Peripheral',
+            'Document',
+            'Consumable',
+            'Spare Part',
+            'Other',
+          ],
           inventoryTypes: PRODUCT_INVENTORY_TYPES,
           gstRatePresets: GST_RATE_PRESETS,
           trackingByProduct: PRODUCT_TRACKING_TYPE,
@@ -1436,10 +1481,33 @@ router.get(
   })
 );
 
-function nextInOutUniqueKey() {
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
-  return `TXN-${stamp}-${rand}`;
+/** Canonical short TXN nomenclature: TXN-00001, TXN-00002, … */
+const TXN_KEY_RE = /^TXN-\d{1,8}$/i;
+
+function isCanonicalTxnKey(value) {
+  return TXN_KEY_RE.test(trimStr(value));
+}
+
+function isOpaqueClientTxnKey(value) {
+  const v = trimStr(value);
+  if (!v) return false;
+  if (isCanonicalTxnKey(v)) return false;
+  // UUIDs, legacy out-/inout-/pkg- keys, long random stamps — idempotency only
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) return true;
+  if (/^(out|inout|pkg|in)-/i.test(v)) return true;
+  return v.length > 16;
+}
+
+async function allocateInOutTxnKey() {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const allocated = await nextSequence('logisticsInOutTxn', 'TXN', { digits: 5 });
+    const clash = await LogisticsInOutEntry.findOne({
+      uniqueKey: allocated,
+      isDeleted: false,
+    });
+    if (!clash) return allocated;
+  }
+  throw new AppError('Could not allocate a unique TXN', 500, 'CODE_ALLOCATION');
 }
 
 function resolveEntryType(raw) {
@@ -1468,6 +1536,47 @@ function resolveProductType(raw) {
   if (hit) return hit[1];
   if (IN_OUT_PRODUCT_TYPES.includes(v)) return v;
   return v;
+}
+
+function resolveProductClassificationValue(raw, productType) {
+  const v = trimStr(raw);
+  if (v === 'Medical' || v === 'Non-Medical') return v;
+  const type = resolveProductType(productType);
+  if (type === 'Non-Medical Device') return 'Non-Medical';
+  if (type === 'Medical Device') return 'Medical';
+  if (/^non[-\s]?medical/i.test(v)) return 'Non-Medical';
+  if (/^medical/i.test(v)) return 'Medical';
+  return 'Medical';
+}
+
+function composeProductTypeFromCascade(classification, categoryKind) {
+  const cls = resolveProductClassificationValue(classification, '');
+  const kind = trimStr(categoryKind);
+  const kindNorm =
+    {
+      Device: 'Device',
+      Devices: 'Device',
+      Peripheral: 'Peripheral',
+      Prepheral: 'Peripheral',
+      Document: 'Document',
+      Documents: 'Document',
+      Consumable: 'Consumable',
+      Consumables: 'Consumable',
+      'Spare Part': 'Spare Part',
+      'Spare Parts': 'Spare Part',
+      'Spart Part': 'Spare Part',
+      Other: 'Other',
+      Others: 'Other',
+    }[kind] || kind;
+  if (kindNorm === 'Device') {
+    return cls === 'Non-Medical' ? 'Non-Medical Device' : 'Medical Device';
+  }
+  if (kindNorm === 'Peripheral') return 'Peripheral';
+  if (kindNorm === 'Document') return 'Document';
+  if (kindNorm === 'Consumable') return 'Consumable';
+  if (kindNorm === 'Spare Part') return 'Spare Part';
+  if (kindNorm === 'Other') return 'Other';
+  return '';
 }
 
 function resolveInventoryType(raw) {
@@ -1655,7 +1764,15 @@ function normalizeInOutBody(body, existing = null, actor = null) {
   }
 
   const awbNumber = trimStr(body.awbNumber ?? existing?.awbNumber ?? '');
-  if (COURIER_DELIVERY_MODES.includes(deliveryMode) && !awbNumber) {
+  const packageStatusEarly = resolvePackageStatus(body.packageStatus ?? existing?.packageStatus ?? '');
+  const dispatchEarly = trimStr(body.dispatchStatus ?? existing?.dispatchStatus ?? '');
+  // AWB is captured at Book POD — not required while preparing the package
+  const awbDeferred =
+    Boolean(packageStatusEarly) ||
+    dispatchEarly === OUTWARD_OPEN_DISPATCH_STATUS ||
+    dispatchEarly === OUTWARD_PACKED_DISPATCH_STATUS ||
+    !dispatchEarly;
+  if (COURIER_DELIVERY_MODES.includes(deliveryMode) && !awbNumber && !awbDeferred) {
     throw new AppError('AWB Number is required for courier deliveries', 400, 'VALIDATION_ERROR');
   }
 
@@ -1696,8 +1813,22 @@ function normalizeInOutBody(body, existing = null, actor = null) {
   const batchNumber =
     trackingKind === 'Batch' || trackingKind === 'Batch + Serial' ? batchOrSerial : '';
 
+  const clientTxn = trimStr(body.uniqueKey ?? '');
+  const existingTxn = trimStr(existing?.uniqueKey ?? '');
+  let uniqueKey = existingTxn;
+  if (!uniqueKey) {
+    if (isCanonicalTxnKey(clientTxn)) uniqueKey = clientTxn.toUpperCase();
+    // else leave blank — create route allocates TXN-#####
+  }
+  const idempotencyKey = trimStr(
+    body.idempotencyKey ??
+      existing?.idempotencyKey ??
+      (isOpaqueClientTxnKey(clientTxn) ? clientTxn : '')
+  );
+
   const row = {
-    uniqueKey: trimStr(body.uniqueKey ?? existing?.uniqueKey ?? '') || nextInOutUniqueKey(),
+    uniqueKey,
+    idempotencyKey,
     entryType,
     productType,
     inventoryType: productType,
@@ -1797,6 +1928,24 @@ function normalizeInOutBody(body, existing = null, actor = null) {
     logisticsKind: trimStr(body.logisticsKind ?? existing?.logisticsKind ?? ''),
     priority: trimStr(body.priority ?? existing?.priority ?? ''),
     preferredDate: trimStr(body.preferredDate ?? existing?.preferredDate ?? ''),
+    packageStatus: resolvePackageStatus(body.packageStatus ?? existing?.packageStatus ?? ''),
+    packageNote: trimStr(body.packageNote ?? existing?.packageNote ?? ''),
+    packageWeight: trimStr(body.packageWeight ?? existing?.packageWeight ?? ''),
+    packageLength: trimStr(body.packageLength ?? existing?.packageLength ?? ''),
+    packageHeight: trimStr(body.packageHeight ?? existing?.packageHeight ?? ''),
+    packageWidth: trimStr(body.packageWidth ?? existing?.packageWidth ?? ''),
+    volumetricWeight: trimStr(body.volumetricWeight ?? existing?.volumetricWeight ?? ''),
+    applicableWeight: trimStr(body.applicableWeight ?? existing?.applicableWeight ?? ''),
+    declaredPrice: trimStr(body.declaredPrice ?? existing?.declaredPrice ?? ''),
+    numberOfPieces: trimStr(body.numberOfPieces ?? existing?.numberOfPieces ?? '') || '1',
+    toAddressLine2: trimStr(body.toAddressLine2 ?? existing?.toAddressLine2 ?? ''),
+    riskSurcharge: (() => {
+      const raw = trimStr(body.riskSurcharge ?? existing?.riskSurcharge ?? 'NO').toUpperCase();
+      return raw === 'YES' ? 'YES' : 'NO';
+    })(),
+    contentType: trimStr(body.contentType ?? existing?.contentType ?? ''),
+    serviceType: trimStr(body.serviceType ?? existing?.serviceType ?? ''),
+    courierType: trimStr(body.courierType ?? existing?.courierType ?? ''),
     fromContactId: body.fromContactId || existing?.fromContactId || null,
     fromName: trimStr(body.fromName ?? existing?.fromName ?? ''),
     fromNumber: trimStr(body.fromNumber ?? existing?.fromNumber ?? ''),
@@ -1870,70 +2019,302 @@ async function enrichBodyFromProduct(body) {
   };
 }
 
+/**
+ * Find the exact stock lot for a movement.
+ * Never fall across a different batch/serial — that merges distinct inward lots.
+ */
 async function findStockForTxn(txn, warehouseId, { availableOnly = false } = {}) {
   const statusFilter = availableOnly ? { status: 'Available' } : {};
-  if (txn.serialNumber) {
+  const serial = lotSerialKey(txn.serialNumber);
+  if (serial) {
     const bySerial = await LogisticsStockItem.findOne({
-      serialNumber: txn.serialNumber,
+      serialNumber: serial,
       isDeleted: false,
       ...statusFilter,
     });
     if (bySerial) return bySerial;
     if (availableOnly) return null;
     return LogisticsStockItem.findOne({
-      serialNumber: txn.serialNumber,
+      serialNumber: serial,
       isDeleted: false,
     });
   }
 
   const wh = warehouseId || null;
+  const batch = lotBatchKey(txn.batchNumber);
+  const expiry = lotExpiryKey(txn.expiryDate);
   const base = { isDeleted: false, ...statusFilter };
   if (wh) base.warehouseId = wh;
 
+  const matchLotFields = (filter) => {
+    const next = { ...filter };
+    if (batch) next.batchNumber = batch;
+    if (expiry) next.expiryDate = expiry;
+    return next;
+  };
+
+  const findExact = async (filter) => {
+    const exact = await LogisticsStockItem.findOne(matchLotFields(filter));
+    if (exact) return exact;
+    // Same batch without expiry stamped yet (legacy rows)
+    if (batch && expiry) {
+      const byBatch = await LogisticsStockItem.findOne({ ...filter, batchNumber: batch });
+      if (byBatch && !lotExpiryKey(byBatch.expiryDate)) return byBatch;
+    }
+    return null;
+  };
+
   if (txn.productId) {
-    const withBatch = txn.batchNumber
-      ? await LogisticsStockItem.findOne({
-          ...base,
-          productId: txn.productId,
-          batchNumber: txn.batchNumber,
-        })
-      : null;
-    if (withBatch) return withBatch;
-    const byProduct = await LogisticsStockItem.findOne({ ...base, productId: txn.productId });
-    if (byProduct) return byProduct;
+    const hit = await findExact({ ...base, productId: txn.productId });
+    if (hit) return hit;
+    if (batch || expiry) return null;
+    // Unbatched qty: only reuse an unbatched lot — never a batched one
+    const rows = await LogisticsStockItem.find({ ...base, productId: txn.productId });
+    const unbatched = rows.find((row) => isUnbatchedLot(row));
+    if (unbatched) return unbatched;
+    return null;
   }
 
   if (txn.sku) {
-    const withBatch = txn.batchNumber
-      ? await LogisticsStockItem.findOne({ ...base, sku: txn.sku, batchNumber: txn.batchNumber })
-      : null;
-    if (withBatch) return withBatch;
-    const bySku = await LogisticsStockItem.findOne({ ...base, sku: txn.sku });
-    if (bySku) return bySku;
+    const hit = await findExact({ ...base, sku: txn.sku });
+    if (hit) return hit;
+    if (batch || expiry) return null;
+    const rows = await LogisticsStockItem.find({ ...base, sku: txn.sku });
+    return rows.find((row) => isUnbatchedLot(row)) || null;
   }
 
   const name = displayItemName(txn);
-  if (txn.batchNumber) {
-    const byNameBatch = await LogisticsStockItem.findOne({
-      ...base,
-      name,
-      batchNumber: txn.batchNumber,
-    });
-    if (byNameBatch) return byNameBatch;
+  if (!name || name === 'Inventory item') return null;
+  const hit = await findExact({ ...base, name });
+  if (hit) return hit;
+  if (batch || expiry) return null;
+  const rows = await LogisticsStockItem.find({ ...base, name });
+  return rows.find((row) => isUnbatchedLot(row)) || null;
+}
+
+/** Net available lots from applied In/Out movements (source of truth when stock rows were merged). */
+async function computeNetLotsFromInOut({ productId = null, productName = '', warehouseId = null } = {}) {
+  const nameWant = trimStr(productName);
+  const filter = { isDeleted: false };
+  if (productId) filter.productId = productId;
+  else if (nameWant) filter.productName = nameWant;
+  else return [];
+
+  let rows = await LogisticsInOutEntry.find(filter);
+  if ((!rows || !rows.length) && productId && nameWant) {
+    rows = await LogisticsInOutEntry.find({ isDeleted: false, productName: nameWant });
   }
-  return LogisticsStockItem.findOne({ ...base, name });
+
+  const nets = new Map();
+  for (const row of rows || []) {
+    if (!row?.inventoryAppliedAt) continue;
+    if (productId && row.productId && !idsEqual(row.productId, productId)) continue;
+    if (!productId && nameWant && displayItemName(row) !== nameWant) continue;
+
+    const entryType = resolveEntryType(row.entryType);
+    if (entryType === 'Transfer') continue;
+
+    const wh =
+      entryType === 'Outward'
+        ? row.sourceWarehouseId || row.warehouseId
+        : row.warehouseId;
+    if (warehouseId && wh && !idsEqual(wh, warehouseId)) continue;
+
+    const ledger = entryTypeLedgerDefaults(entryType, row.qty, row.adjustmentType);
+    const batchNumber = lotBatchKey(row.batchNumber) || null;
+    const expiryDate = lotExpiryKey(row.expiryDate);
+    const serialNumber = lotSerialKey(row.serialNumber) || null;
+    const key = stockLotIdentityKey({ batchNumber, expiryDate, serialNumber });
+    const prev = nets.get(key) || {
+      productId: row.productId || productId || null,
+      name: displayItemName(row),
+      productType: row.productType || '',
+      batchNumber,
+      expiryDate,
+      serialNumber,
+      qty: 0,
+      unitValue: Number(row.perUnitCost) || 0,
+      warehouseId: wh || warehouseId || null,
+    };
+    prev.qty += Number(ledger.quantityDelta) || 0;
+    if (row.perUnitCost) prev.unitValue = Number(row.perUnitCost) || prev.unitValue;
+    nets.set(key, prev);
+  }
+
+  return [...nets.values()]
+    .filter((lot) => Number(lot.qty) > 0)
+    .sort((a, b) => {
+      if (a.expiryDate && b.expiryDate) return a.expiryDate.localeCompare(b.expiryDate);
+      if (a.expiryDate) return -1;
+      if (b.expiryDate) return 1;
+      return String(a.batchNumber || '').localeCompare(String(b.batchNumber || ''));
+    });
+}
+
+/**
+ * Rebuild Available stock rows for a product so each inward batch/expiry is its own lot.
+ * Fixes historical merges where findStockForTxn reused another batch.
+ */
+async function syncStockLotsFromInOut({ productId = null, productName = '', warehouseId = null } = {}) {
+  const expected = await computeNetLotsFromInOut({ productId, productName, warehouseId });
+  const base = { isDeleted: false };
+  if (warehouseId) base.warehouseId = warehouseId;
+  if (productId) base.productId = productId;
+  else if (productName) base.name = trimStr(productName);
+  else return expected;
+
+  const existing = await LogisticsStockItem.find(base);
+  const matched = new Set();
+
+  for (const lot of expected) {
+    const hit = existing.find(
+      (row) => stockLotIdentityKey(row) === stockLotIdentityKey(lot)
+    );
+    if (hit) {
+      hit.quantity = Number(lot.qty) || 0;
+      hit.status = 'Available';
+      hit.batchNumber = lot.batchNumber;
+      hit.expiryDate = lot.expiryDate || '';
+      hit.serialNumber = lot.serialNumber;
+      hit.productId = lot.productId || hit.productId || productId || null;
+      hit.name = lot.name || hit.name;
+      hit.productType = lot.productType || hit.productType;
+      hit.warehouseId = warehouseId || hit.warehouseId || lot.warehouseId || null;
+      if (lot.unitValue) hit.unitValue = lot.unitValue;
+      await hit.save();
+      matched.add(String(hit._id));
+    } else {
+      const created = await LogisticsStockItem.create({
+        sku: '',
+        productId: lot.productId || productId || null,
+        name: lot.name || productName || 'Inventory item',
+        serialNumber: lot.serialNumber,
+        batchNumber: lot.batchNumber,
+        warehouseId: warehouseId || lot.warehouseId || null,
+        productType: lot.productType || '',
+        status: 'Available',
+        quantity: Number(lot.qty) || 0,
+        unitValue: Number(lot.unitValue) || 0,
+        expiryDate: lot.expiryDate || '',
+        remarks: 'Reconciled from inward/outward',
+        isActive: true,
+      });
+      matched.add(String(created._id));
+    }
+  }
+
+  if (expected.length) {
+    for (const row of existing) {
+      if (matched.has(String(row._id))) continue;
+      if ((Number(row.quantity) || 0) === 0) continue;
+      // Clear orphan/merged leftovers so availability matches inward lots
+      row.quantity = 0;
+      await row.save();
+    }
+  }
+
+  return expected;
+}
+
+async function listAvailableLots({
+  productId = null,
+  productName = '',
+  warehouseId = null,
+  repair = true,
+} = {}) {
+  const computed = await computeNetLotsFromInOut({ productId, productName, warehouseId });
+  if (repair && computed.length) {
+    await syncStockLotsFromInOut({ productId, productName, warehouseId });
+    return computed;
+  }
+  if (computed.length) return computed;
+
+  // Fall back to raw stock rows when there is no applied in/out history
+  const base = { isDeleted: false, status: 'Available' };
+  if (warehouseId) base.warehouseId = warehouseId;
+  if (productId) base.productId = productId;
+  else if (productName) base.name = trimStr(productName);
+  else return [];
+
+  let rows = await LogisticsStockItem.find(base);
+  if ((!rows || !rows.length) && productId && productName) {
+    rows = await LogisticsStockItem.find({
+      isDeleted: false,
+      status: 'Available',
+      name: trimStr(productName),
+      ...(warehouseId ? { warehouseId } : {}),
+    });
+  }
+  if ((!rows || !rows.length) && warehouseId) {
+    // Warehouse mismatch: still surface lots so UI is not empty after inward
+    const loose = { isDeleted: false, status: 'Available' };
+    if (productId) loose.productId = productId;
+    else loose.name = trimStr(productName);
+    rows = await LogisticsStockItem.find(loose);
+  }
+
+  const byKey = new Map();
+  for (const row of rows || []) {
+    const qty = Number(row.quantity) || 0;
+    if (qty <= 0) continue;
+    const key = stockLotIdentityKey(row);
+    const prev = byKey.get(key);
+    if (prev) prev.qty += qty;
+    else {
+      byKey.set(key, {
+        productId: row.productId || productId || null,
+        name: row.name || productName || '',
+        productType: row.productType || '',
+        batchNumber: lotBatchKey(row.batchNumber) || null,
+        expiryDate: lotExpiryKey(row.expiryDate),
+        serialNumber: lotSerialKey(row.serialNumber) || null,
+        qty,
+        unitValue: Number(row.unitValue) || 0,
+        warehouseId: row.warehouseId || warehouseId || null,
+      });
+    }
+  }
+  return [...byKey.values()];
 }
 
 /** Sum Available qty for matching product/serial/batch in warehouse (goods issue guard). */
 async function sumAvailableQty(txn, warehouseId) {
   const statusFilter = { status: 'Available' };
-  if (txn.serialNumber) {
+  const serial = lotSerialKey(txn.serialNumber);
+  if (serial) {
     const rows = await LogisticsStockItem.find({
-      serialNumber: txn.serialNumber,
+      serialNumber: serial,
       isDeleted: false,
       ...statusFilter,
     });
     return rows.reduce((sum, row) => sum + (Number(row.quantity) || 0), 0);
+  }
+
+  const productId = txn.productId || null;
+  const productName = displayItemName(txn);
+  const batch = lotBatchKey(txn.batchNumber);
+  const expiry = lotExpiryKey(txn.expiryDate);
+  const nameForLookup = productName !== 'Inventory item' ? productName : '';
+
+  // Read-only lot math from applied inward/outward (repairs merged stock on /inventory/lots)
+  const computed = await computeNetLotsFromInOut({
+    productId,
+    productName: nameForLookup,
+    warehouseId: warehouseId || null,
+  });
+  if (computed.length) {
+    const matched = computed.filter((lot) => {
+      if (batch && lotBatchKey(lot.batchNumber) !== batch) return false;
+      if (expiry && lotExpiryKey(lot.expiryDate) && lotExpiryKey(lot.expiryDate) !== expiry) {
+        return false;
+      }
+      return true;
+    });
+    // If a batch was requested but missing from computed lots, do not fall back to other batches
+    if (batch || expiry) {
+      return matched.reduce((sum, lot) => sum + (Number(lot.qty) || 0), 0);
+    }
+    return computed.reduce((sum, lot) => sum + (Number(lot.qty) || 0), 0);
   }
 
   const wh = warehouseId || null;
@@ -1941,21 +2322,37 @@ async function sumAvailableQty(txn, warehouseId) {
   if (wh) base.warehouseId = wh;
 
   let filter = null;
-  if (txn.productId) {
-    filter = { ...base, productId: txn.productId };
-    if (txn.batchNumber) filter.batchNumber = txn.batchNumber;
+  if (productId) {
+    filter = { ...base, productId };
+    if (batch) filter.batchNumber = batch;
+    if (expiry) filter.expiryDate = expiry;
   } else if (txn.sku) {
     filter = { ...base, sku: txn.sku };
-    if (txn.batchNumber) filter.batchNumber = txn.batchNumber;
+    if (batch) filter.batchNumber = batch;
+    if (expiry) filter.expiryDate = expiry;
   } else {
-    const name = displayItemName(txn);
-    if (!name) return 0;
-    filter = { ...base, name };
-    if (txn.batchNumber) filter.batchNumber = txn.batchNumber;
+    if (!nameForLookup) return 0;
+    filter = { ...base, name: nameForLookup };
+    if (batch) filter.batchNumber = batch;
+    if (expiry) filter.expiryDate = expiry;
   }
 
-  const rows = await LogisticsStockItem.find(filter);
-  return rows.reduce((sum, row) => sum + (Number(row.quantity) || 0), 0);
+  let rows = await LogisticsStockItem.find(filter);
+  let total = rows.reduce((sum, row) => sum + (Number(row.quantity) || 0), 0);
+  if (total === 0 && productId && nameForLookup) {
+    const byName = { ...base, name: nameForLookup };
+    if (batch) byName.batchNumber = batch;
+    if (expiry) byName.expiryDate = expiry;
+    rows = await LogisticsStockItem.find(byName);
+    total = rows.reduce((sum, row) => sum + (Number(row.quantity) || 0), 0);
+  }
+  if (total === 0 && wh) {
+    const noWh = { ...filter };
+    delete noWh.warehouseId;
+    rows = await LogisticsStockItem.find(noWh);
+    total = rows.reduce((sum, row) => sum + (Number(row.quantity) || 0), 0);
+  }
+  return total;
 }
 
 async function applyQtyDeltaToStock(txn, warehouseId, quantityDelta, actor) {
@@ -1963,6 +2360,17 @@ async function applyQtyDeltaToStock(txn, warehouseId, quantityDelta, actor) {
   const need = Math.abs(Number(quantityDelta) || 0);
 
   if (quantityDelta < 0) {
+    // Ensure stock rows match applied inward lots before debit (repairs merged batches)
+    try {
+      await syncStockLotsFromInOut({
+        productId: txn.productId || null,
+        productName: itemName !== 'Inventory item' ? itemName : '',
+        warehouseId: warehouseId || null,
+      });
+    } catch (err) {
+      console.error('[inventory] lot sync before outward failed', err?.message || err);
+    }
+
     const available = await sumAvailableQty(txn, warehouseId);
     if (available < need) {
       throw new AppError(
@@ -2278,7 +2686,7 @@ async function prepareRequestFulfillment(inputBody) {
 
   if ((request.fulfilledLineIds || []).includes(lineId)) {
     throw new AppError(
-      'This request product line has already been dispatched',
+      'This request product line has already been prepared / dispatched',
       409,
       'DUPLICATE_FULFILLMENT'
     );
@@ -2292,10 +2700,38 @@ async function prepareRequestFulfillment(inputBody) {
   const duplicate = await LogisticsInOutEntry.findOne(duplicateFilter);
   if (duplicate) {
     throw new AppError(
-      'This request product line has already been dispatched',
+      'This request product line has already been prepared / dispatched',
       409,
       'DUPLICATE_FULFILLMENT'
     );
+  }
+
+  const packageStatus = resolvePackageStatus(inputBody.packageStatus);
+  if (!PACKAGE_STATUSES.includes(packageStatus)) {
+    throw new AppError(
+      `Package status must be one of: ${PACKAGE_STATUSES.join(', ')}`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+
+  const requestedQty = Number(line?.qty) || 0;
+  const packedQtyRaw = Number(inputBody.qty);
+  let qty = line?.qty;
+  if (packageStatus === 'Partially ready') {
+    if (!Number.isFinite(packedQtyRaw) || packedQtyRaw <= 0) {
+      throw new AppError('Enter the packed quantity for Partially ready', 400, 'VALIDATION_ERROR');
+    }
+    if (requestedQty > 0 && packedQtyRaw > requestedQty) {
+      throw new AppError(
+        `Packed quantity cannot exceed requested quantity (${requestedQty})`,
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    qty = packedQtyRaw;
+  } else if (packageStatus === 'Package ready') {
+    qty = line?.qty;
   }
 
   return {
@@ -2303,19 +2739,28 @@ async function prepareRequestFulfillment(inputBody) {
       ...inputBody,
       assetRequestId: request._id,
       assetRequestLineId: lineId,
+      packageStatus,
+      packageNote: trimStr(inputBody.packageNote),
+      dispatchStatus:
+        packageStatus === 'Package ready' || packageStatus === 'Partially ready'
+          ? OUTWARD_PACKED_DISPATCH_STATUS
+          : trimStr(inputBody.dispatchStatus) || OUTWARD_OPEN_DISPATCH_STATUS,
       ...(line
         ? {
             productId: line.productId || null,
             productName: line.productName,
             productType: line.productType,
             inventoryType: line.productType,
-            qty: line.qty,
+            qty,
           }
         : {}),
     },
     context: {
       requestId: request._id,
       lineId,
+      packageStatus,
+      packageNote: trimStr(inputBody.packageNote),
+      packedQty: qty,
       totalLines: lines.length || 1,
       allLineIds: lines.length
         ? lines.map(requestLineId)
@@ -2336,6 +2781,19 @@ async function finalizeRequestFulfillment(context) {
   const fulfilledLineIds = [
     ...new Set([...(request.fulfilledLineIds || []), context.lineId]),
   ];
+  const lines = Array.isArray(request.logisticsProducts)
+    ? request.logisticsProducts.map((item, index) => {
+      if (requestLineId(item, index) !== context.lineId) return item;
+      return {
+        ...item,
+        packageStatus: context.packageStatus || item.packageStatus || '',
+        packageNote: context.packageNote || item.packageNote || '',
+        packedQty: context.packedQty != null ? context.packedQty : item.packedQty,
+        packagePreparedAt: new Date().toISOString(),
+        fulfillmentStatus: 'FULFILLED',
+      };
+    })
+    : request.logisticsProducts;
   const updated = await AssetRequest.findOneAndUpdate(
     {
       _id: request._id,
@@ -2346,6 +2804,7 @@ async function finalizeRequestFulfillment(context) {
     {
       $set: {
         fulfilledLineIds,
+        logisticsProducts: lines,
         fulfillmentPendingLineIds: (request.fulfillmentPendingLineIds || []).filter(
           (lineId) => String(lineId) !== String(context.lineId)
         ),
@@ -2359,6 +2818,7 @@ async function finalizeRequestFulfillment(context) {
   return {
     assetRequestId: request._id,
     assetRequestLineId: context.lineId,
+    packageStatus: context.packageStatus || '',
     fulfilledLineIds,
     fulfilledCount: fulfilledLineIds.length,
     totalLines: context.totalLines,
@@ -2446,11 +2906,22 @@ router.get(
     if (req.query.status) filter.status = String(req.query.status);
     if (req.query.dispatchStatus) {
       const ds = String(req.query.dispatchStatus).trim();
-      if (ds === OUTWARD_OPEN_DISPATCH_STATUS) {
-        // Include legacy outward rows with no dispatchStatus yet
-        filter.dispatchStatus = { $nin: OUTWARD_TERMINAL_DISPATCH_STATUSES };
+      if (OUTWARD_IN_PROGRESS_FILTER_VALUES.includes(ds)) {
+        // In-progress on Manual tab: Open / Packed only — POD Booked lives under PODs tab
+        filter.dispatchStatus = {
+          $nin: [...OUTWARD_TERMINAL_DISPATCH_STATUSES, OUTWARD_POD_BOOKED_STATUS],
+        };
       } else {
         filter.dispatchStatus = ds;
+      }
+    }
+    if (req.query.excludePodBooked === '1' || req.query.excludePodBooked === 'true') {
+      if (filter.dispatchStatus && typeof filter.dispatchStatus === 'object' && filter.dispatchStatus.$nin) {
+        /* already excluding */
+      } else if (filter.dispatchStatus) {
+        /* specific status — leave as-is */
+      } else {
+        filter.dispatchStatus = { $ne: OUTWARD_POD_BOOKED_STATUS };
       }
     }
     if (req.query.q) {
@@ -2496,22 +2967,76 @@ router.post(
   requireSafeUploads(UPLOAD_RULES.anySafe),
   asyncHandler(async (req, res) => {
     const filesMeta = attachmentsFromUpload(req, null);
+    const packageStatus = resolvePackageStatus(req.body?.packageStatus);
+
+    // No stock: packer confirms package cannot be prepared — close the line without stock move.
+    if (
+      packageStatus === 'No stock'
+      && (req.body?.assetRequestId || req.body?.assetRequestLineId)
+    ) {
+      const prepared = await prepareRequestFulfillment({
+        ...req.body,
+        ...filesMeta,
+        entryType: 'Outward',
+        packageStatus,
+      });
+      let reserved = false;
+      try {
+        reserved = await reserveRequestFulfillment(prepared.context);
+        const fulfillment = await finalizeRequestFulfillment(prepared.context);
+        await writeAudit({
+          actorId: req.user._id,
+          actorEmail: req.user.email,
+          action: 'LogisticsPackage.NO_STOCK',
+          entityType: 'AssetRequest',
+          entityId: prepared.context.requestId,
+          after: {
+            assetRequestLineId: prepared.context.lineId,
+            packageStatus,
+            packageNote: prepared.context.packageNote,
+          },
+          requestId: req.requestId,
+        });
+        return res.status(201).json({
+          data: null,
+          fulfillment,
+          meta: { packageStatus, inventorySkipped: true },
+        });
+      } catch (error) {
+        if (reserved) await releaseRequestFulfillmentReservation(prepared.context);
+        throw error;
+      }
+    }
+
     const prepared = await prepareRequestFulfillment({
       ...req.body,
       ...filesMeta,
     });
     const enriched = await enrichBodyFromProduct(prepared.body);
+    const idem = readIdempotencyKey(req);
+    if (idem) {
+      let clash =
+        (await LogisticsInOutEntry.findOne({
+          idempotencyKey: idem,
+          isDeleted: false,
+        })) ||
+        (await LogisticsInOutEntry.findOne({
+          uniqueKey: idem,
+          isDeleted: false,
+        }));
+      if (clash) {
+        // Idempotent retry — do not create a second stock movement.
+        return res.status(200).json({
+          data: withSignedLogisticsFiles(clash),
+          meta: { idempotentReplay: true },
+        });
+      }
+    }
+
     const body = normalizeInOutBody(enriched, null, req.user);
-    const clash = await LogisticsInOutEntry.findOne({
-      uniqueKey: body.uniqueKey,
-      isDeleted: false,
-    });
-    if (clash) {
-      // Idempotent retry with the same Transaction ID — do not create a second stock movement.
-      return res.status(200).json({
-        data: withSignedLogisticsFiles(clash),
-        meta: { idempotentReplay: true },
-      });
+    if (idem && !body.idempotencyKey) body.idempotencyKey = idem;
+    if (!body.uniqueKey || isOpaqueClientTxnKey(body.uniqueKey)) {
+      body.uniqueKey = await allocateInOutTxnKey();
     }
 
     let reserved = false;
@@ -2549,6 +3074,239 @@ router.post(
       }
       throw error;
     }
+  })
+);
+
+function podBookingStamp(row) {
+  return (
+    trimStr(row?.podBookedAt) ||
+    (trimStr(row?.awbNumber) && trimStr(row?.dispatchStatus) === OUTWARD_POD_BOOKED_STATUS
+      ? trimStr(row?.updatedAt) || trimStr(row?.transactionDateTime) || trimStr(row?.transactionDate)
+      : '') ||
+    (trimStr(row?.awbNumber) && /POD Booked/i.test(String(row?.remark || ''))
+      ? trimStr(row?.updatedAt) || trimStr(row?.transactionDateTime) || trimStr(row?.transactionDate)
+      : '')
+  );
+}
+
+function inPodDateRange(stamp, dateFrom, dateTo) {
+  if (!stamp) return false;
+  const t = new Date(stamp).getTime();
+  if (!Number.isFinite(t)) {
+    const day = String(stamp).slice(0, 10);
+    if (dateFrom && day < dateFrom) return false;
+    if (dateTo && day > dateTo) return false;
+    return Boolean(day);
+  }
+  if (dateFrom) {
+    const from = new Date(`${dateFrom}T00:00:00`).getTime();
+    if (Number.isFinite(from) && t < from) return false;
+  }
+  if (dateTo) {
+    const to = new Date(`${dateTo}T23:59:59.999`).getTime();
+    if (Number.isFinite(to) && t > to) return false;
+  }
+  return true;
+}
+
+async function listPodBookings({ dateFrom, dateTo, q }) {
+  const rows = await LogisticsInOutEntry.find({
+    isDeleted: false,
+    entryType: { $in: ['Outward', 'Return'] },
+  });
+  const needle = String(q || '').trim().toLowerCase();
+  return rows
+    .map((row) => {
+      const obj = row.toObject ? row.toObject() : { ...row };
+      const stamp = podBookingStamp(obj);
+      return { ...obj, podBookedAt: obj.podBookedAt || stamp };
+    })
+    .filter((row) => {
+      if (!trimStr(row.awbNumber) && trimStr(row.dispatchStatus) !== OUTWARD_POD_BOOKED_STATUS) {
+        return false;
+      }
+      const stamp = podBookingStamp(row);
+      if (!stamp && trimStr(row.dispatchStatus) !== OUTWARD_POD_BOOKED_STATUS) return false;
+      if ((dateFrom || dateTo) && !inPodDateRange(stamp || row.transactionDate, dateFrom, dateTo)) {
+        return false;
+      }
+      if (!needle) return true;
+      const hay = [
+        row.uniqueKey,
+        row.awbNumber,
+        row.productName,
+        row.itemName,
+        row.recipientName,
+        row.employeeName,
+        row.name,
+        row.city,
+        row.state,
+        row.remark,
+        row.dispatchStatus,
+      ]
+        .map((v) => String(v || '').toLowerCase())
+        .join(' ');
+      return hay.includes(needle);
+    })
+    .sort((a, b) => String(b.podBookedAt || '').localeCompare(String(a.podBookedAt || '')));
+}
+
+function podExcelRows(rows) {
+  const ORIGIN = {
+    pin: '400063',
+    name: 'Tylo Care',
+    phone: '022-65911206',
+    address: '507-508 De Elmas, Opp. Ginger Hotel, Jay Prakash Nagar, Goregaon East',
+  };
+  const headers = [
+    'Customer Reference Number',
+    'Service Type',
+    'Courier Type',
+    'Declared Price (non-document)',
+    'Number of Pieces (non-document)',
+    'Weight(KG) (non-document)',
+    'Length(cm) (non-document)',
+    'Width(cm) (non-document)',
+    'Height(cm) (non-document)',
+    'Origin Pincode',
+    'Origin Name',
+    'Origin Phone',
+    'Origin Address Line 1',
+    'Destination Pincode',
+    'Destination Name',
+    'Destination Phone',
+    'Destination Address Line 1',
+    'Destination Address Line 2',
+    'Risk Surcharge (YES/NO) (non-document)',
+    'Content Type',
+  ];
+  const excelRows = rows.map((r) => [
+    r.uniqueKey || '',
+    mapPodServiceTypeForExcel(r.serviceType),
+    mapPodCourierTypeForExcel(r),
+    r.declaredPrice ?? '',
+    r.numberOfPieces || '1',
+    r.applicableWeight || r.packageWeight || '',
+    r.packageLength || '',
+    r.packageWidth || '',
+    r.packageHeight || '',
+    r.fromPinCode || ORIGIN.pin,
+    r.fromName || ORIGIN.name,
+    r.fromNumber || ORIGIN.phone,
+    r.fromAddress || ORIGIN.address,
+    r.toPinCode || r.pinCode || '',
+    r.recipientName || r.toName || r.employeeName || r.name || '',
+    r.toNumber || r.number || '',
+    r.toAddress || r.address || '',
+    r.toAddressLine2 || '',
+    r.riskSurcharge === 'YES' ? 'YES' : 'NO',
+    r.contentType ||
+      [r.productType, r.productName || r.itemName].filter(Boolean).join(' — ') ||
+      '',
+  ]);
+  return { headers, excelRows };
+}
+
+/** DTDC booking sheet: Premium / Priority / Ground Express codes. */
+function mapPodServiceTypeForExcel(raw) {
+  const s = trimStr(raw);
+  if (!s) return '';
+  const upper = s.toUpperCase().replace(/\s+/g, ' ');
+  if (upper === 'PREMIUM' || upper === 'PRIORITY' || upper === 'GROUND EXPRESS') return upper;
+  if (/\bPREMIUM\b/i.test(s)) return 'PREMIUM';
+  if (/\bPRIORITY\b/i.test(s)) return 'PRIORITY';
+  if (/GROUND\s*EXPRESS/i.test(s)) return 'GROUND EXPRESS';
+  return s;
+}
+
+/** DTDC booking sheet: DOCUMENT only when Product Category is Document; else NON DOCUMENT. */
+function mapPodCourierTypeForExcel(row) {
+  const productType = resolveProductType(row?.productType) || trimStr(row?.productType);
+  return productType === 'Document' ? 'DOCUMENT' : 'NON DOCUMENT';
+}
+
+router.get(
+  '/in-out/pods',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const { page, limit, skip } = parsePagination(req.query);
+    const dateFrom = trimStr(req.query.dateFrom || req.query.from || '');
+    const dateTo = trimStr(req.query.dateTo || req.query.to || '');
+    const all = await listPodBookings({
+      dateFrom,
+      dateTo,
+      q: req.query.q,
+    });
+    const total = all.length;
+    const slice = all.slice(skip, skip + limit).map(withSignedLogisticsFiles);
+    res.json(paginated(slice, total, page, limit));
+  })
+);
+
+router.get(
+  '/in-out/pods/export',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const dateFrom = trimStr(req.query.dateFrom || req.query.from || '');
+    const dateTo = trimStr(req.query.dateTo || req.query.to || '');
+    const parseList = (raw) =>
+      [
+        ...new Set(
+          String(raw || '')
+            .split(',')
+            .map((v) => String(v || '').trim())
+            .filter((v) => v && v !== 'undefined' && v !== 'null')
+        ),
+      ];
+    // Accept ids as string or repeated query (?ids=a&ids=b)
+    const idsRaw = req.query.ids;
+    const keysRaw = req.query.uniqueKeys || req.query.keys;
+    const ids = parseList(Array.isArray(idsRaw) ? idsRaw.join(',') : idsRaw);
+    const uniqueKeys = parseList(Array.isArray(keysRaw) ? keysRaw.join(',') : keysRaw);
+    const hasSelection = ids.length > 0 || uniqueKeys.length > 0;
+
+    let all;
+    if (hasSelection) {
+      // Selection export: never use the day/range pool. Filter POD rows in memory
+      // with idsEqual so filedb/mongo id casing cannot leak extra TXNs.
+      const pool = await listPodBookings({ dateFrom: '', dateTo: '', q: '' });
+      const keySet = new Set(uniqueKeys.map((k) => k.toLowerCase()));
+      const matched = pool.filter(
+        (row) =>
+          ids.some((id) => idsEqual(row._id, id)) ||
+          keySet.has(String(row.uniqueKey || '').trim().toLowerCase())
+      );
+      const seen = new Set();
+      all = [];
+      for (const id of ids) {
+        const hit = matched.find((row) => idsEqual(row._id, id));
+        if (!hit) continue;
+        const sid = String(hit._id);
+        if (seen.has(sid)) continue;
+        seen.add(sid);
+        all.push(hit);
+      }
+      for (const row of matched) {
+        const sid = String(row._id);
+        if (seen.has(sid)) continue;
+        seen.add(sid);
+        all.push(row);
+      }
+    } else {
+      all = await listPodBookings({
+        dateFrom,
+        dateTo,
+        q: req.query.q,
+      });
+    }
+
+    const { headers, excelRows } = podExcelRows(all);
+    const label = hasSelection
+      ? `selected_${all.length || ids.length || uniqueKeys.length}`
+      : dateFrom && dateTo && dateFrom === dateTo
+        ? dateFrom
+        : [dateFrom || 'start', dateTo || 'end'].join('_to_');
+    sendExcel(res, `PODs_${label}.xlsx`, headers, excelRows, { sheetName: 'PODs' });
   })
 );
 
@@ -2621,23 +3379,82 @@ router.patch(
     const current = trimStr(row.dispatchStatus) || OUTWARD_OPEN_DISPATCH_STATUS;
     if (OUTWARD_TERMINAL_DISPATCH_STATUSES.includes(current)) {
       throw new AppError(
-        `Dispatch is already ${current}. Open status cannot be changed again.`,
+        `Dispatch is already ${current}. Status cannot be changed again.`,
         409,
         'DISPATCH_ALREADY_CLOSED'
       );
     }
 
     const outcome = trimStr(req.body.outcome ?? req.body.deliveryOutcome ?? req.body.dispatchStatus);
+    const now = new Date().toISOString();
+    const markedBy = req.user?.email || req.user?.fullName || '';
+
+    // Intermediate advance: Open/Packed → POD Booked (courier quote + AWB)
+    if (outcome === OUTWARD_POD_BOOKED_STATUS) {
+      if (
+        current !== OUTWARD_OPEN_DISPATCH_STATUS &&
+        current !== OUTWARD_PACKED_DISPATCH_STATUS &&
+        current !== OUTWARD_POD_BOOKED_STATUS
+      ) {
+        throw new AppError(
+          `Cannot book POD from status ${current}`,
+          400,
+          'INVALID_STATUS'
+        );
+      }
+      const awb = trimStr(req.body.awbNumber ?? row.awbNumber);
+      if (!awb) {
+        throw new AppError('AWB number is required to book POD', 400, 'VALIDATION_ERROR');
+      }
+      row.dispatchStatus = OUTWARD_POD_BOOKED_STATUS;
+      row.deliveryMode = 'Courier';
+      row.awbNumber = awb;
+      row.deliveryMarkedBy = markedBy;
+      if (!trimStr(row.podBookedAt)) {
+        row.podBookedAt = now;
+      }
+      if (req.body.serviceType != null && trimStr(req.body.serviceType)) {
+        row.serviceType = trimStr(req.body.serviceType);
+      }
+      if (req.body.courierType != null && trimStr(req.body.courierType)) {
+        row.courierType = trimStr(req.body.courierType);
+      }
+      if (req.body.transporterId) {
+        row.transporterId = req.body.transporterId || null;
+      }
+      if (req.body.applicableWeight != null && trimStr(req.body.applicableWeight)) {
+        row.applicableWeight = trimStr(req.body.applicableWeight);
+      }
+      if (req.body.packageWeight != null && trimStr(req.body.packageWeight)) {
+        row.packageWeight = trimStr(req.body.packageWeight);
+      }
+      if (req.body.remark || req.body.deliveryRemark) {
+        const note = trimStr(req.body.remark || req.body.deliveryRemark);
+        row.remark = row.remark
+          ? `${row.remark} | POD Booked: ${note}`
+          : `POD Booked: ${note}`;
+      }
+      await row.save();
+      await writeAudit({
+        actorId: req.user._id,
+        actorEmail: req.user.email,
+        action: 'LogisticsInOutEntry.POD_BOOKED',
+        entityType: 'LogisticsInOutEntry',
+        entityId: row._id,
+        after: row.toObject ? row.toObject() : row,
+        requestId: req.requestId,
+      });
+      return res.json({ data: row });
+    }
+
     if (!OUTWARD_DELIVERY_OUTCOMES.includes(outcome)) {
       throw new AppError(
-        `outcome must be one of: ${OUTWARD_DELIVERY_OUTCOMES.join(', ')}`,
+        `outcome must be one of: ${[...OUTWARD_DELIVERY_OUTCOMES, OUTWARD_POD_BOOKED_STATUS].join(', ')}`,
         400,
         'VALIDATION_ERROR'
       );
     }
 
-    const now = new Date().toISOString();
-    const markedBy = req.user?.email || req.user?.fullName || '';
     row.dispatchStatus = outcome;
     row.deliveryOutcome = outcome;
     row.closedAt = now;
@@ -2709,10 +3526,9 @@ function computeKpis(items) {
     totalValue += value;
     const status = String(item.status || '');
     if (status === 'Available') availableQty += qty;
-    if (status === 'Reserved' || status === 'Allocated') reservedQty += qty;
+    if (status === 'Reserved') reservedQty += qty;
     if (status === 'Damaged') damagedQty += qty;
-    if (status === 'Repair') repairQty += qty;
-    if (status === 'Picked' || status === 'Packed' || status === 'Allocated') pendingDispatch += qty;
+    if (status === 'Issued') pendingDispatch += qty;
     const threshold = Number(item.lowStockThreshold) || 0;
     if (threshold > 0 && status === 'Available' && qty <= threshold) lowStock += 1;
   }
@@ -2750,7 +3566,7 @@ function inventoryKpiPipeline(match = { isDeleted: false }) {
         reservedQty: {
           $sum: {
             $cond: [
-              { $in: ['$status', ['Reserved', 'Allocated']] },
+              { $eq: ['$status', 'Reserved'] },
               { $ifNull: ['$quantity', 0] },
               0,
             ],
@@ -2763,13 +3579,13 @@ function inventoryKpiPipeline(match = { isDeleted: false }) {
         },
         repairQty: {
           $sum: {
-            $cond: [{ $eq: ['$status', 'Repair'] }, { $ifNull: ['$quantity', 0] }, 0],
+            $cond: [{ $eq: ['$status', 'Disposed'] }, { $ifNull: ['$quantity', 0] }, 0],
           },
         },
         pendingDispatch: {
           $sum: {
             $cond: [
-              { $in: ['$status', ['Picked', 'Packed', 'Allocated']] },
+              { $eq: ['$status', 'Issued'] },
               { $ifNull: ['$quantity', 0] },
               0,
             ],
@@ -2982,6 +3798,7 @@ router.get(
       sku: trimStr(req.query.sku),
       serialNumber: trimStr(req.query.serialNumber),
       batchNumber: trimStr(req.query.batchNumber),
+      expiryDate: trimStr(req.query.expiryDate),
       productName: trimStr(req.query.productName || req.query.name),
       itemName: trimStr(req.query.productName || req.query.name),
       deviceName: trimStr(req.query.productName || req.query.name),
@@ -2989,6 +3806,34 @@ router.get(
     const warehouseId = req.query.warehouseId || null;
     const available = await sumAvailableQty(txn, warehouseId);
     res.json({ data: { availableQty: available, warehouseId, productId: txn.productId } });
+  })
+);
+
+router.get(
+  '/inventory/lots',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const productId = req.query.productId || null;
+    const productName = trimStr(req.query.productName || req.query.name);
+    const warehouseId = req.query.warehouseId || null;
+    if (!productId && !productName) {
+      throw new AppError('productId or productName is required', 400, 'VALIDATION_ERROR');
+    }
+    const lots = await listAvailableLots({
+      productId,
+      productName,
+      warehouseId,
+      repair: true,
+    });
+    res.json({
+      data: lots,
+      meta: {
+        productId,
+        productName,
+        warehouseId,
+        totalQty: lots.reduce((sum, lot) => sum + (Number(lot.qty) || 0), 0),
+      },
+    });
   })
 );
 

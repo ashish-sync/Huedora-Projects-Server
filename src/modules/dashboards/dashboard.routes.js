@@ -5,7 +5,8 @@ import { PERMISSIONS } from '../../config/constants.js';
 import { Asset } from '../assets/asset.model.js';
 import { Agreement } from '../agreements/agreement.model.js';
 import { RepairTicket } from '../repairs/repair.model.js';
-import { Movement } from '../movements/movement.model.js';
+import { LogisticsInOutEntry } from '../logistics/logistics.model.js';
+import { OUTWARD_TERMINAL_DISPATCH_STATUSES } from '../logistics/logistics.constants.js';
 import { Contact } from '../contacts/contact.model.js';
 import { DocumentTemplate } from '../templates/template.model.js';
 import { SignatureMaster } from '../signatures/signature.model.js';
@@ -37,6 +38,43 @@ import { listReviewModulesForUser, runModuleReview } from './moduleReview.js';
 
 function countMap(rows) {
   return Object.fromEntries((rows || []).map((x) => [x._id || 'Unknown', x.count]));
+}
+
+/** Movement One: outward/return rows not yet Delivered / RTO / Closed */
+function goodsIssueInProgressFilter() {
+  return {
+    isDeleted: false,
+    entryType: { $in: ['Outward', 'Return'] },
+    dispatchStatus: { $nin: OUTWARD_TERMINAL_DISPATCH_STATUSES },
+  };
+}
+
+function goodsIssueStatusBucketPipeline() {
+  return [
+    {
+      $match: {
+        isDeleted: false,
+        entryType: { $in: ['Outward', 'Return'] },
+      },
+    },
+    {
+      $group: {
+        _id: {
+          $cond: [
+            {
+              $in: [
+                { $ifNull: ['$dispatchStatus', 'Open'] },
+                OUTWARD_TERMINAL_DISPATCH_STATUSES,
+              ],
+            },
+            { $ifNull: ['$dispatchStatus', 'Open'] },
+            'In progress',
+          ],
+        },
+        count: { $sum: 1 },
+      },
+    },
+  ];
 }
 
 function healthFromSignals({ alerts, pendingTotal }) {
@@ -162,11 +200,8 @@ router.get(
       RepairTicket.find({ isDeleted: false, status: { $nin: ['CLOSED'] } })
         .select('slaDueAt')
         .limit(200),
-      Movement.countDocuments({ isDeleted: false, status: 'REQUESTED' }),
-      Movement.aggregate([
-        { $match: { isDeleted: false } },
-        { $group: { _id: '$status', count: { $sum: 1 } } },
-      ]),
+      LogisticsInOutEntry.countDocuments(goodsIssueInProgressFilter()),
+      LogisticsInOutEntry.aggregate(goodsIssueStatusBucketPipeline()),
       VerificationRecord.countDocuments({ isDeleted: false, status: 'EXCEPTION' }),
       VerificationRecord.aggregate([
         { $match: { isDeleted: false } },
@@ -236,10 +271,10 @@ router.get(
       },
       {
         id: 'movements',
-        label: 'Goods movements pending',
+        label: 'Goods issues in progress',
         count: pendingMovements,
         severity: pendingMovements > 5 ? 'high' : pendingMovements > 0 ? 'medium' : 'ok',
-        href: '/logistics',
+        href: '/movement-one/outward',
         module: 'logistics',
       },
       {
@@ -393,11 +428,11 @@ router.get(
       {
         id: 'logistics',
         label: 'Movement One',
-        href: '/logistics',
+        href: '/movement-one',
         primary: pendingMovements,
-        primaryLabel: 'Pending',
+        primaryLabel: 'In progress',
         secondary: Object.values(movementsByStatus).reduce((s, n) => s + n, 0),
-        secondaryLabel: 'Movements',
+        secondaryLabel: 'Goods issues',
         status: pendingMovements > 5 ? 'warn' : 'ok',
       },
       {
@@ -508,7 +543,7 @@ router.get(
         isDeleted: false,
         status: { $nin: ['CLOSED'] },
       }),
-      Movement.countDocuments({ isDeleted: false, status: 'REQUESTED' }),
+      LogisticsInOutEntry.countDocuments(goodsIssueInProgressFilter()),
       Contact.countDocuments({ isDeleted: false }),
       Asset.countDocuments({ isDeleted: false }),
       VerificationRecord.countDocuments({ isDeleted: false, status: 'EXCEPTION' }),
@@ -643,7 +678,7 @@ router.get(
       Role.countDocuments({ isDeleted: false }),
       User.countDocuments({ isDeleted: false }),
       RepairTicket.countDocuments({ isDeleted: false, status: { $nin: ['CLOSED'] } }),
-      Movement.countDocuments({ isDeleted: false, status: 'REQUESTED' }),
+      LogisticsInOutEntry.countDocuments(goodsIssueInProgressFilter()),
       VerificationRecord.countDocuments({ isDeleted: false, status: 'EXCEPTION' }),
       Asset.aggregate([
         { $match: { isDeleted: false } },
@@ -653,10 +688,7 @@ router.get(
         { $match: { isDeleted: false } },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
-      Movement.aggregate([
-        { $match: { isDeleted: false } },
-        { $group: { _id: '$status', count: { $sum: 1 } } },
-      ]),
+      LogisticsInOutEntry.aggregate(goodsIssueStatusBucketPipeline()),
       VerificationRecord.aggregate([
         { $match: { isDeleted: false } },
         { $group: { _id: '$status', count: { $sum: 1 } } },
@@ -679,7 +711,7 @@ router.get(
           ['Roles', roleCount],
           ['Users', userCount],
           ['Open Repairs', openRepairs],
-          ['Pending Movements', pendingMovements],
+          ['Goods issues in progress', pendingMovements],
           ['Verification Exceptions', verificationExceptions],
         ],
       },
@@ -694,7 +726,7 @@ router.get(
         rows: agreementsByStatus.map((x) => [x._id || '-', x.count]),
       },
       {
-        name: 'Movements by Status',
+        name: 'Goods issues by status',
         headers: ['Status', 'Count'],
         rows: movementsByStatus.map((x) => [x._id || '-', x.count]),
       },
@@ -762,10 +794,7 @@ router.get(
 router.get(
   '/movements-pipeline',
   asyncHandler(async (_req, res) => {
-    const rows = await Movement.aggregate([
-      { $match: { isDeleted: false } },
-      { $group: { _id: '$status', count: { $sum: 1 } } },
-    ]);
+    const rows = await LogisticsInOutEntry.aggregate(goodsIssueStatusBucketPipeline());
     res.json({ data: Object.fromEntries(rows.map((r) => [r._id, r.count])) });
   })
 );

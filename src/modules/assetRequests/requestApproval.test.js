@@ -65,8 +65,31 @@ describe('requestApproval matrix', () => {
     assert.equal(String(goods[0]._id), '1');
   });
 
+  it('lets Admin approve every request type', () => {
+    const adminByRole = { designation: 'Manager', roleIds: [{ name: 'Admin', permissions: ['*'] }] };
+    const adminByDesignation = { designation: 'Admin', roleIds: [] };
+    assert.equal(canApproveRequestType(adminByRole, new Set(), 'TRAINING'), true);
+    assert.equal(canApproveRequestType(adminByRole, new Set(), 'LOGISTICS'), true);
+    assert.equal(canApproveRequestType(adminByRole, new Set(), 'HIRING'), true);
+    assert.equal(canApproveRequestType(adminByDesignation, new Set(), 'REPAIR'), true);
+    assert.equal(canApproveRequestType(adminByDesignation, new Set(), 'REIMBURSEMENT'), true);
+  });
+
+  it('includes Admin in notify recipients for matrix types', () => {
+    const users = [
+      { _id: '1', designation: 'Operations Leader', isActive: true },
+      { _id: '2', designation: 'Manager', roleIds: [{ name: 'Admin', permissions: ['*'] }], isActive: true },
+      { _id: '3', designation: 'Manager', isActive: true },
+    ];
+    const goods = filterApproverUsers(users, 'LOGISTICS');
+    assert.equal(goods.length, 2);
+    assert.deepEqual(goods.map((u) => String(u._id)).sort(), ['1', '2']);
+  });
+
   it('labels approval rules clearly', () => {
-    assert.match(approvalRuleLabel('REPAIR'), /Operations Leader or Training Manager/);
+    assert.match(approvalRuleLabel('REPAIR'), /Operations Leader/);
+    assert.match(approvalRuleLabel('REPAIR'), /Admin/);
     assert.match(approvalRuleLabel('TRAINING'), /Training Manager/);
+    assert.match(approvalRuleLabel('TRAINING'), /Admin/);
   });
 });

@@ -235,3 +235,64 @@ export function remapLineRowsToLiveTables(lineRows = {}, storedTables = [], live
   }
   return next;
 }
+
+function normLabel(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\s_.-]+/g, ' ')
+    .trim();
+}
+
+/** Canonical line-item label (Display Name → Device Name, etc.). */
+export function canonicalLineLabel(label) {
+  const raw = normLabel(label);
+  return LINE_COLUMN_LABEL_ALIASES[raw] || String(label || '').trim();
+}
+
+/**
+ * Copy line-item cell values into scalar placeholders that share the same
+ * field (e.g. hidden "Display Name" / "Per Camp Amt" filled from the table).
+ * Uses the first non-empty matching cell across rows.
+ */
+export function mergeLineValuesIntoPlaceholders(
+  values = {},
+  placeholders = [],
+  repeatableTables = [],
+  lineRows = {}
+) {
+  const next = { ...(values || {}) };
+  for (const p of placeholders || []) {
+    const current = next[p.key] ?? next[p.label];
+    if (current != null && String(current).trim()) continue;
+    const want = canonicalLineLabel(p.label || p.inner || p.key);
+    const wantNorm = normLabel(want);
+    const wantKey = normLabel(p.key);
+    let found = '';
+    for (const table of repeatableTables || []) {
+      for (const row of lineRows[table.id] || []) {
+        for (const col of table.columns || []) {
+          const colCanon = canonicalLineLabel(col.label || col.inner || col.key);
+          const colNorm = normLabel(colCanon);
+          const colKeyNorm = normLabel(col.key);
+          if (
+            colNorm !== wantNorm &&
+            colKeyNorm !== wantKey &&
+            normLabel(col.label) !== wantKey &&
+            colNorm !== wantKey
+          ) {
+            continue;
+          }
+          const v = row?.[col.key] ?? row?.[col.label] ?? row?.[col.inner];
+          if (v != null && String(v).trim()) {
+            found = String(v).trim();
+            break;
+          }
+        }
+        if (found) break;
+      }
+      if (found) break;
+    }
+    if (found) next[p.key] = found;
+  }
+  return next;
+}

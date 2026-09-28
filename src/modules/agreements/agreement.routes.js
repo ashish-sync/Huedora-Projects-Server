@@ -24,7 +24,10 @@ import { previewStore } from '../templates/previewStore.js';
 import { nextSequence } from '../../utils/counters.js';
 import { writeAudit } from '../../utils/audit.js';
 import { AssetEvent } from '../assets/assetEvent.model.js';
-import { syncAssetContactFromAgreement } from '../assets/assetContactSync.js';
+import {
+  syncAssetContactFromAgreement,
+  lockAssetsForSignedAgreement,
+} from '../assets/assetContactSync.js';
 import { notifyUser } from '../notifications/notifyEvent.js';
 import { ensureRecipientShortCode, generateShortCode } from './recipientAccess.js';
 import { buildAgreementPdfBuffer, pdfOptionsFromAgreement } from './agreementPdf.js';
@@ -471,13 +474,17 @@ router.post(
     let hasPrimary = false;
 
     if (previewEntry?.pdfPath && fs.existsSync(previewEntry.pdfPath)) {
-      const pdfKey = buildStoredUploadFileName(`${title || 'agreement'}.pdf`, { purpose: 'preview' });
+      const safeTitle = String(title || 'agreement')
+        .replace(/[\\/:*?"<>|]+/g, '-')
+        .replace(/\s+/g, ' ')
+        .trim() || 'agreement';
+      const pdfKey = buildStoredUploadFileName(`${safeTitle}.pdf`, { purpose: 'preview' });
       await copyLocalUpload(previewEntry.pdfPath, path.join(uploadRoot, pdfKey), {
         contentType: 'application/pdf',
       });
       await AgreementDocument.create({
         agreementId: agreement._id,
-        name: `${title}.pdf`,
+        name: `${safeTitle}.pdf`,
         docKind: 'CONTRACT',
         contentType: 'application/pdf',
         sizeBytes: fs.statSync(path.join(uploadRoot, pdfKey)).size,
@@ -491,7 +498,7 @@ router.post(
       if (previewEntry.filledDocxKey) {
         const src = path.join(previewRoot, previewEntry.filledDocxKey);
         if (fs.existsSync(src)) {
-          const docxKey = buildStoredUploadFileName(`${title || 'agreement'}-filled.docx`, {
+          const docxKey = buildStoredUploadFileName(`${safeTitle}-filled.docx`, {
             purpose: 'filled',
           });
           await copyLocalUpload(src, path.join(uploadRoot, docxKey), {
@@ -500,7 +507,7 @@ router.post(
           });
           await AgreementDocument.create({
             agreementId: agreement._id,
-            name: `${title}-filled.docx`,
+            name: `${safeTitle}-filled.docx`,
             docKind: 'ATTACHMENT',
             contentType:
               'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -513,9 +520,13 @@ router.post(
       }
       previewStore.delete(body.previewToken);
     } else if (bodyHtml) {
+      const safeTitle = String(title || 'agreement')
+        .replace(/[\\/:*?"<>|]+/g, '-')
+        .replace(/\s+/g, ' ')
+        .trim() || 'agreement';
       await AgreementDocument.create({
         agreementId: agreement._id,
-        name: `${title}.txt`,
+        name: `${safeTitle}.txt`,
         docKind: 'CONTRACT',
         contentType: 'text/plain',
         textContent: bodyHtml,
@@ -850,6 +861,7 @@ router.post(
     await agreement.save();
     if (agreement.status === 'COMPLETED') {
       await freezeAgreementAssetSnapshots(agreement._id, { source: 'sign' });
+      await lockAssetsForSignedAgreement(agreement);
     }
 
     await logActivity(
@@ -954,15 +966,21 @@ router.get(
     const pdfBuffer = await buildAgreementPdfBuffer(agreement, pdfOptionsFromAgreement(agreement));
 
     const safeName = String(agreement.title || agreement.agreementNumber || 'agreement')
-      .replace(/[^a-zA-Z0-9._-]+/g, '_')
-      .slice(0, 80);
+      .replace(/[\\/:*?"<>|&]+/g, '-')
+      .replace(/\s+/g, ' ')
+      .replace(/-+/g, '-')
+      .trim()
+      .slice(0, 120) || 'agreement';
     const asDownload = String(req.query.download || '') === '1';
     const suffix = ['COMPLETED', 'ACTIVE'].includes(agreement.status) ? '-signed' : '';
+    const filename = `${safeName}${suffix}.pdf`;
 
     res.setHeader('Content-Type', 'application/pdf');
+    const ascii = filename.replace(/[^\x20-\x7E]+/g, '_');
+    const encoded = encodeURIComponent(filename).replace(/['()]/g, escape);
     res.setHeader(
       'Content-Disposition',
-      `${asDownload ? 'attachment' : 'inline'}; filename="${safeName}${suffix}.pdf"`
+      `${asDownload ? 'attachment' : 'inline'}; filename="${ascii}"; filename*=UTF-8''${encoded}`
     );
     res.setHeader('Cache-Control', 'private, no-store');
     res.send(pdfBuffer);
@@ -1088,15 +1106,38 @@ router.post(
     for (const assetId of assetIds) {
       const asset = await Asset.findOne({ _id: assetId, isDeleted: false });
       if (!asset) throw new AppError(`Asset ${assetId} not found`, 404);
+      if (
+        asset.activeAgreementId &&
+        String(asset.activeAgreementId) !== String(agreement._id)
+      ) {
+        throw new AppError(
+          `Serial ${asset.serialNumber || assetId} is already on a signed agreement until that agreement is terminated.`,
+          400,
+          'AGREEMENT_CONFLICT'
+        );
+      }
       const existing = await AgreementAsset.findOne({ assetId, isActive: true });
       if (existing && String(existing.agreementId) !== String(agreement._id)) {
-        throw new AppError('Asset already has an active agreement', 400, 'AGREEMENT_CONFLICT');
+        const other = await Agreement.findOne({ _id: existing.agreementId, isDeleted: false });
+        const otherStatus = other?.status || 'unknown';
+        if (['COMPLETED', 'ACTIVE'].includes(otherStatus)) {
+          throw new AppError(
+            `Serial ${asset.serialNumber || assetId} is already on a signed agreement until that agreement is terminated.`,
+            400,
+            'AGREEMENT_CONFLICT'
+          );
+        }
+        throw new AppError(
+          `Asset already linked to another agreement (${other?.agreementNumber || otherStatus}).`,
+          400,
+          'AGREEMENT_CONFLICT'
+        );
       }
       if (!existing) {
         const link = await AgreementAsset.create({ agreementId: agreement._id, assetId });
         await captureAgreementAssetSnapshot(link, asset, { source: 'link' });
         linked.push(link);
-        if (agreement.status === 'ACTIVE') {
+        if (['ACTIVE', 'COMPLETED'].includes(agreement.status)) {
           asset.activeAgreementId = agreement._id;
           asset.agreementStatus = 'Agreement Signed';
           await syncAssetContactFromAgreement(asset, agreement);

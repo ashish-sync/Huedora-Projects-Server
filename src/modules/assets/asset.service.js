@@ -68,6 +68,7 @@ export async function transitionAsset({
 
   await AssetEvent.create({
     assetId: asset._id,
+    at: new Date().toISOString(),
     eventType: 'STATUS_TRANSITION',
     fromStatus,
     toStatus,
@@ -77,6 +78,9 @@ export async function transitionAsset({
     relatedEntityType,
     relatedEntityId,
     actorId: actor?._id,
+    actorName: actor?.fullName || actor?.email || undefined,
+    actorEmail: actor?.email || undefined,
+    actorType: 'USER',
     requestId,
   });
 
@@ -113,10 +117,13 @@ export async function createAsset(payload, actor) {
   });
   await AssetEvent.create({
     assetId: asset._id,
-    eventType: 'FIELD_UPDATE',
-    toStatus: asset.status,
-    reason: 'Asset created',
+    at: new Date().toISOString(),
+    eventType: 'ASSET_CREATED',
+    reason: 'Asset registered',
     actorId: actor?._id,
+    actorName: actor?.fullName || actor?.email || undefined,
+    actorEmail: actor?.email || undefined,
+    actorType: 'USER',
   });
   await writeAudit({
     actorId: actor?._id,

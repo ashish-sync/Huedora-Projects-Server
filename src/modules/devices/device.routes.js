@@ -34,31 +34,22 @@ import {
   discardUploadBuffer,
   excelUpload,
   parseSheetRows,
-  sampleCsvFilename,
 } from '../../utils/masterExcel.js';
 import { importRateLimiter } from '../../middleware/importRateLimit.js';
 import { loadCappedRowsFromUpload } from '../imports/streaming/loadCappedRows.js';
-import { sendExcel, sendCsv } from '../../utils/excelExport.js';
+import { sendExcel, sendMultiSheetExcel } from '../../utils/excelExport.js';
 import { notifyImportFailures } from '../imports/importErrorReport.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
+import {
+  ASSET_MASTER_HEADERS,
+  ASSET_SAMPLE_ROWS,
+  assetAllowedValueRows,
+} from './device.excel.js';
 
 const canWriteDevicesOrAssets = requirePermission(
   PERMISSIONS.DEVICES_WRITE,
   PERMISSIONS.ASSETS_WRITE
 );
-
-const ASSET_MASTER_HEADERS = [
-  'Asset Type (Product Type)',
-  'Display Name',
-  'Serial Number',
-  'Purchase Month & Year',
-  'Purchase Amount',
-  'Ownership Type',
-  'Asset Status',
-  'Asset Custody',
-  'Custodian Contact',
-  'Asset & Peripheral Remarks',
-];
 
 const router = Router();
 router.use(authenticate);
@@ -414,37 +405,18 @@ router.get(
   '/import-template',
   canWriteDevicesOrAssets,
   asyncHandler(async (_req, res) => {
-    sendCsv(
-      res,
-      sampleCsvFilename('Asset_Inventory'),
-      ASSET_MASTER_HEADERS,
-      [
-        [
-          'Medical Device',
-          'CarePlus — BP Monitor Pro',
-          'SN-1001',
-          '07/2026',
-          125000,
-          'Tylo Owned',
-          'Not Initiated',
-          'Tylo Office',
-          '',
-          'Includes cuff kit',
-        ],
-        [
-          'Non-Medical Device',
-          'Dell — Latitude 5420',
-          'SN-1002',
-          '06/2026',
-          85000,
-          'Tylo Owned',
-          'Not Initiated',
-          'Tylo Office',
-          '',
-          '',
-        ],
-      ]
-    );
+    sendMultiSheetExcel(res, 'Asset_Inventory_Sample.xlsx', [
+      {
+        name: 'Sample',
+        headers: ASSET_MASTER_HEADERS,
+        rows: ASSET_SAMPLE_ROWS,
+      },
+      {
+        name: 'Allowed Values',
+        headers: ['Field', 'Allowed value (use exactly)'],
+        rows: assetAllowedValueRows(),
+      },
+    ]);
   })
 );
 

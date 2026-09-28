@@ -1,11 +1,41 @@
 import { notifyCampCoordinatorStakeholders } from './campOps.coordinatorNotify.js';
 import { notifyEvent } from '../notifications/notifyEvent.js';
+import { scopeApproversToSubjectManagers } from '../notifications/notificationRecipients.js';
 import { User } from '../users/user.model.js';
 import { Role } from '../users/role.model.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import {
   NOTIFICATION_PRIORITIES,
 } from '../notifications/notificationCatalog.js';
+
+function isPlatformAdminUser(user, roleById) {
+  const roleIds = (user.roleIds || []).map((id) => String(id?._id || id));
+  return roleIds.some((roleId) => {
+    const role = roleById.get(roleId);
+    if (!role) return false;
+    const perms = role.permissions || [];
+    return (
+      perms.includes(PERMISSIONS.ALL)
+      || perms.includes('*')
+      || ['Admin'].includes(role.name)
+    );
+  });
+}
+
+function isCampApproverUser(user, roleById) {
+  const roleIds = (user.roleIds || []).map((id) => String(id?._id || id));
+  return roleIds.some((roleId) => {
+    const role = roleById.get(roleId);
+    if (!role) return false;
+    const perms = role.permissions || [];
+    return (
+      perms.includes(PERMISSIONS.ALL)
+      || perms.includes('*')
+      || perms.includes(PERMISSIONS.CAMPS_APPROVE)
+      || ['Approver', 'Admin'].includes(role.name)
+    );
+  });
+}
 
 async function findCampApprovers(excludeUserId = null) {
   const roles = await Role.find({ isDeleted: false });
@@ -14,18 +44,7 @@ async function findCampApprovers(excludeUserId = null) {
 
   return users.filter((user) => {
     if (excludeUserId && String(user._id) === String(excludeUserId)) return false;
-    const roleIds = (user.roleIds || []).map((id) => String(id?._id || id));
-    return roleIds.some((roleId) => {
-      const role = roleById.get(roleId);
-      if (!role) return false;
-      const perms = role.permissions || [];
-      return (
-        perms.includes(PERMISSIONS.ALL)
-        || perms.includes('*')
-        || perms.includes(PERMISSIONS.CAMPS_APPROVE)
-        || ['Approver', 'Admin'].includes(role.name)
-      );
-    });
+    return isCampApproverUser(user, roleById);
   });
 }
 
@@ -38,15 +57,30 @@ function campSummary(camp = {}) {
   return parts.join(' · ') || 'Camp One request';
 }
 
+function campRequesterId(camp = {}) {
+  return camp.createdById || camp.submittedById || null;
+}
+
+/**
+ * Notify only Approvers/Admins relevant to the requester's reporting line
+ * (managers of the requester + platform admins). Avoids flooding every Approver.
+ */
 export async function notifyCampApprovers({ camp, actorId, type, title, body }) {
-  const approvers = await findCampApprovers(actorId);
+  const roles = await Role.find({ isDeleted: false });
+  const roleById = new Map(roles.map((role) => [String(role._id), role]));
+  const allApprovers = await findCampApprovers(actorId);
+  const subjectId = campRequesterId(camp);
+  const scoped = await scopeApproversToSubjectManagers(allApprovers, subjectId, {
+    isPlatformAdmin: (user) => isPlatformAdminUser(user, roleById),
+  });
+
   await notifyEvent({
     type,
     title,
     body,
     entityType: 'camp_ops_camp',
     entityId: camp._id,
-    recipients: approvers.map((user) => user._id),
+    recipients: scoped.map((user) => user._id),
     includeWatchers: true,
     excludeUserIds: actorId ? [actorId] : [],
     excludeActor: true,
@@ -57,8 +91,9 @@ export async function notifyCampApprovers({ camp, actorId, type, title, body }) 
   });
 }
 
+/** Requester + their reporting managers (FYI for managers of the submitter). */
 export async function notifyCampRequester({ camp, type, title, body, priority }) {
-  const requesterId = camp.createdById || camp.submittedById;
+  const requesterId = campRequesterId(camp);
   if (!requesterId) return;
   await notifyEvent({
     type,
@@ -68,6 +103,7 @@ export async function notifyCampRequester({ camp, type, title, body, priority })
     entityId: camp._id,
     recipients: [requesterId],
     includeWatchers: false,
+    includeReportingManagers: 'chain',
     module: 'camp',
     priority,
     group: true,
@@ -156,6 +192,7 @@ export async function notifyCampBulkSummary({
     entityId,
     recipients,
     includeWatchers: false,
+    includeReportingManagers: 'direct',
     excludeUserIds: [],
     module: 'camp',
     priority,
@@ -209,7 +246,7 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
       }
       break;
     case 'approve':
-      // Requester only — no fan-out to every coordinator on routine approve.
+      // Requester + reporting managers — no fan-out to every coordinator.
       await notifyCampRequester({
         camp,
         type: 'CAMP_APPROVED',

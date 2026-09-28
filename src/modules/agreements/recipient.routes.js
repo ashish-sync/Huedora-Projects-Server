@@ -6,7 +6,10 @@ import { env } from '../../config/env.js';
 import { Agreement, AgreementActivity } from './agreement.model.js';
 import { writeAudit } from '../../utils/audit.js';
 import { findAgreementByAccessKey } from './recipientAccess.js';
-import { syncLinkedAssetsFromAgreement } from '../assets/assetContactSync.js';
+import {
+  syncLinkedAssetsFromAgreement,
+  lockAssetsForSignedAgreement,
+} from '../assets/assetContactSync.js';
 import { freezeAgreementAssetSnapshots } from './agreementAssetSnapshot.js';
 import { buildAgreementPdfBuffer, pdfOptionsFromAgreement } from './agreementPdf.js';
 
@@ -195,6 +198,7 @@ router.post(
     await agreement.save();
     if (agreement.status === 'COMPLETED') {
       await freezeAgreementAssetSnapshots(agreement._id, { source: 'sign' });
+      await lockAssetsForSignedAgreement(agreement);
       await syncLinkedAssetsFromAgreement(agreement);
     }
 
@@ -259,6 +263,7 @@ router.post(
     await agreement.save();
     if (agreement.status === 'COMPLETED') {
       await freezeAgreementAssetSnapshots(agreement._id, { source: 'sign' });
+      await lockAssetsForSignedAgreement(agreement);
       await syncLinkedAssetsFromAgreement(agreement);
     }
 
