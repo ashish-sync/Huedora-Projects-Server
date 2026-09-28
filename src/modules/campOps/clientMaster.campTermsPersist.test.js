@@ -24,6 +24,62 @@ test('empty purchaseOrders body preserves existing POs', () => {
   assert.equal(resolved.orders[0].poNumber, 'PO-100');
 });
 
+test('allowClear empty purchaseOrders clears existing POs', () => {
+  const existing = [
+    {
+      id: 'po-1',
+      poNumber: 'PO-100',
+      poNetValue: 1000,
+      poGrossValue: 1000,
+      files: [],
+    },
+  ];
+  const resolved = resolvePurchaseOrdersForPersist([], existing, { allowClear: true });
+  assert.equal(resolved.changed, true);
+  assert.deepEqual(resolved.orders, []);
+});
+
+test('allowClear empty list + clearKeys wipes persisted PO fields', () => {
+  const row = {
+    purchaseOrders: [
+      {
+        id: 'po-1',
+        poNumber: 'PO-OLD',
+        poNetValue: 5000,
+        poGrossValue: 5000,
+        files: [{ storedName: 'old.pdf' }],
+      },
+    ],
+    poNumber: 'PO-OLD',
+    poNetValue: 5000,
+    poFile: { storedName: 'old.pdf' },
+    poIssueDate: '2024-01-01',
+    poExpiryDate: '2024-12-31',
+  };
+  const resolved = resolvePurchaseOrdersForPersist([], row.purchaseOrders, { allowClear: true });
+  assignPreservingExisting(
+    row,
+    {
+      purchaseOrders: resolved.orders,
+      poNumber: '',
+      poNetValue: 0,
+      poFile: null,
+      poIssueDate: '',
+      poExpiryDate: '',
+      poCombinedNet: 0,
+      poCombinedGst: 0,
+      poCombinedGross: 0,
+    },
+    { clearKeys: ['purchaseOrders', 'poFile', 'poNumber', 'poIssueDate', 'poExpiryDate'] }
+  );
+  assert.deepEqual(row.purchaseOrders, []);
+  assert.equal(row.poNumber, '');
+  assert.equal(row.poFile, null);
+  assert.equal(row.poIssueDate, '');
+  assert.equal(row.poExpiryDate, '');
+  assert.equal(row.poNetValue, 0);
+});
+
 test('meaningful purchaseOrders body replaces existing', () => {
   const existing = [{ id: 'po-1', poNumber: 'PO-100', poNetValue: 1000 }];
   const incoming = [{ id: 'po-2', poNumber: 'PO-200', poNetValue: 2500 }];

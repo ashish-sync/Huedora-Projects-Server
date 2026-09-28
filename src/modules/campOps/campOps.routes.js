@@ -40,6 +40,7 @@ import {
 import {
   isMeaningfulPurchaseOrder,
   resolveCampTermsFilesForPersist,
+  resolvePurchaseOrdersForPersist,
 } from './clientMaster.campTermsPersist.js';
 import { normalizeHealthcareWorkers } from './healthcareWorkers.js';
 import {
@@ -2818,6 +2819,18 @@ function mapBodyPurchaseOrders(bodyOrders, existing) {
     .map(({ _index, ...rest }) => rest);
 }
 
+function wantsReplacePurchaseOrders(body = {}) {
+  const flag = body.replacePurchaseOrders;
+  return flag === true || flag === 'true' || flag === 1 || flag === '1';
+}
+
+/** Explicit PO Based clears must pierce blank-preserve merge rules. */
+function clientMasterPoClearKeys(body = {}, payload = {}) {
+  if (!wantsReplacePurchaseOrders(body)) return [];
+  if (Array.isArray(payload.purchaseOrders) && payload.purchaseOrders.length) return [];
+  return ['purchaseOrders', 'poFile', 'poNumber', 'poIssueDate', 'poExpiryDate'];
+}
+
 function agreementDatesFromBody(body, existing) {
   return {
     agreementStartDate: pickPreservingDate(body.agreementStartDate, existing.agreementStartDate),
@@ -2852,29 +2865,40 @@ function applyCampTermsToPayload(payload, body, existingRow = null) {
     const existingById = new Map(
       (existing.purchaseOrders || []).map((po) => [String(po.id), po])
     );
+    const allowClear = wantsReplacePurchaseOrders(body);
 
     let orders;
     if (Array.isArray(body.purchaseOrders)) {
-      orders = mapBodyPurchaseOrders(body.purchaseOrders, existing);
-      if (!orders.length) {
+      const resolved = resolvePurchaseOrdersForPersist(body.purchaseOrders, existing.purchaseOrders, {
+        allowClear,
+        mapRow: (row, index) => {
+          const normalized = normalizePurchaseOrderRow(row, index, existingById);
+          if (!isMeaningfulPurchaseOrder(normalized)) return null;
+          const { _index, ...rest } = normalized;
+          return rest;
+        },
+      });
+      orders = resolved.orders;
+      // Without an explicit replace flag, keep prior rows when the body only has placeholders.
+      if (!orders.length && !allowClear) {
         orders = (existing.purchaseOrders || []).filter(isMeaningfulPurchaseOrder);
-      }
-      if (!orders.length) {
-        orders = [
-          normalizePurchaseOrderRow(
-            {
-              id: 'po-primary',
-              poNumber: '',
-              poNetValue: 0,
-              poApplyGst18: false,
-              poIssueDate: '',
-              poExpiryDate: '',
-              files: [],
-            },
-            0,
-            existingById
-          ),
-        ].map(({ _index, ...rest }) => rest);
+        if (!orders.length) {
+          orders = [
+            normalizePurchaseOrderRow(
+              {
+                id: 'po-primary',
+                poNumber: '',
+                poNetValue: 0,
+                poApplyGst18: false,
+                poIssueDate: '',
+                poExpiryDate: '',
+                files: [],
+              },
+              0,
+              existingById
+            ),
+          ].map(({ _index, ...rest }) => rest);
+        }
       }
     } else {
       const apply =
@@ -3564,9 +3588,10 @@ router.put(
       }
     }
     const payload = buildMasterPayload(req.body, client, row);
-    // Do not clearKeys Agreement/PO fields when switching Camp Terms — keep both sides
-    // so users can switch back without silent data loss.
-    assignPreservingExisting(row, payload);
+    // Explicit PO Based replace/clear may send empty purchaseOrders / blank PO scalars.
+    // Those must use clearKeys so blank-preserve merge does not resurrect deleted POs.
+    const clearKeys = clientMasterPoClearKeys(req.body, payload);
+    assignPreservingExisting(row, payload, clearKeys.length ? { clearKeys } : undefined);
     if (client) seedMasterBillingFromCompany(row, client);
     row.billingGstin = normalizeMasterBillingGstin(row.billingGstin);
     assertClientMasterPayload(row);

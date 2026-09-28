@@ -23,10 +23,11 @@ export function isMeaningfulPurchaseOrder(row) {
 /**
  * Resolve purchaseOrders for persist.
  * - undefined body → keep existing (caller handles legacy flat fields)
- * - empty / placeholder-only body → keep existing (no silent wipe)
+ * - empty / placeholder-only body → keep existing (no silent wipe), unless allowClear
  * - meaningful body rows → use mapped rows
+ * - allowClear + empty → explicit user clear (PO Based section save after Remove)
  */
-export function resolvePurchaseOrdersForPersist(bodyOrders, existingOrders = [], { mapRow } = {}) {
+export function resolvePurchaseOrdersForPersist(bodyOrders, existingOrders = [], { mapRow, allowClear = false } = {}) {
   if (bodyOrders === undefined) return { changed: false, orders: existingOrders || [] };
   if (!Array.isArray(bodyOrders)) return { changed: false, orders: existingOrders || [] };
 
@@ -36,6 +37,7 @@ export function resolvePurchaseOrdersForPersist(bodyOrders, existingOrders = [],
     : bodyOrders.filter(isMeaningfulPurchaseOrder);
 
   if (mapped.length) return { changed: true, orders: mapped };
+  if (allowClear) return { changed: true, orders: [] };
   return { changed: false, orders: existing };
 }
 
