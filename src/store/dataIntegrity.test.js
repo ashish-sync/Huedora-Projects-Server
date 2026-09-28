@@ -35,6 +35,25 @@ test('matching updatedAt is allowed', () => {
   );
 });
 
+test('Date instance matches equivalent ISO string', () => {
+  assert.doesNotThrow(() =>
+    assertNotStale(
+      { updatedAt: new Date('2026-01-02T00:00:00.000Z') },
+      '2026-01-02T00:00:00.000Z',
+      { label: 'Client Master' }
+    )
+  );
+});
+
+test('equivalent ISO strings with/without ms match', () => {
+  assert.doesNotThrow(() =>
+    assertNotStale(
+      { updatedAt: '2026-01-02T00:00:00.000Z' },
+      '2026-01-02T00:00:00.000Z'
+    )
+  );
+});
+
 test('PIN locality blank on import must not wipe existing locality', () => {
   const existing = {
     pinCode: '110001',

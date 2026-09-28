@@ -114,13 +114,29 @@ export function pickDefinedPatch(body = {}, { allowKeys = null, clearKeys = [] }
 }
 
 /**
+ * Normalize updatedAt for optimistic concurrency compares.
+ * Date instances and ISO strings for the same instant must match (Mongo may return either).
+ */
+export function normalizeUpdatedAtToken(value) {
+  if (value == null || value === '') return '';
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString();
+  }
+  const raw = String(value).trim();
+  if (!raw) return '';
+  const ms = Date.parse(raw);
+  if (!Number.isNaN(ms)) return new Date(ms).toISOString();
+  return raw;
+}
+
+/**
  * Optimistic concurrency: reject stale saves when the client still holds an older updatedAt.
  * @throws {{ status: 409, code: 'STALE_UPDATE', message: string }}
  */
 export function assertNotStale(existing, expectedUpdatedAt, { label = 'Record' } = {}) {
   if (expectedUpdatedAt == null || expectedUpdatedAt === '') return;
-  const current = String(existing?.updatedAt || '');
-  const expected = String(expectedUpdatedAt);
+  const current = normalizeUpdatedAtToken(existing?.updatedAt);
+  const expected = normalizeUpdatedAtToken(expectedUpdatedAt);
   if (!current || !expected) return;
   if (current !== expected) {
     const err = new Error(
