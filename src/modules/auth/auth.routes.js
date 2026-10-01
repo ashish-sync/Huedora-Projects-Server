@@ -45,10 +45,12 @@ const passwordChangeLimiter = rateLimit({
   message: { error: { message: 'Too many password change attempts. Try again later.', code: 'RATE_LIMIT' } },
 });
 
-function refreshCookieOptions() {
+function refreshCookieOptions({ secure } = {}) {
   return {
     httpOnly: true,
-    secure: env.nodeEnv === 'production',
+    // QA uses NODE_ENV=qa (not "production") but is still served over HTTPS.
+    // Always mark cookies Secure outside local development so clear/set attributes match.
+    secure: typeof secure === 'boolean' ? secure : env.nodeEnv !== 'development',
     sameSite: 'lax',
     path: '/api/v1/auth',
   };
@@ -62,8 +64,18 @@ function setRefreshCookie(res, token) {
 }
 
 function clearRefreshCookie(res) {
-  // Attributes must match setRefreshCookie or the browser keeps the cookie.
-  res.clearCookie('refreshToken', refreshCookieOptions());
+  // Browsers only drop a cookie when clear attributes match how it was set.
+  // Clear both Secure and non-Secure + primary path variants to cover NODE_ENV drift.
+  const variants = [
+    refreshCookieOptions({ secure: true }),
+    refreshCookieOptions({ secure: false }),
+    { ...refreshCookieOptions({ secure: true }), path: '/' },
+    { ...refreshCookieOptions({ secure: false }), path: '/' },
+  ];
+  for (const opts of variants) {
+    res.clearCookie('refreshToken', opts);
+    res.cookie('refreshToken', '', { ...opts, maxAge: 0, expires: new Date(0) });
+  }
 }
 
 router.post(
