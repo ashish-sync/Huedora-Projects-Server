@@ -1013,32 +1013,96 @@ export function daysSinceDocumentApproved(row, now = new Date()) {
   return Math.floor((b - a) / 86400000);
 }
 
+/** Canonical DB stage: Draft | Submitted | Issued | Cancelled. */
+export function normalizeCommercialStage(status) {
+  const raw = String(status || '').trim();
+  if (!raw || raw === 'Uploaded') return 'Draft';
+  if (raw === 'Approved') return 'Issued';
+  if (raw === 'Drafting') return 'Draft';
+  return raw;
+}
+
+/** UI Stage label — Draft/Uploaded → Drafting; Approved → Issued. */
+export function displayCommercialStage(status) {
+  const raw = String(status || '').trim() || 'Draft';
+  const map = {
+    Draft: 'Drafting',
+    Uploaded: 'Drafting',
+    Submitted: 'Submitted',
+    Approved: 'Issued',
+    Issued: 'Issued',
+    Cancelled: 'Cancelled',
+  };
+  return map[raw] || raw;
+}
+
+export function isIssuedStage(status) {
+  return ['Issued', 'Approved'].includes(String(status || '').trim());
+}
+
 /**
- * Ageing-based Status while unpaid after approval.
- * 0–10 Invoice Sent · 11–30 Invoice Due · 31–45 Invoice Overdue · 46+ MSME Breach
+ * Document-specific Status (stored in paymentStatus; independent of Stage).
+ */
+export const COMMERCIAL_STATUS_BY_TYPE = {
+  client_invoice: {
+    mode: 'auto_invoice',
+    options: ['Unpaid under 30D', 'Unpaid over 30D', 'Partially Paid', 'Paid'],
+  },
+  bill_of_supply: {
+    mode: 'auto_invoice',
+    options: ['Unpaid under 30D', 'Unpaid over 30D', 'Partially Paid', 'Paid'],
+  },
+  debit_note: {
+    mode: 'auto_debit',
+    default: 'Pending Collection',
+    options: ['Pending Collection', 'Partially Paid', 'Paid'],
+  },
+  credit_note: {
+    mode: 'manual',
+    default: 'Pending Adjustment',
+    options: ['Pending Adjustment', 'Partially Adjusted', 'Adjusted', 'Refunded'],
+  },
+  delivery_challan: {
+    mode: 'manual',
+    default: 'Ready for Dispatch',
+    options: ['Ready for Dispatch', 'Dispatched', 'Delivered', 'Returned'],
+  },
+  proforma: {
+    mode: 'manual',
+    default: 'Sent',
+    options: ['Sent', 'Accepted', 'Converted', 'Expired'],
+  },
+  purchase_order: {
+    mode: 'manual',
+    default: 'Open',
+    options: ['Open', 'Partially Fulfilled', 'Fulfilled', 'Closed'],
+  },
+  quotation: {
+    mode: 'manual',
+    default: 'Sent',
+    options: ['Sent', 'Under Review', 'Accepted', 'Rejected', 'Expired', 'Converted'],
+  },
+};
+
+export function isManualLifecycleStatusType(documentType) {
+  return COMMERCIAL_STATUS_BY_TYPE[documentType]?.mode === 'manual';
+}
+
+export function defaultLifecycleStatus(documentType) {
+  return COMMERCIAL_STATUS_BY_TYPE[documentType]?.default || '';
+}
+
+/**
+ * Ageing Status for Tax Invoice / Bill of Supply while unpaid.
+ * ≤30 days → Unpaid under 30D · >30 → Unpaid over 30D
  */
 export function paymentStatusFromAgeingDays(days) {
-  if (days == null || !Number.isFinite(days) || days < 0) return 'Invoice Sent';
-  if (days <= 10) return 'Invoice Sent';
-  if (days <= 30) return 'Invoice Due';
-  if (days <= 45) return 'Invoice Overdue';
-  return 'MSME Breach';
+  if (days == null || !Number.isFinite(days) || days < 0) return 'Unpaid under 30D';
+  if (days <= 30) return 'Unpaid under 30D';
+  return 'Unpaid over 30D';
 }
 
-/**
- * Billing Center Status (payment / ageing). Empty before approval/issue.
- * Paid / Partially Paid always win; otherwise Status follows approval ageing.
- */
-export function resolveCommercialPaymentDisplayStatus(row, now = new Date()) {
-  if (!['Issued', 'Approved'].includes(row?.status)) return '';
-  const stored = normalizeStoredPaymentStatus(row?.paymentStatus);
-  if (stored === 'Paid') return 'Paid';
-  if (stored === 'Partially Paid') return 'Partially Paid';
-  const days = daysSinceDocumentApproved(row, now);
-  return paymentStatusFromAgeingDays(days == null ? 0 : days);
-}
-
-/** Normalize legacy + current stored paymentStatus values. */
+/** Normalize legacy + current stored payment/lifecycle Status values. */
 export function normalizeStoredPaymentStatus(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw || raw === 'unpaid') return 'Unpaid';
@@ -1046,16 +1110,134 @@ export function normalizeStoredPaymentStatus(value) {
   if (raw === 'partially paid' || raw === 'partially_paid' || raw === 'partial') {
     return 'Partially Paid';
   }
+  if (
+    raw === 'invoice sent' ||
+    raw === 'invoice due' ||
+    raw === 'unpaid under 30d' ||
+    raw === 'unpaid under 30 d'
+  ) {
+    return 'Unpaid under 30D';
+  }
+  if (
+    raw === 'invoice overdue' ||
+    raw === 'msme breach' ||
+    raw === 'unpaid over 30d' ||
+    raw === 'unpaid over 30 d'
+  ) {
+    return 'Unpaid over 30D';
+  }
   return String(value || '').trim() || 'Unpaid';
+}
+
+function shouldShowLifecycleStatus(row) {
+  const stage = normalizeCommercialStage(row?.status);
+  return stage === 'Issued' || stage === 'Cancelled';
+}
+
+/**
+ * Billing Center Status — document-type specific. Empty before Issued.
+ * Paid / Partially Paid win for payment docs; otherwise ageing or stored manual.
+ */
+export function resolveCommercialDisplayStatus(row, now = new Date()) {
+  if (!shouldShowLifecycleStatus(row)) return '';
+  const type = row?.documentType;
+  const cfg = COMMERCIAL_STATUS_BY_TYPE[type];
+  if (!cfg) return '';
+
+  const storedRaw = String(row?.paymentStatus || '').trim();
+  const storedNorm = normalizeStoredPaymentStatus(storedRaw);
+
+  if (cfg.mode === 'auto_invoice') {
+    if (storedNorm === 'Paid') return 'Paid';
+    if (storedNorm === 'Partially Paid') return 'Partially Paid';
+    if (normalizeCommercialStage(row?.status) === 'Cancelled' && !row?.issuedAt && !row?.approvedAt) {
+      return '';
+    }
+    const days = daysSinceDocumentApproved(row, now);
+    return paymentStatusFromAgeingDays(days == null ? 0 : days);
+  }
+
+  if (cfg.mode === 'auto_debit') {
+    if (storedNorm === 'Paid') return 'Paid';
+    if (storedNorm === 'Partially Paid') return 'Partially Paid';
+    return 'Pending Collection';
+  }
+
+  if (storedRaw && cfg.options.includes(storedRaw)) return storedRaw;
+  if (storedNorm !== 'Unpaid' && cfg.options.includes(storedNorm)) return storedNorm;
+  return cfg.default || '';
+}
+
+/** @deprecated Prefer resolveCommercialDisplayStatus */
+export function resolveCommercialPaymentDisplayStatus(row, now = new Date()) {
+  return resolveCommercialDisplayStatus(row, now);
+}
+
+/**
+ * Seed default Status once when Issued if blank / Unpaid placeholder.
+ * Does not change Stage.
+ */
+export function seedLifecycleStatusIfBlank(row) {
+  const cfg = COMMERCIAL_STATUS_BY_TYPE[row?.documentType];
+  if (!cfg?.default) return false;
+  const current = String(row.paymentStatus || '').trim();
+  if (current && cfg.options.includes(current)) return false;
+  if (cfg.mode === 'manual' || cfg.mode === 'auto_debit') {
+    row.paymentStatus = cfg.default;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Manual Status update — writes paymentStatus only; never mutates Stage.
+ */
+export function applyCommercialLifecycleStatus(row, statusInput) {
+  const type = row?.documentType;
+  const cfg = COMMERCIAL_STATUS_BY_TYPE[type];
+  if (!cfg || cfg.mode !== 'manual') {
+    throw new AppError(
+      'This document type uses automatic Status; it cannot be set manually',
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+  if (!isIssuedStage(row.status)) {
+    throw new AppError(
+      'Status can only be changed after the document is Issued',
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+  const next = String(statusInput || '').trim();
+  if (!cfg.options.includes(next)) {
+    throw new AppError(
+      `Invalid Status for this document type. Allowed: ${cfg.options.join(', ')}`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+  row.paymentStatus = next;
+  return row;
 }
 
 /**
  * Record a payment against an issued commercial document.
  * Same amount as Net Receivable → Paid; otherwise Partially Paid.
+ * Does not change Stage.
  */
 export function applyCommercialPayment(row, amountInput) {
-  if (!['Issued', 'Approved'].includes(row.status)) {
-    throw new AppError('Only issued or approved documents can record payment', 400, 'VALIDATION_ERROR');
+  if (!isIssuedStage(row.status)) {
+    throw new AppError('Only issued documents can record payment', 400, 'VALIDATION_ERROR');
+  }
+  const type = row.documentType;
+  const mode = COMMERCIAL_STATUS_BY_TYPE[type]?.mode;
+  if (mode !== 'auto_invoice' && mode !== 'auto_debit') {
+    throw new AppError(
+      'Payment recording is only for Tax Invoice, Bill of Supply, and Debit Note',
+      400,
+      'VALIDATION_ERROR'
+    );
   }
   const amount = toAmount(amountInput);
   if (!(amount > 0)) {
@@ -1081,9 +1263,10 @@ export function assertRejectable(status) {
   }
 }
 
+/** Cancel allowed pre or post approval (any stage except already Cancelled). */
 export function assertCancellable(status) {
-  if (['Issued', 'Cancelled', 'Converted'].includes(status)) {
-    throw new AppError('Document cannot be cancelled in its current status', 400, 'VALIDATION_ERROR');
+  if (normalizeCommercialStage(status) === 'Cancelled' || status === 'Cancelled') {
+    throw new AppError('Document is already cancelled', 400, 'VALIDATION_ERROR');
   }
 }
 

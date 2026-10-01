@@ -9,6 +9,11 @@ import {
 } from './financeCommercial.service.js';
 import { BRAND, moneyPlain, resolveLogoPath } from './pdfBrand.js';
 import { formatCompanyLetterhead, drawCompanyLetterheadLine1 } from './companyLetterhead.js';
+import {
+  drawClickToSignBlock,
+  isClickToSignSignature,
+  resolveDocumentSignature,
+} from './clickToSignStamp.js';
 
 const PAGE = { width: 595.28, height: 841.89, margin: 22 };
 const GRAY = '#E5E7EB';
@@ -348,13 +353,21 @@ function drawAmountWords(pdf, doc, x, y, w) {
   return y + h;
 }
 
-function drawSignatory(pdf, org, x, y, w) {
+function drawSignatory(pdf, org, doc, x, y, w) {
   const boxW = 170;
   const sx = x + w - boxW;
+  const signature = resolveDocumentSignature(doc);
   pdf.font('Helvetica').fontSize(7).fillColor(INK).text(`For ${org.legalName || ''}`, sx, y, {
     width: boxW,
     align: 'center',
   });
+  if (isClickToSignSignature(signature)) {
+    drawClickToSignBlock(pdf, signature, sx + 4, y + 12, boxW - 8, {
+      align: 'center',
+      ink: '#2b2b2b',
+    });
+    return;
+  }
   pdf
     .moveTo(sx + 16, y + 24)
     .lineTo(sx + boxW - 16, y + 24)
@@ -397,7 +410,7 @@ export function buildPurchaseOrderTemplatePdf(docRow, orgProfile) {
     y = drawItems(pdf, doc, x, y, w);
     y = drawTotals(pdf, doc, x, y + 2, w);
     y = drawAmountWords(pdf, doc, x, y + 2, w);
-    drawSignatory(pdf, org, x, y + 6, w);
+    drawSignatory(pdf, org, doc, x, y + 6, w);
 
     pdf
       .rect(PAGE.margin - 2, PAGE.margin - 2, w + 4, PAGE.height - PAGE.margin * 2 + 4)

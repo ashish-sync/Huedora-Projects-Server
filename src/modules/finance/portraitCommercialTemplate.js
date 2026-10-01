@@ -10,6 +10,11 @@ import {
 } from './financeCommercial.service.js';
 import { BRAND, moneyPlain, resolveLogoPath } from './pdfBrand.js';
 import { formatCompanyLetterhead, drawCompanyLetterheadLine1 } from './companyLetterhead.js';
+import {
+  drawClickToSignBlock,
+  isClickToSignSignature,
+  resolveDocumentSignature,
+} from './clickToSignStamp.js';
 
 const PAGE = {
   width: 595.28,
@@ -513,13 +518,21 @@ function trimStrSafe(v) {
   return v == null ? '' : String(v).trim();
 }
 
-function drawSignatory(pdf, org, x, y, w) {
+function drawSignatory(pdf, org, doc, x, y, w) {
   const boxW = 180;
   const sx = x + w - boxW;
+  const signature = resolveDocumentSignature(doc);
   pdf.font('Helvetica').fontSize(8).fillColor(INK).text(`For ${org.legalName || ''}`, sx, y, {
     width: boxW,
     align: 'center',
   });
+  if (isClickToSignSignature(signature)) {
+    drawClickToSignBlock(pdf, signature, sx + 4, y + 16, boxW - 8, {
+      align: 'center',
+      ink: '#2b2b2b',
+    });
+    return;
+  }
   pdf
     .moveTo(sx + 20, y + 40)
     .lineTo(sx + boxW - 20, y + 40)
@@ -570,7 +583,7 @@ export function buildPortraitCommercialPdf(docRow, orgProfile, documentType) {
     y = drawItemsTable(pdf, doc, cfg, x, y, w);
     y = drawAmountWords(pdf, doc, x, y, w);
     y = drawFooter(pdf, org, doc, cfg, x, y, w);
-    drawSignatory(pdf, org, x, y, w);
+    drawSignatory(pdf, org, doc, x, y, w);
 
     pdf
       .rect(PAGE.margin - 4, PAGE.margin - 4, w + 8, PAGE.height - PAGE.margin * 2 + 8)

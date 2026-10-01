@@ -1,10 +1,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  applyCommercialLifecycleStatus,
   applyCommercialPayment,
+  assertCancellable,
   daysSinceDocumentApproved,
+  displayCommercialStage,
   netReceivableFromPreGst,
-  resolveCommercialPaymentDisplayStatus,
+  normalizeCommercialStage,
+  resolveCommercialDisplayStatus,
+  seedLifecycleStatusIfBlank,
 } from './financeCommercial.service.js';
 
 describe('commercial payment / Net Receivable', () => {
@@ -16,6 +21,7 @@ describe('commercial payment / Net Receivable', () => {
   it('marks Paid when amount matches Net Receivable', () => {
     const row = {
       status: 'Issued',
+      documentType: 'client_invoice',
       subtotal: 1000,
       grandTotal: 1180,
       paidAmount: 0,
@@ -29,6 +35,7 @@ describe('commercial payment / Net Receivable', () => {
   it('marks Partially Paid when amount is below Net Receivable', () => {
     const row = {
       status: 'Issued',
+      documentType: 'bill_of_supply',
       subtotal: 1000,
       grandTotal: 1180,
       paidAmount: 0,
@@ -41,10 +48,20 @@ describe('commercial payment / Net Receivable', () => {
   it('rejects payment above Net Receivable', () => {
     const row = {
       status: 'Issued',
+      documentType: 'client_invoice',
       subtotal: 1000,
       grandTotal: 1180,
     };
     assert.throws(() => applyCommercialPayment(row, 901), /Net Receivable/);
+  });
+
+  it('rejects payment on manual-status document types', () => {
+    const row = {
+      status: 'Issued',
+      documentType: 'quotation',
+      subtotal: 1000,
+    };
+    assert.throws(() => applyCommercialPayment(row, 100), /Tax Invoice/);
   });
 
   it('counts calendar days since approval', () => {
@@ -53,48 +70,61 @@ describe('commercial payment / Net Receivable', () => {
     assert.equal(daysSinceDocumentApproved(row, new Date('2026-07-30T12:00:00.000Z')), 29);
   });
 
-  it('shows ageing Status unless Paid or Partially Paid', () => {
+  it('shows Unpaid under/over 30D unless Paid or Partially Paid', () => {
     const base = {
+      documentType: 'client_invoice',
       status: 'Issued',
       approvedAt: '2026-07-01T10:00:00.000Z',
       paymentStatus: 'Unpaid',
     };
     assert.equal(
-      resolveCommercialPaymentDisplayStatus(base, new Date('2026-07-05T12:00:00.000Z')),
-      'Invoice Sent'
+      resolveCommercialDisplayStatus(base, new Date('2026-07-20T12:00:00.000Z')),
+      'Unpaid under 30D'
     );
     assert.equal(
-      resolveCommercialPaymentDisplayStatus(base, new Date('2026-07-20T12:00:00.000Z')),
-      'Invoice Due'
+      resolveCommercialDisplayStatus(base, new Date('2026-08-05T12:00:00.000Z')),
+      'Unpaid over 30D'
     );
     assert.equal(
-      resolveCommercialPaymentDisplayStatus(base, new Date('2026-08-05T12:00:00.000Z')),
-      'Invoice Overdue'
-    );
-    assert.equal(
-      resolveCommercialPaymentDisplayStatus(base, new Date('2026-08-20T12:00:00.000Z')),
-      'MSME Breach'
-    );
-    assert.equal(
-      resolveCommercialPaymentDisplayStatus(
+      resolveCommercialDisplayStatus(
         { ...base, paymentStatus: 'Paid' },
         new Date('2026-08-20T12:00:00.000Z')
       ),
       'Paid'
     );
-    assert.equal(
-      resolveCommercialPaymentDisplayStatus(
-        { ...base, paymentStatus: 'Partially Paid' },
-        new Date('2026-08-20T12:00:00.000Z')
-      ),
-      'Partially Paid'
-    );
-    assert.equal(
-      resolveCommercialPaymentDisplayStatus(
-        { ...base, paymentStatus: 'Fully paid' },
-        new Date('2026-08-20T12:00:00.000Z')
-      ),
-      'Paid'
-    );
+  });
+
+  it('maps Stage display without migrating DB values', () => {
+    assert.equal(displayCommercialStage('Draft'), 'Drafting');
+    assert.equal(normalizeCommercialStage('Uploaded'), 'Draft');
+    assert.equal(normalizeCommercialStage('Approved'), 'Issued');
+  });
+
+  it('seeds manual Status on issue without changing Stage', () => {
+    const row = {
+      documentType: 'quotation',
+      status: 'Issued',
+      paymentStatus: 'Unpaid',
+    };
+    assert.equal(seedLifecycleStatusIfBlank(row), true);
+    assert.equal(row.paymentStatus, 'Sent');
+    assert.equal(row.status, 'Issued');
+  });
+
+  it('applies manual lifecycle Status without changing Stage', () => {
+    const row = {
+      documentType: 'purchase_order',
+      status: 'Issued',
+      paymentStatus: 'Open',
+    };
+    applyCommercialLifecycleStatus(row, 'Partially Fulfilled');
+    assert.equal(row.paymentStatus, 'Partially Fulfilled');
+    assert.equal(row.status, 'Issued');
+  });
+
+  it('allows cancel after Issued', () => {
+    assert.doesNotThrow(() => assertCancellable('Issued'));
+    assert.doesNotThrow(() => assertCancellable('Draft'));
+    assert.throws(() => assertCancellable('Cancelled'), /already cancelled/);
   });
 });

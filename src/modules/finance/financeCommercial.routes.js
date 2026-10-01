@@ -46,7 +46,10 @@ import {
   nextDeliveryChallanNumber,
   nextBillOfSupplyNumber,
   nextQuotationNumber,
-  resolveCommercialPaymentDisplayStatus,
+  resolveCommercialDisplayStatus,
+  seedLifecycleStatusIfBlank,
+  applyCommercialLifecycleStatus,
+  isManualLifecycleStatusType,
   toAmount,
   todayIso,
   addDaysIso,
@@ -152,7 +155,16 @@ function commercialListFilter(req) {
   } else {
     filter.documentType = { $in: COMMERCIAL_DOC_TYPES };
   }
-  if (req.query.status) filter.status = String(req.query.status);
+  const stageFilter = trimStr(req.query.status);
+  if (stageFilter) {
+    if (stageFilter === 'Drafting' || stageFilter === 'Draft') {
+      filter.status = { $in: ['Draft', 'Uploaded'] };
+    } else if (stageFilter === 'Issued') {
+      filter.status = { $in: ['Issued', 'Approved'] };
+    } else {
+      filter.status = stageFilter;
+    }
+  }
   if (req.query.q) {
     const re = new RegExp(escapeRegex(String(req.query.q)), 'i');
     filter.$or = [
@@ -160,6 +172,7 @@ function commercialListFilter(req) {
       { documentNumber: re },
       { recipientName: re },
       { projectName: re },
+      { servicePeriod: re },
     ];
   }
   return filter;
@@ -180,13 +193,13 @@ router.get(
     const paymentStatus = trimStr(req.query.paymentStatus);
     const sortSpec = sort || '-documentDate';
 
-    // Status (payment / ageing) is computed — filter in memory when requested.
+    // Status (payment / lifecycle) is computed for auto types — filter in memory when requested.
     if (paymentStatus) {
       const all = await FinanceCommercialDocument.find(filter)
         .select('-builderForm')
         .sort(sortSpec);
       const filtered = all.filter(
-        (row) => resolveCommercialPaymentDisplayStatus(row) === paymentStatus
+        (row) => resolveCommercialDisplayStatus(row) === paymentStatus
       );
       const total = filtered.length;
       const data = filtered.slice(skip, skip + limit);
@@ -322,6 +335,7 @@ router.post(
     row.approvedByEmail = req.user.email;
     row.issuedAt = row.issuedAt || new Date().toISOString();
     row.source = row.source || 'generated';
+    seedLifecycleStatusIfBlank(row);
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.COMMERCIAL.APPROVE', row, before);
@@ -383,7 +397,7 @@ router.post(
       paymentStatus: 'Status',
       paidAmount: 'Paid amount',
     });
-    const display = resolveCommercialPaymentDisplayStatus(row);
+    const display = resolveCommercialDisplayStatus(row);
     const recipients = [row.createdById, row.updatedById, row.submittedById].filter(Boolean);
     await notifyEvent({
       type: 'COMMERCIAL_PAYMENT',
@@ -402,6 +416,27 @@ router.post(
           ? NOTIFICATION_PRIORITIES.IMPORTANT
           : NOTIFICATION_PRIORITIES.INFORMATIONAL,
     });
+    res.json({ data: row });
+  })
+);
+
+router.post(
+  '/commercial-documents/:id/lifecycle-status',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    const row = await loadCommercialById(req.params.id);
+    if (!isManualLifecycleStatusType(row.documentType)) {
+      throw new AppError(
+        'This document type uses automatic Status; it cannot be set manually',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    const before = row.toObject ? row.toObject() : { ...row };
+    applyCommercialLifecycleStatus(row, req.body?.status ?? req.body?.paymentStatus);
+    stampUpdater(row, req.user);
+    await row.save();
+    await auditCommercial(req, 'FINANCE.COMMERCIAL.LIFECYCLE_STATUS', row, before);
     res.json({ data: row });
   })
 );
@@ -467,6 +502,7 @@ router.get(
         { documentNumber: re },
         { recipientName: re },
         { projectName: re },
+        { servicePeriod: re },
       ];
     }
     const [data, total] = await Promise.all([
@@ -587,6 +623,7 @@ router.post(
     row.status = 'Issued';
     row.issuedAt = new Date().toISOString();
     row.source = row.source || 'generated';
+    seedLifecycleStatusIfBlank(row);
     await row.save();
 
     await writeAudit({
@@ -870,6 +907,7 @@ router.post(
     row.documentPeriod = documentNumberPeriod(row.documentDate).periodKey;
     row.status = 'Issued';
     row.issuedAt = new Date().toISOString();
+    seedLifecycleStatusIfBlank(row);
     await row.save();
 
     await writeAudit({
@@ -1017,6 +1055,7 @@ function clientInvoiceListFilter(req) {
       { documentNumber: re },
       { recipientName: re },
       { projectName: re },
+      { servicePeriod: re },
     ];
   }
   return filter;
@@ -1169,6 +1208,7 @@ router.post(
     row.status = 'Issued';
     row.issuedAt = new Date().toISOString();
     row.source = row.source || 'generated';
+    seedLifecycleStatusIfBlank(row);
     await row.save();
 
     await writeAudit({
@@ -1237,6 +1277,7 @@ router.get(
         { documentNumber: re },
         { recipientName: re },
         { projectName: re },
+        { servicePeriod: re },
       ];
     }
     const [data, total] = await Promise.all([
@@ -1375,6 +1416,7 @@ router.post(
     row.status = 'Issued';
     row.issuedAt = new Date().toISOString();
     row.source = row.source || 'generated';
+    seedLifecycleStatusIfBlank(row);
     await row.save();
 
     await writeAudit({
@@ -1458,6 +1500,7 @@ function registerInvoiceLikeDocRoutes({
           { documentNumber: re },
           { recipientName: re },
           { projectName: re },
+          { servicePeriod: re },
         ];
       }
       const [data, total] = await Promise.all([
@@ -1596,6 +1639,7 @@ function registerInvoiceLikeDocRoutes({
       row.status = 'Issued';
       row.issuedAt = new Date().toISOString();
       row.source = row.source || 'generated';
+      seedLifecycleStatusIfBlank(row);
       await row.save();
 
       await writeAudit({

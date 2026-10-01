@@ -63,7 +63,35 @@ export const COMMERCIAL_DOC_STATUSES = [
   'Converted',
 ];
 
-export const COMMERCIAL_PAYMENT_STATUSES = ['Unpaid', 'Partially paid', 'Fully paid'];
+/** Display Stage labels (DB still uses Draft / Issued / …). */
+export const COMMERCIAL_STAGE_DISPLAY = ['Drafting', 'Submitted', 'Issued', 'Cancelled'];
+
+export const COMMERCIAL_PAYMENT_STATUSES = [
+  'Unpaid',
+  'Unpaid under 30D',
+  'Unpaid over 30D',
+  'Partially Paid',
+  'Paid',
+  'Pending Collection',
+  'Pending Adjustment',
+  'Partially Adjusted',
+  'Adjusted',
+  'Refunded',
+  'Ready for Dispatch',
+  'Dispatched',
+  'Delivered',
+  'Returned',
+  'Sent',
+  'Accepted',
+  'Converted',
+  'Expired',
+  'Open',
+  'Partially Fulfilled',
+  'Fulfilled',
+  'Closed',
+  'Under Review',
+  'Rejected',
+];
 
 export const DEFAULT_SAC_CODE = '999316';
 

@@ -13,6 +13,11 @@ import {
 } from './financeCommercial.service.js';
 import { BRAND, moneyInr, moneyPlain, resolveLogoPath } from './pdfBrand.js';
 import { formatCompanyLetterhead, drawCompanyLetterheadLine1 } from './companyLetterhead.js';
+import {
+  drawClickToSignBlock,
+  isClickToSignSignature,
+  resolveDocumentSignature,
+} from './clickToSignStamp.js';
 
 export const PAGE = {
   width: 841.89,
@@ -670,6 +675,8 @@ function drawDocumentFooter(pdf, margin, y, contentWidth, docRow, org) {
   const colW = (contentWidth - 20) / 2;
   const createdBy = docRow.createdByEmail || docRow.createdByName || '—';
   const orgName = org.brandLine || org.legalName || 'TYLO';
+  const signature = resolveDocumentSignature(docRow);
+  const clickSigned = isClickToSignSignature(signature);
 
   hrule(pdf, margin, y, contentWidth);
   y += 10;
@@ -703,13 +710,20 @@ function drawDocumentFooter(pdf, margin, y, contentWidth, docRow, org) {
     .fontSize(FONT.footerLabel)
     .fillColor(BRAND.muted)
     .text('AUTHORIZED SIGNATORY & COMPANY SEAL', sigX, y + 34, { width: colW, align: 'center' });
-  pdf
-    .font('Helvetica')
-    .fontSize(FONT.footerName)
-    .fillColor(BRAND.ink)
-    .text(`For ${orgName}`, sigX, y + 46, { width: colW, align: 'center' });
+  if (clickSigned) {
+    drawClickToSignBlock(pdf, signature, sigX + 8, y + 46, colW - 16, {
+      align: 'center',
+      ink: '#2b2b2b',
+    });
+  } else {
+    pdf
+      .font('Helvetica')
+      .fontSize(FONT.footerName)
+      .fillColor(BRAND.ink)
+      .text(`For ${orgName}`, sigX, y + 46, { width: colW, align: 'center' });
+  }
 
-  y += 62;
+  y += clickSigned ? 78 : 62;
   pdf
     .font('Helvetica-Oblique')
     .fontSize(FONT.disclaimer)
