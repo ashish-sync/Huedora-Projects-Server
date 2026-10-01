@@ -45,14 +45,25 @@ const passwordChangeLimiter = rateLimit({
   message: { error: { message: 'Too many password change attempts. Try again later.', code: 'RATE_LIMIT' } },
 });
 
-function setRefreshCookie(res, token) {
-  res.cookie('refreshToken', token, {
+function refreshCookieOptions() {
+  return {
     httpOnly: true,
     secure: env.nodeEnv === 'production',
     sameSite: 'lax',
-    maxAge: env.jwtRefreshExpiresDays * 24 * 60 * 60 * 1000,
     path: '/api/v1/auth',
+  };
+}
+
+function setRefreshCookie(res, token) {
+  res.cookie('refreshToken', token, {
+    ...refreshCookieOptions(),
+    maxAge: env.jwtRefreshExpiresDays * 24 * 60 * 60 * 1000,
   });
+}
+
+function clearRefreshCookie(res) {
+  // Attributes must match setRefreshCookie or the browser keeps the cookie.
+  res.clearCookie('refreshToken', refreshCookieOptions());
 }
 
 router.post(
@@ -94,16 +105,17 @@ router.post(
 
 router.post(
   '/logout',
-  authenticate,
+  // Do not require Bearer auth — the client clears the access token before calling
+  // logout for a snappy UI. Revocation + cookie clear must still run via refresh cookie.
   asyncHandler(async (req, res) => {
     await authService.logout({
-      refreshToken: req.cookies.refreshToken,
+      refreshToken: req.cookies.refreshToken || req.body?.refreshToken,
       user: req.user,
       ip: req.ip,
       userAgent: req.headers['user-agent'],
       requestId: req.requestId,
     });
-    res.clearCookie('refreshToken', { path: '/api/v1/auth' });
+    clearRefreshCookie(res);
     res.json({ data: { ok: true } });
   })
 );

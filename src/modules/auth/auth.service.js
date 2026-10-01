@@ -241,13 +241,26 @@ export async function refresh({ refreshToken, ip, userAgent, requestId }) {
 }
 
 export async function logout({ refreshToken, user, ip, userAgent, requestId }) {
+  let actor = user || null;
   if (refreshToken) {
     const tokenHash = hashToken(refreshToken);
-    await RefreshToken.updateOne({ tokenHash }, { $set: { revokedAt: new Date() } });
+    const stored = await RefreshToken.findOne({ tokenHash });
+    if (stored) {
+      if (!actor && stored.userId) {
+        actor = await User.findOne({ _id: stored.userId }).catch(() => null);
+      }
+      // Revoke this session and any other live refresh tokens for the same user.
+      await RefreshToken.updateMany(
+        { userId: stored.userId, revokedAt: null },
+        { $set: { revokedAt: new Date() } },
+      );
+    } else {
+      await RefreshToken.updateOne({ tokenHash }, { $set: { revokedAt: new Date() } });
+    }
   }
   await writeAudit({
-    actorId: user?._id,
-    actorEmail: user?.email,
+    actorId: actor?._id,
+    actorEmail: actor?.email,
     action: 'USER.LOGOUT',
     ip,
     userAgent,
