@@ -462,6 +462,8 @@ export async function ensureListIndexes() {
         { key: { userId: 1, createdAt: -1 }, name: 'list_user_created' },
         { key: { userId: 1, readAt: 1, createdAt: -1 }, name: 'list_user_read_created' },
         { key: { userId: 1, kind: 1, readAt: 1, createdAt: -1 }, name: 'list_user_kind_read' },
+        // Badge polls: unread + type fallback when kind is missing on legacy rows.
+        { key: { userId: 1, readAt: 1, type: 1, createdAt: -1 }, name: 'list_user_read_type' },
         { key: { userId: 1, groupKey: 1, readAt: 1 }, name: 'group_user_key_read' },
         { key: { userId: 1, archivedAt: 1, createdAt: -1 }, name: 'list_user_archived' },
       ],

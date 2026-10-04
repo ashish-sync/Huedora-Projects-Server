@@ -2,8 +2,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   applyInformationalFilter,
+  buildBadgeApprovalClause,
   buildCategoryClause,
   buildListFilter,
+  buildUnreadBadgeFilter,
   passesCategorySafety,
   resolveNotificationKind,
 } from './notificationQuery.js';
@@ -42,6 +44,21 @@ describe('notificationQuery', () => {
     assert.equal(filter.userId, 'user-1');
     assert.equal(filter.readAt, null);
     assert.ok(Array.isArray(filter.$and));
+    assert.ok(filter.$and.some((part) => part.$or?.some((o) => o.kind === 'approval')));
+  });
+
+  it('badge approval clause omits title regex for index use', () => {
+    const clause = buildBadgeApprovalClause();
+    assert.ok(clause.$or.some((part) => part.kind === 'approval'));
+    assert.ok(clause.$or.every((part) => !part.title));
+    const listClause = buildCategoryClause('approvals');
+    assert.ok(listClause.$or.some((part) => part.title?.$regex));
+  });
+
+  it('builds unread badge filter with kind/type only', () => {
+    const filter = buildUnreadBadgeFilter('user-1', 'approvals');
+    assert.equal(filter.userId, 'user-1');
+    assert.equal(filter.readAt, null);
     assert.ok(filter.$and.some((part) => part.$or?.some((o) => o.kind === 'approval')));
   });
 

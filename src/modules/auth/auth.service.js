@@ -242,12 +242,19 @@ export async function refresh({ refreshToken, ip, userAgent, requestId }) {
 
 export async function logout({ refreshToken, user, ip, userAgent, requestId }) {
   let actor = user || null;
+  let userId = actor?._id || null;
+
   if (refreshToken) {
     const tokenHash = hashToken(refreshToken);
     const stored = await RefreshToken.findOne({ tokenHash });
     if (stored) {
+      userId = stored.userId || userId;
       if (!actor && stored.userId) {
-        actor = await User.findOne({ _id: stored.userId }).catch(() => null);
+        try {
+          actor = await User.findOne({ _id: stored.userId });
+        } catch {
+          actor = null;
+        }
       }
       // Revoke this session and any other live refresh tokens for the same user.
       await RefreshToken.updateMany(
@@ -257,9 +264,37 @@ export async function logout({ refreshToken, user, ip, userAgent, requestId }) {
     } else {
       await RefreshToken.updateOne({ tokenHash }, { $set: { revokedAt: new Date() } });
     }
+  } else if (userId) {
+    // Bearer-only logout (refresh cookie missing from the request): still kill sessions.
+    await RefreshToken.updateMany(
+      { userId, revokedAt: null },
+      { $set: { revokedAt: new Date() } },
+    );
   }
+
+  // Invalidate access JWTs + auth cache so a late refresh/login race cannot linger.
+  if (userId) {
+    let fresh = null;
+    try {
+      fresh = await User.findOne({ _id: userId });
+    } catch {
+      fresh = null;
+    }
+    if (fresh) {
+      actor = actor || fresh;
+      fresh.tokenVersion = (fresh.tokenVersion || 0) + 1;
+      await fresh.save();
+      try {
+        const { invalidateAuthCache } = await import('../../middleware/auth.js');
+        invalidateAuthCache(userId);
+      } catch {
+        /* cache module optional in isolated tests */
+      }
+    }
+  }
+
   await writeAudit({
-    actorId: actor?._id,
+    actorId: actor?._id || userId,
     actorEmail: actor?.email,
     action: 'USER.LOGOUT',
     ip,

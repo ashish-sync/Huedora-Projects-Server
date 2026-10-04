@@ -12,18 +12,15 @@ import {
   buildCategoryClause,
   buildInboxBaseFilter,
   buildListFilter,
+  buildUnreadBadgeFilter,
   passesCategorySafety,
   serializeNotification,
 } from './notificationQuery.js';
+import { shouldReturnNotModified, weakUnreadEtag } from './unreadCountBadge.js';
 
 const router = Router();
 router.use(authenticate);
 router.use(requirePermission(PERMISSIONS.NOTIFICATIONS_READ));
-
-async function countForCategory(userId, category, query = {}) {
-  const filter = buildListFilter(userId, { ...query, category, unread: 'true' });
-  return Notification.countDocuments(filter);
-}
 
 router.get(
   '/',
@@ -59,28 +56,33 @@ router.get(
 /**
  * Lightweight poll for Layout badge.
  * Badge `count` = actionable Approvals only (Updates/FYI do not inflate the red number).
- * Archive/delivery run on boot — not on every 90s poll.
+ * Uses kind/type filters (index-friendly) + ETag so unchanged polls can 304.
  */
 router.get(
   '/unread-count',
   asyncHandler(async (req, res) => {
     const userId = req.user._id;
-    const baseQuery = { unread: 'true' };
+    const approvalFilter = buildUnreadBadgeFilter(userId, 'approvals');
+    // FYI bucket includes informational notices (bell “FYI / Notifications”).
+    const fyiFilter = buildUnreadBadgeFilter(userId, 'updates', { informational: '1' });
 
-    const [approvals, fyi] = await Promise.all([
-      countForCategory(userId, 'approvals', baseQuery),
-      // FYI bucket includes informational notices (bell “FYI / Notifications”).
-      countForCategory(userId, 'updates', { ...baseQuery, informational: '1' }),
+    const [approvals, fyi, sample] = await Promise.all([
+      Notification.countDocuments(approvalFilter),
+      Notification.countDocuments(fyiFilter),
+      Notification.find(approvalFilter)
+        .sort({ createdAt: -1 })
+        .limit(8)
+        .select('_id'),
     ]);
 
-    const sample = await Notification.find(
-      buildListFilter(userId, { ...baseQuery, category: 'approvals' })
-    )
-      .sort({ createdAt: -1 })
-      .limit(20)
-      .select('_id');
-
     const sampleIds = sample.map((n) => String(n._id));
+    const etag = weakUnreadEtag(approvals, fyi, sampleIds);
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, no-cache');
+
+    if (shouldReturnNotModified(req.headers['if-none-match'], etag)) {
+      return res.status(304).end();
+    }
 
     res.json({
       data: {

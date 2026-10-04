@@ -68,6 +68,41 @@ export function buildInboxBaseFilter(userId, query = {}, { now = new Date() } = 
  * Approvals vs Updates. Uses top-level `kind` when present; falls back to type/title
  * for legacy rows written before kind was persisted.
  */
+/**
+ * Index-friendly approval clause for badge/count polls.
+ * Omits title regex (cannot use indexes) — list views still use buildCategoryClause.
+ */
+export function buildBadgeApprovalClause() {
+  return {
+    $or: [
+      { kind: 'approval' },
+      { 'meta.kind': 'approval' },
+      { type: { $in: [...APPROVAL_REQUEST_TYPES] } },
+    ],
+  };
+}
+
+/** Index-friendly updates/FYI clause for badge polls (no title regex). */
+export function buildBadgeUpdatesClause() {
+  return {
+    $and: [
+      { kind: { $ne: 'approval' } },
+      { type: { $nin: [...APPROVAL_REQUEST_TYPES] } },
+    ],
+  };
+}
+
+/** Unread inbox filter for Layout badge — prefers kind/type indexes over title regex. */
+export function buildUnreadBadgeFilter(userId, bucket, query = {}, { now = new Date() } = {}) {
+  const filter = buildInboxBaseFilter(userId, { ...query, unread: 'true' }, { now });
+  const clause = bucket === 'approvals' ? buildBadgeApprovalClause() : buildBadgeUpdatesClause();
+  filter.$and = [...(filter.$and || []), clause];
+  if (bucket === 'updates') {
+    applyInformationalFilter(filter, query, 'updates');
+  }
+  return filter;
+}
+
 export function buildCategoryClause(category) {
   const cat = String(category || '').trim().toLowerCase();
   if (!cat || cat === 'all') return null;

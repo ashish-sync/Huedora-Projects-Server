@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import * as authService from './auth.service.js';
 import { authenticate } from '../../middleware/auth.js';
@@ -104,25 +105,54 @@ router.post(
   refreshLimiter,
   asyncHandler(async (req, res) => {
     const refreshToken = req.cookies.refreshToken || req.body.refreshToken;
-    const result = await authService.refresh({
-      refreshToken,
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-      requestId: req.requestId,
-    });
-    setRefreshCookie(res, result.refreshToken);
-    res.json({ data: { accessToken: result.accessToken, user: result.user } });
+    try {
+      const result = await authService.refresh({
+        refreshToken,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+        requestId: req.requestId,
+      });
+      setRefreshCookie(res, result.refreshToken);
+      res.json({ data: { accessToken: result.accessToken, user: result.user } });
+    } catch (err) {
+      // Drop stale/revoked cookies so a page reload cannot keep retrying them.
+      clearRefreshCookie(res);
+      throw err;
+    }
   })
 );
+
+async function resolveLogoutActor(req) {
+  if (req.user) return req.user;
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  if (!token) return null;
+  try {
+    const payload = jwt.verify(token, env.jwtAccessSecret);
+    if (!payload?.sub) return null;
+    // Accept even when tokenVersion already drifted — we only need the user id to revoke.
+    return await User.findOne({ _id: payload.sub, isDeleted: false });
+  } catch {
+    // Expired access tokens are still useful for identifying whom to revoke.
+    try {
+      const payload = jwt.verify(token, env.jwtAccessSecret, { ignoreExpiration: true });
+      if (!payload?.sub) return null;
+      return await User.findOne({ _id: payload.sub, isDeleted: false });
+    } catch {
+      return null;
+    }
+  }
+}
 
 router.post(
   '/logout',
   // Do not require Bearer auth — the client clears the access token before calling
-  // logout for a snappy UI. Revocation + cookie clear must still run via refresh cookie.
+  // logout for a snappy UI. Prefer refresh cookie; fall back to optional Bearer.
   asyncHandler(async (req, res) => {
+    const user = await resolveLogoutActor(req);
     await authService.logout({
       refreshToken: req.cookies.refreshToken || req.body?.refreshToken,
-      user: req.user,
+      user,
       ip: req.ip,
       userAgent: req.headers['user-agent'],
       requestId: req.requestId,
