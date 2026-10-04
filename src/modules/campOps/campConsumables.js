@@ -40,15 +40,9 @@ export function mergeConsumablesWithTemplate(mapped = [], existing = []) {
   });
 }
 
-export function getConsumablesCompletionBlockers(mapped = [], rows = []) {
-  if (!Array.isArray(mapped) || !mapped.length) return [];
-  const rowsById = Object.fromEntries((rows || []).map((row) => [String(row.productId), row]));
-  return mapped
-    .filter((item) => {
-      const row = rowsById[String(item.productId)] || {};
-      return !row.excluded && !isConsumableRowComplete(row);
-    })
-    .map((item) => `Enter usage and wastage for ${item.itemName || 'consumable'}`);
+/** Consumables Used is optional — never block submit / Mark Complete / finance. */
+export function getConsumablesCompletionBlockers(_mapped = [], _rows = []) {
+  return [];
 }
 
 export function normalizeConsumablesUsed(rows = [], { requiredProductIds = [] } = {}) {
