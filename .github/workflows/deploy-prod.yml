@@ -70,19 +70,53 @@ jobs:
         run: |
           set -euo pipefail
           missing=()
-          [[ -n "${PROD_SSH_HOST}" ]] || missing+=("PROD_SSH_HOST")
-          [[ -n "${PROD_SERVER_USER}" ]] || missing+=("PROD_SERVER_USER")
-          [[ -n "${PROD_SERVER_SSH_KEY}" ]] || missing+=("PROD_SERVER_SSH_KEY")
+          [[ -n "${PROD_SSH_HOST//[[:space:]]/}" ]] || missing+=("PROD_SSH_HOST")
+          [[ -n "${PROD_SERVER_USER//[[:space:]]/}" ]] || missing+=("PROD_SERVER_USER")
+          [[ -n "${PROD_SERVER_SSH_KEY//[[:space:]]/}" ]] || missing+=("PROD_SERVER_SSH_KEY")
           if [[ ${#missing[@]} -gt 0 ]]; then
             echo "Missing GitHub secret(s): ${missing[*]}"
-            echo "Add them to the prod environment on ashish-sync/Huedora-Projects-Server (PROD_SSH_HOST, PROD_SERVER_USER, PROD_SERVER_SSH_KEY)."
+            echo "Add them under Settings → Environments → prod on ashish-sync/Huedora-Projects-Server"
+            echo "(PROD_SSH_HOST, PROD_SERVER_USER, PROD_SERVER_SSH_KEY)."
             exit 1
           fi
+
+          # Trim host/user; keep the key body intact aside from CR stripping / literal \n repair.
+          PROD_SSH_HOST="$(printf '%s' "${PROD_SSH_HOST}" | tr -d '[:space:]')"
+          PROD_SERVER_USER="$(printf '%s' "${PROD_SERVER_USER}" | tr -d '[:space:]')"
+          echo "Configuring SSH for ${PROD_SERVER_USER}@${PROD_SSH_HOST}"
+
           install -m 700 -d "${HOME}/.ssh"
-          printf '%s\n' "${PROD_SERVER_SSH_KEY}" | tr -d '\r' > "${HOME}/.ssh/prod_deploy_key"
-          chmod 600 "${HOME}/.ssh/prod_deploy_key"
-          ssh-keyscan -H "${PROD_SSH_HOST}" >> "${HOME}/.ssh/known_hosts"
+          KEY_FILE="${HOME}/.ssh/prod_deploy_key"
+          # Support secrets pasted with literal \n sequences (common GitHub UI paste issue).
+          printf '%s\n' "${PROD_SERVER_SSH_KEY}" \
+            | tr -d '\r' \
+            | sed 's/\\n/\n/g' \
+            > "${KEY_FILE}"
+          chmod 600 "${KEY_FILE}"
+          if ! grep -qE 'BEGIN .*PRIVATE KEY' "${KEY_FILE}"; then
+            echo "PROD_SERVER_SSH_KEY does not look like a PEM/OpenSSH private key."
+            echo "Paste the full key including BEGIN/END lines into the prod environment secret."
+            exit 1
+          fi
+          if ! grep -qE 'END .*PRIVATE KEY' "${KEY_FILE}"; then
+            echo "PROD_SERVER_SSH_KEY is missing the END PRIVATE KEY line (truncated paste)."
+            exit 1
+          fi
+
+          echo "Scanning host keys for ${PROD_SSH_HOST} (TCP/22)…"
+          if ! ssh-keyscan -T 15 -H "${PROD_SSH_HOST}" >> "${HOME}/.ssh/known_hosts" 2>ssh-keyscan.err; then
+            echo "ssh-keyscan failed for host '${PROD_SSH_HOST}'."
+            echo "Check: DNS, VPS up, port 22 open to GitHub Actions, and PROD_SSH_HOST value."
+            sed -n '1,40p' ssh-keyscan.err || true
+            exit 1
+          fi
+          if [[ ! -s "${HOME}/.ssh/known_hosts" ]]; then
+            echo "ssh-keyscan produced an empty known_hosts for '${PROD_SSH_HOST}'."
+            sed -n '1,40p' ssh-keyscan.err || true
+            exit 1
+          fi
           chmod 600 "${HOME}/.ssh/known_hosts"
+          echo "SSH configured."
 
       - name: Check Prod env file on VPS
         env:
