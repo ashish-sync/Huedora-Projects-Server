@@ -50,6 +50,7 @@ import {
   CampOpsCampaign,
   CampOpsImportTemplate,
   CampOpsExportTemplate,
+  CampOpsExecutionInvite,
 } from './campOps.model.js';
 import { LogisticsProduct, LogisticsUom, LogisticsExpenseSubCategory } from '../logistics/logistics.model.js';
 import { Contact } from '../contacts/contact.model.js';
@@ -255,6 +256,7 @@ import {
 } from '../../storage/executionDocDirectUpload.js';
 import { EXEC_DOC_MAX_FILES_PER_REQUEST } from '../../storage/media/uploadLimits.js';
 import { logMemory } from '../../utils/memory.js';
+import { createOrRefreshExecutionInvite } from './campExecute.service.js';
 
 const campUploadRoot = uploadDir('camp-ops');
 const CAMP_DOC_MAX_BYTES = 10 * 1024 * 1024;
@@ -1556,6 +1558,65 @@ router.delete(
     await audit(req, 'camp_ops.execution_docs_delete', 'camp_ops_camp', camp._id, before, camp.toObject());
     res.json({ data: enrichCamp(camp) });
   })
+);
+
+/** Mint a camp-specific secure link for the mobile executor form (does not Mark Complete). */
+router.post(
+  '/camps/:id/execution-link',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const camp = await loadCampForUser(req, req.params.id);
+    if (!canEditLifecycleStage(camp, 'execution', { isAdmin: isCampAdmin(req) })) {
+      throw new AppError('Execution link is available once the camp is in Execution', 400, 'VALIDATION_ERROR');
+    }
+    if (String(camp.executorFormStatus || '') === 'submitted') {
+      throw new AppError('Executor form already submitted for this camp', 409, 'LINK_SUBMITTED');
+    }
+    const a = actor(req);
+    const { url, path: linkPath, expiresAt, token } = await createOrRefreshExecutionInvite(camp, a);
+    await audit(req, 'camp_ops.execution_link_mint', 'camp_ops_camp', camp._id, null, {
+      campId: camp.campId,
+      expiresAt,
+    });
+    res.json({
+      data: {
+        url,
+        path: linkPath,
+        expiresAt,
+        // Token only returned at mint time so staff can copy the link.
+        token,
+        executorFormStatus: camp.executorFormStatus || '',
+      },
+    });
+  }),
+);
+
+router.get(
+  '/camps/:id/execution-link',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const camp = await loadCampForUser(req, req.params.id);
+    const invite = await CampOpsExecutionInvite.findOne({
+      campRefId: camp._id,
+      status: { $in: ['PENDING', 'SUBMITTED'] },
+    });
+    res.json({
+      data: {
+        executorFormStatus: camp.executorFormStatus || '',
+        executorSubmittedAt: camp.executorSubmittedAt || null,
+        invite: invite
+          ? {
+            status: invite.status,
+            expiresAt: invite.expiresAt,
+            submittedAt: invite.submittedAt,
+            // Raw token is not recoverable after mint.
+            hasActiveLink: invite.status === 'PENDING'
+              && (!invite.expiresAt || new Date(invite.expiresAt).getTime() > Date.now()),
+          }
+          : null,
+      },
+    });
+  }),
 );
 
 router.post(

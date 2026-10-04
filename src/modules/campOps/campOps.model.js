@@ -77,6 +77,17 @@ export const CampOpsCamp = defineCollection('camp_ops_camps', {
   labCoat: '',
   rxCount: 0,
   executionDocuments: [],
+  /** Secure-link executor form: draft | submitted (staff still Mark Complete separately). */
+  executorFormStatus: '',
+  executorSubmittedAt: null,
+  executorGps: {
+    latitude: null,
+    longitude: null,
+    accuracy: null,
+    withinRadius: null,
+    distanceMeters: null,
+    capturedAt: null,
+  },
   executionCaptured: {
     chargeableStatus: '',
     inTime: '',
@@ -292,4 +303,18 @@ export const CampOpsParserAudit = defineCollection('camp_ops_parser_audit', {
   timestamp: '',
   actorId: null,
   actorEmail: '',
+});
+
+/** Hashed secure link for field Camp Execution capture (not Mark Complete). */
+export const CampOpsExecutionInvite = defineCollection('camp_ops_execution_invites', {
+  campRefId: null,
+  campId: '',
+  tokenHash: '',
+  status: 'PENDING', // PENDING | SUBMITTED | REVOKED
+  expiresAt: null,
+  submittedAt: null,
+  lastDraftAt: null,
+  createdById: null,
+  createdByEmail: '',
+  revokedAt: null,
 });
