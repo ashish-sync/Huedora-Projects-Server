@@ -256,7 +256,12 @@ import {
 } from '../../storage/executionDocDirectUpload.js';
 import { EXEC_DOC_MAX_FILES_PER_REQUEST } from '../../storage/media/uploadLimits.js';
 import { logMemory } from '../../utils/memory.js';
-import { createOrRefreshExecutionInvite } from './campExecute.service.js';
+import {
+  canMintExecutionActivityLink,
+  createOrRefreshExecutionInvite,
+  isExecutionInviteExpiredForCamp,
+  resolveExecutionInviteExpiresAt,
+} from './campExecute.service.js';
 
 const campUploadRoot = uploadDir('camp-ops');
 const CAMP_DOC_MAX_BYTES = 10 * 1024 * 1024;
@@ -1440,6 +1445,15 @@ router.post(
         existingNames: usedNames,
         index,
         campScope: camp.campId || camp._id,
+        isTaken: ({ storedName: candidate }) => {
+          const finalPath = path.join(campUploadRoot, candidate);
+          if (!fs.existsSync(finalPath)) return false;
+          const owned = existing.some(
+            (doc) => doc.storedName === candidate || doc.fileName === candidate,
+          );
+          // Owned → replace below. Orphaned/foreign → bump name.
+          return !owned;
+        },
       });
       usedNames.push(displayName, storedName);
 
@@ -1566,11 +1580,15 @@ router.post(
   canRequest,
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
-    if (!canEditLifecycleStage(camp, 'execution', { isAdmin: isCampAdmin(req) })) {
-      throw new AppError('Execution link is available once the camp is in Execution', 400, 'VALIDATION_ERROR');
-    }
-    if (String(camp.executorFormStatus || '') === 'submitted') {
-      throw new AppError('Executor form already submitted for this camp', 409, 'LINK_SUBMITTED');
+    if (!canMintExecutionActivityLink(camp)) {
+      if (String(camp.executorFormStatus || '') === 'submitted') {
+        throw new AppError('Executor form already submitted for this camp', 409, 'LINK_SUBMITTED');
+      }
+      throw new AppError(
+        'Activity form link is available once the camp is assigned',
+        400,
+        'VALIDATION_ERROR',
+      );
     }
     const a = actor(req);
     const { url, path: linkPath, expiresAt, token } = await createOrRefreshExecutionInvite(camp, a);
@@ -1600,6 +1618,8 @@ router.get(
       campRefId: camp._id,
       status: { $in: ['PENDING', 'SUBMITTED'] },
     });
+    const campExpiresAt = resolveExecutionInviteExpiresAt(camp);
+    const effectiveExpiresAt = campExpiresAt?.toISOString?.() || invite?.expiresAt || null;
     res.json({
       data: {
         executorFormStatus: camp.executorFormStatus || '',
@@ -1607,10 +1627,11 @@ router.get(
         invite: invite
           ? {
             status: invite.status,
-            expiresAt: invite.expiresAt,
+            expiresAt: effectiveExpiresAt,
             submittedAt: invite.submittedAt,
             // Raw token is not recoverable after mint.
             hasActiveLink: invite.status === 'PENDING'
+              && !isExecutionInviteExpiredForCamp(camp)
               && (!invite.expiresAt || new Date(invite.expiresAt).getTime() > Date.now()),
           }
           : null,

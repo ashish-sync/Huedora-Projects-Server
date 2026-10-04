@@ -803,8 +803,9 @@ export function applyAssignmentStageOutcome(camp, body = {}, now = new Date()) {
 
 export function isAssignedForExecutionAdvance(camp = {}) {
   if (['cancelled', 'rejected'].includes(localTrim(camp?.status))) return false;
-  if (localTrim(camp?.assignmentDecision) !== 'assign') return false;
+  // Prefer status — older rows / list DTOs may omit assignmentDecision.
   if (localTrim(camp?.assignmentStatus) === 'Assigned') return true;
+  if (localTrim(camp?.assignmentDecision) !== 'assign') return false;
   return Boolean(localTrim(camp?.hcwContactId) || localTrim(camp?.hcwName));
 }
 

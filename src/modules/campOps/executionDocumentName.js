@@ -92,6 +92,8 @@ export function buildExecutionDocumentFileName({
   existingNames = [],
   index = 0,
   campScope = '',
+  /** Optional: return true when a candidate is still occupied (e.g. orphaned disk file). */
+  isTaken = null,
 } = {}) {
   const base = buildExecutionDocumentBaseName({ doctorName, docType });
   const ext = fileExtension(originalName);
@@ -110,7 +112,11 @@ export function buildExecutionDocumentFileName({
     const suffix = attempt === 0 ? '' : `-${attempt + 1}`;
     const logical = `${base}${suffix}${ext}`;
     const candidate = scope ? `${scope}__${logical}` : logical;
-    if (!taken.has(candidate.toLowerCase()) && !taken.has(logical.toLowerCase())) {
+    const metaTaken = taken.has(candidate.toLowerCase()) || taken.has(logical.toLowerCase());
+    const externalTaken = !metaTaken
+      && typeof isTaken === 'function'
+      && Boolean(isTaken({ fileName: logical, storedName: candidate }));
+    if (!metaTaken && !externalTaken) {
       return { fileName: logical, storedName: candidate };
     }
     attempt += 1;

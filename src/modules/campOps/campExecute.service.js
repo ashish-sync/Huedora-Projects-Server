@@ -8,8 +8,10 @@ import {
 } from './campOps.model.js';
 import {
   EXECUTION_DOC_TYPES,
+  isAssignedForExecutionAdvance,
   normalizeExecutionDocType,
 } from './campOps.lifecycle.js';
+import { getCampStartDateTime } from './campOps.helpers.js';
 import {
   getConsumablesCompletionBlockers,
   normalizeConsumablesUsed,
@@ -17,7 +19,12 @@ import {
 import { resolveMappedConsumablesForCamp } from './clientMasterConsumables.js';
 
 export const EXECUTOR_GPS_RADIUS_M = 250;
-export const EXECUTION_INVITE_TTL_DAYS = 14;
+/** Activity Form links auto-disable this many hours after camp start time. */
+export const EXECUTION_INVITE_HOURS_AFTER_START = 72;
+
+/** Unambiguous URL-safe alphabet for short Activity Form links (~59 bits at length 10). */
+const SHORT_TOKEN_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+export const EXECUTION_INVITE_TOKEN_LENGTH = 10;
 
 export function hashExecutionToken(raw) {
   const token = String(raw || '');
@@ -25,8 +32,18 @@ export function hashExecutionToken(raw) {
   return createHash('sha256').update(token).digest('hex');
 }
 
-export function mintExecutionToken() {
-  return randomBytes(32).toString('base64url');
+/**
+ * Short public invite token for /e/:token share links.
+ * Stored only as SHA-256 hash; old long base64url tokens remain valid.
+ */
+export function mintExecutionToken(length = EXECUTION_INVITE_TOKEN_LENGTH) {
+  const size = Math.max(6, Math.min(32, Number(length) || EXECUTION_INVITE_TOKEN_LENGTH));
+  const bytes = randomBytes(size);
+  let token = '';
+  for (let i = 0; i < size; i += 1) {
+    token += SHORT_TOKEN_ALPHABET[bytes[i] % SHORT_TOKEN_ALPHABET.length];
+  }
+  return token;
 }
 
 /** Haversine distance in meters. */
@@ -164,6 +181,30 @@ export function publicExecutionContext(invite, camp, mappedConsumables = []) {
   };
 }
 
+/**
+ * Link expiry = camp start datetime + 72 hours.
+ * @returns {Date|null}
+ */
+export function resolveExecutionInviteExpiresAt(camp, now = new Date()) {
+  const start = getCampStartDateTime(camp);
+  if (!start) return null;
+  return new Date(start.getTime() + EXECUTION_INVITE_HOURS_AFTER_START * 60 * 60 * 1000);
+}
+
+export function isExecutionInviteExpiredForCamp(camp, now = new Date()) {
+  const expiresAt = resolveExecutionInviteExpiresAt(camp, now);
+  if (!expiresAt) return false;
+  return expiresAt.getTime() <= now.getTime();
+}
+
+async function revokeExpiredInvite(invite) {
+  if (!invite || invite.status !== 'PENDING') return invite;
+  invite.status = 'REVOKED';
+  invite.revokedAt = new Date().toISOString();
+  await invite.save();
+  return invite;
+}
+
 export async function resolveExecutionInvite(rawToken) {
   const tokenHash = hashExecutionToken(rawToken);
   const invite = tokenHash
@@ -171,26 +212,33 @@ export async function resolveExecutionInvite(rawToken) {
     : null;
   if (!invite) throw new AppError('Invalid execution link', 404, 'LINK_INVALID');
 
-  if (
-    invite.status === 'PENDING'
-    && invite.expiresAt
-    && new Date(invite.expiresAt).getTime() <= Date.now()
-  ) {
-    invite.status = 'REVOKED';
-    invite.revokedAt = new Date().toISOString();
-    await invite.save();
-    throw new AppError('This execution link has expired', 410, 'LINK_EXPIRED');
-  }
-
-  if (invite.status === 'REVOKED') {
-    throw new AppError('This execution link is no longer active', 410, 'LINK_REVOKED');
-  }
-
   const camp = await CampOpsCamp.findOne({
     _id: invite.campRefId,
     isDeleted: false,
   });
   if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
+
+  const now = Date.now();
+  const campExpiresAt = resolveExecutionInviteExpiresAt(camp);
+  const inviteExpired = Boolean(
+    invite.expiresAt && new Date(invite.expiresAt).getTime() <= now,
+  );
+  const campWindowExpired = Boolean(
+    campExpiresAt && campExpiresAt.getTime() <= now,
+  );
+
+  if (invite.status === 'PENDING' && (inviteExpired || campWindowExpired)) {
+    await revokeExpiredInvite(invite);
+    throw new AppError(
+      'This execution link expired 72 hours after the camp start time',
+      410,
+      'LINK_EXPIRED',
+    );
+  }
+
+  if (invite.status === 'REVOKED') {
+    throw new AppError('This execution link is no longer active', 410, 'LINK_REVOKED');
+  }
 
   return { invite, camp };
 }
@@ -213,6 +261,13 @@ export async function assertInviteEditable(invite, camp) {
   }
   if (invite.status !== 'PENDING') {
     throw new AppError('This execution link is no longer active', 410, 'LINK_REVOKED');
+  }
+  if (isExecutionInviteExpiredForCamp(camp)) {
+    throw new AppError(
+      'This execution link expired 72 hours after the camp start time',
+      410,
+      'LINK_EXPIRED',
+    );
   }
 }
 
@@ -263,7 +318,7 @@ export function executorSubmitBlockers(camp, mappedConsumables = []) {
   const types = docsByType(docs);
   if (!types.doctor_form) blockers.push('Upload Doctor Form (DF)');
   if (!types.patient_form) blockers.push('Upload Patient Form (PF)');
-  if (!types.gps_selfie) blockers.push('Upload GPS Selfie (GS)');
+  if (!types.gps_selfie) blockers.push('Capture GPS Selfie (GS)');
 
   const gps = camp.executorGps || {};
   const campHasCoords = camp.latitude !== null && camp.latitude !== undefined && camp.latitude !== ''
@@ -281,38 +336,80 @@ export function executorSubmitBlockers(camp, mappedConsumables = []) {
   return [...new Set(blockers)];
 }
 
+/** Match client Copy-details visibility: Assigned status or assign + HCW. */
+function isAssignedForActivityLink(camp = {}) {
+  if (isAssignedForExecutionAdvance(camp)) return true;
+  const status = String(camp?.assignmentStatus || '').trim();
+  if (status === 'Assigned') return true;
+  const stage = String(camp?.lifecycleStage || '').trim();
+  const hasHcw = Boolean(
+    String(camp?.hcwContactId || '').trim() || String(camp?.hcwName || '').trim(),
+  );
+  if (stage === 'execution' && hasHcw) return true;
+  return String(camp?.assignmentDecision || '').trim() === 'assign' && hasHcw;
+}
+
+/** Activity Form / executor link may be minted once HCW is assigned (for Copy details). */
+export function canMintExecutionActivityLink(camp = {}) {
+  const status = String(camp?.status || '').trim();
+  if (['cancelled', 'rejected'].includes(status)) return false;
+  if (!['approved', 'executed'].includes(status)) return false;
+  if (String(camp?.executorFormStatus || '').trim() === 'submitted') return false;
+  if (!isAssignedForActivityLink(camp)) return false;
+  if (isExecutionInviteExpiredForCamp(camp)) return false;
+  return true;
+}
+
 export async function createOrRefreshExecutionInvite(camp, actor = {}) {
+  const expiresAt = resolveExecutionInviteExpiresAt(camp);
+  if (!expiresAt) {
+    throw new AppError('Camp date and start time are required for an Activity Form link', 400, 'VALIDATION_ERROR');
+  }
+  if (expiresAt.getTime() <= Date.now()) {
+    throw new AppError(
+      'Activity Form link is disabled — more than 72 hours after camp start',
+      410,
+      'LINK_EXPIRED',
+    );
+  }
+
   const existing = await CampOpsExecutionInvite.findOne({
     campRefId: camp._id,
     status: 'PENDING',
   });
-  if (existing?.expiresAt && new Date(existing.expiresAt).getTime() > Date.now()) {
+  if (existing) {
     // Cannot recover raw token — mint a fresh one and revoke old.
-    existing.status = 'REVOKED';
-    existing.revokedAt = new Date().toISOString();
-    await existing.save();
-  } else if (existing) {
     existing.status = 'REVOKED';
     existing.revokedAt = new Date().toISOString();
     await existing.save();
   }
 
-  const token = mintExecutionToken();
-  const expiresAt = new Date();
-  expiresAt.setDate(expiresAt.getDate() + EXECUTION_INVITE_TTL_DAYS);
+  let token = '';
+  let invite = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    token = mintExecutionToken();
+    const tokenHash = hashExecutionToken(token);
+    const existingHash = await CampOpsExecutionInvite.findOne({ tokenHash });
+    if (existingHash) continue;
+    invite = await CampOpsExecutionInvite.create({
+      campRefId: camp._id,
+      campId: camp.campId || '',
+      tokenHash,
+      status: 'PENDING',
+      expiresAt: expiresAt.toISOString(),
+      createdById: actor.id || actor._id || null,
+      createdByEmail: actor.email || '',
+    });
+    break;
+  }
+  if (!invite || !token) {
+    throw new AppError('Could not create Activity Form link', 500, 'LINK_MINT_FAILED');
+  }
 
-  const invite = await CampOpsExecutionInvite.create({
-    campRefId: camp._id,
-    campId: camp.campId || '',
-    tokenHash: hashExecutionToken(token),
-    status: 'PENDING',
-    expiresAt: expiresAt.toISOString(),
-    createdById: actor.id || actor._id || null,
-    createdByEmail: actor.email || '',
-  });
-
-  const path = `/camp-execute/${token}`;
-  const url = `${String(env.clientOrigin || '').replace(/\/$/, '')}${path}`;
+  // Prefer short /e/:token for WhatsApp/share copy; /camp-execute/:token still works.
+  const path = `/e/${token}`;
+  const origin = String(env.clientOrigin || '').replace(/\/$/, '');
+  const url = origin ? `${origin}${path}` : path;
   return { invite, token, url, path, expiresAt: invite.expiresAt };
 }
 

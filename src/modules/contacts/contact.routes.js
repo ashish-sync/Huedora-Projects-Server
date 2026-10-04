@@ -72,7 +72,7 @@ router.use((req, res, next) => {
   return canReadContacts(req, res, next);
 });
 
-import { CONTACT_HEADERS, CONTACT_SAMPLE_ROWS } from './contact.excel.js';
+import { buildContactExportRows, CONTACT_HEADERS, CONTACT_SAMPLE_ROWS } from './contact.excel.js';
 
 async function validateServiceProviderLink(payload, contactId = null) {
   if (payload.contactCategory !== 'Healthcare Worker') return;
@@ -420,25 +420,7 @@ router.get(
       res,
       'Contact_Directory.xlsx',
       CONTACT_HEADERS,
-      enriched.map((c) => [
-        c.name,
-        c.email,
-        c.contactCategory,
-        c.resourceType,
-        c.profession,
-        c.organization,
-        c.supplyCategory,
-        c.contact || c.mobile,
-        c.city,
-        c.state,
-        c.address,
-        c.pinCode,
-        c.panNumber,
-        c.ifscCode,
-        c.bankName,
-        c.accountNumber,
-        c.serviceProviderName || '',
-      ]),
+      buildContactExportRows(enriched),
       { sheetName: 'Contacts' }
     );
   })

@@ -8,7 +8,7 @@ import { writeAudit } from '../../utils/audit.js';
 import { uploadDir } from '../../config/paths.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
-import { renameLocalUpload } from '../../storage/persistUpload.js';
+import { deleteLocalUpload, renameLocalUpload } from '../../storage/persistUpload.js';
 import { finalizeExecutionDocumentUploads } from '../../storage/finalizeExecutionDocs.js';
 import { toSignedUploadUrl } from '../files/file.routes.js';
 import { buildExecutionDocumentFileName } from './executionDocumentName.js';
@@ -61,6 +61,12 @@ function withSignedDocs(context) {
   };
 }
 
+function isOwnedExecutionDocName(existing, storedName) {
+  return (existing || []).some(
+    (doc) => doc.storedName === storedName || doc.fileName === storedName,
+  );
+}
+
 async function appendExecutionDocs(camp, { files, docType, docNote }) {
   const existing = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
   const uploadedAt = new Date().toISOString();
@@ -75,14 +81,21 @@ async function appendExecutionDocs(camp, { files, docType, docNote }) {
       existingNames: usedNames,
       index,
       campScope: camp.campId || camp._id,
+      isTaken: ({ storedName: candidate }) => {
+        const finalPath = path.join(campUploadRoot, candidate);
+        if (!fs.existsSync(finalPath)) return false;
+        // Owned by this camp → allow replace (unlink happens below).
+        if (isOwnedExecutionDocName(existing, candidate)) return false;
+        // Orphaned/foreign file on disk → bump to -2, -3, …
+        return true;
+      },
     });
     usedNames.push(displayName, storedName);
 
     const tempPath = path.join(campUploadRoot, file.filename);
     const finalPath = path.join(campUploadRoot, storedName);
     if (tempPath !== finalPath && fs.existsSync(finalPath)) {
-      const owned = existing.some((doc) => doc.storedName === storedName || doc.fileName === storedName);
-      if (!owned) {
+      if (!isOwnedExecutionDocName(existing, storedName)) {
         throw new AppError(
           `Execution document name conflict for ${displayName}`,
           409,
@@ -229,6 +242,10 @@ router.delete(
     const fileId = String(req.params.fileId || '').trim();
     const before = camp.toObject();
     const docs = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
+    const removed = docs.find((doc) => {
+      const id = String(doc.fileId || doc.id || doc.storedName || doc.url || '');
+      return id === fileId;
+    });
     const next = docs.filter((doc) => {
       const id = String(doc.fileId || doc.id || doc.storedName || doc.url || '');
       return id !== fileId;
@@ -239,6 +256,9 @@ router.delete(
       camp.inTimeSelfieUrl = '';
     }
     await camp.save();
+    if (removed?.storedName) {
+      await deleteLocalUpload(path.join(campUploadRoot, removed.storedName)).catch(() => {});
+    }
     await writeAudit({
       action: 'camp_ops.executor_docs_delete',
       entityType: 'camp_ops_camp',

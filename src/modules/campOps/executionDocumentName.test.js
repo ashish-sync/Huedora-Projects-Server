@@ -77,6 +77,22 @@ test('buildExecutionDocumentFileName keeps extension and avoids collisions', () 
   );
 });
 
+test('buildExecutionDocumentFileName bumps past orphaned disk names via isTaken', () => {
+  assert.deepEqual(
+    buildExecutionDocumentFileName({
+      doctorName: 'Demo Ongo Ongoing',
+      docType: 'gps_selfie',
+      originalName: 'gps-selfie.webp',
+      campScope: '26-08-0028',
+      isTaken: ({ storedName }) => storedName === '26-08-0028__DEMOONGOONGOINGGS.webp',
+    }),
+    {
+      fileName: 'DEMOONGOONGOINGGS-2.webp',
+      storedName: '26-08-0028__DEMOONGOONGOINGGS-2.webp',
+    },
+  );
+});
+
 test('stripLegacyCampDateFromExecutionName removes DDMMYYYY after doc code', () => {
   assert.equal(stripLegacyCampDateFromExecutionName('ADIPF10102026.webp'), 'ADIPF.webp');
   assert.equal(
