@@ -16,17 +16,20 @@ export const NOTIFICATION_TTL_ARCHIVE_REASON = 'notification_ttl_7d';
 
 /** @type {Record<string, { priority: string, module: string }>} */
 const EVENT_META = {
-  CAMP_REVIEW: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
+  // Camp One review queue is FYI / Updates — not reporting-manager Approvals.
+  CAMP_REVIEW: { priority: NOTIFICATION_PRIORITIES.INFORMATIONAL, module: 'camp' },
   CAMP_APPROVED: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
   CAMP_REJECTED: { priority: NOTIFICATION_PRIORITIES.CRITICAL, module: 'camp' },
   CAMP_INFO_REQUESTED: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
-  CAMP_REVIEW_OVERDUE: { priority: NOTIFICATION_PRIORITIES.CRITICAL, module: 'camp' },
+  CAMP_REVIEW_OVERDUE: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
   CAMP_EXECUTION_OVERDUE: { priority: NOTIFICATION_PRIORITIES.CRITICAL, module: 'camp' },
   CAMP_OFF_HOURS: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
   CAMP_WEEKEND_ATTENTION: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
   CAMP_BULK_SUCCESS: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
   CAMP_BULK_PARTIAL: { priority: NOTIFICATION_PRIORITIES.CRITICAL, module: 'camp' },
   CAMP_BULK_REJECT: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
+  // Short HCW gap override — reporting manager must approve (Approvals inbox).
+  CAMP_HCW_GAP_APPROVAL: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
   ASSET_REQUEST_APPROVAL: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'assets' },
   MOVEMENT_APPROVAL: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'assets' },
   VERIFICATION_CALLBACK: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'assets' },
@@ -77,25 +80,53 @@ export function canMergePriorities(existingPriority, incomingPriority) {
   return true;
 }
 
-/** Types that always mean “action required from an approver”. */
+/**
+ * Types that always mean “action required from a reporting manager” (Approvals inbox).
+ * Request One uses ASSET_REQUEST_APPROVAL / MOVEMENT_APPROVAL + “needs approval” title / kind.
+ */
 export const APPROVAL_REQUEST_TYPES = Object.freeze([
-  'CAMP_REVIEW',
-  'CAMP_REVIEW_OVERDUE',
   'PICKLIST_SUGGESTION',
+  'CAMP_HCW_GAP_APPROVAL',
 ]);
 
 /**
- * True when the inbox item is an approval/review request (not a status update).
- * Decision notices reusing *_APPROVAL types are excluded via title wording.
+ * Camp One FYI / Updates only (not reporting-manager Approvals).
+ * Keep CAMP_HCW_GAP_APPROVAL out of this list.
+ */
+export const CAMP_FYI_NOTIFICATION_TYPES = Object.freeze([
+  'CAMP_REVIEW',
+  'CAMP_APPROVED',
+  'CAMP_REJECTED',
+  'CAMP_INFO_REQUESTED',
+  'CAMP_REVIEW_OVERDUE',
+  'CAMP_EXECUTION_OVERDUE',
+  'CAMP_OFF_HOURS',
+  'CAMP_WEEKEND_ATTENTION',
+  'CAMP_BULK_SUCCESS',
+  'CAMP_BULK_PARTIAL',
+  'CAMP_BULK_REJECT',
+]);
+
+export function isCampFyiNotificationType(type) {
+  return CAMP_FYI_NOTIFICATION_TYPES.includes(String(type || '').trim().toUpperCase());
+}
+
+/**
+ * True when the inbox item is a reporting-manager approval request
+ * (Request One, picklist, HCW gap override, etc.).
+ * Routine Camp One “needs review” notices are FYI even on legacy rows.
  */
 export function isApprovalRequestNotification(n = {}) {
+  const type = String(n?.type || '').trim().toUpperCase();
+  if (isCampFyiNotificationType(type)) return false;
+
   if (String(n?.meta?.kind || n?.kind || '').toLowerCase() === 'approval') return true;
   if (String(n?.meta?.kind || n?.kind || '').toLowerCase() === 'update') return false;
 
-  const type = String(n?.type || '').trim().toUpperCase();
   if (APPROVAL_REQUEST_TYPES.includes(type)) return true;
 
   const title = String(n?.title || '').toLowerCase();
+  if (/reporting manager/.test(title) && /approval|approve/.test(title)) return true;
   if (/needs (approval|review)/i.test(title)) return true;
   if (/approval required|awaiting approval|pending approval/i.test(title)) return true;
 

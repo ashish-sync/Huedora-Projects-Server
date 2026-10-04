@@ -6,6 +6,7 @@
 import { applyArchiveListFilter } from '../retention/archivePolicy.js';
 import {
   APPROVAL_REQUEST_TYPES,
+  CAMP_FYI_NOTIFICATION_TYPES,
   isApprovalRequestNotification,
 } from './notificationCatalog.js';
 
@@ -72,12 +73,21 @@ export function buildInboxBaseFilter(userId, query = {}, { now = new Date() } = 
  * Index-friendly approval clause for badge/count polls.
  * Omits title regex (cannot use indexes) — list views still use buildCategoryClause.
  */
+const CAMP_FYI_TYPE_CLAUSE = { type: { $in: [...CAMP_FYI_NOTIFICATION_TYPES] } };
+const NOT_CAMP_FYI_TYPE = { type: { $nin: [...CAMP_FYI_NOTIFICATION_TYPES] } };
+
 export function buildBadgeApprovalClause() {
+  // Exclude Camp One FYI types — even if legacy rows stored kind=approval.
   return {
-    $or: [
-      { kind: 'approval' },
-      { 'meta.kind': 'approval' },
-      { type: { $in: [...APPROVAL_REQUEST_TYPES] } },
+    $and: [
+      NOT_CAMP_FYI_TYPE,
+      {
+        $or: [
+          { kind: 'approval' },
+          { 'meta.kind': 'approval' },
+          { type: { $in: [...APPROVAL_REQUEST_TYPES] } },
+        ],
+      },
     ],
   };
 }
@@ -85,9 +95,14 @@ export function buildBadgeApprovalClause() {
 /** Index-friendly updates/FYI clause for badge polls (no title regex). */
 export function buildBadgeUpdatesClause() {
   return {
-    $and: [
-      { kind: { $ne: 'approval' } },
-      { type: { $nin: [...APPROVAL_REQUEST_TYPES] } },
+    $or: [
+      CAMP_FYI_TYPE_CLAUSE,
+      {
+        $and: [
+          { kind: { $ne: 'approval' } },
+          { type: { $nin: [...APPROVAL_REQUEST_TYPES] } },
+        ],
+      },
     ],
   };
 }
@@ -109,22 +124,32 @@ export function buildCategoryClause(category) {
 
   if (cat === 'approvals') {
     return {
-      $or: [
-        { kind: 'approval' },
-        { 'meta.kind': 'approval' },
-        { type: { $in: [...APPROVAL_REQUEST_TYPES] } },
-        { title: { $regex: APPROVAL_TITLE_RE, $options: 'i' } },
+      $and: [
+        NOT_CAMP_FYI_TYPE,
+        {
+          $or: [
+            { kind: 'approval' },
+            { 'meta.kind': 'approval' },
+            { type: { $in: [...APPROVAL_REQUEST_TYPES] } },
+            { title: { $regex: APPROVAL_TITLE_RE, $options: 'i' } },
+          ],
+        },
       ],
     };
   }
 
   if (cat === 'updates') {
-    // kind $ne approval also matches missing/null kind (legacy rows).
+    // Camp One FYI types always land in Updates. Other rows: kind $ne approval.
     // Title-based approvals without kind are dropped by passesCategorySafety on the page.
     return {
-      $and: [
-        { kind: { $ne: 'approval' } },
-        { type: { $nin: [...APPROVAL_REQUEST_TYPES] } },
+      $or: [
+        CAMP_FYI_TYPE_CLAUSE,
+        {
+          $and: [
+            { kind: { $ne: 'approval' } },
+            { type: { $nin: [...APPROVAL_REQUEST_TYPES] } },
+          ],
+        },
       ],
     };
   }

@@ -62,10 +62,10 @@ function campRequesterId(camp = {}) {
 }
 
 /**
- * Notify only Approvers/Admins relevant to the requester's reporting line
- * (managers of the requester + platform admins). Avoids flooding every Approver.
+ * Camp One review queue FYI for Approvers/Admins on the requester's reporting line
+ * (managers of the requester + platform admins). Not reporting-manager Approvals inbox.
  */
-export async function notifyCampApprovers({ camp, actorId, type, title, body }) {
+export async function notifyCampApprovers({ camp, actorId, type, title, body, priority }) {
   const roles = await Role.find({ isDeleted: false });
   const roleById = new Map(roles.map((role) => [String(role._id), role]));
   const allApprovers = await findCampApprovers(actorId);
@@ -86,8 +86,35 @@ export async function notifyCampApprovers({ camp, actorId, type, title, body }) 
     excludeActor: true,
     actor: actorId ? { _id: actorId } : null,
     module: 'camp',
+    priority,
     group: true,
-    meta: { kind: 'approval' },
+    meta: { kind: 'update' },
+  });
+}
+
+/**
+ * Short HCW schedule gap (< 30m) override → Approvals for the assigner's reporting manager(s).
+ */
+export async function notifyCampHcwGapApproval({ camp, actorId }) {
+  const assignerId = String(actorId || '').trim();
+  if (!assignerId) return [];
+  const label = camp.campId || String(camp._id || '').slice(-6);
+  const hcw = camp.hcwName || camp.hcwContactId || 'HCW';
+  return notifyEvent({
+    type: 'CAMP_HCW_GAP_APPROVAL',
+    title: `Camp ${label} needs approval — HCW gap under 30 minutes`,
+    body: `${hcw} · ${campSummary(camp)}. Short gap between same-day camps needs approval from your reporting manager.`,
+    entityType: 'camp_ops_camp',
+    entityId: camp._id,
+    recipients: [assignerId],
+    includeWatchers: false,
+    includeReportingManagers: 'chain',
+    excludeUserIds: [assignerId],
+    excludeActor: true,
+    actor: { _id: assignerId },
+    module: 'camp',
+    group: true,
+    meta: { kind: 'approval', reason: 'hcw_gap_override' },
   });
 }
 
@@ -223,8 +250,9 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
         camp,
         actorId,
         type: 'CAMP_REVIEW',
-        title: `Camp ${label} needs review`,
+        title: `Camp ${label} submitted for Camp One review`,
         body: summary,
+        priority: NOTIFICATION_PRIORITIES.INFORMATIONAL,
       });
       if (camp.submittedOffHours) {
         await notifyCoordinatorTeam({
@@ -239,7 +267,7 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
         await notifyCoordinatorTeam({
           camp,
           type: 'CAMP_WEEKEND_ATTENTION',
-          title: `Weekend camp needs attention: ${label}`,
+          title: `Weekend camp submitted: ${label}`,
           body: summary,
           excludeUserIds: [actorId],
         });
@@ -280,6 +308,7 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
         type: 'CAMP_REVIEW_OVERDUE',
         title: `Camp review overdue: ${label}`,
         body: summary,
+        priority: NOTIFICATION_PRIORITIES.IMPORTANT,
       });
       break;
     case 'execution_overdue':

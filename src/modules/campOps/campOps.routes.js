@@ -222,7 +222,11 @@ import {
   resolveClosureSelection,
   normalizeClosureType,
 } from './campOps.closure.js';
-import { notifyCampWorkflow, notifyCampBulkSummary } from './campOps.notifications.js';
+import {
+  notifyCampWorkflow,
+  notifyCampBulkSummary,
+  notifyCampHcwGapApproval,
+} from './campOps.notifications.js';
 import { computeClientMasterPoBalanceMap } from '../finance/poUtilization.service.js';
 import {
   handleEmailArchive,
@@ -1871,6 +1875,8 @@ router.put(
     }
 
     // Same HCW, same date: recommend ≥ 30m after previous camp ends (soft warning).
+    const gapOverrideWasPending = Boolean(before.hcwGapOverridePendingApproval);
+    let gapOverrideJustRaised = false;
     if (
       camp.assignmentDecision === 'assign'
       && trimStr(camp.hcwContactId)
@@ -1885,6 +1891,7 @@ router.put(
         if (gapResult?.overridden) {
           camp.hcwGapOverridePendingApproval = true;
           camp.hcwGapOverrideAcknowledgedAt = new Date().toISOString();
+          gapOverrideJustRaised = !gapOverrideWasPending;
         } else {
           camp.hcwGapOverridePendingApproval = false;
           camp.hcwGapOverrideAcknowledgedAt = null;
@@ -1965,6 +1972,13 @@ router.put(
         throw new AppError(DUPLICATE_CAMP_MESSAGE, 409, 'DUPLICATE_CAMP');
       }
       throw err;
+    }
+    if (gapOverrideJustRaised) {
+      try {
+        await notifyCampHcwGapApproval({ camp, actorId: req.user?._id || req.user?.id });
+      } catch (notifyErr) {
+        console.warn('[camp-ops] HCW gap approval notify failed:', notifyErr?.message || notifyErr);
+      }
     }
     await audit(req, 'camp_ops.update', 'camp_ops_camp', camp._id, before, camp.toObject());
     res.json({ data: enrichCamp(camp) });

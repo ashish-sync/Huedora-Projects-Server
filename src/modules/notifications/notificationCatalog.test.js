@@ -35,14 +35,30 @@ describe('notificationCatalog', () => {
   });
 
   it('detects approval-request notifications', () => {
+    // Camp One review is FYI, even with legacy “needs approval/review” titles.
     assert.equal(
-      isApprovalRequestNotification({ type: 'CAMP_REVIEW', title: 'Camp needs review' }),
-      true
+      isApprovalRequestNotification({ type: 'CAMP_REVIEW', title: 'Camp 26-08-0012 needs approval' }),
+      false
+    );
+    assert.equal(
+      isApprovalRequestNotification({
+        type: 'CAMP_REVIEW',
+        title: 'Camp needs review',
+        meta: { kind: 'approval' },
+      }),
+      false
     );
     assert.equal(
       isApprovalRequestNotification({
         type: 'ASSET_REQUEST_APPROVAL',
         title: 'Request X needs approval',
+      }),
+      true
+    );
+    assert.equal(
+      isApprovalRequestNotification({
+        type: 'CAMP_HCW_GAP_APPROVAL',
+        title: 'Camp 26-08-0012 needs approval — HCW gap under 30 minutes',
       }),
       true
     );

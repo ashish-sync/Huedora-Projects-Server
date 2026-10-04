@@ -2,14 +2,13 @@ import nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 
+import { getSystemFromEmail } from '../../../../config/systemEmail.js';
 import { getAllowedEmailDomains } from '../utils/emailParser.js';
 import { buildImapFetchQuery, describeImapFetchQuery, logEmailProcessSince } from './emailIngestSince.js';
 
 export function isEmailReplyConfigured() {
-  return Boolean(
-    process.env.EMAIL_SMTP_HOST
-    && process.env.EMAIL_SMTP_FROM
-  );
+  // From defaults to support@tylo.systems when EMAIL_SMTP_FROM is unset.
+  return Boolean(process.env.EMAIL_SMTP_HOST && getSystemFromEmail());
 }
 
 export function isEmailReplyEnabled() {
@@ -54,7 +53,7 @@ export function logEmailIngestStartup() {
   console.log(`[email] Webhook ingest ready at ${webhookUrl}`);
 
   if (isEmailReplyEnabled() && isEmailReplyConfigured()) {
-    console.log(`[email] SMTP replies enabled from ${process.env.EMAIL_SMTP_FROM}`);
+    console.log(`[email] SMTP replies enabled from ${getSystemFromEmail()}`);
   } else if (!isEmailReplyEnabled()) {
     console.log('[email] SMTP replies disabled — EMAIL_REPLY_ENABLED=false');
   } else {
@@ -142,7 +141,7 @@ export async function sendTransactionalEmail({ to, subject, text, html }) {
 
   const transport = getSmtpTransport();
   const info = await transport.sendMail({
-    from: process.env.EMAIL_SMTP_FROM,
+    from: getSystemFromEmail(),
     to,
     subject,
     text,
