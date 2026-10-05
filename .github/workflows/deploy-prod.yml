@@ -14,6 +14,9 @@
 #   PROD_SSH_HOST
 #   PROD_SERVER_USER
 #   PROD_SERVER_SSH_KEY
+# Optional:
+#   PROD_SSH_PORT          (default 22)
+#   PROD_SSH_KNOWN_HOSTS   (ssh-keyscan -H output; skips live keyscan when set)
 
 name: Deploy Prod API
 
@@ -67,6 +70,8 @@ jobs:
           PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
           PROD_SERVER_USER: ${{ secrets.PROD_SERVER_USER }}
           PROD_SERVER_SSH_KEY: ${{ secrets.PROD_SERVER_SSH_KEY }}
+          PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+          PROD_SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           missing=()
@@ -83,7 +88,9 @@ jobs:
           # Trim host/user; keep the key body intact aside from CR stripping / literal \n repair.
           PROD_SSH_HOST="$(printf '%s' "${PROD_SSH_HOST}" | tr -d '[:space:]')"
           PROD_SERVER_USER="$(printf '%s' "${PROD_SERVER_USER}" | tr -d '[:space:]')"
-          echo "Configuring SSH for ${PROD_SERVER_USER}@${PROD_SSH_HOST}"
+          PROD_SSH_PORT="$(printf '%s' "${PROD_SSH_PORT:-22}" | tr -d '[:space:]')"
+          [[ "${PROD_SSH_PORT}" =~ ^[0-9]+$ ]] || PROD_SSH_PORT=22
+          echo "Configuring SSH for ${PROD_SERVER_USER}@${PROD_SSH_HOST}:${PROD_SSH_PORT}"
 
           install -m 700 -d "${HOME}/.ssh"
           KEY_FILE="${HOME}/.ssh/prod_deploy_key"
@@ -103,16 +110,54 @@ jobs:
             exit 1
           fi
 
-          echo "Scanning host keys for ${PROD_SSH_HOST} (TCP/22)…"
-          if ! ssh-keyscan -T 15 -H "${PROD_SSH_HOST}" >> "${HOME}/.ssh/known_hosts" 2>ssh-keyscan.err; then
-            echo "ssh-keyscan failed for host '${PROD_SSH_HOST}'."
-            echo "Check: DNS, VPS up, port 22 open to GitHub Actions, and PROD_SSH_HOST value."
-            sed -n '1,40p' ssh-keyscan.err || true
-            exit 1
+          # Persist port for later ssh/rsync steps in this job.
+          echo "PROD_SSH_PORT=${PROD_SSH_PORT}" >> "${GITHUB_ENV}"
+          echo "Host ${PROD_SSH_HOST}
+            HostName ${PROD_SSH_HOST}
+            Port ${PROD_SSH_PORT}
+            User ${PROD_SERVER_USER}
+            IdentityFile ${KEY_FILE}
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+          " > "${HOME}/.ssh/config"
+          chmod 600 "${HOME}/.ssh/config"
+
+          diagnose_ssh_reachability() {
+            echo "--- SSH reachability diagnostics ---"
+            echo "Host (length=${#PROD_SSH_HOST}): ${PROD_SSH_HOST}"
+            echo "Port: ${PROD_SSH_PORT}"
+            getent ahosts "${PROD_SSH_HOST}" 2>/dev/null || true
+            getent hosts "${PROD_SSH_HOST}" 2>/dev/null || true
+            (command -v dig >/dev/null && dig +short "${PROD_SSH_HOST}" A AAAA) || true
+            if timeout 8 bash -c "echo >/dev/tcp/${PROD_SSH_HOST}/${PROD_SSH_PORT}" 2>tcp-connect.err; then
+              echo "TCP ${PROD_SSH_PORT}: open from this runner"
+            else
+              echo "TCP ${PROD_SSH_PORT}: NOT reachable from this runner (timeout/refused)."
+              sed -n '1,20p' tcp-connect.err 2>/dev/null || true
+            fi
+            echo "--- end diagnostics ---"
+          }
+
+          : > "${HOME}/.ssh/known_hosts"
+          if [[ -n "${PROD_SSH_KNOWN_HOSTS//[[:space:]]/}" ]]; then
+            echo "Using PROD_SSH_KNOWN_HOSTS secret (skipping live ssh-keyscan)."
+            printf '%s\n' "${PROD_SSH_KNOWN_HOSTS}" | tr -d '\r' >> "${HOME}/.ssh/known_hosts"
+          else
+            echo "Scanning host keys for ${PROD_SSH_HOST} (TCP/${PROD_SSH_PORT})…"
+            if ! ssh-keyscan -p "${PROD_SSH_PORT}" -T 15 -H "${PROD_SSH_HOST}" >> "${HOME}/.ssh/known_hosts" 2>ssh-keyscan.err; then
+              echo "ssh-keyscan failed for host '${PROD_SSH_HOST}' port ${PROD_SSH_PORT}."
+              echo "This is a VPS/network issue, not an app test failure."
+              echo "Check: VPS powered on, DNS for PROD_SSH_HOST, firewall allows GitHub Actions → TCP ${PROD_SSH_PORT},"
+              echo "sshd listening, and optional PROD_SSH_KNOWN_HOSTS / PROD_SSH_PORT secrets."
+              sed -n '1,40p' ssh-keyscan.err || true
+              diagnose_ssh_reachability
+              exit 1
+            fi
           fi
           if [[ ! -s "${HOME}/.ssh/known_hosts" ]]; then
-            echo "ssh-keyscan produced an empty known_hosts for '${PROD_SSH_HOST}'."
-            sed -n '1,40p' ssh-keyscan.err || true
+            echo "known_hosts is empty for '${PROD_SSH_HOST}'."
+            sed -n '1,40p' ssh-keyscan.err 2>/dev/null || true
+            diagnose_ssh_reachability
             exit 1
           fi
           chmod 600 "${HOME}/.ssh/known_hosts"
