@@ -10,14 +10,15 @@ import { buildUnreadBadgeFilter } from './notificationQuery.js';
 
 async function seedUnread(userId) {
   const now = new Date().toISOString();
+  // Use a real Approvals type (CAMP_REVIEW is FYI / Updates now).
   const row = await Notification.create({
     userId: String(userId),
-    type: 'CAMP_REVIEW',
-    title: 'Camp needs review',
+    type: 'ASSET_REQUEST_APPROVAL',
+    title: 'Hiring request HR-1 needs approval',
     body: 'test',
     kind: 'approval',
     priority: 'important',
-    module: 'camp_one',
+    module: 'assets',
     readAt: null,
     createdAt: now,
     updatedAt: now,
