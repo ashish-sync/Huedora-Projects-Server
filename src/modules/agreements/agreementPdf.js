@@ -78,7 +78,7 @@ export async function buildAgreementPdfBuffer(agreement, pdfOptions = {}) {
         filledText: plain || bodyText,
         blocks,
         pdfOptions: options,
-        allowPdfKitFallback: false,
+        allowPdfKitFallback: true,
       });
       return buffer;
     }
@@ -110,7 +110,7 @@ export async function buildAgreementPdfBuffer(agreement, pdfOptions = {}) {
           filledText: plain,
           blocks,
           pdfOptions: options,
-          allowPdfKitFallback: false,
+          allowPdfKitFallback: true,
         });
         return buffer;
       }

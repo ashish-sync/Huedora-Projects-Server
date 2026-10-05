@@ -19,6 +19,9 @@ const LIBRE_CANDIDATES = [
   'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
   '/usr/bin/soffice',
   '/usr/bin/libreoffice',
+  '/usr/lib/libreoffice/program/soffice',
+  '/snap/bin/soffice',
+  '/snap/bin/libreoffice',
   'soffice',
   'libreoffice',
 ].filter(Boolean);

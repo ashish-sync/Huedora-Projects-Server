@@ -33,7 +33,7 @@ import {
   formatTrackingInventoryBuckets,
   formatTrackingVerificationBuckets,
 } from './dashboard.aggregations.js';
-import { VerificationCampaign } from '../verifications/verification.model.js';
+import { VerificationCampaign, VerificationRecord } from '../verifications/verification.model.js';
 import { listReviewModulesForUser, runModuleReview } from './moduleReview.js';
 
 function countMap(rows) {

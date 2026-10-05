@@ -57,9 +57,15 @@ export function resolveDocumentSignature(docRow = {}) {
 
 /**
  * Draw click-to-sign block scaled to fit `w` (never overflows the signature box).
+ * Layout: NAME → Digitally signed on… → AUTHORISED SIGNATORY (brand blue).
  * @returns {number} y after drawing
  */
-export function drawClickToSignBlock(pdf, signature, x, y, w, { align = 'center', ink = '#111111' } = {}) {
+export function drawClickToSignBlock(pdf, signature, x, y, w, {
+  align = 'center',
+  ink = '#111111',
+  labelInk = '#1e3a5f',
+  showAuthorisedLabel = true,
+} = {}) {
   if (!isClickToSignSignature(signature)) return y;
   const name = normalizeSignatoryDisplayName(signature.signatoryName);
   const meta = formatDigitallySignedOn(signature.signedAt);
@@ -68,7 +74,7 @@ export function drawClickToSignBlock(pdf, signature, x, y, w, { align = 'center'
   function fitFontSize(text, fontName, minSize = 6, maxSize = 14, spacingFactor = 0.05) {
     let size = maxSize;
     pdf.font(fontName);
-    const target = boxW * 0.96;
+    const target = boxW * 0.94;
     while (size > minSize) {
       pdf.fontSize(size);
       const spacing = Math.max(0.2, size * spacingFactor);
@@ -80,24 +86,35 @@ export function drawClickToSignBlock(pdf, signature, x, y, w, { align = 'center'
     return size;
   }
 
-  // Match reference: regular-weight name + bold date, both near-black.
-  // Slight horizontal expansion via character spacing (PDFKit has no scaleX).
-  const nameSize = fitFontSize(name, 'Helvetica', 7, 15, 0.06);
-  const nameSpacing = Math.max(0.4, nameSize * 0.06);
+  const nameSize = fitFontSize(name, 'Helvetica', 7, 12, 0.04);
+  const nameSpacing = Math.max(0.25, nameSize * 0.04);
   pdf.font('Helvetica').fontSize(nameSize).fillColor(ink).text(name, x, y, {
     width: boxW,
     align,
     lineBreak: false,
     characterSpacing: nameSpacing,
   });
-  let nextY = y + nameSize + 3;
-  const metaSize = fitFontSize(meta, 'Helvetica-Bold', 6, Math.max(8, nameSize * 0.72), 0.03);
-  const metaSpacing = Math.max(0.2, metaSize * 0.03);
+  let nextY = y + nameSize + 4;
+  const metaSize = fitFontSize(meta, 'Helvetica-Bold', 6, Math.max(7.5, nameSize * 0.75), 0.02);
+  const metaSpacing = Math.max(0.15, metaSize * 0.02);
   pdf.font('Helvetica-Bold').fontSize(metaSize).fillColor(ink).text(meta, x, nextY, {
     width: boxW,
     align,
     lineBreak: false,
     characterSpacing: metaSpacing,
   });
-  return nextY + metaSize + 2;
+  nextY += metaSize + 2;
+
+  if (showAuthorisedLabel) {
+    nextY += 10;
+    pdf.font('Helvetica-Bold').fontSize(8).fillColor(labelInk).text('AUTHORISED SIGNATORY', x, nextY, {
+      width: boxW,
+      align,
+      lineBreak: false,
+      characterSpacing: 0.45,
+    });
+    nextY += 10;
+  }
+
+  return nextY;
 }

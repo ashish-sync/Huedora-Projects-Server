@@ -692,7 +692,7 @@ router.post(
           showSignatures: signingType === 'SIGNING',
           senderSample: tpl.defaultSenderSignature?.name || 'Sender',
         },
-        allowPdfKitFallback: !(tpl.sourceType === 'DOCX' && filledDocxBuffer),
+        allowPdfKitFallback: true,
       }));
     } catch (err) {
       if (err instanceof PdfEngineUnavailableError) {

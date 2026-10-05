@@ -714,6 +714,7 @@ function drawDocumentFooter(pdf, margin, y, contentWidth, docRow, org) {
     drawClickToSignBlock(pdf, signature, sigX + 8, y + 46, colW - 16, {
       align: 'center',
       ink: '#2b2b2b',
+      showAuthorisedLabel: false,
     });
   } else {
     pdf
