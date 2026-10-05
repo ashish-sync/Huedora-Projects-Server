@@ -22,6 +22,6 @@ export const Notification = defineCollection('notifications', {
   changes: [],
   /** Inbox bucket: approval | update (persisted for fast filtering). */
   kind: 'update',
-  /** Set when soft-archived by 7-day notification TTL. */
+  /** Legacy soft-archive stamp (TTL now hard-deletes eligible rows). */
   autoArchivedAt: null,
 });

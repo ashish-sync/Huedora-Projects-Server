@@ -10,9 +10,24 @@ export const NOTIFICATION_PRIORITIES = Object.freeze({
 });
 
 export const GROUP_WINDOW_MS = 5 * 60 * 1000;
-export const NOTIFICATION_TTL_DAYS = 7;
-export const NOTIFICATION_TTL_MS = NOTIFICATION_TTL_DAYS * 24 * 60 * 60 * 1000;
-export const NOTIFICATION_TTL_ARCHIVE_REASON = 'notification_ttl_7d';
+
+/** FYI / Updates — auto-delete after this age (any read state). */
+export const NOTIFICATION_FYI_TTL_DAYS = 7;
+export const NOTIFICATION_FYI_TTL_MS = NOTIFICATION_FYI_TTL_DAYS * 24 * 60 * 60 * 1000;
+
+/**
+ * Approvals — auto-delete after this age only when already read or actioned.
+ * Unread / unactioned approvals are kept until the manager handles them.
+ */
+export const NOTIFICATION_APPROVAL_TTL_DAYS = 14;
+export const NOTIFICATION_APPROVAL_TTL_MS =
+  NOTIFICATION_APPROVAL_TTL_DAYS * 24 * 60 * 60 * 1000;
+
+/** @deprecated Use NOTIFICATION_FYI_TTL_* — kept for older imports/tests. */
+export const NOTIFICATION_TTL_DAYS = NOTIFICATION_FYI_TTL_DAYS;
+export const NOTIFICATION_TTL_MS = NOTIFICATION_FYI_TTL_MS;
+export const NOTIFICATION_TTL_ARCHIVE_REASON = 'notification_ttl_fyi_7d';
+export const NOTIFICATION_APPROVAL_TTL_REASON = 'notification_ttl_approval_14d_read';
 
 /** @type {Record<string, { priority: string, module: string }>} */
 const EVENT_META = {

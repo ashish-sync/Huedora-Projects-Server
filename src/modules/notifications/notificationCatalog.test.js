@@ -6,6 +6,8 @@ import {
   resolveEventMeta,
   isApprovalRequestNotification,
   NOTIFICATION_PRIORITIES,
+  NOTIFICATION_FYI_TTL_DAYS,
+  NOTIFICATION_APPROVAL_TTL_DAYS,
   NOTIFICATION_TTL_DAYS,
 } from './notificationCatalog.js';
 import { buildAuditChanges, mergeChangeLists, summarizeChanges } from './fieldDiff.js';
@@ -30,7 +32,9 @@ describe('notificationCatalog', () => {
     assert.equal(canMergePriorities('important', 'informational'), true);
   });
 
-  it('uses 7-day TTL', () => {
+  it('uses FYI 7-day and Approvals 14-day TTLs', () => {
+    assert.equal(NOTIFICATION_FYI_TTL_DAYS, 7);
+    assert.equal(NOTIFICATION_APPROVAL_TTL_DAYS, 14);
     assert.equal(NOTIFICATION_TTL_DAYS, 7);
   });
 
