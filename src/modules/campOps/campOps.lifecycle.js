@@ -269,13 +269,8 @@ export function getExecutionFinanceBlockers(camp = {}, mappedConsumables = []) {
 
 export function getExecutionConsumablesBlockers(camp = {}, mappedConsumables = []) {
   if (isExecutionCancellationForFinance(camp)) return [];
-  if (!Array.isArray(mappedConsumables) || !mappedConsumables.length) return [];
-  const normalized = normalizeExecutionStatus(camp.executionStatus);
-  const effective = normalized === EXECUTION_STATUS.CAMP_COMPLETED
-    ? EXECUTION_STATUS.CAMP_COMPLETED
-    : isExecutionClosedOut(normalized)
-      ? normalized
-      : resolveScheduledExecutionStatus(camp);
+  const effective = resolveEffectiveExecutionStatus(camp);
+  // Planned camps may save progress without finishing consumables.
   if (effective === EXECUTION_STATUS.CAMP_SCHEDULED) return [];
   return getConsumablesCompletionBlockers(mappedConsumables, camp.consumablesUsed);
 }

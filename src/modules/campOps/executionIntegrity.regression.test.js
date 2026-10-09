@@ -134,7 +134,7 @@ test('syncExecutionStatusForSave promotes Planned when 3 fields present', () => 
   );
 });
 
-test('ordinary Save semantics: markComplete must be explicit (flag helper)', () => {
+test('ordinary Save body without markComplete flag is still a normal execution save', () => {
   const body = { editingStage: 'execution', lifecycleStage: 'financial' };
   const markCompleteIntent = body.markComplete === true || body.markComplete === 'true';
   assert.equal(markCompleteIntent, false);

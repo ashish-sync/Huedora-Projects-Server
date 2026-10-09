@@ -40,9 +40,43 @@ export function mergeConsumablesWithTemplate(mapped = [], existing = []) {
   });
 }
 
-/** Consumables Used is optional — never block submit / Mark Complete / finance. */
-export function getConsumablesCompletionBlockers(_mapped = [], _rows = []) {
-  return [];
+/**
+ * Consumables Tracking must be filled before Finance.
+ * Usage and Wastage require explicit values — enter 0 if none used.
+ * - Mapped mode: every non-excluded mapped item must be complete.
+ * - Freeform mode: every selected (non-excluded) product row must be complete.
+ */
+export function getConsumablesCompletionBlockers(mapped = [], rows = []) {
+  const list = Array.isArray(rows) ? rows : [];
+  const blockers = [];
+
+  if (Array.isArray(mapped) && mapped.length) {
+    const byId = Object.fromEntries(
+      list.map((row) => [String(row?.productId || ''), row]),
+    );
+    for (const item of mapped) {
+      const productId = String(item?.productId || '');
+      if (!productId) continue;
+      const row = byId[productId] || {};
+      if (row.excluded === true) continue;
+      if (!isConsumableRowComplete(row)) {
+        const name = String(item.itemName || row.itemName || 'consumable').trim() || 'consumable';
+        blockers.push(`Enter Usage and Wastage for ${name} (use 0 if none)`);
+      }
+    }
+    return blockers;
+  }
+
+  for (const row of list) {
+    if (row?.excluded === true) continue;
+    const productId = String(row?.productId || '').trim();
+    if (!productId) continue;
+    if (!isConsumableRowComplete(row)) {
+      const name = String(row.itemName || 'consumable').trim() || 'consumable';
+      blockers.push(`Enter Usage and Wastage for ${name} (use 0 if none)`);
+    }
+  }
+  return blockers;
 }
 
 export function normalizeConsumablesUsed(rows = [], { requiredProductIds = [] } = {}) {
