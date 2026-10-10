@@ -28,7 +28,8 @@ import { normalizePhone } from '../../utils/identityNormalize.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { uploadDir } from '../../config/paths.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
-import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
+import { ensureUploadCommit, finalizeRequestUploads } from '../../storage/uploadLifecycle.js';
+import { publicUploadPath, toUploadObjectKey } from '../../storage/uploadKeys.js';
 import { assignPreservingExisting, resolveClearKeys } from '../../store/dataIntegrity.js';
 import { assertEntityNotStale } from '../../utils/mutationGuards.js';
 import {
@@ -649,7 +650,13 @@ router.post(
     }
 
     const before = contact.toObject();
-    contact[field] = `/uploads/contacts/${req.file.filename}`;
+    // Finalize (image→webp / dedupe) BEFORE persisting the URL — ensureUploadCommit
+    // runs on res.json and would otherwise rename the file after we saved the old path.
+    await finalizeRequestUploads(req);
+    const objectKey = String(req.file.objectKey || toUploadObjectKey(req.file.path) || '').trim()
+      || `contacts/${req.file.filename}`;
+    const storedPath = publicUploadPath(objectKey) || `/uploads/contacts/${req.file.filename}`;
+    contact[field] = storedPath;
     contact.updatedBy = req.user._id;
     await contact.save();
 
