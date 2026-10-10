@@ -50,6 +50,49 @@ test('legacy refused execution still blocks finance readiness', () => {
   assert.ok(getExecutionFinanceBlockers(camp).length > 0);
 });
 
+test('complete execution with consumables zero is ready for auto Financial advance', () => {
+  const mapped = [{ productId: 'p1', itemName: 'Test Strip' }];
+  const camp = {
+    executionStatus: 'Marked Executed',
+    chargeableStatus: 'Chargeable',
+    inTime: '09:00',
+    attire: 'No Issues',
+    outTime: '12:00',
+    kmRoundTrip: 0,
+    actualPatients: 10,
+    rxCount: 0,
+    executionDocuments: [
+      { docType: 'doctor_form' },
+      { docType: 'patient_form' },
+    ],
+    consumablesUsed: [{ productId: 'p1', quantityUsed: 0, wastage: 0 }],
+  };
+  assert.equal(isExecutionReadyForFinance(camp, mapped), true);
+  assert.deepEqual(getExecutionFinanceBlockers(camp, mapped), []);
+});
+
+test('blank consumable usage blocks finance readiness even when other fields are complete', () => {
+  const mapped = [{ productId: 'p1', itemName: 'Test Strip' }];
+  const camp = {
+    executionStatus: 'Marked Executed',
+    chargeableStatus: 'Chargeable',
+    inTime: '09:00',
+    attire: 'No Issues',
+    outTime: '12:00',
+    kmRoundTrip: 5,
+    actualPatients: 10,
+    rxCount: 1,
+    executionDocuments: [
+      { docType: 'doctor_form' },
+      { docType: 'patient_form' },
+    ],
+    consumablesUsed: [{ productId: 'p1', quantityUsed: '', wastage: '' }],
+  };
+  const blockers = getExecutionFinanceBlockers(camp, mapped);
+  assert.ok(blockers.some((b) => /Test Strip/i.test(b) && /0 if none/i.test(b)));
+  assert.equal(isExecutionReadyForFinance(camp, mapped), false);
+});
+
 test('Camp PUT cannot set or reverse Payment Done (Finance One only)', () => {
   const unpaid = lifecyclePayloadFromBody(
     { financePaymentStatus: 'paid' },

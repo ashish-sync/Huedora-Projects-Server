@@ -127,9 +127,9 @@ import {
   canEditLifecycleStage,
   applyAssignmentStageOutcome,
   assertExecutionStageSave,
-  assertExecutionConsumablesComplete,
   assertCanMarkCampExecuted,
   isExecutionCancellationForFinance,
+  isExecutionReadyForFinance,
   normalizeLifecycleStage,
   normalizeExecutionStatus,
   promoteDueAssignedCampsToExecution,
@@ -1826,18 +1826,13 @@ router.put(
       );
     }
 
-    // Mark Complete is an explicit user action only — never infer from lifecycleStage or field completeness.
+    // Client may still send markComplete; Financial advance is decided after field checks.
     const markCompleteIntent = stage === 'execution' && (
       req.body?.markComplete === true
       || req.body?.markComplete === 'true'
     );
-    if (markCompleteIntent) {
-      delete payload.lifecycleStage;
-      if (normalizeExecutionStatus(payload.executionStatus) === EXECUTION_STATUS.CAMP_COMPLETED) {
-        delete payload.executionStatus;
-      }
-    } else if (stage === 'execution') {
-      // Ordinary Save must not advance to Camp Completed via status field alone.
+    if (stage === 'execution') {
+      // Do not trust client lifecycle/status to jump to Financial — server auto-advances when ready.
       if (normalizeExecutionStatus(payload.executionStatus) === EXECUTION_STATUS.CAMP_COMPLETED) {
         payload.executionStatus = EXECUTION_STATUS.MARKED_EXECUTED;
       }
@@ -1916,9 +1911,6 @@ router.put(
       try {
         assertExecutionStageSave(camp);
         applyAutoPlannedToExecuted(camp);
-        if (!isExecutionCancellationForFinance(camp)) {
-          assertExecutionConsumablesComplete(camp, mappedConsumables);
-        }
       } catch (err) {
         throw new AppError(err.message || 'Invalid execution stage', 400, 'VALIDATION_ERROR');
       }
@@ -1926,12 +1918,23 @@ router.put(
       if (isExecutionCancellationForFinance(camp)) {
         camp.lifecycleStage = 'financial';
         camp.paymentSubmitStatus = camp.paymentSubmitStatus || 'payment_not_checked';
-      } else if (markCompleteIntent) {
-        try {
-          applyMarkCompleteTransition(camp, mappedConsumables);
-        } catch (err) {
-          const blockers = getMarkCompleteBlockers(camp, mappedConsumables);
-          throw new AppError(blockers[0] || err.message || 'Cannot mark complete', 400, 'VALIDATION_ERROR');
+      } else {
+        // Auto-advance Execution → Financial when every required field (incl. consumables) is complete on Save.
+        const readyForFinance = isExecutionReadyForFinance(camp, mappedConsumables);
+        if (readyForFinance || markCompleteIntent) {
+          try {
+            applyMarkCompleteTransition(camp, mappedConsumables);
+          } catch (err) {
+            // Incomplete ordinary saves stay on Execution. Explicit markComplete still returns blockers.
+            if (markCompleteIntent || readyForFinance) {
+              const blockers = getMarkCompleteBlockers(camp, mappedConsumables);
+              throw new AppError(
+                blockers[0] || err.message || 'Cannot move camp to Finance & Settlement',
+                400,
+                'VALIDATION_ERROR',
+              );
+            }
+          }
         }
       }
     }
