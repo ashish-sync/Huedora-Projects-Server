@@ -28,7 +28,7 @@ export const DESIGNATION_ACCESS_TEMPLATES = {
     modules: [
       { moduleId: 'agreements', access: 'All' },
       { moduleId: 'camps', access: 'All' },
-      { moduleId: 'assetRequests', access: 'Editor, Requester' },
+      { moduleId: 'assetRequests', access: 'View, Request' },
       { moduleId: 'platform', access: 'All' },
       { moduleId: 'verifications', access: 'Viewer' },
     ],

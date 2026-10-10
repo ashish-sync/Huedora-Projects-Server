@@ -12,6 +12,7 @@ export const USER_DESIGNATIONS = [
   'Operations Head',
   'Training Manager',
   'Director',
+  'Business Head',
   'Head of Department',
   'Vice President',
 ];

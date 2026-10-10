@@ -64,10 +64,10 @@ import {
   MASTER_ENTITY_IDS,
 } from '../masters/masterCatalog.js';
 import {
-  assertCanApproveRequestType,
   filterApproverUsers,
   isAdminApprover,
 } from './requestApproval.js';
+import { assertApprovalAuthority } from '../users/approvalAuthority.js';
 import fs from 'fs';
 
 const router = Router();
@@ -822,7 +822,7 @@ router.get(
     }
     const [data, total] = await Promise.all([
       AssetRequest.find(filter)
-        .populate('requestorId', 'fullName email')
+        .populate('requestorId', 'fullName email designation reportingManagerId')
         .populate('approverId', 'fullName email')
         .populate('assetId', 'assetTag deviceNameSnapshot serialNumber status custody')
         .populate('contactId', 'name contact city state')
@@ -843,7 +843,7 @@ router.get(
   canRead,
   asyncHandler(async (_req, res) => {
     const rows = await AssetRequest.find({ isDeleted: false })
-      .populate('requestorId', 'fullName email')
+      .populate('requestorId', 'fullName email designation reportingManagerId')
       .populate('approverId', 'fullName email')
       .sort('-createdAt');
     sendExcel(
@@ -1269,7 +1269,7 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false })
-      .populate('requestorId', 'fullName email')
+      .populate('requestorId', 'fullName email designation reportingManagerId')
       .populate('approverId', 'fullName email')
       .populate(
         'assetId',
@@ -1594,11 +1594,9 @@ router.post(
 
 router.post(
   '/:id/approve',
-  canApprove,
   asyncHandler(async (req, res) => {
     let row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
-    assertCanApproveRequestType(req.user, req.permissions, row.requestType, 'approve');
     if (row.requestType === 'HIRING') {
       throw new AppError(
         'Hiring requests are fulfilled directly. Use Fulfill with hiree details.',
@@ -1609,12 +1607,12 @@ router.post(
     if (row.status !== 'REQUESTED') {
       throw new AppError('Only REQUESTED items can be approved', 400, 'INVALID_STATUS');
     }
-    if (
-      String(row.requestorId) === String(req.user._id)
-      && !isAdminApprover(req.user, req.permissions)
-    ) {
-      throw new AppError('Segregation of duties: requestor cannot approve', 403, 'SOD_VIOLATION');
-    }
+    await assertApprovalAuthority({
+      actor: req.user,
+      subjectUserId: row.requestorId,
+      permissions: req.permissions,
+      action: 'approve',
+    });
     if (row.requestType === 'REIMBURSEMENT' && !row.billAttachment) {
       throw new AppError(
         'A bill must be uploaded before this Finance One Request can be approved',
@@ -1815,20 +1813,18 @@ router.post(
 
 router.post(
   '/:id/reject',
-  canApprove,
   asyncHandler(async (req, res) => {
     let row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
-    assertCanApproveRequestType(req.user, req.permissions, row.requestType, 'reject');
     if (row.status !== 'REQUESTED') {
       throw new AppError('Only REQUESTED items can be rejected', 400, 'INVALID_STATUS');
     }
-    if (
-      String(row.requestorId) === String(req.user._id)
-      && !isAdminApprover(req.user, req.permissions)
-    ) {
-      throw new AppError('Segregation of duties: requestor cannot reject', 403, 'SOD_VIOLATION');
-    }
+    await assertApprovalAuthority({
+      actor: req.user,
+      subjectUserId: row.requestorId,
+      permissions: req.permissions,
+      action: 'reject',
+    });
 
     const rejectedAt = new Date().toISOString();
     const rejectionReason =
@@ -2125,14 +2121,12 @@ router.post(
 
 router.post(
   '/:id/fulfill',
-  canApprove,
   asyncHandler(async (req, res) => {
     let row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
     if (row.requestType !== 'HIRING') {
       throw new AppError('Only hiring requests can be fulfilled', 400, 'INVALID_TYPE');
     }
-    assertCanApproveRequestType(req.user, req.permissions, row.requestType, 'fulfill');
     if (!['REQUESTED', 'APPROVED'].includes(row.status)) {
       throw new AppError(
         'Only REQUESTED or APPROVED hiring requests can be fulfilled',
@@ -2140,12 +2134,12 @@ router.post(
         'INVALID_STATUS'
       );
     }
-    if (
-      String(row.requestorId) === String(req.user._id)
-      && !isAdminApprover(req.user, req.permissions)
-    ) {
-      throw new AppError('Segregation of duties: requestor cannot fulfill', 403, 'SOD_VIOLATION');
-    }
+    await assertApprovalAuthority({
+      actor: req.user,
+      subjectUserId: row.requestorId,
+      permissions: req.permissions,
+      action: 'fulfill',
+    });
 
     const hireeName = String(req.body.hireeName || req.body.name || '').trim();
     const hireeContact = String(

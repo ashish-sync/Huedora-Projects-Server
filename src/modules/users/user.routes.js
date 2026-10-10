@@ -654,11 +654,14 @@ router.patch(
       if (req.body.email !== undefined) user.email = emailKey;
       if (req.body.phone !== undefined) user.phone = phoneKey || String(nextPhone || '').trim();
     }
+    let deactivated = false;
     if (req.body.isActive !== undefined) {
       if (String(req.user._id) === String(user._id) && req.body.isActive === false) {
         throw new AppError('You cannot deactivate your own account', 400, 'LOCKED');
       }
-      user.isActive = req.body.isActive;
+      const nextActive = req.body.isActive !== false;
+      deactivated = user.isActive !== false && !nextActive;
+      user.isActive = nextActive;
     }
     if (req.body.designation !== undefined) {
       user.designation = normalizeDesignation(req.body.designation);
@@ -704,9 +707,19 @@ router.patch(
       user.passwordChangedAt = new Date().toISOString();
       user.tokenVersion = (user.tokenVersion || 0) + 1;
     }
+    if (deactivated) {
+      user.tokenVersion = (user.tokenVersion || 0) + 1;
+    }
     await user.save();
     const { invalidateAuthCache } = await import('../../middleware/auth.js');
     invalidateAuthCache(user._id);
+    if (deactivated) {
+      const { RefreshToken } = await import('../auth/refreshToken.model.js');
+      await RefreshToken.updateMany(
+        { userId: user._id, revokedAt: null },
+        { $set: { revokedAt: new Date() } }
+      );
+    }
     await user.populate('roleIds');
     await user.populate('reportingManagerId', 'fullName email designation');
     await writeAudit({

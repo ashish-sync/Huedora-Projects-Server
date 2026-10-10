@@ -27,13 +27,13 @@ test('security regression: RBAC escalation blocked', () => {
   assert.equal(roleStar.ok, false);
 });
 
-test('security regression: finance SoD blocks self-verify', () => {
-  assert.throws(
+test('security regression: finance SoD blocks self-verify', async () => {
+  await assert.rejects(
     () =>
       assertVendorBillSegregationOfDuties(
         { status: 'under_verification', submittedById: 'u1' },
         'verified',
-        'u1'
+        { _id: 'u1' }
       ),
     (err) => err.code === 'SOD_VIOLATION'
   );

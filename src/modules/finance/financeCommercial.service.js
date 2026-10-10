@@ -11,7 +11,7 @@ import {
   fiscalYearLabel,
   nextCommercialDocumentNumber,
 } from './documentNumbering.js';
-import { FinanceOrgProfile } from './finance.model.js';
+import { FinanceCommercialDocument, FinanceOrgProfile } from './finance.model.js';
 
 export function trimStr(v) {
   return v == null ? '' : String(v).trim();
@@ -237,16 +237,193 @@ export function computeDocumentTotals(lineItems = [], adjustments = {}) {
   };
 }
 
+const ORG_SNAPSHOT_KEYS = [
+  'name',
+  'legalName',
+  'brandLine',
+  'cin',
+  'pan',
+  'gstin',
+  'state',
+  'stateCode',
+  'registeredOffice',
+  'phone',
+  'email',
+  'website',
+  'udyam',
+  'udyamLabel',
+  'bankName',
+  'accountHolder',
+  'accountNumber',
+  'ifscCode',
+  'bankBranch',
+  'upiId',
+  'logoDataUrl',
+  'paymentQrDataUrl',
+  'signatureDataUrl',
+  'signatoryName',
+  'defaultPaymentTermsDays',
+  'defaultTerms',
+  'proformaNotes',
+  'defaultPoTerms',
+  'defaultPurchaseTaxRate',
+];
+
+function orgPlain(row) {
+  if (!row) return null;
+  return row.toObject ? row.toObject() : { ...row };
+}
+
+/** Ensure the legacy default organisation exists (id = default). */
 export async function getOrCreateOrgProfile() {
   let row = await FinanceOrgProfile.findOne({ _id: 'default' });
   if (!row) {
-    row = await FinanceOrgProfile.create({ _id: 'default', ...DEFAULT_ORG_PROFILE });
+    row = await FinanceOrgProfile.create({
+      _id: 'default',
+      name: DEFAULT_ORG_PROFILE.legalName || 'Default organisation',
+      slug: 'default',
+      isDefault: true,
+      isDeleted: false,
+      ...DEFAULT_ORG_PROFILE,
+    });
+  } else {
+    let dirty = false;
+    if (!row.name) {
+      row.name = row.legalName || DEFAULT_ORG_PROFILE.legalName || 'Default organisation';
+      dirty = true;
+    }
+    if (row.isDefault !== true) {
+      row.isDefault = true;
+      dirty = true;
+    }
+    if (row.isDeleted) {
+      row.isDeleted = false;
+      dirty = true;
+    }
+    if (dirty) await row.save();
   }
+  return row;
+}
+
+export async function listOrgProfiles() {
+  await getOrCreateOrgProfile();
+  const rows = await FinanceOrgProfile.find({});
+  return rows
+    .filter((r) => !r.isDeleted)
+    .sort((a, b) => {
+      if (a.isDefault && !b.isDefault) return -1;
+      if (!a.isDefault && b.isDefault) return 1;
+      return String(a.name || a.legalName || '').localeCompare(String(b.name || b.legalName || ''));
+    });
+}
+
+/** Backfill orgProfileId on legacy commercial docs; snapshot Issued/Cancelled that lack one. */
+export async function migrateCommercialDocumentsOrgBinding() {
+  await getOrCreateOrgProfile();
+  const rows = await FinanceCommercialDocument.find({ isDeleted: false });
+  let updated = 0;
+  for (const row of rows) {
+    let dirty = false;
+    if (!row.orgProfileId) {
+      row.orgProfileId = 'default';
+      dirty = true;
+    }
+    const stage = normalizeCommercialStage(row.status);
+    if ((stage === 'Issued' || stage === 'Cancelled') && !row.orgSnapshot) {
+      const live = await resolveOrgProfileId(row.orgProfileId);
+      row.orgSnapshot = buildOrgSnapshot(live);
+      dirty = true;
+    }
+    if (dirty) {
+      await row.save();
+      updated += 1;
+    }
+  }
+  if (updated) {
+    console.log(`[finance] Migrated org binding on ${updated} commercial document(s)`);
+  }
+  return updated;
+}
+
+export async function resolveOrgProfileId(orgProfileId) {
+  const id = String(orgProfileId || '').trim() || 'default';
+  let row = await FinanceOrgProfile.findOne({ _id: id });
+  if (row && !row.isDeleted) return row;
+  if (id !== 'default') {
+    const fallback = await getOrCreateOrgProfile();
+    return fallback;
+  }
+  return getOrCreateOrgProfile();
+}
+
+export function buildOrgSnapshot(orgProfile) {
+  const src = orgPlain(orgProfile) || {};
+  const snap = { orgProfileId: String(src._id || 'default'), frozenAt: new Date().toISOString() };
+  for (const key of ORG_SNAPSHOT_KEYS) {
+    if (src[key] !== undefined) snap[key] = src[key];
+  }
+  if (!snap.name) snap.name = snap.legalName || 'Organisation';
+  return snap;
+}
+
+/**
+ * Live master for drafting/normalize; frozen snapshot for Issued/Cancelled PDFs.
+ */
+export function orgSourceForDocument(row, liveOrg) {
+  const stage = normalizeCommercialStage(row?.status);
+  if ((stage === 'Issued' || stage === 'Cancelled') && row?.orgSnapshot && typeof row.orgSnapshot === 'object') {
+    return { ...row.orgSnapshot };
+  }
+  return orgPlain(liveOrg) || {};
+}
+
+/** Freeze issuing organisation onto the document at approve/issue. */
+export async function freezeOrgSnapshotOnIssue(row) {
+  const live = await resolveOrgProfileId(row.orgProfileId || 'default');
+  row.orgProfileId = String(live._id);
+  row.orgSnapshot = buildOrgSnapshot(live);
+  return live;
+}
+
+export async function createOrgProfile(body = {}, actor = {}) {
+  await getOrCreateOrgProfile();
+  const patch = await mergeOrgProfile(body);
+  const name =
+    trimStr(body.name) || trimStr(patch.legalName) || trimStr(body.legalName) || 'Organisation';
+  const slugBase = trimStr(body.slug)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    || name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+    || 'organisation';
+  let slug = slugBase;
+  let n = 1;
+  while (await FinanceOrgProfile.findOne({ slug })) {
+    slug = `${slugBase}-${++n}`;
+  }
+  const id = `org_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const row = await FinanceOrgProfile.create({
+    _id: id,
+    name,
+    slug,
+    isDefault: false,
+    isDeleted: false,
+    ...DEFAULT_ORG_PROFILE,
+    ...patch,
+    legalName: patch.legalName || name,
+    createdAt: new Date().toISOString(),
+    updatedById: actor._id || null,
+    updatedByEmail: actor.email || '',
+  });
   return row;
 }
 
 export async function mergeOrgProfile(body = {}) {
   const fields = [
+    'name',
     'legalName',
     'brandLine',
     'cin',
@@ -1273,8 +1450,12 @@ export function assertCancellable(status) {
 /** Extra UI fields stored alongside normalized commercial payload */
 export function extractBuilderExtras(body = {}) {
   const out = {};
+  if (body.orgProfileId !== undefined) {
+    out.orgProfileId = trimStr(body.orgProfileId) || 'default';
+  }
   if (body.builderForm !== undefined) {
     // Keep org logo/QR/signature on FinanceOrgProfile only — never duplicate multi‑MB data-URLs per doc.
+    // Issued docs keep orgSnapshot separately for historical integrity.
     out.builderForm =
       body.builderForm && typeof body.builderForm === 'object'
         ? stripBuilderFormMedia(body.builderForm)
