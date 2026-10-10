@@ -37,6 +37,31 @@ export async function resolveUploadLocation(relativePath) {
     return { objectKey, absPath, onDisk: true };
   }
 
+  // Media pipeline converts images to .webp and deletes the original. Older contact
+  // KYC (and similar) rows may still point at .jpg/.png — resolve the webp sibling.
+  const webpKey = siblingWebpObjectKey(objectKey);
+  if (webpKey) {
+    try {
+      const webpAbs = absoluteUploadPath(webpKey);
+      if (fs.existsSync(webpAbs) && fs.statSync(webpAbs).isFile()) {
+        return { objectKey: webpKey, absPath: webpAbs, onDisk: true };
+      }
+      if (isObjectStoreEnabled()) {
+        const webpMeta = await headObject(webpKey);
+        if (webpMeta) {
+          return {
+            objectKey: webpKey,
+            absPath: webpAbs,
+            onDisk: false,
+            contentType: webpMeta.ContentType || 'image/webp',
+          };
+        }
+      }
+    } catch {
+      /* fall through to NOT_FOUND */
+    }
+  }
+
   if (isObjectStoreEnabled()) {
     const meta = await headObject(objectKey);
     if (meta) {
@@ -45,6 +70,14 @@ export async function resolveUploadLocation(relativePath) {
   }
 
   throw new AppError('File not found', 404, 'NOT_FOUND');
+}
+
+/** When an image master was rewritten to .webp, map the stale pre-optimize key. */
+export function siblingWebpObjectKey(objectKey = '') {
+  const key = String(objectKey || '').replace(/\\/g, '/');
+  if (!key || key.toLowerCase().endsWith('.webp')) return '';
+  if (!/\.(jpe?g|png|gif|bmp|tiff?)$/i.test(key)) return '';
+  return key.replace(/\.[^.]+$/, '.webp');
 }
 
 /**
@@ -93,6 +126,32 @@ export async function openUploadReadStream(absOrKey) {
       stream: fs.createReadStream(absPath),
       from: 'disk',
     };
+  }
+
+  const webpKey = siblingWebpObjectKey(key);
+  if (webpKey) {
+    try {
+      const webpAbs = absoluteUploadPath(webpKey);
+      if (fs.existsSync(webpAbs) && fs.statSync(webpAbs).isFile()) {
+        return {
+          stream: fs.createReadStream(webpAbs),
+          contentType: 'image/webp',
+          from: 'disk',
+        };
+      }
+      if (isObjectStoreEnabled()) {
+        const webpObj = await getObject(webpKey);
+        if (webpObj?.Body) {
+          return {
+            stream: webpObj.Body,
+            contentType: webpObj.ContentType || 'image/webp',
+            from: 'r2',
+          };
+        }
+      }
+    } catch {
+      /* fall through */
+    }
   }
 
   if (isObjectStoreEnabled()) {
