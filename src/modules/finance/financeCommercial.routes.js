@@ -8,6 +8,10 @@ import { authenticate, requirePermission, requireAdmin } from '../../middleware/
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import { PERMISSIONS } from '../../config/constants.js';
+import {
+  assertApprovalAuthority,
+  resolveApprovalSubject,
+} from '../users/approvalAuthority.js';
 import { env } from '../../config/env.js';
 import { writeAudit } from '../../utils/audit.js';
 import { nextSequence } from '../../utils/counters.js';
@@ -18,7 +22,6 @@ import { DOCUMENT_NUMBER_STANDARDS, documentNumberPeriod, releaseCommercialDocum
 import {
   assertApprovable,
   assertCancellable,
-  assertCommercialApprover,
   assertOrgMasterEditor,
   assertEditableStatus,
   assertIssuable,
@@ -29,9 +32,15 @@ import {
   extractBuilderExtras,
   fiscalYearLabel,
   getOrCreateOrgProfile,
+  listOrgProfiles,
+  resolveOrgProfileId,
+  createOrgProfile,
+  orgSourceForDocument,
+  freezeOrgSnapshotOnIssue,
   mergeOrgProfile,
   nextProformaNumber,
   nextPurchaseOrderNumber,
+  normalizeCommercialStage,
   normalizeClientInvoicePayload,
   normalizeCreditNotePayload,
   normalizeDebitNotePayload,
@@ -218,10 +227,33 @@ router.get(
   })
 );
 
+
+/** Live org for normalize; snapshot for Issued/Cancelled PDF render. */
+async function loadOrgContext(req, row = null) {
+  const requested =
+    (req.body && req.body.orgProfileId != null && String(req.body.orgProfileId).trim()) ||
+    (row && row.orgProfileId) ||
+    'default';
+  const live = await resolveOrgProfileId(requested);
+  const orgProfileId = String(live._id);
+  const renderOrg = row
+    ? orgSourceForDocument(row, live)
+    : live.toObject
+      ? live.toObject()
+      : { ...live };
+  return { live, orgProfile: live, renderOrg, orgProfileId };
+}
+
 async function loadCommercialById(id) {
   const row = await FinanceCommercialDocument.findOne({ _id: id, isDeleted: false });
   if (!row) throw new AppError('Document not found', 404);
   return row;
+}
+
+async function commercialPayload(row) {
+  const obj = row?.toObject ? row.toObject() : { ...row };
+  obj.approvalSubject = await resolveApprovalSubject(obj.submittedById || obj.createdById);
+  return obj;
 }
 
 function auditCommercial(req, action, row, before = null) {
@@ -250,7 +282,7 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const row = await loadCommercialById(req.params.id);
-    res.json({ data: row });
+    res.json({ data: await commercialPayload(row) });
   })
 );
 
@@ -260,7 +292,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const row = await loadCommercialById(req.params.id);
     assertSubmittable(row.status);
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
     const normalizers = {
       proforma: [normalizeProformaPayload, validateProformaPayload],
       client_invoice: [normalizeClientInvoicePayload, validateClientInvoicePayload],
@@ -288,7 +320,7 @@ router.post(
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.COMMERCIAL.SUBMIT', row, before);
-    res.json({ data: row });
+    res.json({ data: await commercialPayload(row) });
   })
 );
 
@@ -296,9 +328,14 @@ router.post(
   '/commercial-documents/:id/approve',
   canWrite,
   asyncHandler(async (req, res) => {
-    assertCommercialApprover(req.user, req.permissions);
     const row = await loadCommercialById(req.params.id);
     assertApprovable(row.status);
+    await assertApprovalAuthority({
+      actor: req.user,
+      subjectUserId: row.submittedById || row.createdById,
+      permissions: req.permissions,
+      action: 'approve',
+    });
     const before = row.toObject ? row.toObject() : { ...row };
     await assertCommercialDocWithinPoBalance(
       {
@@ -329,6 +366,7 @@ router.post(
     }
 
     await assignCommercialDocumentNumber(row, { force: true });
+    await freezeOrgSnapshotOnIssue(row);
     row.status = 'Issued';
     row.approvedAt = new Date().toISOString();
     row.approvedById = req.user._id;
@@ -339,7 +377,7 @@ router.post(
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.COMMERCIAL.APPROVE', row, before);
-    res.json({ data: row });
+    res.json({ data: await commercialPayload(row) });
   })
 );
 
@@ -347,9 +385,14 @@ router.post(
   '/commercial-documents/:id/reject',
   canWrite,
   asyncHandler(async (req, res) => {
-    assertCommercialApprover(req.user, req.permissions);
     const row = await loadCommercialById(req.params.id);
     assertRejectable(row.status);
+    await assertApprovalAuthority({
+      actor: req.user,
+      subjectUserId: row.submittedById || row.createdById,
+      permissions: req.permissions,
+      action: 'reject',
+    });
     const before = row.toObject ? row.toObject() : { ...row };
     row.status = 'Draft';
     row.submittedAt = null;
@@ -358,7 +401,7 @@ router.post(
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.COMMERCIAL.REJECT', row, before);
-    res.json({ data: row });
+    res.json({ data: await commercialPayload(row) });
   })
 );
 
@@ -489,6 +532,66 @@ router.patch(
 );
 
 router.get(
+  '/org-profiles',
+  canRead,
+  asyncHandler(async (_req, res) => {
+    const rows = await listOrgProfiles();
+    res.json({
+      data: rows.map((r) => {
+        const o = r.toObject ? r.toObject() : { ...r };
+        return {
+          _id: o._id,
+          id: o._id,
+          name: o.name || o.legalName || 'Organisation',
+          legalName: o.legalName,
+          gstin: o.gstin,
+          isDefault: Boolean(o.isDefault),
+          state: o.state,
+          stateCode: o.stateCode,
+        };
+      }),
+    });
+  })
+);
+
+router.post(
+  '/org-profiles',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    assertOrgMasterEditor(req.user, req.permissions);
+    const row = await createOrgProfile(req.body, req.user);
+    res.status(201).json({ data: row });
+  })
+);
+
+router.get(
+  '/org-profiles/:id',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const profile = await resolveOrgProfileId(req.params.id);
+    res.json({ data: profile });
+  })
+);
+
+router.patch(
+  '/org-profiles/:id',
+  canWrite,
+  asyncHandler(async (req, res) => {
+    assertOrgMasterEditor(req.user, req.permissions);
+    const profile = await resolveOrgProfileId(req.params.id);
+    assignPreservingExisting(profile, await mergeOrgProfile(req.body));
+    if (req.body.name !== undefined) {
+      const name = String(req.body.name || '').trim();
+      if (name) profile.name = name;
+    }
+    profile.updatedById = req.user._id;
+    profile.updatedByEmail = req.user.email;
+    await profile.save();
+    res.json({ data: profile });
+  })
+);
+
+router.get(
   '/proformas',
   canRead,
   asyncHandler(async (req, res) => {
@@ -535,11 +638,12 @@ router.post(
   '/proformas',
   canWrite,
   asyncHandler(async (req, res) => {
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req);
     const payload = normalizeProformaPayload(req.body, orgProfile);
     validateProformaPayload(payload, { requireLines: false });
 
     const row = await FinanceCommercialDocument.create({
+      orgProfileId,
       docKey: await nextSequence('financeCommercialDoc', 'PF'),
       documentType: 'proforma',
       documentNumber: '',
@@ -577,7 +681,8 @@ router.patch(
     if (!row) throw new AppError('Proforma not found', 404);
     assertEditableStatus(row.status, req.permissions);
 
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
+    row.orgProfileId = orgProfileId;
     const merged = {
       ...row.toObject(),
       ...req.body,
@@ -611,7 +716,8 @@ router.post(
     if (!row) throw new AppError('Proforma not found', 404);
     assertIssuable(row.status);
 
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
+    await freezeOrgSnapshotOnIssue(row);
     const payload = normalizeProformaPayload(row.toObject(), orgProfile);
     validateProformaPayload(payload);
     assignPreservingExisting(row, payload);
@@ -644,7 +750,7 @@ router.post(
   '/proformas/preview',
   canRead,
   asyncHandler(async (req, res) => {
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req);
     const payload = normalizeProformaPayload(req.body, orgProfile);
     if (!payload.recipientName) payload.recipientName = 'Preview Client';
     const docObj = {
@@ -654,7 +760,7 @@ router.post(
       status: 'Draft',
       taxMode: usesIgst(payload.recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst',
     };
-    sendPreviewPdf(res, await buildProformaPdfBuffer(docObj, orgProfile.toObject()), 'proforma-preview.pdf');
+    sendPreviewPdf(res, await buildProformaPdfBuffer(docObj, renderOrg), 'proforma-preview.pdf');
   })
 );
 
@@ -681,10 +787,10 @@ router.get(
       return;
     }
 
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
     const docObj = row.toObject ? row.toObject() : { ...row };
     docObj.taxMode = usesIgst(docObj.recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst';
-    const pdfBuffer = await buildProformaPdfBuffer(docObj, orgProfile.toObject());
+    const pdfBuffer = await buildProformaPdfBuffer(docObj, renderOrg);
     const asDownload = String(req.query.download || '') === '1';
     const safeName = (row.documentNumber || row.docKey || 'proforma').replace(/[^\w./-]+/g, '_');
     res.setHeader('Content-Type', 'application/pdf');
@@ -714,8 +820,10 @@ router.post(
       documentNumber = validateManualDocumentNumber(documentNumber, 'proforma');
     }
     const period = documentNumberPeriod(documentDate);
+    const { orgProfileId } = await loadOrgContext(req);
 
     const row = await FinanceCommercialDocument.create({
+      orgProfileId,
       docKey: await nextSequence('financeCommercialDoc', 'PF'),
       documentType: 'proforma',
       documentNumber,
@@ -816,11 +924,12 @@ router.post(
   '/purchase-orders',
   canWrite,
   asyncHandler(async (req, res) => {
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req);
     const payload = normalizePurchaseOrderPayload(req.body, orgProfile);
     validatePurchaseOrderPayload(payload, { requireLines: false });
 
     const row = await FinanceCommercialDocument.create({
+      orgProfileId,
       docKey: await nextSequence('financeCommercialDoc', 'PO'),
       documentType: 'purchase_order',
       documentNumber: '',
@@ -858,7 +967,8 @@ router.patch(
     if (!row) throw new AppError('Purchase order not found', 404);
     assertEditableStatus(row.status, req.permissions);
 
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
+    row.orgProfileId = orgProfileId;
     const merged = {
       ...row.toObject(),
       ...req.body,
@@ -896,7 +1006,8 @@ router.post(
     if (!row) throw new AppError('Purchase order not found', 404);
     assertIssuable(row.status);
 
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
+    await freezeOrgSnapshotOnIssue(row);
     const payload = normalizePurchaseOrderPayload(row.toObject(), orgProfile);
     validatePurchaseOrderPayload(payload);
     assignPreservingExisting(row, payload);
@@ -928,7 +1039,7 @@ router.post(
   '/purchase-orders/preview',
   canRead,
   asyncHandler(async (req, res) => {
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req);
     const payload = normalizePurchaseOrderPayload(req.body, orgProfile);
     if (!payload.recipientName) payload.recipientName = 'Preview Vendor';
     const docObj = {
@@ -937,7 +1048,7 @@ router.post(
       documentNumber: trimStr(req.body.documentNumber) || 'PREVIEW',
       status: 'Draft',
     };
-    sendPreviewPdf(res, await buildPurchaseOrderPdfBuffer(docObj, orgProfile.toObject()), 'po-preview.pdf');
+    sendPreviewPdf(res, await buildPurchaseOrderPdfBuffer(docObj, renderOrg), 'po-preview.pdf');
   })
 );
 
@@ -964,8 +1075,8 @@ router.get(
       return;
     }
 
-    const orgProfile = await getOrCreateOrgProfile();
-    const pdfBuffer = await buildPurchaseOrderPdfBuffer(row.toObject(), orgProfile.toObject());
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
+    const pdfBuffer = await buildPurchaseOrderPdfBuffer(row.toObject(), renderOrg);
     const asDownload = String(req.query.download || '') === '1';
     const safeName = (row.documentNumber || row.docKey || 'purchase-order').replace(/[^\w./-]+/g, '_');
     res.setHeader('Content-Type', 'application/pdf');
@@ -995,8 +1106,10 @@ router.post(
       documentNumber = validateManualDocumentNumber(documentNumber, 'purchase_order');
     }
     const period = documentNumberPeriod(documentDate);
+    const { orgProfileId } = await loadOrgContext(req);
 
     const row = await FinanceCommercialDocument.create({
+      orgProfileId,
       docKey: await nextSequence('financeCommercialDoc', 'PO'),
       documentType: 'purchase_order',
       documentNumber,
@@ -1097,7 +1210,7 @@ router.post(
   '/client-invoices/preview',
   canRead,
   asyncHandler(async (req, res) => {
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req);
     const payload = normalizeClientInvoicePayload(req.body, orgProfile);
     if (!payload.recipientName) {
       payload.recipientName = 'Preview Client';
@@ -1109,7 +1222,7 @@ router.post(
       status: 'Draft',
       taxMode: usesIgst(payload.recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst',
     };
-    const pdfBuffer = await buildClientInvoicePdfBuffer(docObj, orgProfile.toObject());
+    const pdfBuffer = await buildClientInvoicePdfBuffer(docObj, renderOrg);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="invoice-preview.pdf"');
     res.send(pdfBuffer);
@@ -1120,11 +1233,12 @@ router.post(
   '/client-invoices',
   canWrite,
   asyncHandler(async (req, res) => {
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req);
     const payload = normalizeClientInvoicePayload(req.body, orgProfile);
     validateClientInvoicePayload(payload, { requireLines: false });
 
     const row = await FinanceCommercialDocument.create({
+      orgProfileId,
       docKey: await nextSequence('financeCommercialDoc', 'INV'),
       documentType: 'client_invoice',
       documentNumber: '',
@@ -1162,7 +1276,8 @@ router.patch(
     if (!row) throw new AppError('Invoice not found', 404);
     assertEditableStatus(row.status, req.permissions);
 
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
+    row.orgProfileId = orgProfileId;
     const merged = {
       ...row.toObject(),
       ...req.body,
@@ -1196,7 +1311,8 @@ router.post(
     if (!row) throw new AppError('Invoice not found', 404);
     assertIssuable(row.status);
 
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
+    await freezeOrgSnapshotOnIssue(row);
     const payload = normalizeClientInvoicePayload(row.toObject(), orgProfile);
     validateClientInvoicePayload(payload);
     assignPreservingExisting(row, payload);
@@ -1248,10 +1364,10 @@ router.get(
       return;
     }
 
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
     const docObj = row.toObject ? row.toObject() : { ...row };
     docObj.taxMode = usesIgst(docObj.recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst';
-    const pdfBuffer = await buildClientInvoicePdfBuffer(docObj, orgProfile.toObject());
+    const pdfBuffer = await buildClientInvoicePdfBuffer(docObj, renderOrg);
     const asDownload = String(req.query.download || '') === '1';
     const safeName = (row.documentNumber || row.docKey || 'invoice').replace(/[^\w./-]+/g, '_');
     res.setHeader('Content-Type', 'application/pdf');
@@ -1310,7 +1426,7 @@ router.post(
   '/credit-notes/preview',
   canRead,
   asyncHandler(async (req, res) => {
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req);
     const payload = normalizeCreditNotePayload(req.body, orgProfile);
     if (!payload.recipientName) payload.recipientName = 'Preview Client';
     const docObj = {
@@ -1320,7 +1436,7 @@ router.post(
       status: 'Draft',
       taxMode: usesIgst(payload.recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst',
     };
-    sendPreviewPdf(res, await buildCreditNotePdfBuffer(docObj, orgProfile.toObject()), 'credit-note-preview.pdf');
+    sendPreviewPdf(res, await buildCreditNotePdfBuffer(docObj, renderOrg), 'credit-note-preview.pdf');
   })
 );
 
@@ -1328,11 +1444,12 @@ router.post(
   '/credit-notes',
   canWrite,
   asyncHandler(async (req, res) => {
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req);
     const payload = normalizeCreditNotePayload(req.body, orgProfile);
     validateCreditNotePayload(payload, { requireLines: false });
 
     const row = await FinanceCommercialDocument.create({
+      orgProfileId,
       docKey: await nextSequence('financeCommercialDoc', 'CN'),
       documentType: 'credit_note',
       documentNumber: '',
@@ -1370,7 +1487,8 @@ router.patch(
     if (!row) throw new AppError('Credit note not found', 404);
     assertEditableStatus(row.status, req.permissions);
 
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
+    row.orgProfileId = orgProfileId;
     const merged = {
       ...row.toObject(),
       ...req.body,
@@ -1404,7 +1522,8 @@ router.post(
     if (!row) throw new AppError('Credit note not found', 404);
     assertIssuable(row.status);
 
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
+    await freezeOrgSnapshotOnIssue(row);
     const payload = normalizeCreditNotePayload(row.toObject(), orgProfile);
     validateCreditNotePayload(payload);
     assignPreservingExisting(row, payload);
@@ -1456,10 +1575,10 @@ router.get(
       return;
     }
 
-    const orgProfile = await getOrCreateOrgProfile();
+    const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
     const docObj = row.toObject ? row.toObject() : { ...row };
     docObj.taxMode = usesIgst(docObj.recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst';
-    const pdfBuffer = await buildCreditNotePdfBuffer(docObj, orgProfile.toObject());
+    const pdfBuffer = await buildCreditNotePdfBuffer(docObj, renderOrg);
     const asDownload = String(req.query.download || '') === '1';
     const safeName = (row.documentNumber || row.docKey || 'credit-note').replace(/[^\w./-]+/g, '_');
     res.setHeader('Content-Type', 'application/pdf');
@@ -1519,7 +1638,7 @@ function registerInvoiceLikeDocRoutes({
     `/${basePath}/preview`,
     canRead,
     asyncHandler(async (req, res) => {
-      const orgProfile = await getOrCreateOrgProfile();
+      const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req);
       const payload = normalize(req.body, orgProfile);
       if (!payload.recipientName) payload.recipientName = 'Preview Client';
       const docObj = {
@@ -1529,7 +1648,7 @@ function registerInvoiceLikeDocRoutes({
         status: 'Draft',
         taxMode: usesIgst(payload.recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst',
       };
-      sendPreviewPdf(res, await buildPdf(docObj, orgProfile.toObject()), `${fileSlug}-preview.pdf`);
+      sendPreviewPdf(res, await buildPdf(docObj, renderOrg), `${fileSlug}-preview.pdf`);
     })
   );
 
@@ -1551,11 +1670,12 @@ function registerInvoiceLikeDocRoutes({
     `/${basePath}`,
     canWrite,
     asyncHandler(async (req, res) => {
-      const orgProfile = await getOrCreateOrgProfile();
+      const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req);
       const payload = normalize(req.body, orgProfile);
       validate(payload, { requireLines: false });
 
       const row = await FinanceCommercialDocument.create({
+        orgProfileId,
         docKey: await nextSequence('financeCommercialDoc', docKeyPrefix),
         documentType,
         documentNumber: '',
@@ -1593,7 +1713,8 @@ function registerInvoiceLikeDocRoutes({
       if (!row) throw new AppError(`${notFoundLabel} not found`, 404);
       assertEditableStatus(row.status, req.permissions);
 
-      const orgProfile = await getOrCreateOrgProfile();
+      const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
+      row.orgProfileId = orgProfileId;
       const merged = {
         ...row.toObject(),
         ...req.body,
@@ -1627,7 +1748,8 @@ function registerInvoiceLikeDocRoutes({
       if (!row) throw new AppError(`${notFoundLabel} not found`, 404);
       assertIssuable(row.status);
 
-      const orgProfile = await getOrCreateOrgProfile();
+      const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
+      await freezeOrgSnapshotOnIssue(row);
       const payload = normalize(row.toObject(), orgProfile);
       validate(payload);
       assignPreservingExisting(row, payload);
@@ -1679,10 +1801,10 @@ function registerInvoiceLikeDocRoutes({
         return;
       }
 
-      const orgProfile = await getOrCreateOrgProfile();
+      const { orgProfile, renderOrg, orgProfileId } = await loadOrgContext(req, row);
       const docObj = row.toObject ? row.toObject() : { ...row };
       docObj.taxMode = usesIgst(docObj.recipientStateCode, orgProfile.stateCode) ? 'igst' : 'cgst_sgst';
-      const pdfBuffer = await buildPdf(docObj, orgProfile.toObject());
+      const pdfBuffer = await buildPdf(docObj, renderOrg);
       const asDownload = String(req.query.download || '') === '1';
       const safeName = (row.documentNumber || row.docKey || fileSlug).replace(/[^\w./-]+/g, '_');
       res.setHeader('Content-Type', 'application/pdf');
