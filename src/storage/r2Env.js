@@ -32,6 +32,60 @@ function flagFalse(v) {
 export const R2_ACCESS_KEY_ID_EXPECTED_LENGTH = 32;
 
 /**
+ * Environment object-key prefix so QA and Prod can share one bucket without colliding.
+ * - Set R2_KEY_PREFIX explicitly (e.g. env/qa/) to override.
+ * - Set R2_KEY_PREFIX= (empty) to disable prefixing.
+ * - Otherwise auto: qa → env/qa/, production → env/prod/, else none.
+ */
+export function resolveR2KeyPrefix(nodeEnv = process.env.NODE_ENV) {
+  if (Object.prototype.hasOwnProperty.call(process.env, 'R2_KEY_PREFIX')) {
+    const raw = String(process.env.R2_KEY_PREFIX ?? '')
+      .trim()
+      .replace(/\\/g, '/')
+      .replace(/^\/+|\/+$/g, '');
+    return raw ? `${raw}/` : '';
+  }
+  const envName = String(nodeEnv || '')
+    .trim()
+    .toLowerCase();
+  if (envName === 'qa') return 'env/qa/';
+  if (envName === 'production' || envName === 'prod') return 'env/prod/';
+  return '';
+}
+
+/**
+ * Apply the env prefix for new writes. Idempotent if key already starts with the prefix.
+ * @param {string} objectKey
+ * @param {string} [prefix]
+ */
+export function applyR2KeyPrefix(objectKey, prefix = resolveR2KeyPrefix()) {
+  const key = String(objectKey || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
+  if (!key) return '';
+  const p = String(prefix || '');
+  if (!p) return key;
+  if (key.startsWith(p)) return key;
+  return `${p}${key}`;
+}
+
+/**
+ * Read candidates: prefixed key first, then legacy unprefixed (prod migration safety).
+ * @param {string} objectKey
+ * @param {string} [prefix]
+ */
+export function r2KeyReadCandidates(objectKey, prefix = resolveR2KeyPrefix()) {
+  const key = String(objectKey || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
+  if (!key) return [];
+  const p = String(prefix || '');
+  if (!p) return [key];
+  if (key.startsWith(p)) return [key];
+  return [`${p}${key}`, key];
+}
+
+/**
  * @returns {{
  *   enabled: boolean,
  *   required: boolean,
@@ -42,6 +96,7 @@ export const R2_ACCESS_KEY_ID_EXPECTED_LENGTH = 32;
  *   endpoint: string,
  *   region: string,
  *   publicBaseUrl: string,
+ *   keyPrefix: string,
  *   missing: string[],
  *   credentialProblem: string | null,
  * }}
@@ -62,6 +117,7 @@ export function getR2Env() {
   const region = cleanSecret(process.env.R2_REGION || process.env.AWS_REGION) || 'auto';
   const publicBaseUrl = cleanSecret(process.env.R2_PUBLIC_BASE_URL).replace(/\/+$/, '');
   const required = flagTrue(process.env.R2_REQUIRED);
+  const keyPrefix = resolveR2KeyPrefix();
 
   const missing = [];
   if (!accountId && !endpointExplicit) missing.push('R2_ACCOUNT_ID (or R2_ENDPOINT)');
@@ -94,6 +150,7 @@ export function getR2Env() {
     endpoint,
     region,
     publicBaseUrl,
+    keyPrefix,
     missing: hasCreds ? [] : missing,
     credentialProblem,
   };
@@ -107,11 +164,14 @@ export function describeR2Config(cfg = getR2Env()) {
   } catch {
     endpointHost = '(invalid endpoint)';
   }
+  const keyPrefix = cfg.keyPrefix || '';
   return {
     enabled: cfg.enabled,
     required: cfg.required,
     bucket: cfg.bucket || null,
     endpointHost: endpointHost || null,
+    keyPrefix: keyPrefix || null,
+    isolationActive: Boolean(keyPrefix),
     hasAccountId: Boolean(cfg.accountId),
     hasAccessKeyId: Boolean(cfg.accessKeyId),
     hasSecretAccessKey: Boolean(cfg.secretAccessKey),
