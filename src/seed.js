@@ -277,6 +277,15 @@ export async function ensureSeed() {
   await ensureGeoSeed();
   await ensureDistrictSupplements();
 
+  try {
+    const { migrateCommercialDocumentsOrgBinding } = await import(
+      './modules/finance/financeCommercial.service.js'
+    );
+    await migrateCommercialDocumentsOrgBinding();
+  } catch (err) {
+    console.warn('[seed] Commercial org migration skipped:', err?.message || err);
+  }
+
   if (env.seedCampOneDemo) {
     const campSeed = await ensureCampOpsSeed();
     if (campSeed.createdCamps > 0 || campSeed.updatedCamps > 0) {

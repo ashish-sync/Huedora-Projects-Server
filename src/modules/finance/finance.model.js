@@ -78,9 +78,14 @@ export const FinanceInvoice = defineCollection('finance_invoices', {
   isActive: true,
 });
 
-/** Singleton org letterhead / bank details for commercial PDFs */
+/** Organisation letterhead / bank details for commercial PDFs (multi-org). */
 export const FinanceOrgProfile = defineCollection('finance_org_profile', {
   _id: 'default',
+  /** Display name in Organisation Master list / builder picker */
+  name: '',
+  slug: '',
+  isDefault: false,
+  isDeleted: false,
   legalName: '',
   brandLine: '',
   cin: '',
@@ -111,6 +116,7 @@ export const FinanceOrgProfile = defineCollection('finance_org_profile', {
   defaultPurchaseTaxRate: 5,
   updatedById: null,
   updatedByEmail: '',
+  createdAt: null,
 });
 
 /** Proforma, client invoice, purchase order */
@@ -124,6 +130,13 @@ export const FinanceCommercialDocument = defineCollection('finance_commercial_do
   documentPeriod: '',
   status: 'Draft',
   source: 'generated',
+  /** Issuing organisation (FinanceOrgProfile._id) */
+  orgProfileId: 'default',
+  /**
+   * Frozen organisation letterhead/bank/signature at issuance.
+   * Issued/cancelled PDFs must use this — never the live master.
+   */
+  orgSnapshot: null,
   clientId: null,
   clientMasterId: null,
   /** Links Tax Invoice / Bill of Supply to a Client Master customer PO row */

@@ -7,55 +7,61 @@ import {
   permissionForVendorBillTransition,
 } from './vendorBill.sod.js';
 
-test('submitter cannot verify', () => {
-  assert.throws(
+test('submitter cannot verify', async () => {
+  await assert.rejects(
     () =>
       assertVendorBillSegregationOfDuties(
         { status: 'under_verification', submittedById: 'u1' },
         'verified',
-        'u1'
+        { _id: 'u1' }
       ),
     (err) => err.code === 'SOD_VIOLATION' && err.status === 403
   );
 });
 
-test('different user may verify', () => {
-  assert.doesNotThrow(() =>
+test('different user may verify', async () => {
+  await assert.doesNotReject(() =>
     assertVendorBillSegregationOfDuties(
       { status: 'under_verification', submittedById: 'u1' },
       'verified',
-      'u2'
+      { _id: 'u2' }
     )
   );
 });
 
-test('submitter or verifier cannot approve', () => {
-  assert.throws(
+test('submitter cannot approve unless exempt', async () => {
+  await assert.rejects(
     () =>
       assertVendorBillSegregationOfDuties(
         { status: 'verified', submittedById: 'u1', verifiedById: 'u2' },
         'approved',
-        'u1'
-      ),
-    (err) => err.code === 'SOD_VIOLATION'
-  );
-  assert.throws(
-    () =>
-      assertVendorBillSegregationOfDuties(
-        { status: 'verified', submittedById: 'u1', verifiedById: 'u2' },
-        'approved',
-        'u2'
+        { _id: 'u1', designation: 'Individual Contributor' },
+        new Set()
       ),
     (err) => err.code === 'SOD_VIOLATION'
   );
 });
 
-test('third party may approve', () => {
-  assert.doesNotThrow(() =>
+test('verifier cannot approve', async () => {
+  await assert.rejects(
+    () =>
+      assertVendorBillSegregationOfDuties(
+        { status: 'verified', submittedById: 'u1', verifiedById: 'u2' },
+        'approved',
+        { _id: 'u2', designation: 'Manager' },
+        new Set()
+      ),
+    (err) => err.code === 'SOD_VIOLATION'
+  );
+});
+
+test('exempt manager may approve another submitter', async () => {
+  await assert.doesNotReject(() =>
     assertVendorBillSegregationOfDuties(
       { status: 'verified', submittedById: 'u1', verifiedById: 'u2' },
       'approved',
-      'u3'
+      { _id: 'u3', designation: 'Manager' },
+      new Set()
     )
   );
 });

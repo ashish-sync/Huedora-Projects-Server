@@ -26,6 +26,7 @@ import {
   assertVendorBillPaySegregationOfDuties,
   permissionForVendorBillTransition,
 } from './vendorBill.sod.js';
+import { resolveApprovalSubject } from '../users/approvalAuthority.js';
 import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
 import { assertEntityNotStale, beginIdempotentCreate, readIdempotencyKey } from '../../utils/mutationGuards.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
@@ -148,7 +149,27 @@ async function loadVendorContactsByIds(ids = []) {
 
 async function enrichVendorBills(rows = []) {
   const byId = await loadVendorContactsByIds(rows.map((row) => row.contactId));
-  return rows.map((row) => serializeVendorBill(row, byId.get(String(row.contactId || '')) || null));
+  const serialized = rows.map((row) =>
+    serializeVendorBill(row, byId.get(String(row.contactId || '')) || null)
+  );
+  const subjectIds = [
+    ...new Set(
+      serialized
+        .map((row) => String(row.submittedById || row.createdById || '').trim())
+        .filter(Boolean)
+    ),
+  ];
+  const subjects = new Map();
+  await Promise.all(
+    subjectIds.map(async (id) => {
+      subjects.set(id, await resolveApprovalSubject(id));
+    })
+  );
+  return serialized.map((row) => ({
+    ...row,
+    approvalSubject:
+      subjects.get(String(row.submittedById || row.createdById || '').trim()) || null,
+  }));
 }
 
 async function assertNoDuplicateBill({ billNumber, contactId, vendorName, excludeId = null }) {
@@ -399,7 +420,12 @@ async function transitionVendorBill(req, res) {
     );
   }
 
-  assertVendorBillSegregationOfDuties(row, to === 'submitted' ? 'under_verification' : to, req.user._id);
+  await assertVendorBillSegregationOfDuties(
+    row,
+    to === 'submitted' ? 'under_verification' : to,
+    req.user,
+    req.permissions,
+  );
 
   if (to === 'submitted' || to === 'under_verification') {
     if (!trimStr(row.billNumber || row.invoiceNumber)) {
