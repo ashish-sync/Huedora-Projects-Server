@@ -67,6 +67,41 @@ export function relativeUploadPathFromUrl(urlOrPath = '') {
   return '';
 }
 
+/**
+ * Recover durable relative path from a (possibly expired) signed file URL.
+ * Uses jwt.decode — does not require a still-valid signature/expiry.
+ */
+export function relativeUploadPathFromSignedUrl(urlOrPath = '') {
+  const raw = String(urlOrPath || '').trim();
+  if (!raw || !raw.includes('/files/signed')) return '';
+  try {
+    let token = '';
+    if (/^https?:\/\//i.test(raw) || raw.startsWith('/')) {
+      const u = new URL(raw, 'http://local.invalid');
+      token = u.searchParams.get('token') || '';
+    }
+    if (!token && raw.includes('token=')) {
+      token = decodeURIComponent(String(raw.split('token=')[1] || '').split('&')[0] || '');
+    }
+    if (!token) return '';
+    const payload = jwt.decode(token);
+    if (payload?.kind !== 'file' || !payload?.path) return '';
+    return String(payload.path)
+      .replace(/\\/g, '/')
+      .replace(/^\/+/, '')
+      .replace(/^uploads\/+/i, '');
+  } catch {
+    return '';
+  }
+}
+
+/** Relative key from /uploads path or recoverable signed token. */
+export function durableUploadRelativePath(urlOrPath = '') {
+  const raw = String(urlOrPath || '').trim();
+  if (!raw) return '';
+  return relativeUploadPathFromSignedUrl(raw) || relativeUploadPathFromUrl(raw);
+}
+
 export function signUploadFileUrl(relativePath, { expiresIn = '1h' } = {}) {
   const cleaned = String(relativePath || '')
     .replace(/^\/+/, '')
@@ -81,15 +116,18 @@ export function signUploadFileUrl(relativePath, { expiresIn = '1h' } = {}) {
 
 /**
  * Convert any stored `/uploads/...` (or absolute upload URL) into a short-lived
- * signed `/api/v1/files/signed` link. Leaves non-upload / already-signed URLs as-is.
- * Does not move or rewrite files on disk — safe for existing uploads.
+ * signed `/api/v1/files/signed` link. Re-mints a fresh token when given an
+ * already-signed (even expired) URL so Master One View links keep working.
  */
 export function toSignedUploadUrl(urlOrPath, opts) {
   const raw = String(urlOrPath || '').trim();
   if (!raw) return '';
-  if (raw.includes('/files/signed')) return raw;
-  const relative = relativeUploadPathFromUrl(raw);
-  if (!relative) return raw;
+  const relative = durableUploadRelativePath(raw);
+  if (!relative) {
+    // Non-upload API paths (e.g. document download) stay unchanged.
+    if (raw.includes('/files/signed')) return '';
+    return raw;
+  }
   return signUploadFileUrl(relative, opts);
 }
 
