@@ -115,6 +115,8 @@ async function attachObjectStorageReady(base) {
       enabled: summary.enabled,
       bucket: summary.bucket,
       endpointHost: summary.endpointHost,
+      keyPrefix: summary.keyPrefix || null,
+      isolationActive: Boolean(summary.isolationActive),
       accessKeyIdLength: summary.accessKeyIdLength,
       accessKeyIdExpectedLength: summary.accessKeyIdExpectedLength,
       credentialProblem: summary.credentialProblem || undefined,

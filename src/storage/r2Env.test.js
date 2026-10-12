@@ -1,6 +1,12 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { getR2Env, describeR2Config } from './r2Env.js';
+import {
+  getR2Env,
+  describeR2Config,
+  resolveR2KeyPrefix,
+  applyR2KeyPrefix,
+  r2KeyReadCandidates,
+} from './r2Env.js';
 import { toUploadObjectKey, publicUploadPath } from './uploadKeys.js';
 import { resetObjectStoreClientForTests } from './objectStore.js';
 
@@ -13,16 +19,21 @@ describe('r2Env', () => {
     'R2_BUCKET',
     'R2_ENDPOINT',
     'R2_REQUIRED',
+    'R2_KEY_PREFIX',
     'AWS_ACCESS_KEY_ID',
     'AWS_SECRET_ACCESS_KEY',
   ];
   const prev = {};
+  let prevNodeEnv;
 
   beforeEach(() => {
+    prevNodeEnv = process.env.NODE_ENV;
     for (const k of keys) {
       prev[k] = process.env[k];
       delete process.env[k];
     }
+    // Disable auto prefix unless a test sets NODE_ENV / R2_KEY_PREFIX.
+    process.env.R2_KEY_PREFIX = '';
     resetObjectStoreClientForTests();
   });
 
@@ -31,6 +42,8 @@ describe('r2Env', () => {
       if (prev[k] === undefined) delete process.env[k];
       else process.env[k] = prev[k];
     }
+    if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = prevNodeEnv;
     resetObjectStoreClientForTests();
   });
 
@@ -89,6 +102,30 @@ describe('r2Env', () => {
     const cfg = getR2Env();
     assert.equal(cfg.enabled, true);
     assert.equal(cfg.accessKeyId.length, 32);
+  });
+
+  it('auto-prefixes QA and production object keys for bucket isolation', () => {
+    delete process.env.R2_KEY_PREFIX;
+    assert.equal(resolveR2KeyPrefix('qa'), 'env/qa/');
+    assert.equal(resolveR2KeyPrefix('production'), 'env/prod/');
+    assert.equal(resolveR2KeyPrefix('development'), '');
+    assert.equal(applyR2KeyPrefix('contacts/a.pdf', 'env/qa/'), 'env/qa/contacts/a.pdf');
+    assert.equal(applyR2KeyPrefix('env/qa/contacts/a.pdf', 'env/qa/'), 'env/qa/contacts/a.pdf');
+    assert.deepEqual(r2KeyReadCandidates('contacts/a.pdf', 'env/qa/'), [
+      'env/qa/contacts/a.pdf',
+      'contacts/a.pdf',
+    ]);
+  });
+
+  it('exposes isolationActive in describeR2Config when prefix is set', () => {
+    process.env.R2_ACCOUNT_ID = 'acct123';
+    process.env.R2_ACCESS_KEY_ID = 'a'.repeat(32);
+    process.env.R2_SECRET_ACCESS_KEY = 'secret_test';
+    process.env.R2_BUCKET = 'tylo-one-files';
+    process.env.R2_KEY_PREFIX = 'env/qa';
+    const summary = describeR2Config(getR2Env());
+    assert.equal(summary.keyPrefix, 'env/qa/');
+    assert.equal(summary.isolationActive, true);
   });
 });
 
