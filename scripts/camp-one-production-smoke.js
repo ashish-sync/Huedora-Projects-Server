@@ -374,9 +374,15 @@ async function main() {
       camp = await getCamp(campMongoId);
       if (camp.paymentSubmitStatus !== 'payment_hold') throw new Error('hold not applied');
 
-      await api(`/camp-ops/camps/${campMongoId}/release-hold`, { method: 'POST' });
+      await api(`/camp-ops/camps/${campMongoId}/release-hold`, {
+        method: 'POST',
+        body: { paymentRemark: `PROD-SMOKE unhold test ${stamp}` },
+      });
       camp = await getCamp(campMongoId);
       if (camp.paymentSubmitStatus !== 'payment_confirmed') throw new Error('release hold failed');
+      if (camp.paymentRemark !== `PROD-SMOKE unhold test ${stamp}`) {
+        throw new Error('unhold remark not kept');
+      }
       return 'hold cycle OK';
     });
 

@@ -540,14 +540,21 @@ async function test1HappyPath() {
     });
     expectExpect(camp.paymentSubmitStatus === 'payment_hold', 'not on hold');
 
-    await api(`/camp-ops/camps/${camp._id}/release-hold`, { method: 'POST' });
+    await api(`/camp-ops/camps/${camp._id}/release-hold`, {
+      method: 'POST',
+      body: { paymentRemark: 'E2E unhold — documents received' },
+    });
     camp = await getCamp(camp._id);
     logTransition({
       initial: 'Financial / Hold',
-      action: 'POST release-hold',
-      expected: 'Confirmed Payment; remark cleared',
+      action: 'POST release-hold + Unhold Remark',
+      expected: 'Confirmed Payment; unhold remark kept',
       result: `${camp.paymentSubmitStatus}; remark="${camp.paymentRemark || ''}"`,
-      outcome: camp.paymentSubmitStatus === 'payment_confirmed' ? 'OK' : 'MISMATCH',
+      outcome:
+        camp.paymentSubmitStatus === 'payment_confirmed'
+        && camp.paymentRemark === 'E2E unhold — documents received'
+          ? 'OK'
+          : 'MISMATCH',
     });
 
     await api(`/camp-ops/camps/${camp._id}/submit-to-finance`, {
