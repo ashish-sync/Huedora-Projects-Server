@@ -4,6 +4,7 @@ import http from 'http';
 import jwt from 'jsonwebtoken';
 import {
   relativeUploadPathFromUrl,
+  relativeUploadPathFromSignedUrl,
   signUploadFileUrl,
   toSignedUploadUrl,
 } from './file.routes.js';
@@ -64,9 +65,25 @@ describe('file upload URL signing', () => {
     assert.equal(payload.path, 'logistics/demo.pdf');
   });
 
-  it('leaves already-signed and non-upload URLs unchanged', () => {
-    assert.equal(toSignedUploadUrl('/api/v1/files/signed?token=abc'), '/api/v1/files/signed?token=abc');
+  it('re-mints a fresh signed URL from an expired signed token', () => {
+    const expired = jwt.sign(
+      { kind: 'file', path: 'contacts/stale-pan.jpg', iat: Math.floor(Date.now() / 1000) - 7200 },
+      env.jwtAccessSecret,
+      { expiresIn: '1s', noTimestamp: true }
+    );
+    const stale = `/api/v1/files/signed?token=${encodeURIComponent(expired)}`;
+    assert.equal(relativeUploadPathFromSignedUrl(stale), 'contacts/stale-pan.jpg');
+    const fresh = toSignedUploadUrl(stale);
+    assert.match(fresh, /^\/api\/v1\/files\/signed\?token=/);
+    assert.notEqual(fresh, stale);
+    const token = decodeURIComponent(fresh.split('token=')[1]);
+    const payload = jwt.verify(token, env.jwtAccessSecret);
+    assert.equal(payload.path, 'contacts/stale-pan.jpg');
+  });
+
+  it('leaves non-upload URLs unchanged and clears unrecoverable signed junk', () => {
     assert.equal(toSignedUploadUrl('/api/v1/documents/1/download'), '/api/v1/documents/1/download');
+    assert.equal(toSignedUploadUrl('/api/v1/files/signed?token=not-a-jwt'), '');
     assert.equal(toSignedUploadUrl(''), '');
   });
 
