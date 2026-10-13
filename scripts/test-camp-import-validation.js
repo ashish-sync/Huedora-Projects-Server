@@ -27,9 +27,16 @@ const EXPECTED_HEADERS = [
   'PIN Code',
   'City',
   'Expected Patients',
-  'Contact Person Level',
-  'Contact Person Name',
-  'Contact Person Number',
+  'TM Name',
+  'TM Number',
+  'AM Name',
+  'AM Number',
+  'RM Name',
+  'RM Number',
+  'ZM Name',
+  'ZM Number',
+  'PM Name',
+  'PM Number',
 ];
 
 const validRow = {
@@ -52,9 +59,8 @@ const validRow = {
   hq: 'Bengaluru',
   zone: 'South Zone',
   expectedPatients: 50,
-  contactPersonLevel: 'Territory Manager',
-  fieldPersonName: 'Ravi Kumar',
-  fieldPersonPhone: '9876543210',
+  tmName: 'Ravi Kumar',
+  tmPhone: '9876543210',
 };
 
 const cases = [
@@ -118,12 +124,63 @@ const cases = [
       district: '',
       city: '',
       hq: '',
-      fieldPersonName: '',
-      fieldPersonPhone: '',
+      tmName: '',
+      tmPhone: '',
       expectedPatients: 0,
     }],
     expectValid: 0,
     expectInvalid: 1,
+  },
+  {
+    name: 'multiple contact levels map into contactPersons',
+    rows: [{
+      ...validRow,
+      tmName: 'Ravi Kumar',
+      tmPhone: '9876543210',
+      amName: 'Anita AM',
+      amPhone: '9123456780',
+      zmName: 'Zonal Zee',
+      zmPhone: '9988776655',
+    }],
+    expectValid: 1,
+    expectInvalid: 0,
+    assertRow: (row) => {
+      assert(row.contactPersons?.length === 3, `expected 3 contacts, got ${row.contactPersons?.length}`);
+      assert(row.contactPersons[0].level === 'Territory Manager', 'first contact is TM');
+      assert(row.contactPersons[1].level === 'Area Manager', 'second contact is AM');
+      assert(row.contactPersons[2].level === 'Zonal Manager', 'third contact is ZM');
+      assert(row.fieldPersonName === 'Ravi Kumar', 'primary mirrors TM name');
+    },
+  },
+  {
+    name: 'legacy single contact columns still work',
+    rows: [{
+      ...validRow,
+      tmName: '',
+      tmPhone: '',
+      contactPersonLevel: 'Area Manager',
+      fieldPersonName: 'Legacy AM',
+      fieldPersonPhone: '9000011111',
+    }],
+    expectValid: 1,
+    expectInvalid: 0,
+    assertRow: (row) => {
+      assert(row.contactPersons?.length === 1, 'one legacy contact');
+      assert(row.contactPersons[0].level === 'Area Manager', 'legacy level preserved');
+    },
+  },
+  {
+    name: 'missing all contact levels is invalid',
+    rows: [{
+      ...validRow,
+      tmName: '',
+      tmPhone: '',
+      amName: '',
+      amPhone: '',
+    }],
+    expectValid: 0,
+    expectInvalid: 1,
+    expectErrorIncludes: 'At least one contact person level is required',
   },
   {
     name: 'paste with only doctor+date is review-required (missing PIN and start)',
@@ -187,6 +244,8 @@ const cases = [
       endTime: '',
       doctorCode: '',
       expectedPatients: '',
+      tmName: '',
+      tmPhone: '',
       fieldPersonName: '',
       fieldPersonPhone: '',
     }],
@@ -212,8 +271,23 @@ const cases = [
       assert(result.mapping.requestDate === 'Request Date', 'requestDate maps');
       assert(result.mapping.speciality === 'Doctor Type / Specialty', 'speciality maps');
       assert(result.mapping.campAddress === 'Camp / Clinic Address', 'campAddress maps');
-      assert(result.mapping.contactPersonLevel === 'Contact Person Level', 'contactPersonLevel maps');
+      assert(result.mapping.tmName === 'TM Name', 'tmName maps');
+      assert(result.mapping.amPhone === 'AM Number', 'amPhone maps');
+      assert(result.mapping.pmName === 'PM Name', 'pmName maps');
       assert(!result.missingRequiredFields.length, `unexpected missing: ${result.missingRequiredFields.join(', ')}`);
+    },
+  },
+  {
+    name: 'legacy contact headers still map',
+    run: () => {
+      const result = matchImportColumns([
+        'Contact Person Level',
+        'Contact Person Name',
+        'Contact Person Number',
+      ]);
+      assert(result.mapping.contactPersonLevel === 'Contact Person Level', 'legacy level maps');
+      assert(result.mapping.fieldPersonName === 'Contact Person Name', 'legacy name maps');
+      assert(result.mapping.fieldPersonPhone === 'Contact Person Number', 'legacy number maps');
     },
   },
 ];
@@ -241,6 +315,9 @@ for (const testCase of cases) {
           errors.some((err) => String(err).includes(testCase.expectErrorIncludes)),
           `expected error containing "${testCase.expectErrorIncludes}", got: ${errors.join('; ')}`,
         );
+      }
+      if (testCase.assertRow && validRows[0]) {
+        testCase.assertRow(validRows[0]);
       }
     }
     passed += 1;

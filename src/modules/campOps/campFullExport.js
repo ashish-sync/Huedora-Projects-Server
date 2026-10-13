@@ -1,3 +1,4 @@
+import { formatDate, formatDateTime, formatTimeOfDay } from '../../utils/dateFormat.js';
 import { formatConsumablesUsedSummary } from './campConsumables.js';
 import {
   CAMP_EXPORT_SAMPLE_ROW,
@@ -44,25 +45,31 @@ export function resolveExportColumns(columnKeys) {
   return selected.length ? selected : all;
 }
 
+/** Export dates as DD-MM-YYYY; datetimes as DD-MM-YYYY HH:mm (24-hour). */
 function formatExportDate(value) {
   if (!value) return '';
   const text = String(value).trim();
+  if (!text) return '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-    const [year, month, day] = text.split('-');
-    return `${day}/${month}/${year}`;
+    const formatted = formatDate(text);
+    return formatted === '-' ? text : formatted;
   }
-  if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
-    const [year, month, day] = text.slice(0, 10).split('-');
-    return `${day}/${month}/${year}`;
+  if (/[T\s]\d{1,2}:\d{2}/.test(text) || /^\d{4}-\d{2}-\d{2}.+/.test(text)) {
+    const formatted = formatDateTime(text);
+    return formatted === '-' ? text : formatted;
   }
-  const date = new Date(text);
-  if (Number.isNaN(date.getTime())) return text;
-  return date.toLocaleString('en-IN', { hour12: false });
+  const formatted = formatDate(text);
+  return formatted === '-' ? text : formatted;
+}
+
+function formatExportTime(value) {
+  if (!value) return '';
+  return formatTimeOfDay(value) || String(value).trim();
 }
 
 function formatTimeFrameRange(startTime = '', endTime = '') {
-  const start = String(startTime || '').trim();
-  const end = String(endTime || '').trim();
+  const start = formatExportTime(startTime);
+  const end = formatExportTime(endTime);
   if (start && end) return `${start} – ${end}`;
   return start || end || '';
 }
@@ -89,6 +96,10 @@ export function prepareCampForFullExport(camp = {}) {
     sourceLabel: CAMP_SOURCE_LABELS[source] || source,
     requestDate: formatExportDate(enriched.requestDate),
     campDate: formatExportDate(enriched.campDate),
+    startTime: formatExportTime(enriched.startTime),
+    endTime: formatExportTime(enriched.endTime),
+    inTime: formatExportTime(enriched.inTime),
+    outTime: formatExportTime(enriched.outTime),
     timeFrameRange: formatTimeFrameRange(enriched.startTime, enriched.endTime),
     cancelledByLabel: CANCELLED_BY_LABELS[enriched.cancelledBy] || enriched.cancelledBy || '',
     patientsCount: enriched.patientsCount ?? enriched.actualPatients ?? 0,

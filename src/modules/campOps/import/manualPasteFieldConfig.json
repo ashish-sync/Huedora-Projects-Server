@@ -1,5 +1,5 @@
 {
-  "version": "1.2",
+  "version": "1.3",
   "ignore_case": true,
   "ignore_special_characters": true,
   "trim_whitespace": true,
@@ -20,9 +20,16 @@
     { "key": "pincode", "label": "PIN Code", "required": true },
     { "key": "city", "label": "City", "required": true },
     { "key": "expectedPatients", "label": "Expected Patients", "required": true },
-    { "key": "contactPersonLevel", "label": "Contact Person Level", "required": true },
-    { "key": "fieldPersonName", "label": "Contact Person Name", "required": true },
-    { "key": "fieldPersonPhone", "label": "Contact Person Number", "required": true }
+    { "key": "tmName", "label": "TM Name", "required": false },
+    { "key": "tmPhone", "label": "TM Number", "required": false },
+    { "key": "amName", "label": "AM Name", "required": false },
+    { "key": "amPhone", "label": "AM Number", "required": false },
+    { "key": "rmName", "label": "RM Name", "required": false },
+    { "key": "rmPhone", "label": "RM Number", "required": false },
+    { "key": "zmName", "label": "ZM Name", "required": false },
+    { "key": "zmPhone", "label": "ZM Number", "required": false },
+    { "key": "pmName", "label": "PM Name", "required": false },
+    { "key": "pmPhone", "label": "PM Number", "required": false }
   ],
   "importOnlyFields": {
     "source": {
@@ -65,7 +72,7 @@
     },
     "contactPersonLevel": {
       "label": "Contact Person Level",
-      "required": true,
+      "required": false,
       "aliases": [
         "contact person level",
         "contact level",
@@ -73,6 +80,75 @@
         "designation",
         "contact designation"
       ]
+    },
+    "fieldPersonName": {
+      "label": "Contact Person Name",
+      "required": false,
+      "aliases": [
+        "contact person name",
+        "contact name",
+        "field person name"
+      ]
+    },
+    "fieldPersonPhone": {
+      "label": "Contact Person Number",
+      "required": false,
+      "aliases": [
+        "contact person number",
+        "contact person mobile",
+        "contact number",
+        "field person phone"
+      ]
+    },
+    "tmName": {
+      "label": "TM Name",
+      "required": false,
+      "aliases": ["tm name", "territory manager name", "territory manager (tm) name"]
+    },
+    "tmPhone": {
+      "label": "TM Number",
+      "required": false,
+      "aliases": ["tm number", "tm mobile", "tm contact", "territory manager number", "territory manager mobile"]
+    },
+    "amName": {
+      "label": "AM Name",
+      "required": false,
+      "aliases": ["am name", "area manager name", "area manager (am) name", "abm name"]
+    },
+    "amPhone": {
+      "label": "AM Number",
+      "required": false,
+      "aliases": ["am number", "am mobile", "am contact", "area manager number", "abm contact", "abm mobile"]
+    },
+    "rmName": {
+      "label": "RM Name",
+      "required": false,
+      "aliases": ["rm name", "regional manager name", "regional manager (rm) name", "rbm name", "rsm name"]
+    },
+    "rmPhone": {
+      "label": "RM Number",
+      "required": false,
+      "aliases": ["rm number", "rm mobile", "rm contact", "regional manager number", "rbm contact", "rsm contact"]
+    },
+    "zmName": {
+      "label": "ZM Name",
+      "required": false,
+      "aliases": ["zm name", "zonal manager name", "zonal manager (zm) name", "zbm name"]
+    },
+    "zmPhone": {
+      "label": "ZM Number",
+      "required": false,
+      "aliases": ["zm number", "zm mobile", "zm contact", "zonal manager number", "zbm contact", "zbm mobile"]
+    },
+    "pmName": {
+      "label": "PM Name",
+      "required": false,
+      "aliases": ["pm name", "product manager name", "product manager (pm) name"]
+    },
+    "pmPhone": {
+      "label": "PM Number",
+      "required": false,
+      "aliases": ["pm number", "pm mobile", "pm contact", "product manager number", "product manager mobile"]
     }
   },
   "canonical_fields": {
@@ -161,14 +237,28 @@
     ],
     "expected_patients": ["expected patient", "expected patients", "expected patient count", "patients", "patient count", "no of patients", "number of patients", "patient volume"],
     "employee_name": ["employee", "employee name", "emp", "emp name"],
-    "field_person_name": ["field person", "field person name", "se", "se name", "sales executive", "tm", "tm name", "territory manager", "mr", "medical representative", "fse", "field sales executive", "contact person", "contact person name", "bo", "bo name", "business officer", "employee name"],
+    "field_person_name": [
+      "field person",
+      "field person name",
+      "se",
+      "se name",
+      "sales executive",
+      "mr",
+      "medical representative",
+      "fse",
+      "field sales executive",
+      "contact person",
+      "contact person name",
+      "bo",
+      "bo name",
+      "business officer",
+      "employee name"
+    ],
     "field_person_contact": [
       "field person contact",
       "field contact",
       "se mobile",
       "se contact",
-      "tm contact",
-      "tm mobile",
       "mobile",
       "mobile number",
       "phone",
@@ -187,8 +277,8 @@
       "emp mobile",
       "emp contact"
     ],
-    "manager_name": ["manager", "manager name", "abm", "abm name", "asm", "asm name", "rbm", "rbm name", "rsm", "rsm name", "zbm", "zbm name", "flm", "flm name"],
-    "manager_contact": ["manager contact", "manager mobile", "abm contact", "rbm contact", "rsm contact", "zbm contact", "flm contact", "abm mobile", "rbm mobile", "rsm mobile", "zbm mobile", "flm mobile", "mob no", "mobile no"],
+    "manager_name": ["manager", "manager name", "flm", "flm name"],
+    "manager_contact": ["manager contact", "manager mobile", "flm contact", "flm mobile", "mob no", "mobile no"],
     "technician_name": ["tech", "tech name", "technician", "technician name"],
     "technician_contact": ["tech no", "tech number", "tech mobile", "technician mobile", "technician contact"],
     "plan_code": ["plan", "plan code"],
@@ -251,10 +341,20 @@
     "campAddress": true,
     "pincode": true,
     "city": true,
-    "contactPersonLevel": true,
-    "fieldPersonName": true,
-    "fieldPersonPhone": true,
-    "expectedPatients": true
+    "expectedPatients": true,
+    "contactPersonLevel": false,
+    "fieldPersonName": false,
+    "fieldPersonPhone": false,
+    "tmName": false,
+    "tmPhone": false,
+    "amName": false,
+    "amPhone": false,
+    "rmName": false,
+    "rmPhone": false,
+    "zmName": false,
+    "zmPhone": false,
+    "pmName": false,
+    "pmPhone": false
   },
   "field_labels": {
     "source": "Source of Request",
@@ -277,6 +377,16 @@
     "city": "City",
     "hq": "HQ",
     "expectedPatients": "Expected Patients",
+    "tmName": "TM Name",
+    "tmPhone": "TM Number",
+    "amName": "AM Name",
+    "amPhone": "AM Number",
+    "rmName": "RM Name",
+    "rmPhone": "RM Number",
+    "zmName": "ZM Name",
+    "zmPhone": "ZM Number",
+    "pmName": "PM Name",
+    "pmPhone": "PM Number",
     "contactPersonLevel": "Contact Person Level",
     "fieldPersonName": "Contact Person Name",
     "fieldPersonPhone": "Contact Person Number",

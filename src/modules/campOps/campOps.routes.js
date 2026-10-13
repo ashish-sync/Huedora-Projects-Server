@@ -245,7 +245,7 @@ import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
 import { uploadDir } from '../../config/paths.js';
-import { toSignedUploadUrl, durableUploadRelativePath } from '../files/file.routes.js';
+import { toSignedUploadUrl } from '../files/file.routes.js';
 import { buildExecutionDocumentFileName, executionDocumentDisplayName } from './executionDocumentName.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
@@ -2622,21 +2622,13 @@ function newCampTermsFileId() {
 
 function normalizeCampTermsFile(doc, fallbackId) {
   if (!doc?.storedName && !doc?.fileName) return null;
-  const storedName = doc.storedName || '';
-  // Prefer durable /uploads path — never persist short-lived signed JWTs in Mongo.
-  let url = storedName ? `/uploads/camp-ops/${storedName}` : '';
-  if (!url && doc.url) {
-    const fromSigned = durableUploadRelativePath(doc.url);
-    if (fromSigned) url = `/uploads/${fromSigned}`;
-    else if (!String(doc.url).includes('/files/signed')) url = doc.url;
-  }
   return {
     id: trimStr(doc.id || doc._id) || fallbackId || newCampTermsFileId(),
     fileName: doc.fileName || doc.originalFileName || 'Attachment',
-    storedName,
+    storedName: doc.storedName || '',
     mimeType: doc.mimeType || 'application/octet-stream',
     fileSize: doc.fileSize || 0,
-    url,
+    url: doc.url || (doc.storedName ? `/uploads/camp-ops/${doc.storedName}` : ''),
     uploadedAt: doc.uploadedAt || null,
   };
 }
@@ -4261,14 +4253,15 @@ router.get(
   asyncHandler(async (_req, res) => {
     const headers = CAMP_IMPORT_FIELDS.map((f) => f.label);
     // Keep sample cells aligned 1:1 with CAMP_IMPORT_FIELDS / Create Camp form labels.
+    // Columns after Expected Patients: TM/AM/RM/ZM/PM Name + Number (at least one level required).
     const rows = [
       [
         'Import',
         'Acme Pharma',
         'Screening',
         'BMD',
-        '01/08/2026',
-        '30/07/2026',
+        '01-08-2026',
+        '30-07-2026',
         '09:00',
         '12:00',
         'Dr Example',
@@ -4278,17 +4271,24 @@ router.get(
         '400001',
         'Mumbai',
         '40',
-        'Territory Manager',
         'Rep One',
         '9999999999',
+        'Area Lead',
+        '9888888888',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
       ],
       [
         'Email',
         'Acme Pharma',
         'Oncology',
         'Neuro & Physio',
-        '15/08/2026',
-        '10/08/2026',
+        '15-08-2026',
+        '10-08-2026',
         '10:00',
         '14:00',
         'Dr Sharma',
@@ -4298,9 +4298,16 @@ router.get(
         '411001',
         'Pune',
         '25',
-        'Area Manager',
+        '',
+        '',
         'Rep Two',
         '9888888888',
+        '',
+        '',
+        '',
+        '',
+        'Product Lead',
+        '9777777777',
       ],
     ];
     sendCsv(res, 'camp-import-sample.csv', headers, rows);
@@ -4501,8 +4508,6 @@ router.post(
           ...schedule,
           expectedPatients: row.expectedPatients || 0,
           ...contactFields,
-          fieldPersonName: row.fieldPersonName,
-          fieldPersonPhone: row.fieldPersonPhone,
           remarks: row.remarks || '',
           source: normalizeImportSource(row.source, 'excel'),
           status: 'pending_review',
