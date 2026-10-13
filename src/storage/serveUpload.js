@@ -9,6 +9,33 @@ import { touchStoredFileAccess } from './media/touchAccess.js';
 import { ensureHotStorage } from './media/ensureHotStorage.js';
 import { getOrCreateImagePreview } from './media/thumbCache.js';
 
+/** Keys to try when masters were rewritten (jpg→webp) or remapped in StoredFile. */
+async function candidateObjectKeys(objectKey) {
+  const keys = [];
+  const push = (k) => {
+    const key = String(k || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (key && !keys.includes(key)) keys.push(key);
+  };
+  push(objectKey);
+  push(siblingWebpObjectKey(objectKey));
+  try {
+    const { StoredFile } = await import('../modules/files/storedFile.model.js');
+    for (const k of [...keys]) {
+      const row = await StoredFile.findOne({ objectKey: k, isDeleted: false });
+      if (row?.objectKey) push(row.objectKey);
+    }
+    // Stale .jpg/.png rows after optimize: registry often has the .webp master only.
+    const webp = siblingWebpObjectKey(objectKey);
+    if (webp) {
+      const webpRow = await StoredFile.findOne({ objectKey: webp, isDeleted: false });
+      if (webpRow?.objectKey) push(webpRow.objectKey);
+    }
+  } catch {
+    /* registry optional during early boot / tests */
+  }
+  return keys;
+}
+
 /**
  * Resolve a relative upload path and ensure the object exists (disk or R2).
  * Returns { objectKey, absPath, onDisk }.
@@ -19,53 +46,40 @@ export async function resolveUploadLocation(relativePath) {
     throw new AppError('Invalid file path', 400, 'VALIDATION_ERROR');
   }
 
-  let absPath;
-  try {
-    absPath = absoluteUploadPath(objectKey);
-  } catch {
-    throw new AppError('Invalid file path', 400, 'VALIDATION_ERROR');
-  }
+  const keys = await candidateObjectKeys(objectKey);
 
-  // Auto-restore from Infrequent Access before resolving
-  try {
-    await ensureHotStorage(objectKey);
-  } catch (err) {
-    console.warn(`[storage] restore before resolve failed: ${err?.message || err}`);
-  }
-
-  if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) {
-    return { objectKey, absPath, onDisk: true };
-  }
-
-  // Media pipeline converts images to .webp and deletes the original. Older contact
-  // KYC (and similar) rows may still point at .jpg/.png — resolve the webp sibling.
-  const webpKey = siblingWebpObjectKey(objectKey);
-  if (webpKey) {
+  for (const key of keys) {
     try {
-      const webpAbs = absoluteUploadPath(webpKey);
-      if (fs.existsSync(webpAbs) && fs.statSync(webpAbs).isFile()) {
-        return { objectKey: webpKey, absPath: webpAbs, onDisk: true };
-      }
-      if (isObjectStoreEnabled()) {
-        const webpMeta = await headObject(webpKey);
-        if (webpMeta) {
+      await ensureHotStorage(key);
+    } catch (err) {
+      console.warn(`[storage] restore before resolve failed: ${err?.message || err}`);
+    }
+
+    let absPath;
+    try {
+      absPath = absoluteUploadPath(key);
+    } catch {
+      continue;
+    }
+
+    if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) {
+      return { objectKey: key, absPath, onDisk: true };
+    }
+
+    if (isObjectStoreEnabled()) {
+      try {
+        const meta = await headObject(key);
+        if (meta) {
           return {
-            objectKey: webpKey,
-            absPath: webpAbs,
+            objectKey: key,
+            absPath,
             onDisk: false,
-            contentType: webpMeta.ContentType || 'image/webp',
+            contentType: meta.ContentType || (key.endsWith('.webp') ? 'image/webp' : undefined),
           };
         }
+      } catch (err) {
+        console.warn(`[storage] headObject failed key=${key}: ${err?.message || err}`);
       }
-    } catch {
-      /* fall through to NOT_FOUND */
-    }
-  }
-
-  if (isObjectStoreEnabled()) {
-    const meta = await headObject(objectKey);
-    if (meta) {
-      return { objectKey, absPath, onDisk: false, contentType: meta.ContentType };
     }
   }
 
@@ -104,64 +118,46 @@ export async function uploadExists(absOrKey) {
  * @returns {Promise<{ stream: NodeJS.ReadableStream, contentType?: string, from: 'disk'|'r2' }>}
  */
 export async function openUploadReadStream(absOrKey) {
-  const key = toUploadObjectKey(absOrKey);
-  if (!key) throw new AppError('Invalid file path', 400, 'VALIDATION_ERROR');
+  const primary = toUploadObjectKey(absOrKey);
+  if (!primary) throw new AppError('Invalid file path', 400, 'VALIDATION_ERROR');
 
-  try {
-    await ensureHotStorage(key);
-  } catch (err) {
-    console.warn(`[storage] restore before open failed: ${err?.message || err}`);
-  }
-  void touchStoredFileAccess(key);
-
-  let absPath;
-  try {
-    absPath = absoluteUploadPath(key);
-  } catch {
-    throw new AppError('Invalid file path', 400, 'VALIDATION_ERROR');
-  }
-
-  if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) {
-    return {
-      stream: fs.createReadStream(absPath),
-      from: 'disk',
-    };
-  }
-
-  const webpKey = siblingWebpObjectKey(key);
-  if (webpKey) {
+  const keys = await candidateObjectKeys(primary);
+  for (const key of keys) {
     try {
-      const webpAbs = absoluteUploadPath(webpKey);
-      if (fs.existsSync(webpAbs) && fs.statSync(webpAbs).isFile()) {
-        return {
-          stream: fs.createReadStream(webpAbs),
-          contentType: 'image/webp',
-          from: 'disk',
-        };
-      }
-      if (isObjectStoreEnabled()) {
-        const webpObj = await getObject(webpKey);
-        if (webpObj?.Body) {
+      await ensureHotStorage(key);
+    } catch (err) {
+      console.warn(`[storage] restore before open failed: ${err?.message || err}`);
+    }
+    void touchStoredFileAccess(key);
+
+    let absPath;
+    try {
+      absPath = absoluteUploadPath(key);
+    } catch {
+      continue;
+    }
+
+    if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) {
+      return {
+        stream: fs.createReadStream(absPath),
+        contentType: key.endsWith('.webp') ? 'image/webp' : undefined,
+        from: 'disk',
+      };
+    }
+
+    if (isObjectStoreEnabled()) {
+      try {
+        const obj = await getObject(key);
+        if (obj?.Body) {
           return {
-            stream: webpObj.Body,
-            contentType: webpObj.ContentType || 'image/webp',
+            stream: obj.Body,
+            contentType: obj.ContentType || (key.endsWith('.webp') ? 'image/webp' : undefined),
             from: 'r2',
           };
         }
+      } catch (err) {
+        console.warn(`[storage] getObject failed key=${key}: ${err?.message || err}`);
       }
-    } catch {
-      /* fall through */
-    }
-  }
-
-  if (isObjectStoreEnabled()) {
-    const obj = await getObject(key);
-    if (obj?.Body) {
-      return {
-        stream: obj.Body,
-        contentType: obj.ContentType,
-        from: 'r2',
-      };
     }
   }
 
@@ -253,28 +249,39 @@ export async function pipeUploadToResponse(res, absOrKey, { contentType } = {}) 
  * Useful for legacy sync readers (readFileSync, LibreOffice conversion).
  */
 export async function ensureLocalUpload(absOrKey) {
-  const key = toUploadObjectKey(absOrKey);
-  if (!key) throw new AppError('Invalid file path', 400, 'VALIDATION_ERROR');
+  const primary = toUploadObjectKey(absOrKey);
+  if (!primary) throw new AppError('Invalid file path', 400, 'VALIDATION_ERROR');
 
-  try {
-    await ensureHotStorage(key);
-  } catch (err) {
-    console.warn(`[storage] restore before ensureLocal failed: ${err?.message || err}`);
+  const keys = await candidateObjectKeys(primary);
+  for (const key of keys) {
+    try {
+      await ensureHotStorage(key);
+    } catch (err) {
+      console.warn(`[storage] restore before ensureLocal failed: ${err?.message || err}`);
+    }
+    void touchStoredFileAccess(key);
+
+    let absPath;
+    try {
+      absPath = absoluteUploadPath(key);
+    } catch {
+      continue;
+    }
+    if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) return absPath;
+
+    if (!isObjectStoreEnabled()) continue;
+    try {
+      const obj = await getObject(key);
+      if (!obj?.Body) continue;
+      fs.mkdirSync(path.dirname(absPath), { recursive: true });
+      await pipeline(obj.Body, fs.createWriteStream(absPath));
+      return absPath;
+    } catch (err) {
+      console.warn(`[storage] ensureLocal getObject failed key=${key}: ${err?.message || err}`);
+    }
   }
-  void touchStoredFileAccess(key);
 
-  const absPath = absoluteUploadPath(key);
-  if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) return absPath;
-
-  if (!isObjectStoreEnabled()) {
-    throw new AppError('File not found', 404, 'NOT_FOUND');
-  }
-  const obj = await getObject(key);
-  if (!obj?.Body) throw new AppError('File not found', 404, 'NOT_FOUND');
-
-  fs.mkdirSync(path.dirname(absPath), { recursive: true });
-  await pipeline(obj.Body, fs.createWriteStream(absPath));
-  return absPath;
+  throw new AppError('File not found', 404, 'NOT_FOUND');
 }
 
 /** Sync disk-only check used by legacy code paths during gradual migration. */
