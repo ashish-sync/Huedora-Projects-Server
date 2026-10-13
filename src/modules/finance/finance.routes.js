@@ -74,7 +74,7 @@ router.get(
         invoiceStatuses: INVOICE_STATUSES,
         paymentModes: PAYMENT_MODES,
         documentNumberStandards: DOCUMENT_NUMBER_STANDARDS,
-        documentNumberFormat: 'PREFIX/FY/MM/SEQ',
+        documentNumberFormat: 'PREFIXFY/MM/SEQ',
       },
     });
   })
