@@ -284,6 +284,9 @@ export function assertWorkflowAction(camp, action, payload = {}) {
       if (normalizePaymentSubmitStatus(camp.paymentSubmitStatus) !== 'payment_hold') {
         throw new AppError('Camp is not on Hold', 400, 'INVALID_TRANSITION');
       }
+      if (!trim(payload.paymentRemark || payload.unholdRemark || payload.holdRemark || payload.remarks)) {
+        throw new AppError('Unhold Remark is required', 400, 'VALIDATION_ERROR');
+      }
       return;
     }
     case WORKFLOW_ACTIONS.PAYMENT_DONE: {
@@ -345,10 +348,13 @@ export function applyHoldTransition(camp, remark) {
   camp.paymentRemark = trim(remark);
 }
 
-export function applyReleaseHoldTransition(camp) {
-  assertWorkflowAction(camp, WORKFLOW_ACTIONS.RELEASE_HOLD);
+export function applyReleaseHoldTransition(camp, remark) {
+  assertWorkflowAction(camp, WORKFLOW_ACTIONS.RELEASE_HOLD, {
+    paymentRemark: remark,
+    unholdRemark: remark,
+  });
   camp.paymentSubmitStatus = 'payment_confirmed';
-  camp.paymentRemark = '';
+  camp.paymentRemark = trim(remark);
 }
 
 /**

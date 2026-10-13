@@ -471,6 +471,11 @@ const canReadClientMaster = requirePermission(
 const canRequest = requirePermission(PERMISSIONS.CAMPS_REQUEST, PERMISSIONS.CAMPS_APPROVE);
 const canApprove = requirePermission(PERMISSIONS.CAMPS_APPROVE);
 const canFinanceWrite = requirePermission(PERMISSIONS.FINANCE_WRITE);
+const canBulkCampAction = requirePermission(
+  PERMISSIONS.CAMPS_REQUEST,
+  PERMISSIONS.CAMPS_APPROVE,
+  PERMISSIONS.FINANCE_WRITE,
+);
 
 function actor(req) {
   return {
@@ -1184,9 +1189,10 @@ router.get(
 
 router.post(
   '/camps/bulk-action',
-  canRequest,
+  canBulkCampAction,
   asyncHandler(async (req, res) => {
-    const { ids, action } = req.body || {};
+    const { ids, action: rawAction } = req.body || {};
+    const action = rawAction === 'releaseHold' ? 'unhold' : rawAction;
     if (!Array.isArray(ids) || !ids.length) {
       throw new AppError('Select at least one camp', 400, 'VALIDATION_ERROR');
     }
@@ -1196,6 +1202,10 @@ router.post(
       reject: { action: 'reject', needApprove: true },
       execute: { action: 'execute', needApprove: true },
       delete: { archive: true, needAdmin: true },
+      confirmPayment: { action: 'confirmPayment', needFinanceWrite: true },
+      hold: { action: 'hold', needFinanceWrite: true, needRemark: true },
+      unhold: { action: 'unhold', needFinanceWrite: true, needRemark: true },
+      submitToFinance: { action: 'submitToFinance', needRequest: true },
     };
     const config = configs[action];
     if (!config) throw new AppError('Invalid bulk action', 400, 'VALIDATION_ERROR');
@@ -1208,6 +1218,32 @@ router.post(
       !req.permissions.has(PERMISSIONS.CAMPS_APPROVE)
     ) {
       throw new AppError('Insufficient permissions for this bulk action', 403, 'FORBIDDEN');
+    }
+    if (
+      config.needFinanceWrite &&
+      !req.permissions.has(PERMISSIONS.ALL) &&
+      !req.permissions.has(PERMISSIONS.FINANCE_WRITE)
+    ) {
+      throw new AppError('Insufficient permissions for this finance bulk action', 403, 'FORBIDDEN');
+    }
+    if (
+      config.needRequest &&
+      !req.permissions.has(PERMISSIONS.ALL) &&
+      !req.permissions.has(PERMISSIONS.CAMPS_REQUEST) &&
+      !req.permissions.has(PERMISSIONS.CAMPS_APPROVE)
+    ) {
+      throw new AppError('Insufficient permissions to submit camps to Finance One', 403, 'FORBIDDEN');
+    }
+
+    const paymentRemark = trimStr(
+      req.body?.paymentRemark || req.body?.holdRemark || req.body?.unholdRemark || req.body?.remarks,
+    );
+    if (config.needRemark && !paymentRemark) {
+      throw new AppError(
+        action === 'unhold' ? 'Unhold Remark is required' : 'Hold Remark is required',
+        400,
+        'VALIDATION_ERROR',
+      );
     }
 
     const results = { success: [], failed: [] };
@@ -1265,6 +1301,69 @@ router.post(
             camp.executedByEmail = a.email;
             camp.executedAt = new Date().toISOString();
           }
+        }
+        if (config.action === 'confirmPayment') {
+          applyConfirmPaymentTransition(camp);
+        }
+        if (config.action === 'hold') {
+          applyHoldTransition(camp, paymentRemark);
+        }
+        if (config.action === 'unhold') {
+          applyReleaseHoldTransition(camp, paymentRemark);
+        }
+        if (config.action === 'submitToFinance') {
+          if (camp.lifecycleStage !== 'financial') {
+            throw new Error('Submit to Finance One is only allowed in Financial');
+          }
+          if (camp.submittedToFinanceAt) {
+            throw new Error('This camp payout was already submitted to Finance One');
+          }
+          const paymentSubmitStatus = normalizePaymentSubmitStatus(camp.paymentSubmitStatus);
+          if (paymentSubmitStatus !== 'payment_confirmed') {
+            throw new Error('Confirm Payment before submitting to Finance One');
+          }
+          const hcwContactId = camp.hcwContactId;
+          const skipHcwFinanceChecks = camp.status === 'cancelled'
+            && isExecutionCancellationForFinance(camp);
+          if (!skipHcwFinanceChecks) {
+            if (!hcwContactId) {
+              throw new Error('Assign a healthcare worker before submitting to Finance');
+            }
+            const payeeResolved = await resolveCampPayoutPayeeContact(hcwContactId);
+            if (!payeeResolved.assignedContact && !String(hcwContactId).startsWith('spe:')) {
+              throw new Error('Assigned healthcare worker was not found in Contact Directory');
+            }
+            if (payeeResolved.payeeIsServiceProvider && !payeeResolved.payeeContact) {
+              throw new Error(
+                'Service Provider profile is missing in Contact Directory for this assignment',
+              );
+            }
+            const payeeContact = payeeResolved.payeeContact || payeeResolved.assignedContact;
+            const payeeLabel = payeeResolved.payeeIsServiceProvider ? 'Service Provider' : 'HCW';
+            const hcwBlockers = getHcwFinanceBlockers(payeeContact, { label: payeeLabel });
+            if (hcwBlockers.length) {
+              throw new Error(
+                `Complete ${payeeLabel} profile before Finance submit: ${hcwBlockers.join('; ')}`,
+              );
+            }
+          }
+          const now = new Date().toISOString();
+          camp.paymentSubmitStatus = paymentSubmitStatus;
+          camp.financePaymentStatus = 'under_review';
+          camp.submittedToFinanceAt = now;
+          camp.submittedToFinanceById = a.id;
+          camp.submittedToFinanceByEmail = a.email;
+          camp.lifecycleStage = 'financial';
+          const expenseDefaults = campFinanceExpenseDefaults();
+          camp.expenseCategory = expenseDefaults.expenseCategory;
+          camp.expenseSubCategory = expenseDefaults.expenseSubCategory;
+          const expenseSub = await LogisticsExpenseSubCategory.findOne({
+            isDeleted: false,
+            isActive: true,
+            name: CAMP_FINANCE_EXPENSE_SUB_CATEGORY,
+            categoryName: CAMP_FINANCE_EXPENSE_CATEGORY,
+          });
+          camp.expenseSubCategoryId = expenseSub?._id || null;
         }
         syncExecutionCaptureProvenance(camp, before, a);
         await camp.save();
@@ -2332,9 +2431,12 @@ router.post(
   canFinanceWrite,
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
+    const remark = trimStr(
+      req.body?.paymentRemark || req.body?.unholdRemark || req.body?.holdRemark || req.body?.remarks,
+    );
     const before = camp.toObject();
     try {
-      applyReleaseHoldTransition(camp);
+      applyReleaseHoldTransition(camp, remark);
     } catch (err) {
       throw new AppError(err.message || 'Cannot release hold', 400, err.code || 'VALIDATION_ERROR');
     }
@@ -4253,14 +4355,15 @@ router.get(
   asyncHandler(async (_req, res) => {
     const headers = CAMP_IMPORT_FIELDS.map((f) => f.label);
     // Keep sample cells aligned 1:1 with CAMP_IMPORT_FIELDS / Create Camp form labels.
+    // Columns after Expected Patients: TM/AM/RM/ZM/PM Name + Number (at least one level required).
     const rows = [
       [
         'Import',
         'Acme Pharma',
         'Screening',
         'BMD',
-        '01/08/2026',
-        '30/07/2026',
+        '01-08-2026',
+        '30-07-2026',
         '09:00',
         '12:00',
         'Dr Example',
@@ -4270,17 +4373,24 @@ router.get(
         '400001',
         'Mumbai',
         '40',
-        'Territory Manager',
         'Rep One',
         '9999999999',
+        'Area Lead',
+        '9888888888',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
       ],
       [
         'Email',
         'Acme Pharma',
         'Oncology',
         'Neuro & Physio',
-        '15/08/2026',
-        '10/08/2026',
+        '15-08-2026',
+        '10-08-2026',
         '10:00',
         '14:00',
         'Dr Sharma',
@@ -4290,9 +4400,16 @@ router.get(
         '411001',
         'Pune',
         '25',
-        'Area Manager',
+        '',
+        '',
         'Rep Two',
         '9888888888',
+        '',
+        '',
+        '',
+        '',
+        'Product Lead',
+        '9777777777',
       ],
     ];
     sendCsv(res, 'camp-import-sample.csv', headers, rows);
@@ -4493,8 +4610,6 @@ router.post(
           ...schedule,
           expectedPatients: row.expectedPatients || 0,
           ...contactFields,
-          fieldPersonName: row.fieldPersonName,
-          fieldPersonPhone: row.fieldPersonPhone,
           remarks: row.remarks || '',
           source: normalizeImportSource(row.source, 'excel'),
           status: 'pending_review',

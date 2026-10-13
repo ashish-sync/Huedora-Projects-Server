@@ -62,7 +62,7 @@ test('Mark Complete blockers include kms patients product count', () => {
   assert.ok(blockers.some((b) => /Product Count/i.test(b)));
 });
 
-test('Hold requires remark; release clears active remark', () => {
+test('Hold requires remark; Unhold requires remark and keeps last remark', () => {
   const camp = {
     lifecycleStage: 'financial',
     status: 'executed',
@@ -73,9 +73,10 @@ test('Hold requires remark; release clears active remark', () => {
   applyHoldTransition(camp, 'Waiting for UTR');
   assert.equal(camp.paymentSubmitStatus, 'payment_hold');
   assert.equal(camp.paymentRemark, 'Waiting for UTR');
-  applyReleaseHoldTransition(camp);
+  assert.throws(() => applyReleaseHoldTransition(camp, ''), /Unhold Remark is required/);
+  applyReleaseHoldTransition(camp, 'Documents received');
   assert.equal(camp.paymentSubmitStatus, 'payment_confirmed');
-  assert.equal(camp.paymentRemark, '');
+  assert.equal(camp.paymentRemark, 'Documents received');
 });
 
 test('Confirm Payment from pending', () => {
