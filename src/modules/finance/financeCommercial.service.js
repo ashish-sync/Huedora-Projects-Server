@@ -511,7 +511,7 @@ export async function nextBillOfSupplyNumber(documentDate) {
   return nextCommercialDocumentNumber('bill_of_supply', documentDate);
 }
 
-/** Assign official document number on approval (PREFIX/FY/MM/SEQ). */
+/** Assign official document number on approval (PREFIXFY/MM/SEQ). */
 export async function assignCommercialDocumentNumber(row, { force = false } = {}) {
   if (!force && trimStr(row.documentNumber)) return row.documentNumber;
   const number = await nextCommercialDocumentNumber(row.documentType, row.documentDate);

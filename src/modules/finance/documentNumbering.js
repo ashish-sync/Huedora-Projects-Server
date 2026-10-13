@@ -2,8 +2,8 @@ import { AppError } from '../../utils/helpers.js';
 import { nextSequence, releaseSequence } from '../../utils/counters.js';
 
 /**
- * Standard commercial document numbering: PREFIX/FY/MM/SEQ
- * e.g. TCIN/26-27/08/001 — Tax Invoice, FY 26-27, August, 1st of the month
+ * Standard commercial document numbering: PREFIXFY/MM/SEQ
+ * e.g. TCIN26-27/08/001 — Tax Invoice, FY 26-27, August, 1st of the month
  *
  * TCIN – Tax Invoice
  * TCPO – Purchase Order
@@ -13,6 +13,8 @@ import { nextSequence, releaseSequence } from '../../utils/counters.js';
  * TCDN – Debit Note
  * TCDC – Delivery Challan
  * TCBS – Bill of Supply
+ *
+ * Legacy PREFIX/FY/MM/SEQ (with slash after prefix) is still parsed for existing issued docs.
  */
 export const DOCUMENT_NUMBER_PREFIXES = {
   client_invoice: 'TCIN',
@@ -42,12 +44,16 @@ export const DOCUMENT_NUMBER_STANDARDS = Object.entries(DOCUMENT_NUMBER_PREFIXES
     documentType,
     prefix,
     label: DOCUMENT_NUMBER_LABELS[documentType] || documentType,
-    example: `${prefix}/26-27/08/001`,
+    example: `${prefix}26-27/08/001`,
   })
 );
 
-const NUMBER_PATTERN =
-  /^(TCIN|TCPO|TCPI|TCQT|TCCN|TCDN|TCDC|TCBS|IN|PO|PI|CN|DN|DC|BS|TYLO|QT)\/(\d{2}-\d{2})(?:\/(\d{2}))?\/(\d{3,})$/i;
+const PREFIX_GROUP = 'TCIN|TCPO|TCPI|TCQT|TCCN|TCDN|TCDC|TCBS|IN|PO|PI|CN|DN|DC|BS|TYLO|QT';
+/** Current: TCIN26-27/08/001 — optional slash after prefix kept for legacy PREFIX/FY/... */
+const NUMBER_PATTERN = new RegExp(
+  `^(${PREFIX_GROUP})(?:\\/)?(\\d{2}-\\d{2})(?:\\/(\\d{2}))?\\/(\\d{3,})$`,
+  'i'
+);
 const LEGACY_DASH_PATTERN = /^(TCIN|TCPO|TCPI|TCCN)-(\d{2})-(\d{2})-(\d{3,})$/i;
 
 const SEQ_DIGITS = 3;
@@ -111,7 +117,7 @@ export function documentTypeFromPrefix(prefix) {
 }
 
 function formatCanonical(prefix, fy, mm, sequence) {
-  return `${prefix}/${fy}/${mm}/${String(sequence).padStart(SEQ_DIGITS, '0')}`;
+  return `${prefix}${fy}/${mm}/${String(sequence).padStart(SEQ_DIGITS, '0')}`;
 }
 
 export function parseDocumentNumber(value) {
@@ -130,7 +136,7 @@ export function parseDocumentNumber(value) {
         mm: '',
         sequence,
         periodKey: fy,
-        normalized: `${prefix}/${fy}/${String(sequence).padStart(4, '0')}`,
+        normalized: `${prefix}${fy}/${String(sequence).padStart(4, '0')}`,
         fyOnly: true,
       };
     }
@@ -174,7 +180,7 @@ export function formatDocumentNumberExample(documentType, dateIso) {
 }
 
 /**
- * Assign next number for a document type: PREFIX/FY/MM/SEQ (monthly sequence).
+ * Assign next number for a document type: PREFIXFY/MM/SEQ (monthly sequence).
  */
 export async function nextCommercialDocumentNumber(documentType, documentDate) {
   const prefix = DOCUMENT_NUMBER_PREFIXES[documentType];
@@ -183,7 +189,7 @@ export async function nextCommercialDocumentNumber(documentType, documentDate) {
   }
   const { fy, mm, periodKey } = documentNumberPeriod(documentDate);
   const counterName = `financeDoc_${documentType}_${periodKey}`;
-  const numberPrefix = `${prefix}/${fy}/${mm}`;
+  const numberPrefix = `${prefix}${fy}/${mm}`;
   return nextSequence(counterName, numberPrefix, { separator: '/', digits: SEQ_DIGITS });
 }
 
@@ -203,10 +209,10 @@ export async function releaseCommercialDocumentNumber(documentNumber, documentTy
 export function validateManualDocumentNumber(value, documentType) {
   const parsed = parseDocumentNumber(value);
   const expectedPrefix = DOCUMENT_NUMBER_PREFIXES[documentType];
-  const example = formatDocumentNumberExample(documentType) || 'TCIN/26-27/08/001';
+  const example = formatDocumentNumberExample(documentType) || 'TCIN26-27/08/001';
   if (!parsed || parsed.fyOnly || !parsed.mm) {
     throw new AppError(
-      `Document number must match PREFIX/FY/MM/SEQ (e.g. ${example})`,
+      `Document number must match PREFIXFY/MM/SEQ (e.g. ${example})`,
       400,
       'VALIDATION_ERROR'
     );
