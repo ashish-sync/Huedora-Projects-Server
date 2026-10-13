@@ -8,7 +8,7 @@ import {
   isPastePartialImportEligible,
 } from './campOps.requestValidation.js';
 import { normalizePasteStartTime } from './pasteTimeNormalize.js';
-import { normalizeContactPersons } from './campContactPersons.js';
+import { resolveContactPersonFields } from './campContactPersons.js';
 import { cleanSpaces, formatTextValue } from '../../utils/textFormat.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
 import { normalizeImportSource } from './import/importRowEnrichment.js';
@@ -680,12 +680,9 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
         : Number(row.expectedPatients);
     if (Number.isNaN(expectedPatients)) errors.push('Expected patients must be a number');
 
-    const rawStart = isPaste
-      ? (normalizePasteStartTime(row.startTime) || trimStr(row.startTime))
-      : trimStr(row.startTime);
-    const rawEnd = isPaste
-      ? (normalizePasteStartTime(row.endTime) || trimStr(row.endTime))
-      : trimStr(row.endTime);
+    // Always canonicalize clock times to HH:mm (24h) — accept AM/PM from Excel/paste.
+    const rawStart = normalizePasteStartTime(row.startTime) || trimStr(row.startTime);
+    const rawEnd = normalizePasteStartTime(row.endTime) || trimStr(row.endTime);
     // Paste: never invent mandatory startTime (or optional endTime) during validation.
     // Excel/dashboard keep prior schedule defaults for compatibility.
     let schedule;
@@ -705,8 +702,8 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
       }
     } else {
       schedule = resolveCampSchedule({
-        startTime: rawStart || '09:00',
-        endTime: rawEnd,
+        startTime: (normalizePasteStartTime(rawStart) || rawStart) || '09:00',
+        endTime: normalizePasteStartTime(rawEnd) || rawEnd,
         durationHours: row.durationHours,
       });
     }
@@ -741,10 +738,7 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
       endTime: schedule.endTime,
       durationHours: schedule.durationHours,
       expectedPatients: expectedPatients || 0,
-      contactPersonLevel: trimStr(row.contactPersonLevel),
-      contactPersons: normalizeContactPersons(row),
-      fieldPersonName: trimStr(row.fieldPersonName),
-      fieldPersonPhone: trimStr(row.fieldPersonPhone),
+      ...resolveContactPersonFields(row),
       remarks: trimStr(row.remarks),
     });
 
