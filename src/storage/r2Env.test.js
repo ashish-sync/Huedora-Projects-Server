@@ -129,6 +129,17 @@ describe('r2Env', () => {
   });
 });
 
+describe('isR2MissingObjectError', () => {
+  it('recognizes S3/R2 missing-key shapes so legacy unprefixed keys are still tried', async () => {
+    const { isR2MissingObjectError } = await import('./objectStore.js');
+    assert.equal(isR2MissingObjectError({ name: 'NoSuchKey' }), true);
+    assert.equal(isR2MissingObjectError({ Code: 'NoSuchKey' }), true);
+    assert.equal(isR2MissingObjectError({ name: 'NotFound', $metadata: { httpStatusCode: 404 } }), true);
+    assert.equal(isR2MissingObjectError({ $metadata: { httpStatusCode: 404 } }), true);
+    assert.equal(isR2MissingObjectError({ name: 'AccessDenied', $metadata: { httpStatusCode: 403 } }), false);
+  });
+});
+
 describe('uploadKeys', () => {
   it('normalizes /uploads URLs and absolute-style relative keys', () => {
     assert.equal(toUploadObjectKey('/uploads/camp-ops/a.pdf'), 'camp-ops/a.pdf');

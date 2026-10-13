@@ -26,6 +26,15 @@ function normalizeStorageClass(storageClass) {
   return R2_STORAGE_STANDARD;
 }
 
+/** True when R2/S3 reports the object key is absent (try the next candidate). */
+export function isR2MissingObjectError(err) {
+  if (!err) return false;
+  const status = Number(err?.$metadata?.httpStatusCode || err?.statusCode || 0);
+  if (status === 404) return true;
+  const name = String(err?.name || err?.Code || err?.code || '');
+  return ['NotFound', 'NoSuchKey', 'NotFoundError', 'NoSuchKeyError'].includes(name);
+}
+
 let client = null;
 let clientKey = '';
 let lastProbe = null;
@@ -209,10 +218,7 @@ async function resolveExistingR2Key(objectKey, cfg = getR2Env()) {
       );
       return candidate;
     } catch (err) {
-      const status = err?.$metadata?.httpStatusCode || err?.statusCode;
-      if (status === 404 || err?.name === 'NotFound' || err?.Code === 'NotFound') {
-        continue;
-      }
+      if (isR2MissingObjectError(err)) continue;
       throw err;
     }
   }
@@ -223,7 +229,6 @@ export async function getObject(objectKey) {
   const cfg = getR2Env();
   if (!cfg.enabled) return null;
   const s3 = buildClient(cfg);
-  let lastErr = null;
   for (const candidate of r2KeyReadCandidates(objectKey, cfg.keyPrefix)) {
     try {
       return await s3.send(
@@ -233,15 +238,10 @@ export async function getObject(objectKey) {
         }),
       );
     } catch (err) {
-      const status = err?.$metadata?.httpStatusCode || err?.statusCode;
-      if (status === 404 || err?.name === 'NotFound' || err?.Code === 'NotFound') {
-        lastErr = err;
-        continue;
-      }
+      if (isR2MissingObjectError(err)) continue;
       throw err;
     }
   }
-  if (lastErr) throw lastErr;
   return null;
 }
 
@@ -328,10 +328,7 @@ export async function headObject(objectKey) {
         }),
       );
     } catch (err) {
-      const status = err?.$metadata?.httpStatusCode || err?.statusCode;
-      if (status === 404 || err?.name === 'NotFound' || err?.Code === 'NotFound') {
-        continue;
-      }
+      if (isR2MissingObjectError(err)) continue;
       throw err;
     }
   }

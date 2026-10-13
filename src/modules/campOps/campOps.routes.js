@@ -245,7 +245,7 @@ import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
 import { uploadDir } from '../../config/paths.js';
-import { toSignedUploadUrl } from '../files/file.routes.js';
+import { toSignedUploadUrl, durableUploadRelativePath } from '../files/file.routes.js';
 import { buildExecutionDocumentFileName, executionDocumentDisplayName } from './executionDocumentName.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
@@ -2622,13 +2622,21 @@ function newCampTermsFileId() {
 
 function normalizeCampTermsFile(doc, fallbackId) {
   if (!doc?.storedName && !doc?.fileName) return null;
+  const storedName = doc.storedName || '';
+  // Prefer durable /uploads path — never persist short-lived signed JWTs in Mongo.
+  let url = storedName ? `/uploads/camp-ops/${storedName}` : '';
+  if (!url && doc.url) {
+    const fromSigned = durableUploadRelativePath(doc.url);
+    if (fromSigned) url = `/uploads/${fromSigned}`;
+    else if (!String(doc.url).includes('/files/signed')) url = doc.url;
+  }
   return {
     id: trimStr(doc.id || doc._id) || fallbackId || newCampTermsFileId(),
     fileName: doc.fileName || doc.originalFileName || 'Attachment',
-    storedName: doc.storedName || '',
+    storedName,
     mimeType: doc.mimeType || 'application/octet-stream',
     fileSize: doc.fileSize || 0,
-    url: doc.url || (doc.storedName ? `/uploads/camp-ops/${doc.storedName}` : ''),
+    url,
     uploadedAt: doc.uploadedAt || null,
   };
 }
