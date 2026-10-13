@@ -1,7 +1,6 @@
 import XLSX from 'xlsx';
 import { CAMP_NAME_OPTIONS } from '../config/campNames.js';
 import { CAMP_IMPORT_FIELDS } from './importMapper.js';
-import { CONTACT_PERSON_LEVELS } from '../../campOps.constants.js';
 
 const SAMPLE_CLIENTS = [
   'Sun Pharma',
@@ -47,7 +46,7 @@ function formatCampDate(dayOffset) {
   const day = String(date.getDate()).padStart(2, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const year = date.getFullYear();
-  return `${day}/${month}/${year}`;
+  return `${day}-${month}-${year}`;
 }
 
 function computeEndTime(startTime, durationHours) {
@@ -80,9 +79,16 @@ function buildSampleRow(index) {
     'PIN Code': location.pincode,
     City: location.city,
     'Expected Patients': 40 + index * 3,
-    'Contact Person Level': CONTACT_PERSON_LEVELS[index % CONTACT_PERSON_LEVELS.length],
-    'Contact Person Name': `Field Rep ${index + 1}`,
-    'Contact Person Number': `98765${String(43210 + index).slice(-5)}`,
+    'TM Name': index % 2 === 0 ? `TM Rep ${index + 1}` : '',
+    'TM Number': index % 2 === 0 ? `98765${String(43210 + index).slice(-5)}` : '',
+    'AM Name': index % 3 === 0 ? `AM Lead ${index + 1}` : '',
+    'AM Number': index % 3 === 0 ? `98888${String(10000 + index).slice(-5)}` : '',
+    'RM Name': '',
+    'RM Number': '',
+    'ZM Name': '',
+    'ZM Number': '',
+    'PM Name': index % 2 === 1 ? `PM Lead ${index + 1}` : '',
+    'PM Number': index % 2 === 1 ? `97777${String(20000 + index).slice(-5)}` : '',
   };
 }
 

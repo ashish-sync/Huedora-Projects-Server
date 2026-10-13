@@ -1,3 +1,4 @@
+import { formatDate, formatDateTime, formatTimeOfDay } from '../../utils/dateFormat.js';
 import {
   computeLifecycleDerived,
   FINANCE_PAYMENT_STATUSES,
@@ -62,13 +63,22 @@ export const CAMP_FINANCE_EXPORT_COLUMNS = [
 function formatExportDate(value) {
   if (!value) return '';
   const text = String(value).trim();
-  if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
-    const [year, month, day] = text.slice(0, 10).split('-');
-    return `${day}/${month}/${year}`;
+  if (!text) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const formatted = formatDate(text);
+    return formatted === '-' ? text : formatted;
   }
-  const date = new Date(text);
-  if (Number.isNaN(date.getTime())) return text;
-  return date.toLocaleString('en-IN', { hour12: false });
+  if (/[T\s]\d{1,2}:\d{2}/.test(text) || /^\d{4}-\d{2}-\d{2}.+/.test(text)) {
+    const formatted = formatDateTime(text);
+    return formatted === '-' ? text : formatted;
+  }
+  const formatted = formatDate(text);
+  return formatted === '-' ? text : formatted;
+}
+
+function formatExportTime(value) {
+  if (!value) return '';
+  return formatTimeOfDay(value) || String(value).trim();
 }
 
 function paymentSubmitLabel(value) {
@@ -91,6 +101,8 @@ export function buildCampFinanceExportRow(camp = {}) {
     submittedToFinanceAt: formatExportDate(row.submittedToFinanceAt),
     financeProcessedAt: formatExportDate(row.financeProcessedAt),
     campDate: formatExportDate(row.campDate),
+    inTime: formatExportTime(row.inTime),
+    outTime: formatExportTime(row.outTime),
     status: String(row.status || '').replaceAll('_', ' '),
   };
 

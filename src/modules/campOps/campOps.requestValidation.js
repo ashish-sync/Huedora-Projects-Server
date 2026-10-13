@@ -132,11 +132,16 @@ const REQUEST_COMPLETION_CHECKS = [
   { key: 'expectedPatients', test: (c) => /^\d+$/.test(String(c.expectedPatients ?? '').trim()) },
   {
     key: 'contactPersons',
-    test: (c) => normalizeContactPersons(c).every(
-      (contact) => hasText(contact.name)
-        && CONTACT_PERSON_LEVELS.includes(trimStr(contact.level))
-        && isValidPhone(contact.phone),
-    ),
+    test: (c) => {
+      const contacts = normalizeContactPersons(c).filter(
+        (contact) => hasText(contact.name) || hasText(contact.phone),
+      );
+      return contacts.length > 0 && contacts.every(
+        (contact) => hasText(contact.name)
+          && CONTACT_PERSON_LEVELS.includes(trimStr(contact.level))
+          && isValidPhone(contact.phone),
+      );
+    },
   },
 ];
 
@@ -198,19 +203,23 @@ export function getRequestStageBlockers(camp = {}) {
   }
 
   const contacts = normalizeContactPersons(camp);
-  if (!contacts.length) {
-    errors.push('At least one contact person is required');
+  const filledContacts = contacts.filter((contact) => hasText(contact.name) || hasText(contact.phone));
+  if (!filledContacts.length) {
+    errors.push(
+      'At least one contact person level is required (TM / AM / RM / ZM / PM Name and Number)',
+    );
+  } else {
+    filledContacts.forEach((contact, index) => {
+      const levelLabel = trimStr(contact.level) || `Contact ${index + 1}`;
+      if (!CONTACT_PERSON_LEVELS.includes(trimStr(contact.level))) {
+        errors.push(`${levelLabel} level is required`);
+      }
+      if (!hasText(contact.name)) errors.push(`${levelLabel} name is required`);
+      if (!isValidPhone(contact.phone)) {
+        errors.push(`${levelLabel} number must be exactly 10 digits`);
+      }
+    });
   }
-  contacts.forEach((contact, index) => {
-    const label = contacts.length > 1 ? `Contact person ${index + 1}` : 'Contact person';
-    if (!CONTACT_PERSON_LEVELS.includes(trimStr(contact.level))) {
-      errors.push(`${label} level is required`);
-    }
-    if (!hasText(contact.name)) errors.push(`${label} name is required`);
-    if (!isValidPhone(contact.phone)) {
-      errors.push(`${label} number must be exactly 10 digits`);
-    }
-  });
 
   return errors;
 }
