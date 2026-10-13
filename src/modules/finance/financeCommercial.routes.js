@@ -1890,7 +1890,7 @@ router.get(
       data: {
         commercialStatuses: COMMERCIAL_DOC_STATUSES,
         documentNumberStandards: DOCUMENT_NUMBER_STANDARDS,
-        documentNumberFormat: 'PREFIX/FY/MM/SEQ',
+        documentNumberFormat: 'PREFIXFY/MM/SEQ',
       },
     });
   })
