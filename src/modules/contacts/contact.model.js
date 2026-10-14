@@ -49,6 +49,8 @@ export const Contact = defineCollection('contacts', {
   stateId: null,
   districtId: null,
   cityId: null,
+  /** Default Camp Payout (₹) when this HCW is assigned in Camp One Finance. */
+  campAmount: 0,
   /** Healthcare Worker staff → parent Service Provider contact */
   serviceProviderContactId: null,
   /** Employees under a Service Provider (name, mobile, profession) */
@@ -164,6 +166,10 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
     stateId: body.stateId || null,
     districtId: body.districtId || null,
     cityId: body.cityId || null,
+    campAmount:
+      !isClient && contactCategory === 'Healthcare Worker'
+        ? Math.max(0, Number(body.campAmount ?? body['Camp Amount'] ?? body.camp_amount) || 0)
+        : 0,
   };
 
   // Only touch the roster when the client actually sent an array.

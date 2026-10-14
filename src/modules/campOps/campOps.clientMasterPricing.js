@@ -1,12 +1,12 @@
 /**
- * Client Master pricing units → Camp One revenue auto-calc.
+ * Client Master pricing units → Camp One / Financial stage revenue auto-calc.
  *
- * Camp Revenue:
- *   Executed + Chargeable → executedCampUnit
- *   Cancelled + Chargeable → cancelledCampUnit
- *   Non-Chargeable → 0
+ * Financial Stage camp units (Client Master):
+ *   Executed Chargeable → executedCampUnit
+ *   Cancelled Chargeable → cancelledCampUnit
+ *   Cancelled Non-Chargeable → always 0 financial units (all revenue parts)
  *
- * Overtime Revenue:
+ * Overtime Revenue (executed / chargeable paths only):
  *   max(0, Total Hours − Camp Duration) × OT Unit
  *   Total Hours = In→Out; Camp Duration = Client Master campDuration (fallback: camp durationHours)
  *
@@ -139,11 +139,22 @@ export function isCampExecutedForRevenue(camp = {}) {
   return exec === 'Camp Completed' || exec === 'Marked Executed';
 }
 
+const CANCELLED_EXECUTION_STATUSES = new Set([
+  'Cancelled',
+  'Refused',
+  'Cancelled by Tylo',
+  'Cancelled by Client',
+]);
+
 export function isCampCancelledForRevenue(camp = {}) {
   const status = trimStr(camp.status).toLowerCase();
   if (status === 'cancelled') return true;
   const exec = normalizeExecutionStatus(camp.executionStatus);
-  return exec === 'Cancelled' || exec === 'Refused';
+  if (CANCELLED_EXECUTION_STATUSES.has(exec)) return true;
+  const reason = normalizeExecutionStatus(camp.assignmentRefusalReason);
+  if (CANCELLED_EXECUTION_STATUSES.has(reason)) return true;
+  if (camp.cancelledBy === 'brand' || camp.cancelledBy === 'khw') return true;
+  return false;
 }
 
 export function isCampChargeable(camp = {}) {
@@ -176,10 +187,18 @@ export function computeCampRevenueFromPricing(camp = {}, pricing = null) {
   };
   if (!pricing) return empty;
 
+  const cancelled = isCampCancelledForRevenue(camp);
+  const chargeable = isCampChargeable(camp);
+
+  // Cancelled Non-Chargeable → always 0 financial units.
+  if (cancelled && !chargeable) {
+    return empty;
+  }
+
   let campRevenue = 0;
-  if (!isCampChargeable(camp)) {
+  if (!chargeable) {
     campRevenue = 0;
-  } else if (isCampCancelledForRevenue(camp)) {
+  } else if (cancelled) {
     campRevenue = num(pricing.cancelledCampUnit);
   } else if (isCampExecutedForRevenue(camp)) {
     campRevenue = num(pricing.executedCampUnit);
@@ -218,4 +237,35 @@ export function computeCampRevenueFromPricing(camp = {}, pricing = null) {
     otherRevenue,
     totalRevenue,
   };
+}
+
+/**
+ * Seed Financial-stage revenue from Client Master when empty (or force-zero Cancelled Non-Chargeable).
+ * Does not overwrite non-zero manual revenue except Cancelled Non-Chargeable → all zeros.
+ */
+export function seedCampRevenueFromPricing(camp, pricing) {
+  if (!camp || !pricing) return camp;
+
+  const cancelled = isCampCancelledForRevenue(camp);
+  const chargeable = isCampChargeable(camp);
+  if (cancelled && !chargeable) {
+    camp.campRevenue = 0;
+    camp.travelRevenue = 0;
+    camp.overtimeRevenue = 0;
+    camp.otherRevenue = 0;
+    camp.totalRevenue = 0;
+    return camp;
+  }
+
+  const revenueEmpty = ['campRevenue', 'travelRevenue', 'overtimeRevenue', 'otherRevenue']
+    .every((key) => num(camp[key]) === 0);
+  if (!revenueEmpty) return camp;
+
+  const computed = computeCampRevenueFromPricing(camp, pricing);
+  camp.campRevenue = computed.campRevenue;
+  camp.travelRevenue = computed.travelRevenue;
+  camp.overtimeRevenue = computed.overtimeRevenue;
+  camp.otherRevenue = computed.otherRevenue;
+  camp.totalRevenue = computed.totalRevenue;
+  return camp;
 }

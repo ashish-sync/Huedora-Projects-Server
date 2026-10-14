@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   computeCampRevenueFromPricing,
   resolveClientMasterPricingFromRecords,
+  seedCampRevenueFromPricing,
 } from './campOps.clientMasterPricing.js';
 import { computeLifecycleDerived, lifecyclePayloadFromBody } from './campOps.lifecycle.js';
 
@@ -79,7 +80,18 @@ test('camp revenue uses cancelled unit when chargeable and cancelled', () => {
   assert.equal(result.campRevenue, 2000);
 });
 
-test('non-chargeable camp revenue is zero', () => {
+test('cancelled by Tylo/Client chargeable uses cancelledCampUnit', () => {
+  for (const executionStatus of ['Cancelled by Tylo', 'Cancelled by Client']) {
+    const result = computeCampRevenueFromPricing({
+      status: 'cancelled',
+      executionStatus,
+      chargeableStatus: 'Chargeable',
+    }, pricing);
+    assert.equal(result.campRevenue, 2000, executionStatus);
+  }
+});
+
+test('non-chargeable executed camp revenue is zero; OT still applies', () => {
   const result = computeCampRevenueFromPricing({
     status: 'executed',
     executionStatus: 'Camp Completed',
@@ -89,6 +101,50 @@ test('non-chargeable camp revenue is zero', () => {
   }, pricing);
   assert.equal(result.campRevenue, 0);
   assert.equal(result.overtimeRevenue, 800);
+});
+
+test('cancelled non-chargeable always zeros all financial units', () => {
+  const result = computeCampRevenueFromPricing({
+    status: 'cancelled',
+    executionStatus: 'Cancelled by Client',
+    chargeableStatus: 'Non-Chargeable',
+    totalHours: 6,
+    durationHours: 4,
+    actualPatients: 80,
+    kmRoundTrip: 200,
+  }, pricing);
+  assert.equal(result.campRevenue, 0);
+  assert.equal(result.travelRevenue, 0);
+  assert.equal(result.overtimeRevenue, 0);
+  assert.equal(result.otherRevenue, 0);
+  assert.equal(result.totalRevenue, 0);
+});
+
+test('seedCampRevenueFromPricing fills empty executed chargeable from Client Master', () => {
+  const camp = {
+    status: 'executed',
+    executionStatus: 'Camp Completed',
+    chargeableStatus: 'Chargeable',
+    totalHours: 4,
+  };
+  seedCampRevenueFromPricing(camp, pricing);
+  assert.equal(camp.campRevenue, 5000);
+  assert.equal(camp.totalRevenue, 5000);
+});
+
+test('seedCampRevenueFromPricing forces zero for cancelled non-chargeable even if stored', () => {
+  const camp = {
+    status: 'cancelled',
+    executionStatus: 'Cancelled by Tylo',
+    chargeableStatus: 'Non-Chargeable',
+    campRevenue: 2000,
+    overtimeRevenue: 100,
+    totalRevenue: 2100,
+  };
+  seedCampRevenueFromPricing(camp, pricing);
+  assert.equal(camp.campRevenue, 0);
+  assert.equal(camp.overtimeRevenue, 0);
+  assert.equal(camp.totalRevenue, 0);
 });
 
 test('computeLifecycleDerived keeps stored revenue when Client Master pricing is provided', () => {
@@ -149,7 +205,23 @@ test('lifecyclePayloadFromBody preserves manual revenue overrides even with pric
   assert.equal(next.overtimeRevenue, 50);
   assert.equal(next.otherRevenue, 25);
   assert.equal(next.totalRevenue, 4725);
+  assert.equal(next.totalPayout, 1000);
   assert.equal(next.netContribution, 3725);
+});
+
+test('lifecyclePayloadFromBody recomputes totalPayout from parts when body totalPayout is stale zero', () => {
+  const next = lifecyclePayloadFromBody(
+    {
+      campAmount: 2500,
+      travelling: 0,
+      overtimeExpense: 0,
+      otherExpenses: 0,
+      totalPayout: 0,
+    },
+    { lifecycleStage: 'financial' },
+  );
+  assert.equal(next.campAmount, 2500);
+  assert.equal(next.totalPayout, 2500);
 });
 
 test('net contribution is total revenue minus total payout', () => {

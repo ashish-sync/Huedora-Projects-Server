@@ -387,7 +387,7 @@ router.get(
     }
 
     const ASSIGN_PROJECTION =
-      'name email contact mobile resourceType contactCategory profession organization city state district pinCode serviceProviderContactId providerEmployees';
+      'name email contact mobile resourceType contactCategory profession organization city state district pinCode campAmount serviceProviderContactId providerEmployees';
 
     let query = Contact.find(filter).sort(sort || 'name').skip(skip).limit(limit);
     if (assignLight) {
