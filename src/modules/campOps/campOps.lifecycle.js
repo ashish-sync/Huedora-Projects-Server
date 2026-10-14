@@ -6,7 +6,11 @@ import {
   getCampEndDateTime,
 } from './campOps.helpers.js';
 import { localTodayIso } from './campDatePolicy.js';
-import { computeCampRevenueFromPricing } from './campOps.clientMasterPricing.js';
+import {
+  computeCampRevenueFromPricing,
+  isCampCancelledForRevenue,
+  isCampChargeable,
+} from './campOps.clientMasterPricing.js';
 import { clearCampHcwAssignment } from './hcwAssignmentGap.js';
 
 function localTrim(v) {
@@ -645,9 +649,12 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
 
   const derived = computeLifecycleDerived({ ...existing, ...body, ...payload }, { pricing });
   const next = { ...payload, ...derived };
-  // Prefer explicit body revenue; otherwise keep existing-derived payload values when sent;
-  // never invent zeros for omitted finance keys in the merge patch.
-  for (const key of ['campRevenue', 'travelRevenue', 'overtimeRevenue', 'otherRevenue']) {
+  // Prefer explicit body finance parts; never invent zeros for omitted finance keys in the merge patch.
+  // derived.totalPayout / revenue totals must not stick when the client did not send those parts.
+  for (const key of [
+    'campRevenue', 'travelRevenue', 'overtimeRevenue', 'otherRevenue',
+    'campAmount', 'travelling', 'overtimeExpense', 'otherExpenses',
+  ]) {
     if (payload[key] !== undefined) {
       next[key] = payload[key];
     } else {
@@ -657,9 +664,23 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
 
   const bodyTouchedRevenue = ['campRevenue', 'travelRevenue', 'overtimeRevenue', 'otherRevenue']
     .some((key) => body[key] !== undefined && body[key] !== '');
+  const bodyTouchedPayout = ['campAmount', 'travelling', 'overtimeExpense', 'otherExpenses']
+    .some((key) => body[key] !== undefined && body[key] !== '');
   const revenueEmpty = ['campRevenue', 'travelRevenue', 'overtimeRevenue', 'otherRevenue']
     .every((key) => num(next[key] ?? existing?.[key]) === 0);
-  if (pricing && derived.revenueAutoCalculated && !bodyTouchedRevenue && revenueEmpty) {
+  const mergedForChargeable = { ...existing, ...body, ...next };
+  // Cancelled Non-Chargeable → always 0 financial units (Financial module rule).
+  if (
+    pricing
+    && derived.revenueAutoCalculated
+    && isCampCancelledForRevenue(mergedForChargeable)
+    && !isCampChargeable(mergedForChargeable)
+  ) {
+    next.campRevenue = 0;
+    next.travelRevenue = 0;
+    next.overtimeRevenue = 0;
+    next.otherRevenue = 0;
+  } else if (pricing && derived.revenueAutoCalculated && !bodyTouchedRevenue && revenueEmpty) {
     next.campRevenue = derived.formulaCampRevenue;
     next.travelRevenue = derived.formulaTravelRevenue;
     next.overtimeRevenue = derived.formulaOvertimeRevenue;
@@ -679,7 +700,23 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
   } else {
     delete next.totalRevenue;
   }
-  if (body.totalPayout !== undefined && body.totalPayout !== '') {
+  // When payout parts are sent, derive total from parts. A stale form totalPayout: 0
+  // must not win over a non-zero Camp Payout (campAmount) — that was wiping amounts.
+  if (bodyTouchedPayout || ['campAmount', 'travelling', 'overtimeExpense', 'otherExpenses']
+    .some((key) => next[key] !== undefined)) {
+    const partsSum = Math.round((
+      num(next.campAmount ?? existing?.campAmount)
+      + num(next.travelling ?? existing?.travelling)
+      + num(next.overtimeExpense ?? existing?.overtimeExpense)
+      + num(next.otherExpenses ?? existing?.otherExpenses)
+    ) * 100) / 100;
+    if (body.totalPayout !== undefined && body.totalPayout !== '') {
+      const bodyTotal = Math.max(0, num(body.totalPayout));
+      next.totalPayout = bodyTotal === 0 && partsSum > 0 ? partsSum : bodyTotal;
+    } else {
+      next.totalPayout = partsSum;
+    }
+  } else if (body.totalPayout !== undefined && body.totalPayout !== '') {
     next.totalPayout = Math.max(0, num(body.totalPayout));
   } else if (!Object.prototype.hasOwnProperty.call(body, 'totalPayout')
     && next.totalPayout === undefined
