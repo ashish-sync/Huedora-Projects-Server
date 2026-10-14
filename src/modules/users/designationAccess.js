@@ -1,36 +1,20 @@
-import { PERMISSIONS } from '../../config/constants.js';
+import { ROLE_PERMISSIONS } from '../../config/constants.js';
 
-/** Permissions for Healthcare Camp Coordinator — scoped to five applications only. */
-export const CAMP_COORDINATOR_PERMISSIONS = [
-  PERMISSIONS.AGREEMENTS_READ,
-  PERMISSIONS.AGREEMENTS_WRITE,
-  PERMISSIONS.DOCUMENTS_WRITE,
-  PERMISSIONS.CAMPS_READ,
-  PERMISSIONS.CAMPS_REQUEST,
-  PERMISSIONS.CAMPS_APPROVE,
-  PERMISSIONS.VERIFICATIONS_READ,
-  PERMISSIONS.ASSET_REQUESTS_READ,
-  PERMISSIONS.MOVEMENTS_READ,
-  PERMISSIONS.REPAIRS_READ,
-  PERMISSIONS.ASSET_REQUESTS_REQUEST,
-  PERMISSIONS.MOVEMENTS_REQUEST,
-  PERMISSIONS.REPAIRS_WRITE,
-  PERMISSIONS.MAINTENANCE_WRITE,
-  PERMISSIONS.DASHBOARDS_READ,
-  PERMISSIONS.NOTIFICATIONS_READ,
-];
+/** Keep in sync with ROLE_PERMISSIONS['Camp Coordinator'] (seed overwrites this role). */
+export const CAMP_COORDINATOR_PERMISSIONS = [...ROLE_PERMISSIONS['Camp Coordinator']];
 
 export const DESIGNATION_ACCESS_TEMPLATES = {
   'healthcare camp coordinator': {
     roleNames: ['Camp Coordinator'],
     summary:
-      'Document One, Camp One, Request One, Operations Dashboard & Notifications, and Verification One only.',
+      'Document One, Camp One (incl. Confirm / Hold / Unhold / Submit to Finance One), Request One, Operations Dashboard & Notifications, and Verification One.',
     modules: [
       { moduleId: 'agreements', access: 'All' },
       { moduleId: 'camps', access: 'All' },
       { moduleId: 'assetRequests', access: 'View, Request' },
       { moduleId: 'platform', access: 'All' },
       { moduleId: 'verifications', access: 'Viewer' },
+      { moduleId: 'finance', access: 'View, Add' },
     ],
   },
 };
