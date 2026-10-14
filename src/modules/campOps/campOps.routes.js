@@ -160,6 +160,7 @@ import {
 import {
   parseCampDurationToHours,
   resolveClientMasterPricingForCamp,
+  seedCampRevenueFromPricing,
 } from './campOps.clientMasterPricing.js';
 import {
   assertCampSubmittedToFinance,
@@ -1300,6 +1301,12 @@ router.post(
             camp.executedById = a.id;
             camp.executedByEmail = a.email;
             camp.executedAt = new Date().toISOString();
+            const pricing = await resolveClientMasterPricingForCamp(camp.clientId, {
+              campaignType: camp.campaignType,
+              campaignName: camp.campaignName,
+              clientName: camp.clientName,
+            });
+            seedCampRevenueFromPricing(camp, pricing);
           }
         }
         if (config.action === 'confirmPayment') {
@@ -2048,6 +2055,31 @@ router.put(
       camp.lifecycleStage = 'financial';
     }
 
+    if (
+      normalizeLifecycleStage(before.lifecycleStage, 'request') !== 'financial'
+      && normalizeLifecycleStage(camp.lifecycleStage, 'request') === 'financial'
+    ) {
+      seedCampRevenueFromPricing(camp, pricing);
+      if (!(Number(camp.campAmount) > 0) && trimStr(camp.hcwContactId)) {
+        try {
+          const payeeResolved = await resolveCampPayoutPayeeContact(camp.hcwContactId);
+          const payee = payeeResolved.payeeContact || payeeResolved.assignedContact;
+          const fromContact = Number(payee?.campAmount);
+          if (Number.isFinite(fromContact) && fromContact > 0) {
+            camp.campAmount = fromContact;
+            const travelling = Number(camp.travelling) || 0;
+            const overtimeExpense = Number(camp.overtimeExpense) || 0;
+            const otherExpenses = Number(camp.otherExpenses) || 0;
+            camp.totalPayout = Math.round(
+              (fromContact + travelling + overtimeExpense + otherExpenses) * 100,
+            ) / 100;
+          }
+        } catch {
+          // Contact lookup is best-effort for Camp Payout defaults.
+        }
+      }
+    }
+
     syncExecutionCaptureProvenance(camp, before, actor(req));
     // Duplicate check only when the five-field identity fingerprint actually changes.
     // Cosmetic re-posts (9:00 vs 09:00) and locked non-request stages share the same fingerprint.
@@ -2254,6 +2286,12 @@ async function transitionCamp(req, res, nextStatus, action) {
     if (req.body?.actualPatients != null) {
       camp.actualPatients = Math.max(0, Number(req.body.actualPatients) || 0);
     }
+    const pricing = await resolveClientMasterPricingForCamp(camp.clientId, {
+      campaignType: camp.campaignType,
+      campaignName: camp.campaignName,
+      clientName: camp.clientName,
+    });
+    seedCampRevenueFromPricing(camp, pricing);
   }
   if (nextStatus === 'cancelled') {
     throw new AppError(
@@ -2379,6 +2417,14 @@ router.post(
       });
     } catch (err) {
       throw new AppError(err.message || 'Invalid closure details', 400, err.code || 'VALIDATION_ERROR');
+    }
+    if (normalizeLifecycleStage(camp.lifecycleStage, 'request') === 'financial') {
+      const pricing = await resolveClientMasterPricingForCamp(camp.clientId, {
+        campaignType: camp.campaignType,
+        campaignName: camp.campaignName,
+        clientName: camp.clientName,
+      });
+      seedCampRevenueFromPricing(camp, pricing);
     }
     await camp.save();
     await audit(req, 'camp_ops.close', 'camp_ops_camp', camp._id, before, camp.toObject());

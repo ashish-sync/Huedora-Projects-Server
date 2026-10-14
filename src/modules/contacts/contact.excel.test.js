@@ -40,12 +40,12 @@ test('export includes Service Provider embedded staff as Healthcare Worker rows'
   assert.equal(ravi[3], 'Individual');
   assert.equal(ravi[4], 'Nurse');
   assert.equal(ravi[7], '9111000001');
-  assert.equal(ravi[16], 'Care Agency');
+  assert.equal(ravi[17], 'Care Agency');
   assert.equal(ravi[8], 'Pune');
 
   const anita = rows.find((r) => r[0] === 'Anita Desai');
   assert.ok(anita);
-  assert.equal(anita[16], 'Care Agency');
+  assert.equal(anita[17], 'Care Agency');
 });
 
 test('export skips roster staff already present as linked Contact rows', () => {
@@ -74,5 +74,5 @@ test('export skips roster staff already present as linked Contact rows', () => {
 
   const raviRows = rows.filter((r) => r[0] === 'Ravi Kumar');
   assert.equal(raviRows.length, 1, 'must not duplicate linked + roster staff');
-  assert.equal(raviRows[0][16], 'Care Agency');
+  assert.equal(raviRows[0][17], 'Care Agency');
 });
