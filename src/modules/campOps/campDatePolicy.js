@@ -1,8 +1,11 @@
 import { AppError } from '../../utils/helpers.js';
 import { parseLocalDateInput } from './campOps.helpers.js';
 
-/** Dates more than this many days before today require Team Leader (or Admin). */
+/** Dates more than this many days before today require Team Leader or Admin. */
 export const CAMP_HISTORICAL_DATE_THRESHOLD_DAYS = 2;
+
+const ADMIN_DESIGNATION_KEYS = new Set(['admin', 'administrator']);
+const ADMIN_ROLE_KEYS = new Set(['admin', 'administrator']);
 
 export function normalizeDesignationKey(designation) {
   return String(designation || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -10,6 +13,33 @@ export function normalizeDesignationKey(designation) {
 
 export function isTeamLeaderDesignation(designation) {
   return normalizeDesignationKey(designation) === 'team leader';
+}
+
+export function isAdminDesignation(designation) {
+  return ADMIN_DESIGNATION_KEYS.has(normalizeDesignationKey(designation));
+}
+
+function userRoleNames(user) {
+  const names = [];
+  if (user?.role) names.push(String(user.role));
+  if (user?.roleName) names.push(String(user.roleName));
+  if (Array.isArray(user?.roles)) {
+    for (const role of user.roles) {
+      if (typeof role === 'string') names.push(role);
+      else if (role?.name) names.push(String(role.name));
+    }
+  }
+  return names.map((name) => normalizeDesignationKey(name)).filter(Boolean);
+}
+
+export function isAdminUser(user, permissions = null) {
+  if (!user) return false;
+  if (isAdminDesignation(user.designation)) return true;
+  if (userRoleNames(user).some((name) => ADMIN_ROLE_KEYS.has(name))) return true;
+  if (permissions?.has?.('*')) return true;
+  if (user.permissions instanceof Set && user.permissions.has('*')) return true;
+  if (Array.isArray(user.permissions) && user.permissions.includes('*')) return true;
+  return false;
 }
 
 function localDateFromIso(value) {
@@ -35,9 +65,9 @@ export function isHistoricalCampDate(dateValue) {
   return daysFromToday(dateValue) < -CAMP_HISTORICAL_DATE_THRESHOLD_DAYS;
 }
 
-export function canSetHistoricalCampDates(user) {
+export function canSetHistoricalCampDates(user, permissions = null) {
   if (!user) return false;
-  return isTeamLeaderDesignation(user.designation);
+  return isTeamLeaderDesignation(user.designation) || isAdminUser(user, permissions);
 }
 
 function normalizeDateKey(value) {
@@ -66,16 +96,16 @@ export function getHistoricalCampDateErrors(
 
     errors.push(
       `${label} is more than ${CAMP_HISTORICAL_DATE_THRESHOLD_DAYS} days before today `
-        + 'and can only be set by Team Leaders',
+        + 'and can only be set by Team Leaders or Admins',
     );
   }
 
   return errors;
 }
 
-export function assertHistoricalCampDatesAllowed(user, _permissions, dates, { existing = null } = {}) {
+export function assertHistoricalCampDatesAllowed(user, permissions, dates, { existing = null } = {}) {
   const errors = getHistoricalCampDateErrors(dates, {
-    canSetHistorical: canSetHistoricalCampDates(user),
+    canSetHistorical: canSetHistoricalCampDates(user, permissions),
     existing,
   });
   if (errors.length) {
