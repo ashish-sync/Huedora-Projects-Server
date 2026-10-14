@@ -130,7 +130,11 @@ export const ROLE_PERMISSIONS = {
     PERMISSIONS.FINANCE_VERIFY,
     PERMISSIONS.FINANCE_APPROVE,
   ],
-  /** Healthcare Camp Coordinator — five applications only (see designationAccess.js). */
+  /**
+   * Healthcare Camp Coordinator — Document / Camp / Request / Dashboard / Verification.
+   * Includes finance:write so Coordinators can Confirm / Hold / Unhold / Submit
+   * camps to Finance One (single + bulk) from Camp One Financial.
+   */
   'Camp Coordinator': [
     PERMISSIONS.AGREEMENTS_READ,
     PERMISSIONS.AGREEMENTS_WRITE,
@@ -148,6 +152,8 @@ export const ROLE_PERMISSIONS = {
     PERMISSIONS.MAINTENANCE_WRITE,
     PERMISSIONS.DASHBOARDS_READ,
     PERMISSIONS.NOTIFICATIONS_READ,
+    PERMISSIONS.FINANCE_READ,
+    PERMISSIONS.FINANCE_WRITE,
   ],
 };
 
