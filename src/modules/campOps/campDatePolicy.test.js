@@ -57,14 +57,20 @@ test('team leaders can set historical dates', () => {
   assert.equal(errors.length, 0);
 });
 
-test('admin role without team leader designation cannot set historical dates', () => {
+test('admin designation can set historical dates', () => {
   const adminUser = { designation: 'Administrator' };
-  assert.equal(canSetHistoricalCampDates(adminUser), false);
+  assert.equal(canSetHistoricalCampDates(adminUser), true);
   const errors = getHistoricalCampDateErrors(
     { campDate: iso(-5) },
     { canSetHistorical: canSetHistoricalCampDates(adminUser) },
   );
-  assert.equal(errors.length, 1);
+  assert.equal(errors.length, 0);
+});
+
+test('admin permission * can set historical dates', () => {
+  const user = { designation: 'Healthcare Camp Coordinator' };
+  const permissions = new Set(['*']);
+  assert.equal(canSetHistoricalCampDates(user, permissions), true);
 });
 
 test('unchanged historical dates on edit are allowed for non-leaders', () => {
