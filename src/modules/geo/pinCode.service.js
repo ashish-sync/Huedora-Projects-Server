@@ -10,7 +10,7 @@ import {
   DISTRICT_SUPPLEMENTS_BY_STATE,
   normGeoKey,
 } from './geo.districtSupplements.js';
-import { PIN_DISTRICT_ALIASES } from './pinCodeGeoNormalize.js';
+import { PIN_CITY_OVERRIDES, PIN_DISTRICT_ALIASES } from './pinCodeGeoNormalize.js';
 
 function normGeoName(name) {
   return normGeoKey(name);
@@ -65,7 +65,7 @@ function buildGeoIndexes(states, districts, cities) {
   };
 }
 
-function resolveCityForDistrict({ district, state, districtInput = '' }, indexes) {
+export function resolveCityForDistrict({ district, state, districtInput = '' }, indexes) {
   const districtId = String(district._id);
   const districtNorm = normGeoName(district.name);
   const inputNorm = normGeoName(districtInput || district.name);
@@ -77,6 +77,15 @@ function resolveCityForDistrict({ district, state, districtInput = '' }, indexes
 
   const stateKey = String(state._id);
   const stateNorm = normGeoName(state.name);
+
+  // Explicit PIN Geography city overrides (e.g. Mumbai Suburban → Mumbai).
+  const overrideName = PIN_CITY_OVERRIDES[`${stateNorm}|${inputNorm}`]
+    || PIN_CITY_OVERRIDES[`${stateNorm}|${districtNorm}`];
+  if (overrideName) {
+    const overrideCity = indexes.cityByStateAndName.get(`${stateKey}|${normGeoName(overrideName)}`);
+    if (overrideCity) return overrideCity;
+  }
+
   const cityFallbacks = indexes.districtCityFallbacksByState.get(stateNorm);
   const fallbackCityName = cityFallbacks?.get(inputNorm) || cityFallbacks?.get(districtNorm);
   if (fallbackCityName) {
@@ -94,8 +103,7 @@ function resolveCityForDistrict({ district, state, districtInput = '' }, indexes
     if (delhiCity) return delhiCity;
   }
 
-  const inState = indexes.citiesByState.get(stateKey) || [];
-  if (inState.length) return inState[0];
+  // Never return an arbitrary first-in-state city (that mapped MH Suburban → Ahmednagar).
   return null;
 }
 
@@ -133,10 +141,8 @@ function resolveGeoFromNames({ stateName, districtName, cityName = '' }, indexes
     city = indexes.cityByStateAndName.get(`${state._id}|${normGeoName(cityName)}`);
     if (!city) throw new AppError(`City not found: ${cityName}`, 400, 'VALIDATION_ERROR');
   } else {
+    // Optional — some districts (e.g. Mumbai Suburban) have no seed city; PIN Geography is district-keyed.
     city = resolveCityForDistrict({ district, state, districtInput: districtName }, indexes);
-    if (!city) {
-      throw new AppError(`No city found for district: ${districtName}`, 400, 'VALIDATION_ERROR');
-    }
   }
 
   return { state, district, city };
@@ -159,8 +165,8 @@ export function pinFilterFromGeo({ stateId, districtId, cityId, active = true } 
 export function normalizedPinPayload({ pinCode, city, district, state, locality = '', notes = '', isActive = true }) {
   return {
     pinCode: String(pinCode || '').replace(/\D+/g, ''),
-    cityId: city._id,
-    districtId: district?._id || city.districtId || null,
+    cityId: city?._id || null,
+    districtId: district?._id || city?.districtId || null,
     stateId: state._id,
     locality: String(locality || '').trim(),
     notes: String(notes || '').trim(),
@@ -195,9 +201,7 @@ export async function resolvePinTargets({ cityId, districtId, stateId }) {
     ]);
     const indexes = buildGeoIndexes(states, districts, cities);
     city = resolveCityForDistrict({ district, state }, indexes);
-    if (!city) {
-      throw new AppError(`No city found for district: ${district.name}`, 400, 'VALIDATION_ERROR');
-    }
+    // City optional when district has no seed city (PIN Geography is district-keyed).
   }
 
   return { city, district, state };
@@ -231,6 +235,23 @@ async function loadGeoMaps(rows) {
   };
 }
 
+/**
+ * Display name for City/District from a PIN row.
+ * When cityId points outside the PIN district (legacy inState[0] bug), prefer the district name.
+ */
+export function displayCityForPin(row, maps = {}) {
+  const district = maps.districts?.[String(row.districtId || '')];
+  const city = maps.cities?.[String(row.cityId || '')];
+  const districtName = district?.name || row.districtName || '';
+  if (!city) return districtName || row.cityName || '';
+  const cityDistrictId = String(city.districtId || '');
+  const pinDistrictId = String(row.districtId || '');
+  if (cityDistrictId && pinDistrictId && cityDistrictId !== pinDistrictId) {
+    return districtName || city.name || row.cityName || '';
+  }
+  return city.name || row.cityName || districtName || '';
+}
+
 /** Attach state/district/city names from master references (no duplicated storage required). */
 export async function enrichPinRecords(rows = []) {
   if (!rows.length) return [];
@@ -238,11 +259,12 @@ export async function enrichPinRecords(rows = []) {
   const maps = await loadGeoMaps(list);
   return list.map((row) => {
     const stateName = maps.states[String(row.stateId)]?.name || row.stateName || '';
+    const districtName = maps.districts[String(row.districtId)]?.name || row.districtName || '';
     return {
       ...row,
       stateName,
-      districtName: maps.districts[String(row.districtId)]?.name || row.districtName || '',
-      cityName: maps.cities[String(row.cityId)]?.name || row.cityName || '',
+      districtName,
+      cityName: displayCityForPin(row, maps),
       zone: resolveZoneNameForState(stateName) || row.zone || '',
     };
   });
