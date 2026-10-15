@@ -17,6 +17,7 @@ import vendorBillRoutes from './vendorBill.routes.js';
 import { CampOpsCamp } from '../campOps/campOps.model.js';
 import {
   computeLifecycleDerived,
+  deriveFinanceSettlementStatus,
   normalizeFinancePaymentStatus,
   normalizePaymentSubmitStatus,
   FINANCE_PAYMENT_STATUSES,
@@ -458,8 +459,14 @@ async function campPayoutSummaryWithPayeeBank(camp) {
 }
 
 function applyCampPayoutFields(camp, body = {}, actor = {}, options = {}) {
-  const status = normalizeFinancePaymentStatus(body.financePaymentStatus || camp.financePaymentStatus);
-  if (!status || !FINANCE_PAYMENT_STATUSES.includes(status)) {
+  const derivedBefore = computeLifecycleDerived(camp);
+  const paidAmount = body.paidAmount !== undefined
+    ? toAmount(body.paidAmount)
+    : toAmount(camp.paidAmount);
+  const totalPayout = toAmount(derivedBefore.totalPayout || camp.totalPayout);
+  // Settlement is driven by Paid Amount (not a manual status dropdown).
+  const status = deriveFinanceSettlementStatus(paidAmount, totalPayout);
+  if (!FINANCE_PAYMENT_STATUSES.includes(status)) {
     throw new AppError(
       'financePaymentStatus must be paid, not_paid, or under_review',
       400,
@@ -470,7 +477,6 @@ function applyCampPayoutFields(camp, body = {}, actor = {}, options = {}) {
   const alreadyPaid = normalizeFinancePaymentStatus(camp.financePaymentStatus) === 'paid';
   const idempotencyKey = trimStr(options.idempotencyKey);
   if (status === 'paid' && alreadyPaid) {
-    // Idempotent: same UTR/payment update must not re-mutate or spam audits upstream.
     const transactionId = trimStr(body.transactionId ?? camp.transactionId);
     if (transactionId && camp.transactionId && transactionId !== camp.transactionId) {
       throw new AppError('Payment Done already recorded with a different UTR', 409, 'CONFLICT');
@@ -485,48 +491,54 @@ function applyCampPayoutFields(camp, body = {}, actor = {}, options = {}) {
     return { camp, changed: false };
   }
 
-  if (status === 'paid') {
-    const submit = normalizePaymentSubmitStatus(camp.paymentSubmitStatus) || 'payment_not_checked';
+  if (alreadyPaid && status !== 'paid') {
+    throw new AppError('Payment Done cannot be reversed from Finance One', 400, 'INVALID_TRANSITION');
+  }
+
+  const submit = normalizePaymentSubmitStatus(camp.paymentSubmitStatus) || 'payment_not_checked';
+  if (status === 'paid' || status === 'under_review') {
     if (submit === 'payment_hold') {
-      throw new AppError('Release Hold before marking Payment Done', 400, 'INVALID_TRANSITION');
+      throw new AppError('Release Hold before recording payment', 400, 'INVALID_TRANSITION');
     }
     if (submit !== 'payment_confirmed') {
       throw new AppError(
-        'Confirm Payment in Camp Management before marking Payment Done',
+        'Confirm Payment in Camp Management before recording payment',
         400,
         'INVALID_TRANSITION',
       );
     }
+  }
 
-    const paidAmount = toAmount(body.paidAmount ?? camp.paidAmount);
-    const transactionId = trimStr(body.transactionId ?? camp.transactionId);
-    if (!paidAmount) {
-      throw new AppError('Paid Amount is required when status is Paid', 400, 'VALIDATION_ERROR');
+  const transactionId = trimStr(body.transactionId ?? camp.transactionId);
+  const paymentDate = trimStr(body.paymentDate || body.financeProcessedAt);
+  const paymentRemark = body.paymentRemark !== undefined
+    ? trimStr(body.paymentRemark)
+    : trimStr(camp.paymentRemark);
+
+  if (status === 'paid' || status === 'under_review') {
+    if (status === 'paid' && !paidAmount) {
+      throw new AppError('Paid Amount is required when status is Paid in Full', 400, 'VALIDATION_ERROR');
     }
     if (!transactionId) {
-      throw new AppError('Transaction ID / UTR is required when status is Paid', 400, 'VALIDATION_ERROR');
+      throw new AppError('Transaction ID / UTR is required when Paid Amount is greater than zero', 400, 'VALIDATION_ERROR');
     }
-    const paymentDate = trimStr(body.paymentDate || body.financeProcessedAt);
     if (!paymentDate) {
-      throw new AppError('Payment Date is required when status is Paid', 400, 'VALIDATION_ERROR');
+      throw new AppError('Payment Date is required when Paid Amount is greater than zero', 400, 'VALIDATION_ERROR');
     }
     camp.paidAmount = paidAmount;
     camp.transactionId = transactionId;
-    camp.paymentRemark = trimStr(body.paymentRemark ?? camp.paymentRemark);
-    camp.financePaymentStatus = 'paid';
-    camp.financeProcessedAt = paymentDate;
-    if (idempotencyKey) camp.financePaymentIdempotencyKey = idempotencyKey;
-  } else {
-    if (alreadyPaid) {
-      throw new AppError('Payment Done cannot be reversed from Finance One', 400, 'INVALID_TRANSITION');
-    }
+    camp.paymentRemark = paymentRemark;
     camp.financePaymentStatus = status;
-    if (body.paidAmount !== undefined) camp.paidAmount = toAmount(body.paidAmount);
-    if (body.transactionId !== undefined) camp.transactionId = trimStr(body.transactionId);
-    if (body.paymentRemark !== undefined) camp.paymentRemark = trimStr(body.paymentRemark);
-    camp.financeProcessedAt = new Date().toISOString();
-    if (idempotencyKey) camp.financePaymentIdempotencyKey = idempotencyKey;
+    camp.financeProcessedAt = paymentDate;
+  } else {
+    camp.paidAmount = 0;
+    camp.financePaymentStatus = 'not_paid';
+    if (body.transactionId !== undefined) camp.transactionId = transactionId;
+    if (body.paymentRemark !== undefined) camp.paymentRemark = paymentRemark;
+    camp.financeProcessedAt = paymentDate || new Date().toISOString();
   }
+
+  if (idempotencyKey) camp.financePaymentIdempotencyKey = idempotencyKey;
 
   const derived = computeLifecycleDerived(camp);
   camp.balance = derived.balance;
@@ -591,24 +603,13 @@ const bulkUpdateCampPayouts = asyncHandler(async (req, res) => {
     throw new AppError('Select at least one camp payout', 400, 'VALIDATION_ERROR');
   }
 
-  const status = normalizeFinancePaymentStatus(req.body?.financePaymentStatus);
-  if (!status || !FINANCE_PAYMENT_STATUSES.includes(status)) {
-    throw new AppError(
-      'financePaymentStatus must be paid, not_paid, or under_review',
-      400,
-      'VALIDATION_ERROR'
-    );
-  }
-
   const transactionId = trimStr(req.body?.transactionId);
   const paymentRemark = trimStr(req.body?.paymentRemark);
-  const sharedPaidAmount = req.body?.paidAmount !== undefined && req.body?.paidAmount !== ''
-    ? toAmount(req.body.paidAmount)
-    : null;
-
-  if (status === 'paid' && !transactionId) {
-    throw new AppError('Transaction ID / UTR is required when status is Paid', 400, 'VALIDATION_ERROR');
+  const bulkPaymentDate = trimStr(req.body?.paymentDate || req.body?.financeProcessedAt);
+  if (req.body?.paidAmount === undefined || req.body?.paidAmount === '') {
+    throw new AppError('Paid Amount is required', 400, 'VALIDATION_ERROR');
   }
+  const sharedPaidAmount = toAmount(req.body.paidAmount);
 
   const camps = await CampOpsCamp.find({
     _id: { $in: ids },
@@ -619,30 +620,49 @@ const bulkUpdateCampPayouts = asyncHandler(async (req, res) => {
     throw new AppError('No matching camp payouts found', 404);
   }
 
+  const campTotals = camps.map((camp) => {
+    const derived = computeLifecycleDerived(camp);
+    return toAmount(derived.totalPayout || camp.totalPayout);
+  });
+  const combinedTotal = Math.round(campTotals.reduce((sum, n) => sum + n, 0) * 100) / 100;
+  const status = deriveFinanceSettlementStatus(sharedPaidAmount, combinedTotal);
+
+  if ((status === 'paid' || status === 'under_review') && !transactionId) {
+    throw new AppError('Transaction ID / UTR is required when Paid Amount is greater than zero', 400, 'VALIDATION_ERROR');
+  }
+  if ((status === 'paid' || status === 'under_review') && !bulkPaymentDate) {
+    throw new AppError('Payment Date is required when Paid Amount is greater than zero', 400, 'VALIDATION_ERROR');
+  }
+
+  const amounts = [];
+  if (status === 'not_paid') {
+    for (let i = 0; i < camps.length; i += 1) amounts.push(0);
+  } else if (status === 'paid' || combinedTotal <= 0) {
+    for (const total of campTotals) amounts.push(total);
+  } else {
+    let allocated = 0;
+    for (let i = 0; i < camps.length; i += 1) {
+      if (i === camps.length - 1) {
+        amounts.push(Math.round((sharedPaidAmount - allocated) * 100) / 100);
+        break;
+      }
+      const share = Math.round(((campTotals[i] / combinedTotal) * sharedPaidAmount) * 100) / 100;
+      amounts.push(share);
+      allocated = Math.round((allocated + share) * 100) / 100;
+    }
+  }
+
   const a = req.user;
   const idempotencyKey = financeIdempotencyKey(req);
   const updated = [];
-  for (const camp of camps) {
+  for (let i = 0; i < camps.length; i += 1) {
+    const camp = camps[i];
     const before = camp.toObject ? camp.toObject() : { ...camp };
-    const derived = computeLifecycleDerived(camp);
-    const paidAmount = status === 'paid'
-      ? (sharedPaidAmount != null && camps.length === 1
-        ? sharedPaidAmount
-        : derived.totalPayout || toAmount(camp.paidAmount) || 0)
-      : (sharedPaidAmount != null ? sharedPaidAmount : camp.paidAmount);
-
-    if (status === 'paid' && !paidAmount) {
-      throw new AppError(
-        `Paid Amount is required for ${camp.campId || camp._id}`,
-        400,
-        'VALIDATION_ERROR',
-      );
-    }
+    const paidAmount = amounts[i];
 
     const { changed } = applyCampPayoutFields(camp, {
-      financePaymentStatus: status,
       paidAmount,
-      transactionId: status === 'paid' ? transactionId : (req.body?.transactionId ?? camp.transactionId),
+      transactionId: status === 'not_paid' ? (req.body?.transactionId ?? camp.transactionId) : transactionId,
       paymentRemark: paymentRemark || camp.paymentRemark,
       paymentDate: req.body?.paymentDate,
       financeProcessedAt: req.body?.financeProcessedAt,
@@ -672,15 +692,21 @@ const bulkUpdateCampPayouts = asyncHandler(async (req, res) => {
     after: {
       count: updated.length,
       financePaymentStatus: status,
-      transactionId: status === 'paid' ? transactionId : undefined,
+      paidAmount: sharedPaidAmount,
+      transactionId: status === 'not_paid' ? undefined : transactionId,
       ids: updated.map((row) => row._id),
     },
     requestId: req.requestId,
   });
 
+  const statusLabel = status === 'paid'
+    ? 'Paid in Full'
+    : status === 'under_review'
+      ? 'Partially Paid'
+      : 'Not Paid';
   res.json({
     data: updated,
-    message: `Updated ${updated.length} camp payout${updated.length === 1 ? '' : 's'}`,
+    message: `Updated ${updated.length} camp payout${updated.length === 1 ? '' : 's'} (${statusLabel})`,
   });
 });
 
@@ -758,7 +784,7 @@ const returnCampPayoutToFinancial = asyncHandler(async (req, res) => {
 
   res.json({
     data: { _id: camp._id, campId: camp.campId, returned: true },
-    message: 'Camp returned to Camp One Financial',
+    message: 'Camp returned to Camp One Financial (Pending Confirmation)',
   });
 });
 
@@ -802,7 +828,7 @@ const bulkReturnCampPayoutsToFinancial = asyncHandler(async (req, res) => {
 
   res.json({
     data: { returned, skipped },
-    message: `Returned ${returned.length} camp${returned.length === 1 ? '' : 's'} to Camp One Financial`,
+    message: `Returned ${returned.length} camp${returned.length === 1 ? '' : 's'} to Camp One Financial (Pending Confirmation)`,
   });
 });
 
