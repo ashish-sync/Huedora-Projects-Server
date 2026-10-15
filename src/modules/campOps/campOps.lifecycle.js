@@ -361,12 +361,24 @@ export function normalizeFinancePaymentStatus(raw) {
   const aliases = {
     paid: 'paid',
     payment_completed: 'paid',
+    paid_in_full: 'paid',
     not_paid: 'not_paid',
     unpaid: 'not_paid',
     under_review: 'under_review',
     review: 'under_review',
+    partially_paid: 'under_review',
+    partial: 'under_review',
   };
   return aliases[v] || (FINANCE_PAYMENT_STATUSES.includes(v) ? v : '');
+}
+
+/** Derive Finance One settlement from Paid Amount vs Total Payout. */
+export function deriveFinanceSettlementStatus(paidAmount, totalPayout) {
+  const paid = Math.round((Number(paidAmount) || 0) * 100) / 100;
+  const total = Math.round((Number(totalPayout) || 0) * 100) / 100;
+  if (paid <= 0) return 'not_paid';
+  if (total > 0 && paid + 0.009 < total) return 'under_review';
+  return 'paid';
 }
 
 export function formatInTimeIst(date = new Date()) {
