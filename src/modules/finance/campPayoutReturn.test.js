@@ -59,7 +59,7 @@ test('Camp Coordinator finance:write alone cannot return', () => {
   );
 });
 
-test('applyReturnCampFromPayoutQueue clears queue fields and keeps confirmed payment', () => {
+test('applyReturnCampFromPayoutQueue restores Pending Confirmation like post-Execution', () => {
   const camp = {
     submittedToFinanceAt: '2026-10-01T00:00:00.000Z',
     submittedToFinanceById: 'u1',
@@ -73,8 +73,19 @@ test('applyReturnCampFromPayoutQueue clears queue fields and keeps confirmed pay
   assert.equal(camp.submittedToFinanceById, null);
   assert.equal(camp.submittedToFinanceByEmail, '');
   assert.equal(camp.financePaymentStatus, '');
-  assert.equal(camp.paymentSubmitStatus, 'payment_confirmed');
+  assert.equal(camp.paymentSubmitStatus, 'payment_not_checked');
   assert.equal(camp.lifecycleStage, 'financial');
+});
+
+test('applyReturnCampFromPayoutQueue clears Hold back to Pending Confirmation', () => {
+  const camp = {
+    submittedToFinanceAt: '2026-10-01T00:00:00.000Z',
+    financePaymentStatus: 'under_review',
+    paymentSubmitStatus: 'payment_hold',
+    lifecycleStage: 'financial',
+  };
+  applyReturnCampFromPayoutQueue(camp);
+  assert.equal(camp.paymentSubmitStatus, 'payment_not_checked');
 });
 
 test('applyReturnCampFromPayoutQueue rejects Payment Done', () => {

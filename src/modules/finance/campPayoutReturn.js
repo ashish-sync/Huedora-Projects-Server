@@ -77,8 +77,9 @@ export function assertCanReturnCampFromPayoutQueue(user, permissions) {
 }
 
 /**
- * Clear Finance One queue membership and restore Camp One Financial
- * at Confirmed Payment (one step before Submit to Finance One).
+ * Clear Finance One queue membership and restore Camp One Financial as if the
+ * camp just arrived from Execution — Pending Confirmation — so revenue/payout
+ * amounts can be edited and Confirm Payment run again before re-submit.
  * Payment Done camps cannot be returned.
  */
 export function applyReturnCampFromPayoutQueue(camp) {
@@ -100,10 +101,8 @@ export function applyReturnCampFromPayoutQueue(camp) {
   camp.submittedToFinanceById = null;
   camp.submittedToFinanceByEmail = '';
   camp.financePaymentStatus = '';
-  // Keep paymentSubmitStatus as payment_confirmed so Camp One can re-submit.
-  if (!camp.paymentSubmitStatus || camp.paymentSubmitStatus === 'payment_not_checked') {
-    camp.paymentSubmitStatus = 'payment_confirmed';
-  }
+  // Same state as Mark Complete → Financial (Pending Confirmation).
+  camp.paymentSubmitStatus = 'payment_not_checked';
   camp.lifecycleStage = 'financial';
   return camp;
 }
