@@ -32,13 +32,19 @@ test('signContactKycUrl converts /uploads paths to signed file links', () => {
   assert.match(presented.passbookCopyUrl, /files\/signed/);
 });
 
-test('storageContactKycUrl keeps durable /uploads paths and ignores signed tokens', () => {
+test('storageContactKycUrl keeps durable /uploads paths and recovers signed tokens', async () => {
+  const { signUploadFileUrl } = await import('../files/file.routes.js');
   assert.equal(
     storageContactKycUrl('/uploads/contacts/a.pdf', '/uploads/contacts/old.pdf'),
     '/uploads/contacts/a.pdf',
   );
+  const signed = signUploadFileUrl('contacts/recovered-pan.jpg');
   assert.equal(
-    storageContactKycUrl('/api/v1/files/signed?token=abc', '/uploads/contacts/old.pdf'),
+    storageContactKycUrl(signed, '/uploads/contacts/old.pdf'),
+    '/uploads/contacts/recovered-pan.jpg',
+  );
+  assert.equal(
+    storageContactKycUrl('/api/v1/files/signed?token=not-a-jwt', '/uploads/contacts/old.pdf'),
     '/uploads/contacts/old.pdf',
   );
   assert.equal(storageContactKycUrl('', '/uploads/contacts/old.pdf'), '/uploads/contacts/old.pdf');

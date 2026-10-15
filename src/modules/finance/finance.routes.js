@@ -36,6 +36,10 @@ import {
   CAMP_FINANCE_EXPENSE_SUB_CATEGORY,
 } from '../campOps/campFinanceExpense.js';
 import { enrichCampPayoutsWithPayee } from '../contacts/campPayoutPayee.js';
+import {
+  applyReturnCampFromPayoutQueue,
+  assertCanReturnCampFromPayoutQueue,
+} from './campPayoutReturn.js';
 
 const router = Router();
 router.use(authenticate);
@@ -727,13 +731,90 @@ const updateCampPayoutById = asyncHandler(async (req, res) => {
   res.json({ data: await campPayoutSummaryWithPayeeBank(camp) });
 });
 
+/** Return camp from Payout Queue → Camp One Financial (Confirmed Payment). */
+const returnCampPayoutToFinancial = asyncHandler(async (req, res) => {
+  assertCanReturnCampFromPayoutQueue(req.user, req.permissions);
+  const camp = await CampOpsCamp.findOne({
+    _id: req.params.campId,
+    isDeleted: false,
+    submittedToFinanceAt: { $ne: null },
+  });
+  if (!camp) throw new AppError('Camp payout not found', 404);
+
+  const a = req.user;
+  const before = camp.toObject ? camp.toObject() : { ...camp };
+  applyReturnCampFromPayoutQueue(camp);
+  await camp.save();
+  await writeAudit({
+    actorId: a?._id || null,
+    actorEmail: a?.email || null,
+    action: 'FINANCE.CAMP_PAYOUT_RETURN',
+    entityType: 'camp_ops_camp',
+    entityId: camp._id,
+    before,
+    after: camp.toObject ? camp.toObject() : { ...camp },
+    requestId: req.requestId,
+  });
+
+  res.json({
+    data: { _id: camp._id, campId: camp.campId, returned: true },
+    message: 'Camp returned to Camp One Financial',
+  });
+});
+
+const bulkReturnCampPayoutsToFinancial = asyncHandler(async (req, res) => {
+  assertCanReturnCampFromPayoutQueue(req.user, req.permissions);
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((id) => String(id || '').trim()).filter(Boolean) : [];
+  if (!ids.length) {
+    throw new AppError('Select at least one camp payout', 400, 'VALIDATION_ERROR');
+  }
+
+  const camps = await CampOpsCamp.find({
+    _id: { $in: ids },
+    isDeleted: false,
+    submittedToFinanceAt: { $ne: null },
+  });
+  if (!camps.length) throw new AppError('No matching camp payouts found', 404);
+
+  const a = req.user;
+  const returned = [];
+  const skipped = [];
+  for (const camp of camps) {
+    if (normalizeFinancePaymentStatus(camp.financePaymentStatus) === 'paid') {
+      skipped.push({ _id: camp._id, campId: camp.campId, reason: 'Payment Done' });
+      continue;
+    }
+    const before = camp.toObject ? camp.toObject() : { ...camp };
+    applyReturnCampFromPayoutQueue(camp);
+    await camp.save();
+    await writeAudit({
+      actorId: a?._id || null,
+      actorEmail: a?.email || null,
+      action: 'FINANCE.CAMP_PAYOUT_RETURN',
+      entityType: 'camp_ops_camp',
+      entityId: camp._id,
+      before,
+      after: camp.toObject ? camp.toObject() : { ...camp },
+      requestId: req.requestId,
+    });
+    returned.push({ _id: camp._id, campId: camp.campId });
+  }
+
+  res.json({
+    data: { returned, skipped },
+    message: `Returned ${returned.length} camp${returned.length === 1 ? '' : 's'} to Camp One Financial`,
+  });
+});
+
 // Canonical paths + /payouts aliases (SPA historically called /finance/payouts).
 for (const base of ['/camp-payouts', '/payouts']) {
   router.get(base, canRead, listCampPayouts);
   router.get(`${base}/export`, canRead, exportCampPayouts);
   router.post(`${base}/bulk`, canWrite, bulkUpdateCampPayouts);
+  router.post(`${base}/bulk-return-to-camp-financial`, canRead, bulkReturnCampPayoutsToFinancial);
   router.get(`${base}/:campId/export`, canRead, exportCampPayoutById);
   router.patch(`${base}/:campId`, canWrite, updateCampPayoutById);
+  router.post(`${base}/:campId/return-to-camp-financial`, canRead, returnCampPayoutToFinancial);
 }
 
 export default router;
