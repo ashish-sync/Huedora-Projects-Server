@@ -558,6 +558,16 @@ router.patch(
           req.body.serviceProviderContactId !== undefined
             ? req.body.serviceProviderContactId
             : contact.serviceProviderContactId,
+        // Camp Amount must be forwarded — omit → normalize defaults to 0 and wipe
+        // existing HCW amounts (0 is not blank-preserved).
+        campAmount:
+          req.body.campAmount !== undefined
+            ? req.body.campAmount
+            : req.body['Camp Amount'] !== undefined
+              ? req.body['Camp Amount']
+              : req.body.camp_amount !== undefined
+                ? req.body.camp_amount
+                : contact.campAmount,
         ...(Object.prototype.hasOwnProperty.call(req.body, 'providerEmployees')
           ? { providerEmployees: req.body.providerEmployees }
           : {}),
@@ -729,6 +739,7 @@ router.post(
             ifscCode: cell(row, ['IFSC Code', 'IFSC', 'ifscCode']),
             bankName: cell(row, ['Bank Name', 'bankName']),
             accountNumber: cell(row, ['Account Number', 'accountNumber', 'Account']),
+            campAmount: cell(row, ['Camp Amount', 'campAmount', 'CampAmount']),
             serviceProvider: cell(row, [
               'Service Provider (agency)',
               'Service Provider',

@@ -249,3 +249,51 @@ test('FRESH_START keeps contacts collection intact', async () => {
   const contacts = await loadCollection('contacts');
   assert.equal(contacts.some((c) => String(c._id) === 'c-keep'), true);
 });
+
+test('HCW PATCH must forward campAmount or normalize defaults to 0 and wipes', () => {
+  const existing = {
+    name: 'Nurse A',
+    contactCategory: 'Healthcare Worker',
+    resourceType: 'Individual',
+    contact: '9876500001',
+    state: 'Maharashtra',
+    campAmount: 2500,
+  };
+
+  // Bug pattern: PATCH body fields without campAmount → normalize → 0 overwrites.
+  const wiped = normalizeContactPayload({
+    name: existing.name,
+    contactCategory: existing.contactCategory,
+    resourceType: existing.resourceType,
+    contact: existing.contact,
+    state: existing.state,
+  });
+  assert.equal(wiped.campAmount, 0);
+  const wipedContact = { ...existing };
+  assignPreservingExisting(wipedContact, wiped);
+  assert.equal(wipedContact.campAmount, 0);
+
+  // Fix pattern: forward existing (or request) campAmount into normalize.
+  const kept = normalizeContactPayload({
+    name: existing.name,
+    contactCategory: existing.contactCategory,
+    resourceType: existing.resourceType,
+    contact: existing.contact,
+    state: existing.state,
+    campAmount: existing.campAmount,
+  });
+  assert.equal(kept.campAmount, 2500);
+  const keptContact = { ...existing };
+  assignPreservingExisting(keptContact, kept);
+  assert.equal(keptContact.campAmount, 2500);
+
+  const updated = normalizeContactPayload({
+    name: existing.name,
+    contactCategory: existing.contactCategory,
+    resourceType: existing.resourceType,
+    contact: existing.contact,
+    state: existing.state,
+    campAmount: 3200,
+  });
+  assert.equal(updated.campAmount, 3200);
+});
