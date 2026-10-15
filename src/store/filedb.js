@@ -12,10 +12,34 @@ import {
   registerCollection,
   getRegisteredCollections,
   mergeDocumentFields,
+  isBlankValue,
   queryCollection,
   aggregateCollection,
 } from './persistence.js';
 import { entityIdMapKey, idsEqual } from '../utils/entityIds.js';
+
+/** Keys that $set blanks / $unset — must pass clearKeys so upsert merge does not resurrect them. */
+function clearKeysFromUpdate(update = {}) {
+  const keys = [];
+  if (update.$set && typeof update.$set === 'object') {
+    for (const [k, v] of Object.entries(update.$set)) {
+      if (isBlankValue(v)) keys.push(k);
+    }
+  }
+  if (update.$unset && typeof update.$unset === 'object') {
+    keys.push(...Object.keys(update.$unset));
+  }
+  return [...new Set(keys)];
+}
+
+/** Ensure $unset keys exist as null on the doc so merge clearKeys can apply. */
+function materializeUnsetKeys(doc, update = {}) {
+  if (!update.$unset || typeof update.$unset !== 'object') return doc;
+  for (const k of Object.keys(update.$unset)) {
+    setPath(doc, k, null);
+  }
+  return doc;
+}
 
 function oid() {
   return randomBytes(12).toString('hex');
@@ -454,16 +478,21 @@ export function defineCollection(name, defaults = {}) {
         delete plain.populate;
         return clone(plain);
       };
-      o.save = async () => {
+      o.save = async (opts = {}) => {
         const plain = { ...o };
         delete plain.toObject;
         delete plain.save;
         delete plain.populate;
         plain.updatedAt = new Date().toISOString();
+        const clearKeys = [
+          ...((opts && opts.clearKeys) || []),
+          ...(Array.isArray(plain.__clearKeys) ? plain.__clearKeys : []),
+        ];
         // Single-doc upsert in mongo mode — avoids rewriting entire collections (OOM risk).
-        await upsertDocument(name, plain);
+        const saved = await upsertDocument(name, plain, { clearKeys });
         invalidateIdIndex(name);
-        Object.assign(o, plain);
+        Object.assign(o, saved);
+        delete o.__clearKeys;
         return o;
       };
       o.populate = async (field, select) => {
@@ -576,6 +605,7 @@ export function defineCollection(name, defaults = {}) {
       return model.findOne({ _id: String(id) });
     },
     async findOneAndUpdate(filter, update, opts = {}) {
+      const clearKeys = clearKeysFromUpdate(update);
       if (getPersistenceMode() === 'mongo') {
         const { data } = await queryCollection(name, { filter, limit: 1 });
         if (!data[0]) {
@@ -584,10 +614,10 @@ export function defineCollection(name, defaults = {}) {
           }
           return null;
         }
-        const next = applyUpdate(clone(data[0]), update);
-        await upsertDocument(name, next);
+        const next = materializeUnsetKeys(applyUpdate(clone(data[0]), update), update);
+        const saved = await upsertDocument(name, next, { clearKeys });
         invalidateIdIndex(name);
-        return model._wrap(next);
+        return model._wrap(saved);
       }
       const rows = await model._all();
       const idx = rows.findIndex((d) => match(d, filter));
@@ -598,10 +628,11 @@ export function defineCollection(name, defaults = {}) {
         }
         return null;
       }
-      rows[idx] = applyUpdate(rows[idx], update);
-      await upsertDocument(name, rows[idx]);
+      rows[idx] = materializeUnsetKeys(applyUpdate(rows[idx], update), update);
+      const saved = await upsertDocument(name, rows[idx], { clearKeys });
+      rows[idx] = saved;
       invalidateIdIndex(name);
-      return model._wrap(rows[idx]);
+      return model._wrap(saved);
     },
     async findByIdAndUpdate(id, update, opts = {}) {
       return model.findOneAndUpdate({ _id: String(id) }, update, opts);
@@ -643,28 +674,30 @@ export function defineCollection(name, defaults = {}) {
       return scanCollection(name, { filter });
     },
     async updateOne(filter, update) {
+      const clearKeys = clearKeysFromUpdate(update);
       if (getPersistenceMode() === 'mongo') {
         const { data } = await queryCollection(name, { filter, limit: 1 });
         if (!data[0]) return { matchedCount: 0, modifiedCount: 0 };
-        const next = applyUpdate(clone(data[0]), update);
-        await upsertDocument(name, next);
+        const next = materializeUnsetKeys(applyUpdate(clone(data[0]), update), update);
+        await upsertDocument(name, next, { clearKeys });
         invalidateIdIndex(name);
         return { matchedCount: 1, modifiedCount: 1 };
       }
       const rows = await model._all();
       const idx = rows.findIndex((d) => match(d, filter));
       if (idx < 0) return { matchedCount: 0, modifiedCount: 0 };
-      rows[idx] = applyUpdate(rows[idx], update);
-      await upsertDocument(name, rows[idx]);
+      rows[idx] = materializeUnsetKeys(applyUpdate(rows[idx], update), update);
+      rows[idx] = await upsertDocument(name, rows[idx], { clearKeys });
       invalidateIdIndex(name);
       return { matchedCount: 1, modifiedCount: 1 };
     },
     async updateMany(filter, update) {
+      const clearKeys = clearKeysFromUpdate(update);
       if (getPersistenceMode() === 'mongo') {
         const { data } = await queryCollection(name, { filter });
         if (!data.length) return { matchedCount: 0, modifiedCount: 0 };
-        const changed = data.map((row) => applyUpdate(clone(row), update));
-        await bulkUpsertDocuments(name, changed);
+        const changed = data.map((row) => materializeUnsetKeys(applyUpdate(clone(row), update), update));
+        await bulkUpsertDocuments(name, changed, { clearKeys });
         invalidateIdIndex(name);
         return { matchedCount: changed.length, modifiedCount: changed.length };
       }
@@ -672,12 +705,12 @@ export function defineCollection(name, defaults = {}) {
       const changed = [];
       for (let i = 0; i < rows.length; i++) {
         if (match(rows[i], filter)) {
-          rows[i] = applyUpdate(rows[i], update);
+          rows[i] = materializeUnsetKeys(applyUpdate(rows[i], update), update);
           changed.push(rows[i]);
         }
       }
       if (changed.length) {
-        await model._write(rows);
+        await bulkUpsertDocuments(name, changed, { clearKeys });
         invalidateIdIndex(name);
       }
       return { matchedCount: changed.length, modifiedCount: changed.length };
