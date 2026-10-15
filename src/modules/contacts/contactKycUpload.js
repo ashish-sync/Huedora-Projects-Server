@@ -3,7 +3,11 @@
  * Accept PDF and common image formats (field keys stay passbookCopyUrl / panCardCopyUrl).
  */
 
-import { toSignedUploadUrl, relativeUploadPathFromUrl } from '../files/file.routes.js';
+import {
+  toSignedUploadUrl,
+  relativeUploadPathFromUrl,
+  durableUploadRelativePath,
+} from '../files/file.routes.js';
 
 export const CONTACT_KYC_ACCEPT_EXTENSIONS = [
   '.pdf',
@@ -75,7 +79,12 @@ export function signContactKycUrl(url = '') {
 export function storageContactKycUrl(clientValue, existingValue = '') {
   const raw = String(clientValue ?? '').trim();
   if (!raw) return existingValue || '';
-  if (raw.includes('/files/signed')) return existingValue || '';
+  // Prefer durable path recovered from a (possibly expired) signed View URL.
+  const fromSigned = durableUploadRelativePath(raw);
+  if (raw.includes('/files/signed')) {
+    if (fromSigned) return `/uploads/${fromSigned}`;
+    return existingValue || '';
+  }
   const relative = relativeUploadPathFromUrl(raw);
   if (relative) return `/uploads/${relative}`;
   if (raw.startsWith('/uploads/')) return raw;
