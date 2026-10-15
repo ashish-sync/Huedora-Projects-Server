@@ -276,6 +276,16 @@ export const PIN_CITY_OVERRIDES = {
   'puducherry|pondicherry': 'Puducherry',
   'puducherry|puducherry': 'Puducherry',
   'maharashtra|mumbai': 'Mumbai',
+  // Mumbai Suburban has no linked city in seed — never fall through to Ahmednagar.
+  'maharashtra|mumbai suburban': 'Mumbai',
+  'maharashtra|raigad': 'Panvel',
+  'maharashtra|bhandara': 'Bhandara',
+  'maharashtra|buldhana': 'Buldhana',
+  'maharashtra|gadchiroli': 'Gadchiroli',
+  'maharashtra|gondia': 'Gondia',
+  'maharashtra|nandurbar': 'Nandurbar',
+  'maharashtra|osmanabad': 'Osmanabad',
+  'maharashtra|aurangabad': 'Aurangabad',
   'tamil nadu|chengalpattu': 'Chengalpattu',
   'tamil nadu|mayiladuthurai': 'Mayiladuthurai',
   'tamil nadu|tenkasi': 'Tenkasi',
@@ -458,6 +468,15 @@ function resolveCityForDistrict({ district, state, districtInput = '' }, indexes
 
   const stateKey = String(state._id);
   const stateNorm = normGeoKey(state.name);
+
+  // Explicit PIN Geography city overrides (e.g. Mumbai Suburban → Mumbai).
+  const overrideName = PIN_CITY_OVERRIDES[`${stateNorm}|${inputNorm}`]
+    || PIN_CITY_OVERRIDES[`${stateNorm}|${districtNorm}`];
+  if (overrideName) {
+    const overrideCity = indexes.cityByStateAndName.get(`${stateKey}|${normGeoKey(overrideName)}`);
+    if (overrideCity) return overrideCity;
+  }
+
   const cityFallbacks = indexes.districtCityFallbacksByState.get(stateNorm);
   const fallbackCityName = cityFallbacks?.get(inputNorm) || cityFallbacks?.get(districtNorm);
   if (fallbackCityName) {
@@ -475,8 +494,7 @@ function resolveCityForDistrict({ district, state, districtInput = '' }, indexes
     if (delhiCity) return delhiCity;
   }
 
-  const inState = indexes.citiesByState.get(stateKey) || [];
-  if (inState.length) return inState[0];
+  // Never return an arbitrary first-in-state city (that mapped MH Suburban → Ahmednagar).
   return null;
 }
 
