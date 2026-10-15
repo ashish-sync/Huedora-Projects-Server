@@ -363,7 +363,7 @@ function drawItemsTable(pdf, doc, cfg, x, y, w) {
   const cols = [
     { key: 'sr', label: 'Sr.', width: 26, align: 'center' },
     { key: 'desc', label: 'Description of Services', width: 0, align: 'left' },
-    { key: 'sac', label: 'SAC', width: 48, align: 'center' },
+    { key: 'sac', label: 'SAC / HSN', width: 52, align: 'center' },
     { key: 'qty', label: 'Qty', width: 34, align: 'center' },
     { key: 'rate', label: 'Rate (₹)', width: 54, align: 'right' },
     { key: 'taxable', label: 'Taxable Value (₹)', width: 74, align: 'right' },

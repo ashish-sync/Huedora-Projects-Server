@@ -41,21 +41,21 @@ export function addDaysIso(dateText, days = 30) {
 
 export { fiscalYearLabel };
 
+/** Display dates as DD-MM-YYYY across Finance One. */
 export function formatDisplayDate(iso) {
   if (!iso) return '';
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso));
-  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso).slice(0, 10));
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
   return String(iso);
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/** e.g. 09-01-2026 for ERP document headers */
+/** ERP document headers — same DD-MM-YYYY standard. */
 export function formatDisplayDateErp(iso) {
   if (!iso) return '—';
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso));
-  if (!m) return formatDisplayDate(iso);
-  return `${m[3]}-${m[2]}-${m[1]}`;
+  const formatted = formatDisplayDate(iso);
+  return formatted || '—';
 }
 
 /** e.g. 05 Aug 2024 for proforma PDF header */
@@ -511,7 +511,7 @@ export async function nextBillOfSupplyNumber(documentDate) {
   return nextCommercialDocumentNumber('bill_of_supply', documentDate);
 }
 
-/** Assign official document number on approval (PREFIX/FY/MM/SEQ). */
+/** Assign official document number on approval (PREFIXFY/MM/SEQ). */
 export async function assignCommercialDocumentNumber(row, { force = false } = {}) {
   if (!force && trimStr(row.documentNumber)) return row.documentNumber;
   const number = await nextCommercialDocumentNumber(row.documentType, row.documentDate);

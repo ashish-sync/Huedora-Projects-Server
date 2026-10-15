@@ -228,20 +228,28 @@ router.get(
 );
 
 
-/** Live org for normalize; snapshot for Issued/Cancelled PDF render. */
+/**
+ * Live org for draft normalize; frozen snapshot for Issued/Cancelled.
+ * Issued/Cancelled docs lock orgProfileId (body cannot rebind the issuer).
+ */
 async function loadOrgContext(req, row = null) {
-  const requested =
-    (req.body && req.body.orgProfileId != null && String(req.body.orgProfileId).trim()) ||
-    (row && row.orgProfileId) ||
-    'default';
+  const stage = normalizeCommercialStage(row?.status);
+  const locked = stage === 'Issued' || stage === 'Cancelled';
+  const requested = locked
+    ? row?.orgProfileId || 'default'
+    : (req.body && req.body.orgProfileId != null && String(req.body.orgProfileId).trim()) ||
+      (row && row.orgProfileId) ||
+      'default';
   const live = await resolveOrgProfileId(requested);
-  const orgProfileId = String(live._id);
+  const orgProfileId = locked && row?.orgProfileId ? String(row.orgProfileId) : String(live._id);
   const renderOrg = row
     ? orgSourceForDocument(row, live)
     : live.toObject
       ? live.toObject()
       : { ...live };
-  return { live, orgProfile: live, renderOrg, orgProfileId };
+  // Admin edits on issued docs must normalize against the frozen letterhead, not live master.
+  const orgProfile = locked ? renderOrg : live;
+  return { live, orgProfile, renderOrg, orgProfileId };
 }
 
 async function loadCommercialById(id) {
@@ -694,6 +702,7 @@ router.patch(
 
     const before = row.toObject ? row.toObject() : { ...row };
     assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
+    row.orgProfileId = orgProfileId;
     if (['Draft', 'Uploaded'].includes(row.status)) {
       row.documentNumber = '';
     }
@@ -984,6 +993,7 @@ router.patch(
 
     const before = row.toObject ? row.toObject() : { ...row };
     assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
+    row.orgProfileId = orgProfileId;
     if (['Draft', 'Uploaded'].includes(row.status)) {
       row.documentNumber = '';
     }
@@ -1289,6 +1299,7 @@ router.patch(
 
     const before = row.toObject ? row.toObject() : { ...row };
     assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
+    row.orgProfileId = orgProfileId;
     if (['Draft', 'Uploaded'].includes(row.status)) {
       row.documentNumber = '';
     }
@@ -1500,6 +1511,7 @@ router.patch(
 
     const before = row.toObject ? row.toObject() : { ...row };
     assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
+    row.orgProfileId = orgProfileId;
     if (['Draft', 'Uploaded'].includes(row.status)) {
       row.documentNumber = '';
     }
@@ -1726,6 +1738,7 @@ function registerInvoiceLikeDocRoutes({
 
       const before = row.toObject ? row.toObject() : { ...row };
       assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
+      row.orgProfileId = orgProfileId;
       if (['Draft', 'Uploaded'].includes(row.status)) {
         row.documentNumber = '';
       }
@@ -1877,7 +1890,7 @@ router.get(
       data: {
         commercialStatuses: COMMERCIAL_DOC_STATUSES,
         documentNumberStandards: DOCUMENT_NUMBER_STANDARDS,
-        documentNumberFormat: 'PREFIX/FY/MM/SEQ',
+        documentNumberFormat: 'PREFIXFY/MM/SEQ',
       },
     });
   })
