@@ -40,6 +40,7 @@ import { enrichCampPayoutsWithPayee } from '../contacts/campPayoutPayee.js';
 import {
   applyReturnCampFromPayoutQueue,
   assertCanReturnCampFromPayoutQueue,
+  CAMP_PAYOUT_RETURN_CLEAR_KEYS,
 } from './campPayoutReturn.js';
 
 const router = Router();
@@ -770,7 +771,9 @@ const returnCampPayoutToFinancial = asyncHandler(async (req, res) => {
   const a = req.user;
   const before = camp.toObject ? camp.toObject() : { ...camp };
   applyReturnCampFromPayoutQueue(camp);
-  await camp.save();
+  // clearKeys required: blank-preserve merge would keep submittedToFinanceAt and leave
+  // the camp in Payout Queue (also hiding Confirm Payment on Financial).
+  await camp.save({ clearKeys: CAMP_PAYOUT_RETURN_CLEAR_KEYS });
   await writeAudit({
     actorId: a?._id || null,
     actorEmail: a?.email || null,
@@ -812,7 +815,7 @@ const bulkReturnCampPayoutsToFinancial = asyncHandler(async (req, res) => {
     }
     const before = camp.toObject ? camp.toObject() : { ...camp };
     applyReturnCampFromPayoutQueue(camp);
-    await camp.save();
+    await camp.save({ clearKeys: CAMP_PAYOUT_RETURN_CLEAR_KEYS });
     await writeAudit({
       actorId: a?._id || null,
       actorEmail: a?.email || null,

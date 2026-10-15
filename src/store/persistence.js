@@ -513,10 +513,20 @@ export function mongoCollectionName(logicalName) {
   return collectionKey(logicalName);
 }
 
-/** Upsert a single document — avoids rewriting the entire collection to Mongo. */
-export async function upsertDocument(name, doc, { session = null } = {}) {
+/**
+ * Upsert a single document — avoids rewriting the entire collection to Mongo.
+ * Blank/null fields do not erase existing values unless listed in `clearKeys`
+ * (or doc.__clearKeys). Use clearKeys for intentional workflow clears
+ * (e.g. return camp from Payout Queue → clear submittedToFinanceAt).
+ */
+export async function upsertDocument(name, doc, { session = null, clearKeys = [] } = {}) {
   if (!doc?._id) throw new Error('upsertDocument requires _id');
   const incoming = normalizeDocumentEntityIds(clone(doc));
+  const docClearKeys = Array.isArray(incoming.__clearKeys) ? incoming.__clearKeys : [];
+  delete incoming.__clearKeys;
+  const mergeOpts = {
+    clearKeys: [...new Set([...(clearKeys || []), ...docClearKeys].map((k) => String(k || '').trim()).filter(Boolean))],
+  };
 
   if (mode === 'mongo') {
     if (!mongoDb) throw new Error('MongoDB persistence is not configured');
@@ -528,7 +538,7 @@ export async function upsertDocument(name, doc, { session = null } = {}) {
       const raw = String(doc._id || '');
       if (raw && raw !== incoming._id) existing = await col.findOne({ _id: raw }, findOpts);
     }
-    const plain = mergeDocumentFields(existing || {}, incoming);
+    const plain = mergeDocumentFields(existing || {}, incoming, mergeOpts);
     plain._id = normalizeEntityId(plain._id) || plain._id;
     await col.replaceOne({ _id: plain._id }, plain, writeOpts);
     if (existing && String(existing._id) !== String(plain._id)) {
@@ -546,7 +556,7 @@ export async function upsertDocument(name, doc, { session = null } = {}) {
 
   const rows = await loadCollection(name);
   const idx = rows.findIndex((r) => idsEqual(r._id, incoming._id));
-  const plain = mergeDocumentFields(idx >= 0 ? rows[idx] : {}, incoming);
+  const plain = mergeDocumentFields(idx >= 0 ? rows[idx] : {}, incoming, mergeOpts);
   plain._id = normalizeEntityId(plain._id) || plain._id;
   if (idx >= 0) rows[idx] = plain;
   else rows.push(plain);
@@ -555,8 +565,11 @@ export async function upsertDocument(name, doc, { session = null } = {}) {
 }
 
 /** Batch upsert — merge each doc with the latest cached/persisted row (no silent field wipe). */
-export async function bulkUpsertDocuments(name, docs = [], { session = null, replace = false } = {}) {
+export async function bulkUpsertDocuments(name, docs = [], { session = null, replace = false, clearKeys = [] } = {}) {
   if (!docs.length) return 0;
+  const mergeOpts = {
+    clearKeys: [...new Set((clearKeys || []).map((k) => String(k || '').trim()).filter(Boolean))],
+  };
 
   if (mode === 'mongo') {
     if (!mongoDb) throw new Error('MongoDB persistence is not configured');
@@ -571,6 +584,7 @@ export async function bulkUpsertDocuments(name, docs = [], { session = null, rep
     for (const doc of docs) {
       if (!doc?._id) continue;
       const incoming = normalizeDocumentEntityIds(clone(doc));
+      delete incoming.__clearKeys;
       const key = normalizeEntityId(incoming._id) || String(incoming._id);
       let existing = {};
       if (!replace) {
@@ -579,7 +593,7 @@ export async function bulkUpsertDocuments(name, docs = [], { session = null, rep
       }
       const plain = replace
         ? { ...(incoming || {}), _id: key }
-        : mergeDocumentFields(existing || {}, incoming);
+        : mergeDocumentFields(existing || {}, incoming, mergeOpts);
       plain._id = key;
       if (cached) {
         if (byId.has(key)) cached[byId.get(key)] = plain;
@@ -611,11 +625,12 @@ export async function bulkUpsertDocuments(name, docs = [], { session = null, rep
   for (const doc of docs) {
     if (!doc?._id) continue;
     const incoming = normalizeDocumentEntityIds(clone(doc));
+    delete incoming.__clearKeys;
     const key = normalizeEntityId(incoming._id) || String(incoming._id);
     const existing = byId.has(key) ? rows[byId.get(key)] : {};
     const plain = replace
       ? { ...(incoming || {}), _id: key }
-      : mergeDocumentFields(existing || {}, incoming);
+      : mergeDocumentFields(existing || {}, incoming, mergeOpts);
     plain._id = key;
     if (byId.has(key)) rows[byId.get(key)] = plain;
     else {

@@ -58,6 +58,27 @@ test('mergeDocumentFields clears when clearKeys listed', () => {
   assert.equal(merged.notes, 'keep');
 });
 
+test('mergeDocumentFields clears submittedToFinanceAt when listed in clearKeys', () => {
+  const merged = mergeDocumentFields(
+    {
+      _id: 'c1',
+      submittedToFinanceAt: '2026-10-01T00:00:00.000Z',
+      financePaymentStatus: 'under_review',
+      paymentSubmitStatus: 'payment_confirmed',
+    },
+    {
+      _id: 'c1',
+      submittedToFinanceAt: null,
+      financePaymentStatus: '',
+      paymentSubmitStatus: 'payment_not_checked',
+    },
+    { clearKeys: ['submittedToFinanceAt', 'financePaymentStatus'] }
+  );
+  assert.equal(merged.submittedToFinanceAt, null);
+  assert.equal(merged.financePaymentStatus, '');
+  assert.equal(merged.paymentSubmitStatus, 'payment_not_checked');
+});
+
 test('assignPreservingExisting mutates target safely', () => {
   const row = { name: 'A', gstin: 'G1', city: 'Pune' };
   assignPreservingExisting(row, { name: 'B', gstin: '', city: 'Mumbai' });

@@ -77,10 +77,25 @@ export function assertCanReturnCampFromPayoutQueue(user, permissions) {
 }
 
 /**
+ * Fields blanked on return. Must be passed to save/upsert as clearKeys —
+ * mergeDocumentFields otherwise preserves non-blank existing values and the
+ * camp stays in Payout Queue (hiding Confirm Payment on Financial).
+ */
+export const CAMP_PAYOUT_RETURN_CLEAR_KEYS = [
+  'submittedToFinanceAt',
+  'submittedToFinanceById',
+  'submittedToFinanceByEmail',
+  'financePaymentStatus',
+];
+
+/**
  * Clear Finance One queue membership and restore Camp One Financial as if the
  * camp just arrived from Execution — Pending Confirmation — so revenue/payout
  * amounts can be edited and Confirm Payment run again before re-submit.
  * Payment Done camps cannot be returned.
+ *
+ * Callers must persist with `save({ clearKeys: CAMP_PAYOUT_RETURN_CLEAR_KEYS })`
+ * (or equivalent upsert clearKeys) so blank clears actually stick.
  */
 export function applyReturnCampFromPayoutQueue(camp) {
   if (!camp) {

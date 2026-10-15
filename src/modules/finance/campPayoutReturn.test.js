@@ -4,7 +4,9 @@ import {
   applyReturnCampFromPayoutQueue,
   canReturnCampFromPayoutQueue,
   normalizePayoutReturnKey,
+  CAMP_PAYOUT_RETURN_CLEAR_KEYS,
 } from './campPayoutReturn.js';
+import { mergeDocumentFields } from '../../store/dataIntegrity.js';
 
 test('normalizePayoutReturnKey collapses spaces and en-dashes', () => {
   assert.equal(
@@ -96,4 +98,32 @@ test('applyReturnCampFromPayoutQueue rejects Payment Done', () => {
     }),
     /Payment Done/,
   );
+});
+
+test('return clearKeys are required — blank merge alone keeps queue membership', () => {
+  const existing = {
+    _id: 'c1',
+    submittedToFinanceAt: '2026-10-01T00:00:00.000Z',
+    submittedToFinanceById: 'u1',
+    submittedToFinanceByEmail: 'a@b.com',
+    financePaymentStatus: 'under_review',
+    paymentSubmitStatus: 'payment_confirmed',
+    lifecycleStage: 'financial',
+  };
+  const camp = { ...existing };
+  applyReturnCampFromPayoutQueue(camp);
+
+  const withoutClear = mergeDocumentFields(existing, camp);
+  assert.equal(withoutClear.submittedToFinanceAt, '2026-10-01T00:00:00.000Z');
+  assert.equal(withoutClear.financePaymentStatus, 'under_review');
+  assert.equal(withoutClear.paymentSubmitStatus, 'payment_not_checked');
+
+  const withClear = mergeDocumentFields(existing, camp, {
+    clearKeys: CAMP_PAYOUT_RETURN_CLEAR_KEYS,
+  });
+  assert.equal(withClear.submittedToFinanceAt, null);
+  assert.equal(withClear.submittedToFinanceById, null);
+  assert.equal(withClear.submittedToFinanceByEmail, '');
+  assert.equal(withClear.financePaymentStatus, '');
+  assert.equal(withClear.paymentSubmitStatus, 'payment_not_checked');
 });
