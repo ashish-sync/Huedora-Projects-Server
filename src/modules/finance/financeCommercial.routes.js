@@ -18,7 +18,7 @@ import { nextSequence } from '../../utils/counters.js';
 import { FinanceCommercialDocument } from './finance.model.js';
 import { COMMERCIAL_DOC_STATUSES } from './finance.constants.js';
 import { applyArchiveListFilter } from '../retention/archivePolicy.js';
-import { DOCUMENT_NUMBER_STANDARDS, documentNumberPeriod, releaseCommercialDocumentNumber, validateManualDocumentNumber } from './documentNumbering.js';
+import { DOCUMENT_NUMBER_STANDARDS, documentNumberPeriod, formatDocumentNumberExample, releaseCommercialDocumentNumber, validateManualDocumentNumber } from './documentNumbering.js';
 import {
   assertApprovable,
   assertCancellable,
@@ -29,7 +29,12 @@ import {
   assertSubmittable,
   assignCommercialDocumentNumber,
   applyCommercialPayment,
+  assertDocumentNumberAvailable,
+  assertUniqueDocumentCode,
+  correctIssuedDocumentNumber,
   extractBuilderExtras,
+  persistRequestedDocumentNumber,
+  resolveOrgDocumentCode,
   fiscalYearLabel,
   getOrCreateOrgProfile,
   listOrgProfiles,
@@ -285,6 +290,11 @@ function stampUpdater(row, user) {
   if (row.status === 'Draft') row.draftStaleWarnedAt = null;
 }
 
+async function saveRequestedNumber(row, req) {
+  await persistRequestedDocumentNumber(row, req.body, req.permissions);
+  if (trimStr(row.requestedDocumentNumber)) await row.save();
+}
+
 router.get(
   '/commercial-documents/:id',
   canRead,
@@ -373,6 +383,11 @@ router.post(
       }
     }
 
+    if (trimStr(req.body?.documentNumber) || trimStr(req.body?.requestedDocumentNumber)) {
+      await persistRequestedDocumentNumber(row, {
+        requestedDocumentNumber: trimStr(req.body.documentNumber) || trimStr(req.body.requestedDocumentNumber),
+      }, req.permissions);
+    }
     await assignCommercialDocumentNumber(row, { force: true });
     await freezeOrgSnapshotOnIssue(row);
     row.status = 'Issued';
@@ -386,6 +401,27 @@ router.post(
     await row.save();
     await auditCommercial(req, 'FINANCE.COMMERCIAL.APPROVE', row, before);
     res.json({ data: await commercialPayload(row) });
+  })
+);
+
+router.post(
+  '/commercial-documents/:id/correct-number',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const row = await loadCommercialById(req.params.id);
+    const before = row.toObject ? row.toObject() : { ...row };
+    await correctIssuedDocumentNumber(row, {
+      documentNumber: req.body?.documentNumber,
+      remark: req.body?.remark || req.body?.reason,
+      actor: req.user,
+    });
+    stampUpdater(row, req.user);
+    await row.save();
+    await auditCommercial(req, 'FINANCE.COMMERCIAL.CORRECT_NUMBER', row, before);
+    res.json({
+      data: await commercialPayload(row),
+      message: `Document number updated to ${row.documentNumber}`,
+    });
   })
 );
 
@@ -531,7 +567,9 @@ router.patch(
   asyncHandler(async (req, res) => {
     assertOrgMasterEditor(req.user, req.permissions);
     const profile = await getOrCreateOrgProfile();
-    assignPreservingExisting(profile, await mergeOrgProfile(req.body));
+    const patch = await mergeOrgProfile(req.body);
+    if (patch.documentCode) await assertUniqueDocumentCode(patch.documentCode, profile._id);
+    assignPreservingExisting(profile, patch);
     profile.updatedById = req.user._id;
     profile.updatedByEmail = req.user.email;
     await profile.save();
@@ -554,6 +592,7 @@ router.get(
           legalName: o.legalName,
           gstin: o.gstin,
           isDefault: Boolean(o.isDefault),
+          documentCode: o.documentCode || 'TC',
           state: o.state,
           stateCode: o.stateCode,
         };
@@ -587,7 +626,9 @@ router.patch(
   asyncHandler(async (req, res) => {
     assertOrgMasterEditor(req.user, req.permissions);
     const profile = await resolveOrgProfileId(req.params.id);
-    assignPreservingExisting(profile, await mergeOrgProfile(req.body));
+    const patch = await mergeOrgProfile(req.body);
+    if (patch.documentCode) await assertUniqueDocumentCode(patch.documentCode, profile._id);
+    assignPreservingExisting(profile, patch);
     if (req.body.name !== undefined) {
       const name = String(req.body.name || '').trim();
       if (name) profile.name = name;
@@ -662,6 +703,7 @@ router.post(
       ...payload,
       ...extractBuilderExtras(req.body),
     });
+    await saveRequestedNumber(row, req);
 
     await writeAudit({
       actorId: req.user._id,
@@ -707,6 +749,7 @@ router.patch(
       row.documentNumber = '';
     }
     stampUpdater(row, req.user);
+    await persistRequestedDocumentNumber(row, req.body, req.permissions);
     await row.save();
     await auditCommercial(req, 'FINANCE.PROFORMA.UPDATE', row, before);
     res.json({ data: row });
@@ -731,10 +774,7 @@ router.post(
     validateProformaPayload(payload);
     assignPreservingExisting(row, payload);
 
-    if (!trimStr(row.documentNumber)) {
-      row.documentNumber = await nextProformaNumber(row.documentDate);
-    }
-    row.documentPeriod = documentNumberPeriod(row.documentDate).periodKey;
+    await assignCommercialDocumentNumber(row);
     row.status = 'Issued';
     row.issuedAt = new Date().toISOString();
     row.source = row.source || 'generated';
@@ -824,12 +864,15 @@ router.post(
 
     const documentDate = trimStr(req.body.documentDate) || todayIso();
     const grandTotal = toAmount(req.body.grandTotal);
+    const { orgProfile, orgProfileId } = await loadOrgContext(req);
     let documentNumber = trimStr(req.body.documentNumber);
     if (documentNumber) {
-      documentNumber = validateManualDocumentNumber(documentNumber, 'proforma');
+      documentNumber = validateManualDocumentNumber(documentNumber, 'proforma', {
+        documentCode: resolveOrgDocumentCode(orgProfile),
+      });
+      await assertDocumentNumberAvailable(documentNumber);
     }
     const period = documentNumberPeriod(documentDate);
-    const { orgProfileId } = await loadOrgContext(req);
 
     const row = await FinanceCommercialDocument.create({
       orgProfileId,
@@ -949,6 +992,7 @@ router.post(
       ...payload,
       ...extractBuilderExtras(req.body),
     });
+    await saveRequestedNumber(row, req);
 
     await writeAudit({
       actorId: req.user._id,
@@ -998,6 +1042,7 @@ router.patch(
       row.documentNumber = '';
     }
     stampUpdater(row, req.user);
+    await persistRequestedDocumentNumber(row, req.body, req.permissions);
     await row.save();
     await auditCommercial(req, 'FINANCE.PO.UPDATE', row, before);
     res.json({ data: row });
@@ -1022,10 +1067,7 @@ router.post(
     validatePurchaseOrderPayload(payload);
     assignPreservingExisting(row, payload);
 
-    if (!trimStr(row.documentNumber)) {
-      row.documentNumber = await nextPurchaseOrderNumber(row.documentDate);
-    }
-    row.documentPeriod = documentNumberPeriod(row.documentDate).periodKey;
+    await assignCommercialDocumentNumber(row);
     row.status = 'Issued';
     row.issuedAt = new Date().toISOString();
     seedLifecycleStatusIfBlank(row);
@@ -1111,12 +1153,15 @@ router.post(
 
     const documentDate = trimStr(req.body.documentDate) || todayIso();
     const grandTotal = toAmount(req.body.grandTotal);
+    const { orgProfile, orgProfileId } = await loadOrgContext(req);
     let documentNumber = trimStr(req.body.documentNumber);
     if (documentNumber) {
-      documentNumber = validateManualDocumentNumber(documentNumber, 'purchase_order');
+      documentNumber = validateManualDocumentNumber(documentNumber, 'purchase_order', {
+        documentCode: resolveOrgDocumentCode(orgProfile),
+      });
+      await assertDocumentNumberAvailable(documentNumber);
     }
     const period = documentNumberPeriod(documentDate);
-    const { orgProfileId } = await loadOrgContext(req);
 
     const row = await FinanceCommercialDocument.create({
       orgProfileId,
@@ -1259,6 +1304,7 @@ router.post(
       ...payload,
       ...extractBuilderExtras(req.body),
     });
+    await saveRequestedNumber(row, req);
 
     await writeAudit({
       actorId: req.user._id,
@@ -1304,6 +1350,7 @@ router.patch(
       row.documentNumber = '';
     }
     stampUpdater(row, req.user);
+    await persistRequestedDocumentNumber(row, req.body, req.permissions);
     await row.save();
     await auditCommercial(req, 'FINANCE.CLIENT_INVOICE.UPDATE', row, before);
     res.json({ data: row });
@@ -1328,10 +1375,7 @@ router.post(
     validateClientInvoicePayload(payload);
     assignPreservingExisting(row, payload);
 
-    if (!trimStr(row.documentNumber)) {
-      row.documentNumber = await nextClientInvoiceNumber(row.documentDate);
-    }
-    row.documentPeriod = documentNumberPeriod(row.documentDate).periodKey;
+    await assignCommercialDocumentNumber(row);
     row.status = 'Issued';
     row.issuedAt = new Date().toISOString();
     row.source = row.source || 'generated';
@@ -1471,6 +1515,7 @@ router.post(
       ...payload,
       ...extractBuilderExtras(req.body),
     });
+    await saveRequestedNumber(row, req);
 
     await writeAudit({
       actorId: req.user._id,
@@ -1516,6 +1561,7 @@ router.patch(
       row.documentNumber = '';
     }
     stampUpdater(row, req.user);
+    await persistRequestedDocumentNumber(row, req.body, req.permissions);
     await row.save();
     await auditCommercial(req, 'FINANCE.CREDIT_NOTE.UPDATE', row, before);
     res.json({ data: row });
@@ -1540,10 +1586,7 @@ router.post(
     validateCreditNotePayload(payload);
     assignPreservingExisting(row, payload);
 
-    if (!trimStr(row.documentNumber)) {
-      row.documentNumber = await nextCreditNoteNumber(row.documentDate);
-    }
-    row.documentPeriod = documentNumberPeriod(row.documentDate).periodKey;
+    await assignCommercialDocumentNumber(row);
     row.status = 'Issued';
     row.issuedAt = new Date().toISOString();
     row.source = row.source || 'generated';
@@ -1698,6 +1741,7 @@ function registerInvoiceLikeDocRoutes({
         ...payload,
         ...extractBuilderExtras(req.body),
       });
+      await saveRequestedNumber(row, req);
 
       await writeAudit({
         actorId: req.user._id,
@@ -1743,6 +1787,7 @@ function registerInvoiceLikeDocRoutes({
         row.documentNumber = '';
       }
       stampUpdater(row, req.user);
+      await persistRequestedDocumentNumber(row, req.body, req.permissions);
       await row.save();
       await auditCommercial(req, `FINANCE.${auditVerb}.UPDATE`, row, before);
       res.json({ data: row });
@@ -1767,10 +1812,7 @@ function registerInvoiceLikeDocRoutes({
       validate(payload);
       assignPreservingExisting(row, payload);
 
-      if (!trimStr(row.documentNumber)) {
-        row.documentNumber = await nextNumber(row.documentDate);
-      }
-      row.documentPeriod = documentNumberPeriod(row.documentDate).periodKey;
+      await assignCommercialDocumentNumber(row);
       row.status = 'Issued';
       row.issuedAt = new Date().toISOString();
       row.source = row.source || 'generated';
@@ -1891,6 +1933,7 @@ router.get(
         commercialStatuses: COMMERCIAL_DOC_STATUSES,
         documentNumberStandards: DOCUMENT_NUMBER_STANDARDS,
         documentNumberFormat: 'PREFIXFY/MM/SEQ',
+        documentNumberHint: 'Prefix is organisation document code + type suffix (e.g. TCIN, MDPO, RDBS).',
       },
     });
   })
