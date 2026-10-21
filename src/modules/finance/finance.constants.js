@@ -96,6 +96,7 @@ export const COMMERCIAL_PAYMENT_STATUSES = [
 export const DEFAULT_SAC_CODE = '999316';
 
 export const DEFAULT_ORG_PROFILE = {
+  documentCode: 'TC',
   legalName: 'Tylo Care Private Limited',
   brandLine: 'Bringing Healthcare Closer',
   cin: 'U86909MH2026PTC472417',

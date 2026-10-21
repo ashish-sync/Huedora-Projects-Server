@@ -2,9 +2,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DOCUMENT_NUMBER_PREFIXES,
+  documentPrefix,
   formatDocumentNumberExample,
   parseDocumentNumber,
   documentNumberPeriod,
+  historyHoldsDocumentNumber,
   validateManualDocumentNumber,
 } from './documentNumbering.js';
 
@@ -56,5 +58,43 @@ describe('documentNumbering', () => {
       validateManualDocumentNumber('TCIN/26-27/08/001', 'client_invoice'),
       'TCIN26-27/08/001'
     );
+  });
+
+  it('builds org-specific prefixes from documentCode + type suffix', () => {
+    assert.equal(documentPrefix('client_invoice', 'MD'), 'MDIN');
+    assert.equal(documentPrefix('purchase_order', 'RD'), 'RDPO');
+    assert.equal(documentPrefix('bill_of_supply', 'RD'), 'RDBS');
+    assert.equal(documentPrefix('client_invoice', 'TYLO'), 'TYLOIN');
+    assert.equal(formatDocumentNumberExample('client_invoice', '2026-08-15', 'MD'), 'MDIN26-27/08/001');
+    assert.equal(formatDocumentNumberExample('proforma', '2026-08-15', 'TYLO'), 'TYLOPI26-27/08/001');
+  });
+
+  it('parses MDIN and TYLOIN numbers back to org code + type', () => {
+    const md = parseDocumentNumber('MDIN26-27/08/001');
+    assert.equal(md.prefix, 'MDIN');
+    assert.equal(md.documentType, 'client_invoice');
+    assert.equal(md.documentCode, 'MD');
+    const tylo = parseDocumentNumber('TYLOIN26-27/08/001');
+    assert.equal(tylo.prefix, 'TYLOIN');
+    assert.equal(tylo.documentType, 'client_invoice');
+    assert.equal(tylo.documentCode, 'TYLO');
+  });
+
+  it('accepts a matching org prefix and rejects a mismatched one', () => {
+    assert.equal(
+      validateManualDocumentNumber('MDIN26-27/08/001', 'client_invoice', { documentCode: 'MD' }),
+      'MDIN26-27/08/001'
+    );
+    assert.throws(
+      () => validateManualDocumentNumber('TCIN26-27/08/001', 'client_invoice', { documentCode: 'MD' }),
+      /MDIN/
+    );
+  });
+
+  it('keeps corrected numbers reserved in history', () => {
+    const history = [{ from: 'TCIN26-27/08/001', to: 'TCIN26-27/08/040' }];
+    assert.equal(historyHoldsDocumentNumber(history, 'TCIN26-27/08/001'), true);
+    assert.equal(historyHoldsDocumentNumber(history, 'TCIN/26-27/08/040'), true);
+    assert.equal(historyHoldsDocumentNumber(history, 'TCIN26-27/08/002'), false);
   });
 });
