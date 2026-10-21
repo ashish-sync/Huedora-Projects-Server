@@ -114,6 +114,8 @@ export const FinanceOrgProfile = defineCollection('finance_org_profile', {
   proformaNotes: [],
   defaultPoTerms: [],
   defaultPurchaseTaxRate: 5,
+  /** Org half of commercial PREFIX (TC, MD, RD, TYLO) → TCIN / MDPO / RDBS. */
+  documentCode: 'TC',
   updatedById: null,
   updatedByEmail: '',
   createdAt: null,
@@ -126,6 +128,10 @@ export const FinanceCommercialDocument = defineCollection('finance_commercial_do
   docKey: '',
   documentType: 'proforma',
   documentNumber: '',
+  /** Admin-entered number reserved before Approve (blank → auto-assign). */
+  requestedDocumentNumber: '',
+  /** Post-issuance corrections: { from, to, remark, at, byId, byEmail } */
+  documentNumberHistory: [],
   fiscalYear: '',
   documentPeriod: '',
   status: 'Draft',
