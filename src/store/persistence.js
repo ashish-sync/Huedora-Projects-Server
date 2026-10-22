@@ -345,6 +345,15 @@ export function getListIndexStatus() {
   return { ...listIndexStatus, failed: [...listIndexStatus.failed] };
 }
 
+/** Options passed to Mongo `createIndex`. Uniqueness indexes must not skip `unique`. */
+export function mongoIndexOptions(idx = {}) {
+  const options = { name: idx.name, background: true };
+  if (idx.unique) options.unique = true;
+  if (idx.sparse) options.sparse = true;
+  if (idx.partialFilterExpression) options.partialFilterExpression = idx.partialFilterExpression;
+  return options;
+}
+
 /** Mark indexes degraded when ensure throws before returning. */
 export function markListIndexesFailed(errorMessage = 'ensureListIndexes failed') {
   listIndexStatus = {
@@ -441,6 +450,38 @@ export async function ensureListIndexes() {
       name: 'finance_commercial_documents',
       indexes: [
         { key: { isDeleted: 1, documentType: 1, status: 1 }, name: 'dash_deleted_type_status' },
+        {
+          key: { documentNumber: 1 },
+          name: 'uniq_live_document_number',
+          unique: true,
+          blocking: false,
+          partialFilterExpression: {
+            isDeleted: false,
+            documentNumber: { $type: 'string', $gt: '' },
+          },
+        },
+        {
+          key: { 'documentNumberHistory.from': 1 },
+          name: 'uniq_document_number_history_from',
+          unique: true,
+          sparse: true,
+          blocking: false,
+        },
+      ],
+    },
+    {
+      name: 'finance_org_profile',
+      indexes: [
+        {
+          key: { documentCode: 1 },
+          name: 'uniq_live_document_code',
+          unique: true,
+          blocking: false,
+          partialFilterExpression: {
+            isDeleted: { $ne: true },
+            documentCode: { $type: 'string', $gt: '' },
+          },
+        },
       ],
     },
     {
@@ -474,19 +515,20 @@ export async function ensureListIndexes() {
     const col = mongoDb.collection(collectionKey(spec.name));
     for (const idx of spec.indexes) {
       try {
-        await col.createIndex(idx.key, { name: idx.name, background: true });
+        await col.createIndex(idx.key, mongoIndexOptions(idx));
         results.push({ collection: spec.name, index: idx.name, ok: true });
       } catch (err) {
         results.push({
           collection: spec.name,
           index: idx.name,
           ok: false,
+          blocking: idx.blocking !== false,
           error: String(err?.message || err).slice(0, 200),
         });
       }
     }
   }
-  const failed = results.filter((r) => !r.ok).map((r) => ({
+  const failed = results.filter((r) => !r.ok && r.blocking !== false).map((r) => ({
     collection: r.collection,
     index: r.index,
     error: r.error,
