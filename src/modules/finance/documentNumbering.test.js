@@ -94,6 +94,24 @@ describe('documentNumbering', () => {
     );
   });
 
+  it('uses the organisation document code in PREFIXFY examples, not TC', () => {
+    assert.throws(
+      () => validateManualDocumentNumber('MR26-27/10', 'client_invoice', { documentCode: 'MR' }),
+      /MRIN26-27/,
+    );
+  });
+
+  it('coerces MR26-27/10/058 into MRIN26-27/10/058', () => {
+    assert.equal(
+      validateManualDocumentNumber('MR26-27/10/058', 'client_invoice', { documentCode: 'MR' }),
+      'MRIN26-27/10/058',
+    );
+    assert.equal(
+      validateManualDocumentNumber('MR26-27/10/0058', 'client_invoice', { documentCode: 'MR' }),
+      'MRIN26-27/10/058',
+    );
+  });
+
   it('keeps historical Tylo counters and scopes other orgs', () => {
     assert.equal(
       documentNumberCounterName('client_invoice', '26-27_08'),

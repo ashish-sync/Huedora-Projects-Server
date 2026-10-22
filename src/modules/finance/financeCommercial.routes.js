@@ -418,14 +418,14 @@ router.post(
   requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await loadCommercialById(req.params.id);
-    const { orgProfile } = await loadOrgContext(req, row);
+    const { live, orgProfile } = await loadOrgContext(req, row);
     const before = row.toObject ? row.toObject() : { ...row };
     await correctIssuedDocumentNumber(
       row,
       req.body?.documentNumber,
       req.body?.remark,
       req.user,
-      orgProfile,
+      live || orgProfile,
     );
     stampUpdater(row, req.user);
     await row.save();
@@ -601,7 +601,7 @@ router.get(
           id: o._id,
           name: o.name || o.legalName || 'Organisation',
           legalName: o.legalName,
-          documentCode: o.documentCode || 'TC',
+          documentCode: o.documentCode || (o.isDefault ? 'TC' : ''),
           gstin: o.gstin,
           isDefault: Boolean(o.isDefault),
           state: o.state,

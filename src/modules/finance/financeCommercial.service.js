@@ -12,6 +12,8 @@ import {
   isValidDocumentCode,
   nextCommercialDocumentNumber,
   normalizeDocumentCode,
+  parseDocumentNumber,
+  readExplicitDocumentCode,
   validateManualDocumentNumber,
 } from './documentNumbering.js';
 import { FinanceCommercialDocument, FinanceOrgProfile } from './finance.model.js';
@@ -314,10 +316,24 @@ export async function getOrCreateOrgProfile() {
 }
 
 export function resolveDocumentCode(orgOrRow) {
-  return normalizeDocumentCode(
-    orgOrRow?.documentCode
-    || orgOrRow?.orgSnapshot?.documentCode
-    || DEFAULT_ORG_PROFILE.documentCode,
+  return (
+    readExplicitDocumentCode(orgOrRow)
+    || readExplicitDocumentCode(orgOrRow?.orgSnapshot)
+    || DEFAULT_ORG_PROFILE.documentCode
+    || 'TC'
+  );
+}
+
+/** Live Organisation Master first, then snapshot, then the existing number's prefix. */
+export function resolveNumberingDocumentCode(row, orgProfile) {
+  const parsed = parseDocumentNumber(row?.documentNumber);
+  return (
+    readExplicitDocumentCode(orgProfile)
+    || readExplicitDocumentCode(row?.orgSnapshot)
+    || readExplicitDocumentCode(row)
+    || parsed?.documentCode
+    || DEFAULT_ORG_PROFILE.documentCode
+    || 'TC'
   );
 }
 
@@ -417,6 +433,7 @@ export function buildOrgSnapshot(orgProfile) {
     if (src[key] !== undefined) snap[key] = src[key];
   }
   if (!snap.name) snap.name = snap.legalName || 'Organisation';
+  snap.documentCode = resolveDocumentCode(src);
   return snap;
 }
 
@@ -578,11 +595,9 @@ export async function nextBillOfSupplyNumber(documentDate, options = {}) {
 }
 
 function numberingOptionsForRow(row, orgProfile) {
-  const stage = normalizeCommercialStage(row?.status);
-  const frozen = (stage === 'Issued' || stage === 'Cancelled') ? row?.orgSnapshot : null;
   return {
-    orgProfileId: row?.orgProfileId || frozen?.orgProfileId || orgProfile?._id || 'default',
-    documentCode: resolveDocumentCode(frozen || orgProfile || row?.orgSnapshot || row),
+    orgProfileId: row?.orgProfileId || orgProfile?._id || row?.orgSnapshot?.orgProfileId || 'default',
+    documentCode: resolveNumberingDocumentCode(row, orgProfile),
   };
 }
 

@@ -32,12 +32,20 @@ const SUFFIX_TO_TYPE = Object.fromEntries(
 const TYPE_SUFFIX_GROUP = Object.values(DOCUMENT_TYPE_SUFFIXES).join('|');
 
 export function normalizeDocumentCode(value) {
+  const raw = readExplicitDocumentCode(value);
+  return raw || DEFAULT_DOCUMENT_CODE;
+}
+
+/** Return a 2–5 letter code, or '' — never invent TC for a missing org code. */
+export function readExplicitDocumentCode(value) {
+  if (value && typeof value === 'object') {
+    value = value.documentCode;
+  }
   const raw = String(value || '')
     .trim()
     .toUpperCase()
     .replace(/[^A-Z]/g, '');
-  if (raw.length >= 2 && raw.length <= 5) return raw;
-  return DEFAULT_DOCUMENT_CODE;
+  return raw.length >= 2 && raw.length <= 5 ? raw : '';
 }
 
 export function isValidDocumentCode(value) {
@@ -312,8 +320,25 @@ export async function releaseCommercialDocumentNumber(documentNumber, documentTy
   return releaseSequence(counterName, parsed.sequence);
 }
 
+/**
+ * Allow `{code}FY/MM/SEQ` (e.g. MR26-27/10/058) as shorthand for `{code}{IN|PO|…}FY/MM/SEQ`.
+ */
+export function coerceManualDocumentNumberInput(value, documentType, documentCode) {
+  const text = String(value || '').trim().toUpperCase();
+  if (!text) return text;
+  if (parseDocumentNumber(text)) return text;
+  const code = readExplicitDocumentCode(documentCode);
+  const suffix = DOCUMENT_TYPE_SUFFIXES[documentType];
+  if (!code || !suffix) return text;
+  const bare = new RegExp(`^${code}(?:\\/)?(\\d{2}-\\d{2})\\/(\\d{2})\\/(\\d{3,})$`, 'i');
+  const match = bare.exec(text);
+  if (!match) return text;
+  return `${code}${suffix}${match[1]}/${match[2]}/${match[3]}`;
+}
+
 export function validateManualDocumentNumber(value, documentType, options = {}) {
-  const parsed = parseDocumentNumber(value);
+  const coerced = coerceManualDocumentNumberInput(value, documentType, options.documentCode);
+  const parsed = parseDocumentNumber(coerced);
   const expectedPrefix = prefixForDocumentType(documentType, options.documentCode);
   const example = formatDocumentNumberExample(documentType, undefined, options.documentCode)
     || 'TCIN26-27/08/001';

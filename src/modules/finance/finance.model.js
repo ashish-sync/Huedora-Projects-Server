@@ -86,8 +86,8 @@ export const FinanceOrgProfile = defineCollection('finance_org_profile', {
   slug: '',
   isDefault: false,
   isDeleted: false,
-  /** 2–5 letter code used as PREFIX for commercial document numbers (TCIN, MDPO, RDBS). */
-  documentCode: 'TC',
+  /** 2–5 letter code used as PREFIX for commercial document numbers (TCIN, MDPO, RDBS). Empty until set on Organisation Master — do not default every org to TC. */
+  documentCode: '',
   legalName: '',
   brandLine: '',
   cin: '',
