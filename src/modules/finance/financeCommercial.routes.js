@@ -18,7 +18,7 @@ import { nextSequence } from '../../utils/counters.js';
 import { FinanceCommercialDocument } from './finance.model.js';
 import { COMMERCIAL_DOC_STATUSES } from './finance.constants.js';
 import { applyArchiveListFilter } from '../retention/archivePolicy.js';
-import { DOCUMENT_NUMBER_STANDARDS, documentNumberPeriod, formatDocumentNumberExample, releaseCommercialDocumentNumber, validateManualDocumentNumber } from './documentNumbering.js';
+import { DOCUMENT_NUMBER_STANDARDS, documentNumberPeriod, releaseCommercialDocumentNumber, validateManualDocumentNumber } from './documentNumbering.js';
 import {
   assertApprovable,
   assertCancellable,
@@ -28,13 +28,13 @@ import {
   assertRejectable,
   assertSubmittable,
   assignCommercialDocumentNumber,
-  applyCommercialPayment,
-  assertDocumentNumberAvailable,
-  assertUniqueDocumentCode,
+  applyDraftDocumentNumber,
   correctIssuedDocumentNumber,
+  assertDocumentNumberAvailable,
+  assertDocumentCodeAvailable,
+  resolveDocumentCode,
+  applyCommercialPayment,
   extractBuilderExtras,
-  persistRequestedDocumentNumber,
-  resolveOrgDocumentCode,
   fiscalYearLabel,
   getOrCreateOrgProfile,
   listOrgProfiles,
@@ -290,9 +290,23 @@ function stampUpdater(row, user) {
   if (row.status === 'Draft') row.draftStaleWarnedAt = null;
 }
 
-async function saveRequestedNumber(row, req) {
-  await persistRequestedDocumentNumber(row, req.body, req.permissions);
-  if (trimStr(row.requestedDocumentNumber)) await row.save();
+function documentNumberReleaseOpts(row) {
+  return {
+    orgProfileId: row.orgProfileId,
+    documentCode: row.orgSnapshot?.documentCode,
+  };
+}
+
+async function persistDraftDocumentNumber(row, req, orgProfile) {
+  await applyDraftDocumentNumber(row, req.body?.documentNumber, {
+    orgProfile,
+    permissions: req.permissions,
+  });
+}
+
+async function persistNewDraftDocumentNumber(row, req, orgProfile) {
+  await persistDraftDocumentNumber(row, req, orgProfile);
+  if (row.documentNumber) await row.save();
 }
 
 router.get(
@@ -330,8 +344,7 @@ router.post(
     assignPreservingExisting(row, payload);
     const before = row.toObject ? row.toObject() : { ...row };
     row.status = 'Submitted';
-    row.documentNumber = '';
-    row.documentPeriod = '';
+    await persistDraftDocumentNumber(row, req, orgProfile);
     row.submittedAt = new Date().toISOString();
     row.submittedById = req.user._id;
     row.submittedByEmail = req.user.email;
@@ -383,12 +396,8 @@ router.post(
       }
     }
 
-    if (trimStr(req.body?.documentNumber) || trimStr(req.body?.requestedDocumentNumber)) {
-      await persistRequestedDocumentNumber(row, {
-        requestedDocumentNumber: trimStr(req.body.documentNumber) || trimStr(req.body.requestedDocumentNumber),
-      }, req.permissions);
-    }
-    await assignCommercialDocumentNumber(row, { force: true });
+    const { orgProfile } = await loadOrgContext(req, row);
+    await assignCommercialDocumentNumber(row, { orgProfile });
     await freezeOrgSnapshotOnIssue(row);
     row.status = 'Issued';
     row.approvedAt = new Date().toISOString();
@@ -405,23 +414,23 @@ router.post(
 );
 
 router.post(
-  '/commercial-documents/:id/correct-number',
+  '/commercial-documents/:id/correct-document-number',
   requireAdmin,
   asyncHandler(async (req, res) => {
     const row = await loadCommercialById(req.params.id);
+    const { orgProfile } = await loadOrgContext(req, row);
     const before = row.toObject ? row.toObject() : { ...row };
-    await correctIssuedDocumentNumber(row, {
-      documentNumber: req.body?.documentNumber,
-      remark: req.body?.remark || req.body?.reason,
-      actor: req.user,
-    });
+    await correctIssuedDocumentNumber(
+      row,
+      req.body?.documentNumber,
+      req.body?.remark,
+      req.user,
+      orgProfile,
+    );
     stampUpdater(row, req.user);
     await row.save();
-    await auditCommercial(req, 'FINANCE.COMMERCIAL.CORRECT_NUMBER', row, before);
-    res.json({
-      data: await commercialPayload(row),
-      message: `Document number updated to ${row.documentNumber}`,
-    });
+    await auditCommercial(req, 'FINANCE.COMMERCIAL.CORRECT_DOCUMENT_NUMBER', row, before);
+    res.json({ data: await commercialPayload(row) });
   })
 );
 
@@ -544,7 +553,7 @@ router.delete(
     await row.save();
 
     if (documentNumber) {
-      await releaseCommercialDocumentNumber(documentNumber, documentType);
+      await releaseCommercialDocumentNumber(documentNumber, documentType, documentNumberReleaseOpts(row));
     }
 
     await auditCommercial(req, 'FINANCE.COMMERCIAL.DELETE', row, before);
@@ -568,7 +577,9 @@ router.patch(
     assertOrgMasterEditor(req.user, req.permissions);
     const profile = await getOrCreateOrgProfile();
     const patch = await mergeOrgProfile(req.body);
-    if (patch.documentCode) await assertUniqueDocumentCode(patch.documentCode, profile._id);
+    if (patch.documentCode) {
+      patch.documentCode = await assertDocumentCodeAvailable(patch.documentCode, { excludeId: profile._id });
+    }
     assignPreservingExisting(profile, patch);
     profile.updatedById = req.user._id;
     profile.updatedByEmail = req.user.email;
@@ -590,9 +601,9 @@ router.get(
           id: o._id,
           name: o.name || o.legalName || 'Organisation',
           legalName: o.legalName,
+          documentCode: o.documentCode || 'TC',
           gstin: o.gstin,
           isDefault: Boolean(o.isDefault),
-          documentCode: o.documentCode || 'TC',
           state: o.state,
           stateCode: o.stateCode,
         };
@@ -627,7 +638,9 @@ router.patch(
     assertOrgMasterEditor(req.user, req.permissions);
     const profile = await resolveOrgProfileId(req.params.id);
     const patch = await mergeOrgProfile(req.body);
-    if (patch.documentCode) await assertUniqueDocumentCode(patch.documentCode, profile._id);
+    if (patch.documentCode) {
+      patch.documentCode = await assertDocumentCodeAvailable(patch.documentCode, { excludeId: profile._id });
+    }
     assignPreservingExisting(profile, patch);
     if (req.body.name !== undefined) {
       const name = String(req.body.name || '').trim();
@@ -703,7 +716,7 @@ router.post(
       ...payload,
       ...extractBuilderExtras(req.body),
     });
-    await saveRequestedNumber(row, req);
+    await persistNewDraftDocumentNumber(row, req, orgProfile);
 
     await writeAudit({
       actorId: req.user._id,
@@ -745,11 +758,8 @@ router.patch(
     const before = row.toObject ? row.toObject() : { ...row };
     assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
     row.orgProfileId = orgProfileId;
-    if (['Draft', 'Uploaded'].includes(row.status)) {
-      row.documentNumber = '';
-    }
+    await persistDraftDocumentNumber(row, req, orgProfile);
     stampUpdater(row, req.user);
-    await persistRequestedDocumentNumber(row, req.body, req.permissions);
     await row.save();
     await auditCommercial(req, 'FINANCE.PROFORMA.UPDATE', row, before);
     res.json({ data: row });
@@ -774,7 +784,7 @@ router.post(
     validateProformaPayload(payload);
     assignPreservingExisting(row, payload);
 
-    await assignCommercialDocumentNumber(row);
+    await assignCommercialDocumentNumber(row, { orgProfile });
     row.status = 'Issued';
     row.issuedAt = new Date().toISOString();
     row.source = row.source || 'generated';
@@ -868,7 +878,7 @@ router.post(
     let documentNumber = trimStr(req.body.documentNumber);
     if (documentNumber) {
       documentNumber = validateManualDocumentNumber(documentNumber, 'proforma', {
-        documentCode: resolveOrgDocumentCode(orgProfile),
+        documentCode: resolveDocumentCode(orgProfile),
       });
       await assertDocumentNumberAvailable(documentNumber);
     }
@@ -919,7 +929,7 @@ router.delete(
     row.deletedBy = req.user._id;
     await row.save();
     if (documentNumber) {
-      await releaseCommercialDocumentNumber(documentNumber, 'proforma');
+      await releaseCommercialDocumentNumber(documentNumber, 'proforma', documentNumberReleaseOpts(row));
     }
     res.json({ data: { ok: true } });
   })
@@ -992,7 +1002,7 @@ router.post(
       ...payload,
       ...extractBuilderExtras(req.body),
     });
-    await saveRequestedNumber(row, req);
+    await persistNewDraftDocumentNumber(row, req, orgProfile);
 
     await writeAudit({
       actorId: req.user._id,
@@ -1038,11 +1048,8 @@ router.patch(
     const before = row.toObject ? row.toObject() : { ...row };
     assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
     row.orgProfileId = orgProfileId;
-    if (['Draft', 'Uploaded'].includes(row.status)) {
-      row.documentNumber = '';
-    }
+    await persistDraftDocumentNumber(row, req, orgProfile);
     stampUpdater(row, req.user);
-    await persistRequestedDocumentNumber(row, req.body, req.permissions);
     await row.save();
     await auditCommercial(req, 'FINANCE.PO.UPDATE', row, before);
     res.json({ data: row });
@@ -1067,7 +1074,7 @@ router.post(
     validatePurchaseOrderPayload(payload);
     assignPreservingExisting(row, payload);
 
-    await assignCommercialDocumentNumber(row);
+    await assignCommercialDocumentNumber(row, { orgProfile });
     row.status = 'Issued';
     row.issuedAt = new Date().toISOString();
     seedLifecycleStatusIfBlank(row);
@@ -1157,7 +1164,7 @@ router.post(
     let documentNumber = trimStr(req.body.documentNumber);
     if (documentNumber) {
       documentNumber = validateManualDocumentNumber(documentNumber, 'purchase_order', {
-        documentCode: resolveOrgDocumentCode(orgProfile),
+        documentCode: resolveDocumentCode(orgProfile),
       });
       await assertDocumentNumberAvailable(documentNumber);
     }
@@ -1207,7 +1214,7 @@ router.delete(
     row.deletedBy = req.user._id;
     await row.save();
     if (documentNumber) {
-      await releaseCommercialDocumentNumber(documentNumber, 'purchase_order');
+      await releaseCommercialDocumentNumber(documentNumber, 'purchase_order', documentNumberReleaseOpts(row));
     }
     res.json({ data: { ok: true } });
   })
@@ -1304,7 +1311,7 @@ router.post(
       ...payload,
       ...extractBuilderExtras(req.body),
     });
-    await saveRequestedNumber(row, req);
+    await persistNewDraftDocumentNumber(row, req, orgProfile);
 
     await writeAudit({
       actorId: req.user._id,
@@ -1346,11 +1353,8 @@ router.patch(
     const before = row.toObject ? row.toObject() : { ...row };
     assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
     row.orgProfileId = orgProfileId;
-    if (['Draft', 'Uploaded'].includes(row.status)) {
-      row.documentNumber = '';
-    }
+    await persistDraftDocumentNumber(row, req, orgProfile);
     stampUpdater(row, req.user);
-    await persistRequestedDocumentNumber(row, req.body, req.permissions);
     await row.save();
     await auditCommercial(req, 'FINANCE.CLIENT_INVOICE.UPDATE', row, before);
     res.json({ data: row });
@@ -1375,7 +1379,7 @@ router.post(
     validateClientInvoicePayload(payload);
     assignPreservingExisting(row, payload);
 
-    await assignCommercialDocumentNumber(row);
+    await assignCommercialDocumentNumber(row, { orgProfile });
     row.status = 'Issued';
     row.issuedAt = new Date().toISOString();
     row.source = row.source || 'generated';
@@ -1515,7 +1519,7 @@ router.post(
       ...payload,
       ...extractBuilderExtras(req.body),
     });
-    await saveRequestedNumber(row, req);
+    await persistNewDraftDocumentNumber(row, req, orgProfile);
 
     await writeAudit({
       actorId: req.user._id,
@@ -1557,11 +1561,8 @@ router.patch(
     const before = row.toObject ? row.toObject() : { ...row };
     assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
     row.orgProfileId = orgProfileId;
-    if (['Draft', 'Uploaded'].includes(row.status)) {
-      row.documentNumber = '';
-    }
+    await persistDraftDocumentNumber(row, req, orgProfile);
     stampUpdater(row, req.user);
-    await persistRequestedDocumentNumber(row, req.body, req.permissions);
     await row.save();
     await auditCommercial(req, 'FINANCE.CREDIT_NOTE.UPDATE', row, before);
     res.json({ data: row });
@@ -1586,7 +1587,7 @@ router.post(
     validateCreditNotePayload(payload);
     assignPreservingExisting(row, payload);
 
-    await assignCommercialDocumentNumber(row);
+    await assignCommercialDocumentNumber(row, { orgProfile });
     row.status = 'Issued';
     row.issuedAt = new Date().toISOString();
     row.source = row.source || 'generated';
@@ -1741,7 +1742,7 @@ function registerInvoiceLikeDocRoutes({
         ...payload,
         ...extractBuilderExtras(req.body),
       });
-      await saveRequestedNumber(row, req);
+      await persistNewDraftDocumentNumber(row, req, orgProfile);
 
       await writeAudit({
         actorId: req.user._id,
@@ -1783,11 +1784,8 @@ function registerInvoiceLikeDocRoutes({
       const before = row.toObject ? row.toObject() : { ...row };
       assignPreservingExisting(row, { ...payload, ...extractBuilderExtras(req.body) });
       row.orgProfileId = orgProfileId;
-      if (['Draft', 'Uploaded'].includes(row.status)) {
-        row.documentNumber = '';
-      }
+      await persistDraftDocumentNumber(row, req, orgProfile);
       stampUpdater(row, req.user);
-      await persistRequestedDocumentNumber(row, req.body, req.permissions);
       await row.save();
       await auditCommercial(req, `FINANCE.${auditVerb}.UPDATE`, row, before);
       res.json({ data: row });
@@ -1812,7 +1810,7 @@ function registerInvoiceLikeDocRoutes({
       validate(payload);
       assignPreservingExisting(row, payload);
 
-      await assignCommercialDocumentNumber(row);
+      await assignCommercialDocumentNumber(row, { orgProfile });
       row.status = 'Issued';
       row.issuedAt = new Date().toISOString();
       row.source = row.source || 'generated';
@@ -1933,7 +1931,6 @@ router.get(
         commercialStatuses: COMMERCIAL_DOC_STATUSES,
         documentNumberStandards: DOCUMENT_NUMBER_STANDARDS,
         documentNumberFormat: 'PREFIXFY/MM/SEQ',
-        documentNumberHint: 'Prefix is organisation document code + type suffix (e.g. TCIN, MDPO, RDBS).',
       },
     });
   })

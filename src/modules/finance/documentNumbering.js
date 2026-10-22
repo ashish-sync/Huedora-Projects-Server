@@ -3,14 +3,14 @@ import { nextSequence, releaseSequence } from '../../utils/counters.js';
 
 /**
  * Standard commercial document numbering: PREFIXFY/MM/SEQ
- * Prefix = organisation documentCode + type suffix.
- * e.g. TCIN26-27/08/001 — Tylo Care (TC) Tax Invoice, FY 26-27, August, 1st of the month
+ * PREFIX = {org documentCode}{type suffix}
+ * e.g. TCIN26-27/08/001 — Tylo Care Tax Invoice, FY 26-27, August, 1st of the month
  *
- * Suffixes:
- * IN Tax Invoice · PO Purchase Order · PI Proforma · QT Quotation
- * CN Credit Note · DN Debit Note · DC Delivery Challan · BS Bill of Supply
+ * Type suffixes:
+ * IN – Tax Invoice · PO – Purchase Order · PI – Proforma Invoice · QT – Quotation
+ * CN – Credit Note · DN – Debit Note · DC – Delivery Challan · BS – Bill of Supply
  *
- * Legacy PREFIX/FY/MM/SEQ (with slash after prefix) is still parsed for existing issued docs.
+ * Legacy PREFIX/FY/MM/SEQ (slash after prefix) is still parsed for existing issued docs.
  */
 export const DEFAULT_DOCUMENT_CODE = 'TC';
 
@@ -25,12 +25,34 @@ export const DOCUMENT_TYPE_SUFFIXES = {
   bill_of_supply: 'BS',
 };
 
-/** Default (Tylo Care) prefixes — used in examples and legacy docs. */
+const SUFFIX_TO_TYPE = Object.fromEntries(
+  Object.entries(DOCUMENT_TYPE_SUFFIXES).map(([type, suffix]) => [suffix, type]),
+);
+
+const TYPE_SUFFIX_GROUP = Object.values(DOCUMENT_TYPE_SUFFIXES).join('|');
+
+export function normalizeDocumentCode(value) {
+  const raw = String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z]/g, '');
+  if (raw.length >= 2 && raw.length <= 5) return raw;
+  return DEFAULT_DOCUMENT_CODE;
+}
+
+export function isValidDocumentCode(value) {
+  return /^[A-Z]{2,5}$/.test(String(value || '').trim().toUpperCase());
+}
+
+export function prefixForDocumentType(documentType, documentCode = DEFAULT_DOCUMENT_CODE) {
+  const suffix = DOCUMENT_TYPE_SUFFIXES[documentType];
+  if (!suffix) return '';
+  return `${normalizeDocumentCode(documentCode)}${suffix}`;
+}
+
+/** Default (Tylo Care) prefixes — kept for API meta and existing docs. */
 export const DOCUMENT_NUMBER_PREFIXES = Object.fromEntries(
-  Object.entries(DOCUMENT_TYPE_SUFFIXES).map(([type, suffix]) => [
-    type,
-    `${DEFAULT_DOCUMENT_CODE}${suffix}`,
-  ])
+  Object.entries(DOCUMENT_TYPE_SUFFIXES).map(([type, suffix]) => [type, `${DEFAULT_DOCUMENT_CODE}${suffix}`]),
 );
 
 export const DOCUMENT_NUMBER_LABELS = {
@@ -51,55 +73,31 @@ export const DOCUMENT_NUMBER_STANDARDS = Object.entries(DOCUMENT_NUMBER_PREFIXES
     prefix,
     label: DOCUMENT_NUMBER_LABELS[documentType] || documentType,
     example: `${prefix}26-27/08/001`,
-  })
+  }),
 );
 
-const SUFFIX_TO_TYPE = Object.fromEntries(
-  Object.entries(DOCUMENT_TYPE_SUFFIXES).map(([type, suffix]) => [suffix, type])
-);
+export function numberingPreviewForCode(documentCode = DEFAULT_DOCUMENT_CODE) {
+  const code = normalizeDocumentCode(documentCode);
+  return Object.entries(DOCUMENT_TYPE_SUFFIXES).map(([documentType, suffix]) => ({
+    documentType,
+    prefix: `${code}${suffix}`,
+    label: DOCUMENT_NUMBER_LABELS[documentType] || documentType,
+    example: `${code}${suffix}26-27/08/001`,
+  }));
+}
 
 /** Current: TCIN26-27/08/001 — optional slash after prefix kept for legacy PREFIX/FY/... */
-const NUMBER_PATTERN = /^([A-Z]{2,10})(?:\/)?(\d{2}-\d{2})(?:\/(\d{2}))?\/(\d{3,})$/i;
+const NUMBER_PATTERN = new RegExp(
+  `^([A-Z]{2,5})(${TYPE_SUFFIX_GROUP})(?:\\/)?(\\d{2}-\\d{2})(?:\\/(\\d{2}))?\\/(\\d{3,})$`,
+  'i',
+);
+const SHORT_LEGACY_PATTERN = new RegExp(
+  `^(${TYPE_SUFFIX_GROUP}|TYLO)(?:\\/)?(\\d{2}-\\d{2})(?:\\/(\\d{2}))?\\/(\\d{3,})$`,
+  'i',
+);
 const LEGACY_DASH_PATTERN = /^(TCIN|TCPO|TCPI|TCCN)-(\d{2})-(\d{2})-(\d{3,})$/i;
 
 const SEQ_DIGITS = 3;
-
-/** 2–5 letters used as the org half of PREFIX (TC, MD, RD, TYLO). */
-export function normalizeDocumentCode(value) {
-  const raw = String(value || '')
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z]/g, '');
-  if (raw.length < 2 || raw.length > 5) return '';
-  return raw;
-}
-
-export function documentPrefix(documentType, documentCode = DEFAULT_DOCUMENT_CODE) {
-  const suffix = DOCUMENT_TYPE_SUFFIXES[documentType];
-  if (!suffix) return '';
-  const code = normalizeDocumentCode(documentCode) || DEFAULT_DOCUMENT_CODE;
-  return `${code}${suffix}`;
-}
-
-export function documentCodeFromPrefix(prefix) {
-  const key = String(prefix || '').trim().toUpperCase();
-  if (!key) return DEFAULT_DOCUMENT_CODE;
-  const legacyMap = {
-    IN: DEFAULT_DOCUMENT_CODE,
-    PO: DEFAULT_DOCUMENT_CODE,
-    PI: DEFAULT_DOCUMENT_CODE,
-    QT: DEFAULT_DOCUMENT_CODE,
-    CN: DEFAULT_DOCUMENT_CODE,
-    DN: DEFAULT_DOCUMENT_CODE,
-    DC: DEFAULT_DOCUMENT_CODE,
-    BS: DEFAULT_DOCUMENT_CODE,
-    TYLO: DEFAULT_DOCUMENT_CODE,
-  };
-  if (legacyMap[key]) return legacyMap[key];
-  const suffix = key.slice(-2);
-  if (SUFFIX_TO_TYPE[suffix] && key.length > 2) return key.slice(0, -2);
-  return DEFAULT_DOCUMENT_CODE;
-}
 
 /** Indian FY label e.g. 26-27 for dates in Apr 2026 – Mar 2027 */
 export function fiscalYearLabel(dateIso) {
@@ -156,11 +154,19 @@ export function documentTypeFromPrefix(prefix) {
   };
   if (legacyMap[key]) return legacyMap[key];
   if (key === 'TYLO') return '';
-  const fromDefault = Object.entries(DOCUMENT_NUMBER_PREFIXES).find(([, p]) => p === key)?.[0];
-  if (fromDefault) return fromDefault;
-  const suffix = key.slice(-2);
-  if (SUFFIX_TO_TYPE[suffix] && key.length > 2) return SUFFIX_TO_TYPE[suffix];
-  return '';
+  const suffix = Object.values(DOCUMENT_TYPE_SUFFIXES).find((s) => key.endsWith(s) && key.length > s.length);
+  if (suffix && SUFFIX_TO_TYPE[suffix]) return SUFFIX_TO_TYPE[suffix];
+  return Object.entries(DOCUMENT_NUMBER_PREFIXES).find(([, p]) => p === key)?.[0] || '';
+}
+
+export function documentCodeFromPrefix(prefix) {
+  const key = String(prefix || '').trim().toUpperCase();
+  const type = documentTypeFromPrefix(key);
+  const suffix = type ? DOCUMENT_TYPE_SUFFIXES[type] : '';
+  if (suffix && key.endsWith(suffix) && key.length > suffix.length) {
+    return key.slice(0, -suffix.length);
+  }
+  return DEFAULT_DOCUMENT_CODE;
 }
 
 function formatCanonical(prefix, fy, mm, sequence) {
@@ -171,15 +177,18 @@ export function parseDocumentNumber(value) {
   const text = String(value || '').trim().toUpperCase();
   const match = NUMBER_PATTERN.exec(text);
   if (match) {
-    const prefix = match[1];
-    const fy = match[2];
-    const mm = match[3] || '';
-    const sequence = Number(match[4]);
+    const documentCode = match[1];
+    const suffix = match[2];
+    const prefix = `${documentCode}${suffix}`;
+    const fy = match[3];
+    const mm = match[4] || '';
+    const sequence = Number(match[5]);
+    const documentType = SUFFIX_TO_TYPE[suffix] || '';
     if (!mm) {
       return {
         prefix,
-        documentType: documentTypeFromPrefix(prefix),
-        documentCode: documentCodeFromPrefix(prefix),
+        documentCode,
+        documentType,
         fy,
         mm: '',
         sequence,
@@ -188,18 +197,47 @@ export function parseDocumentNumber(value) {
         fyOnly: true,
       };
     }
-    const type = documentTypeFromPrefix(prefix);
-    const documentCode = documentCodeFromPrefix(prefix);
-    const canonicalPrefix = type ? documentPrefix(type, documentCode) : prefix;
+    return {
+      prefix,
+      documentCode,
+      documentType,
+      fy,
+      mm,
+      sequence,
+      periodKey: `${fy}_${mm}`,
+      normalized: formatCanonical(prefix, fy, mm, sequence),
+    };
+  }
+  const short = SHORT_LEGACY_PATTERN.exec(text);
+  if (short) {
+    const prefix = short[1];
+    const fy = short[2];
+    const mm = short[3] || '';
+    const sequence = Number(short[4]);
+    if (!mm) {
+      return {
+        prefix,
+        documentCode: DEFAULT_DOCUMENT_CODE,
+        documentType: documentTypeFromPrefix(prefix),
+        fy,
+        mm: '',
+        sequence,
+        periodKey: fy,
+        normalized: `${prefix}${fy}/${String(sequence).padStart(4, '0')}`,
+        fyOnly: true,
+      };
+    }
+    const canonicalPrefix = DOCUMENT_NUMBER_PREFIXES[documentTypeFromPrefix(prefix)] || prefix;
     return {
       prefix: canonicalPrefix,
-      documentType: type,
-      documentCode,
+      documentCode: documentCodeFromPrefix(canonicalPrefix),
+      documentType: documentTypeFromPrefix(prefix),
       fy,
       mm,
       sequence,
       periodKey: `${fy}_${mm}`,
       normalized: formatCanonical(canonicalPrefix, fy, mm, sequence),
+      legacy: true,
     };
   }
   const legacy = LEGACY_DASH_PATTERN.exec(text);
@@ -211,8 +249,8 @@ export function parseDocumentNumber(value) {
     const fy = `${yy}-${String(Number(yy) + 1).padStart(2, '0')}`;
     return {
       prefix,
-      documentType: documentTypeFromPrefix(prefix),
       documentCode: documentCodeFromPrefix(prefix),
+      documentType: documentTypeFromPrefix(prefix),
       fy,
       mm,
       sequence,
@@ -225,30 +263,35 @@ export function parseDocumentNumber(value) {
 }
 
 export function formatDocumentNumberExample(documentType, dateIso, documentCode = DEFAULT_DOCUMENT_CODE) {
-  const prefix = documentPrefix(documentType, documentCode);
+  const prefix = prefixForDocumentType(documentType, documentCode);
   if (!prefix) return '';
   const { fy, mm } = documentNumberPeriod(dateIso);
   return formatCanonical(prefix, fy, mm, 1);
 }
 
-function counterNameFor(documentType, periodKey, documentCode) {
-  const code = normalizeDocumentCode(documentCode) || DEFAULT_DOCUMENT_CODE;
-  // Tylo Care (TC) keeps the original counter so existing sequences continue.
-  if (code === DEFAULT_DOCUMENT_CODE) return `financeDoc_${documentType}_${periodKey}`;
-  return `financeDoc_${documentType}_${code}_${periodKey}`;
+/**
+ * Preserve historical Tylo (default + TC) counter keys so sequences do not restart.
+ * Other orgs get an org-scoped counter.
+ */
+export function documentNumberCounterName(documentType, periodKey, { orgProfileId, documentCode } = {}) {
+  const orgId = String(orgProfileId || 'default').trim() || 'default';
+  const code = normalizeDocumentCode(documentCode);
+  if (orgId === 'default' && code === DEFAULT_DOCUMENT_CODE) {
+    return `financeDoc_${documentType}_${periodKey}`;
+  }
+  return `financeDoc_${orgId}_${documentType}_${periodKey}`;
 }
 
 /**
- * Assign next number for a document type: PREFIXFY/MM/SEQ (monthly sequence per org code).
+ * Assign next number for a document type: PREFIXFY/MM/SEQ (monthly sequence).
  */
 export async function nextCommercialDocumentNumber(documentType, documentDate, options = {}) {
-  const documentCode = normalizeDocumentCode(options.documentCode) || DEFAULT_DOCUMENT_CODE;
-  const prefix = documentPrefix(documentType, documentCode);
+  const prefix = prefixForDocumentType(documentType, options.documentCode);
   if (!prefix) {
     throw new AppError(`Unknown document type for numbering: ${documentType}`, 400, 'VALIDATION_ERROR');
   }
   const { fy, mm, periodKey } = documentNumberPeriod(documentDate);
-  const counterName = counterNameFor(documentType, periodKey, documentCode);
+  const counterName = documentNumberCounterName(documentType, periodKey, options);
   const numberPrefix = `${prefix}${fy}/${mm}`;
   return nextSequence(counterName, numberPrefix, { separator: '/', digits: SEQ_DIGITS });
 }
@@ -256,59 +299,45 @@ export async function nextCommercialDocumentNumber(documentType, documentDate, o
 /**
  * Release an official document number so its monthly sequence can be reused.
  */
-export async function releaseCommercialDocumentNumber(documentNumber, documentType) {
+export async function releaseCommercialDocumentNumber(documentNumber, documentType, options = {}) {
   const parsed = parseDocumentNumber(documentNumber);
   if (!parsed || parsed.fyOnly || !parsed.mm || !(parsed.sequence > 0)) return false;
   const type = documentType || parsed.documentType;
   if (!type || !DOCUMENT_TYPE_SUFFIXES[type]) return false;
   const periodKey = parsed.periodKey || `${parsed.fy}_${parsed.mm}`;
-  const counterName = counterNameFor(type, periodKey, parsed.documentCode);
+  const counterName = documentNumberCounterName(type, periodKey, {
+    orgProfileId: options.orgProfileId,
+    documentCode: options.documentCode || parsed.documentCode,
+  });
   return releaseSequence(counterName, parsed.sequence);
 }
 
 export function validateManualDocumentNumber(value, documentType, options = {}) {
   const parsed = parseDocumentNumber(value);
-  const documentCode = normalizeDocumentCode(options.documentCode) || DEFAULT_DOCUMENT_CODE;
-  const expectedPrefix = documentPrefix(documentType, documentCode);
-  const example = formatDocumentNumberExample(documentType, null, documentCode) || 'TCIN26-27/08/001';
+  const expectedPrefix = prefixForDocumentType(documentType, options.documentCode);
+  const example = formatDocumentNumberExample(documentType, undefined, options.documentCode)
+    || 'TCIN26-27/08/001';
   if (!parsed || parsed.fyOnly || !parsed.mm) {
     throw new AppError(
       `Document number must match PREFIXFY/MM/SEQ (e.g. ${example})`,
       400,
-      'VALIDATION_ERROR'
+      'VALIDATION_ERROR',
     );
   }
   const typeFromParsed = parsed.documentType || documentTypeFromPrefix(parsed.prefix);
-  if (documentType && typeFromParsed && typeFromParsed !== documentType) {
+  if (expectedPrefix && typeFromParsed && typeFromParsed !== documentType) {
     throw new AppError(
       `Document number prefix must be ${expectedPrefix} for ${DOCUMENT_NUMBER_LABELS[documentType] || documentType}`,
       400,
-      'VALIDATION_ERROR'
+      'VALIDATION_ERROR',
     );
   }
   if (expectedPrefix && parsed.prefix !== expectedPrefix) {
     throw new AppError(
       `Document number prefix must be ${expectedPrefix} for ${DOCUMENT_NUMBER_LABELS[documentType] || documentType}`,
       400,
-      'VALIDATION_ERROR'
+      'VALIDATION_ERROR',
     );
   }
   return formatCanonical(expectedPrefix || parsed.prefix, parsed.fy, parsed.mm, parsed.sequence);
-}
-
-export function normalizeDocumentNumberKey(value) {
-  const parsed = parseDocumentNumber(value);
-  if (parsed?.normalized) return parsed.normalized.toUpperCase();
-  return String(value || '').trim().toUpperCase();
-}
-
-/** Corrected numbers stay reserved — they are not released for reuse. */
-export function historyHoldsDocumentNumber(history, value) {
-  const key = normalizeDocumentNumberKey(value);
-  if (!key || !Array.isArray(history)) return false;
-  return history.some((entry) => {
-    const from = normalizeDocumentNumberKey(entry?.from);
-    const to = normalizeDocumentNumberKey(entry?.to);
-    return from === key || to === key;
-  });
 }
