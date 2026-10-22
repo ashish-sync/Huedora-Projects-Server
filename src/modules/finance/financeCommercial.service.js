@@ -7,14 +7,11 @@ import {
   DEFAULT_SAC_CODE,
 } from './finance.constants.js';
 import {
-  DEFAULT_DOCUMENT_CODE,
   documentNumberPeriod,
   fiscalYearLabel,
+  isValidDocumentCode,
   nextCommercialDocumentNumber,
   normalizeDocumentCode,
-  normalizeDocumentNumberKey,
-  historyHoldsDocumentNumber,
-  parseDocumentNumber,
   validateManualDocumentNumber,
 } from './documentNumbering.js';
 import { FinanceCommercialDocument, FinanceOrgProfile } from './finance.model.js';
@@ -245,6 +242,7 @@ export function computeDocumentTotals(lineItems = [], adjustments = {}) {
 
 const ORG_SNAPSHOT_KEYS = [
   'name',
+  'documentCode',
   'legalName',
   'brandLine',
   'cin',
@@ -273,7 +271,6 @@ const ORG_SNAPSHOT_KEYS = [
   'proformaNotes',
   'defaultPoTerms',
   'defaultPurchaseTaxRate',
-  'documentCode',
 ];
 
 function orgPlain(row) {
@@ -281,33 +278,53 @@ function orgPlain(row) {
   return row.toObject ? row.toObject() : { ...row };
 }
 
-export function inferDocumentCode(org = {}) {
-  const existing = normalizeDocumentCode(org.documentCode);
-  if (existing) return existing;
-  const name = `${org.name || ''} ${org.legalName || ''}`.toLowerCase();
-  if (/\bmedrento\b/.test(name)) return 'MD';
-  if (/\brapid\b/.test(name)) return 'RD';
-  if (/\btylo\b/.test(name)) return DEFAULT_DOCUMENT_CODE;
-  if (org.isDefault || org._id === 'default') return DEFAULT_DOCUMENT_CODE;
-  const letters = String(org.legalName || org.name || '')
-    .toUpperCase()
-    .replace(/[^A-Z]/g, '');
-  if (letters.length >= 2) return letters.slice(0, 2);
-  return DEFAULT_DOCUMENT_CODE;
+/** Ensure the legacy default organisation exists (id = default). */
+export async function getOrCreateOrgProfile() {
+  let row = await FinanceOrgProfile.findOne({ _id: 'default' });
+  if (!row) {
+    row = await FinanceOrgProfile.create({
+      _id: 'default',
+      name: DEFAULT_ORG_PROFILE.legalName || 'Default organisation',
+      slug: 'default',
+      isDefault: true,
+      isDeleted: false,
+      ...DEFAULT_ORG_PROFILE,
+    });
+  } else {
+    let dirty = false;
+    if (!row.name) {
+      row.name = row.legalName || DEFAULT_ORG_PROFILE.legalName || 'Default organisation';
+      dirty = true;
+    }
+    if (row.isDefault !== true) {
+      row.isDefault = true;
+      dirty = true;
+    }
+    if (row.isDeleted) {
+      row.isDeleted = false;
+      dirty = true;
+    }
+    if (!row.documentCode) {
+      row.documentCode = DEFAULT_ORG_PROFILE.documentCode || 'TC';
+      dirty = true;
+    }
+    if (dirty) await row.save();
+  }
+  return row;
 }
 
-export function resolveOrgDocumentCode(org = {}) {
-  return inferDocumentCode(org);
+export function resolveDocumentCode(orgOrRow) {
+  return normalizeDocumentCode(
+    orgOrRow?.documentCode
+    || orgOrRow?.orgSnapshot?.documentCode
+    || DEFAULT_ORG_PROFILE.documentCode,
+  );
 }
 
-export async function assertUniqueDocumentCode(documentCode, excludeId = null) {
-  const code = normalizeDocumentCode(documentCode);
-  if (!code) {
-    throw new AppError(
-      'Document code must be 2–5 letters (e.g. TC, MD, RD, TYLO)',
-      400,
-      'VALIDATION_ERROR',
-    );
+export async function assertDocumentCodeAvailable(documentCode, { excludeId } = {}) {
+  const code = String(documentCode || '').trim().toUpperCase();
+  if (!isValidDocumentCode(code)) {
+    throw new AppError('Document code must be 2–5 letters (e.g. TC, MD, RD, TYLO)', 400, 'VALIDATION_ERROR');
   }
   const rows = await FinanceOrgProfile.find({});
   const clash = rows.find((row) => {
@@ -325,133 +342,26 @@ export async function assertUniqueDocumentCode(documentCode, excludeId = null) {
   return code;
 }
 
-async function uniquifyDocumentCode(preferred, excludeId = null) {
-  const base = normalizeDocumentCode(preferred) || DEFAULT_DOCUMENT_CODE;
-  const rows = await FinanceOrgProfile.find({});
-  const used = new Set(
-    rows
-      .filter((row) => !row.isDeleted && !(excludeId && String(row._id) === String(excludeId)))
-      .map((row) => normalizeDocumentCode(row.documentCode))
-      .filter(Boolean),
-  );
-  if (!used.has(base)) return base;
-  for (let n = 2; n < 50; n++) {
-    const candidate = `${base.slice(0, 4)}${n}`.slice(0, 5);
-    if (!used.has(candidate) && normalizeDocumentCode(candidate) === candidate) return candidate;
-  }
-  throw new AppError('Could not allocate a unique document code', 409, 'CONFLICT');
-}
-
-export async function ensureOrgDocumentCode(row) {
-  if (!row) return row;
-  const current = normalizeDocumentCode(row.documentCode);
-  if (current) return current;
-  const inferred = await uniquifyDocumentCode(inferDocumentCode(row), row._id);
-  row.documentCode = inferred;
-  await row.save();
-  return inferred;
-}
-
-export function numbersMatch(a, b) {
-  const left = normalizeDocumentNumberKey(a);
-  const right = normalizeDocumentNumberKey(b);
-  return Boolean(left) && left === right;
-}
-
-export async function assertDocumentNumberAvailable(documentNumber, { excludeId = null } = {}) {
-  const key = normalizeDocumentNumberKey(documentNumber);
-  if (!key) {
-    throw new AppError('Document number is required', 400, 'VALIDATION_ERROR');
-  }
+export async function assertDocumentNumberAvailable(documentNumber, { excludeId } = {}) {
+  const number = String(documentNumber || '').trim().toUpperCase();
+  if (!number) return;
   const rows = await FinanceCommercialDocument.find({ isDeleted: false });
   const clash = rows.find((row) => {
-    const sameRow = excludeId && String(row._id) === String(excludeId);
-    if (!sameRow && numbersMatch(row.documentNumber, key)) return true;
-    const stage = String(row.status || '');
-    if (
-      !sameRow
-      && ['Draft', 'Submitted', 'Uploaded'].includes(stage)
-      && numbersMatch(row.requestedDocumentNumber, key)
-    ) {
-      return true;
-    }
-    if (historyHoldsDocumentNumber(row.documentNumberHistory, key)) return true;
-    return false;
+    if (excludeId && String(row._id) === String(excludeId)) return false;
+    return String(row.documentNumber || '').trim().toUpperCase() === number;
   });
-    if (clash) {
+  if (clash) {
     throw new AppError(
-      `Document number ${key} is already used`,
+      `Document number ${number} is already used`,
       409,
       'CONFLICT',
     );
   }
-  return key;
-}
-
-export async function persistRequestedDocumentNumber(row, body = {}, permissions = null) {
-  if (!row || body.requestedDocumentNumber === undefined) return row;
-  const stage = String(row.status || '');
-  if (stage === 'Issued' || stage === 'Cancelled') return row;
-  const raw = trimStr(body.requestedDocumentNumber);
-  const isAdmin = Boolean(permissions?.has?.(PERMISSIONS.ALL) || permissions?.has?.('*'));
-  if (!raw) {
-    if (isAdmin) row.requestedDocumentNumber = '';
-    return row;
-  }
-  if (!isAdmin && trimStr(row.requestedDocumentNumber) && numbersMatch(row.requestedDocumentNumber, raw)) {
-    return row;
-  }
-  if (!isAdmin) return row;
-  const org = await resolveOrgProfileId(row.orgProfileId || 'default');
-  const code = resolveOrgDocumentCode(org);
-  const canonical = validateManualDocumentNumber(raw, row.documentType, { documentCode: code });
-  await assertDocumentNumberAvailable(canonical, { excludeId: row._id });
-  row.requestedDocumentNumber = canonical;
-  return row;
-}
-
-/** Ensure the legacy default organisation exists (id = default). */
-export async function getOrCreateOrgProfile() {
-  let row = await FinanceOrgProfile.findOne({ _id: 'default' });
-  if (!row) {
-    row = await FinanceOrgProfile.create({
-      _id: 'default',
-      name: DEFAULT_ORG_PROFILE.legalName || 'Default organisation',
-      slug: 'default',
-      isDefault: true,
-      isDeleted: false,
-      documentCode: DEFAULT_DOCUMENT_CODE,
-      ...DEFAULT_ORG_PROFILE,
-    });
-  } else {
-    let dirty = false;
-    if (!row.name) {
-      row.name = row.legalName || DEFAULT_ORG_PROFILE.legalName || 'Default organisation';
-      dirty = true;
-    }
-    if (!normalizeDocumentCode(row.documentCode)) {
-      row.documentCode = DEFAULT_DOCUMENT_CODE;
-      dirty = true;
-    }
-    if (row.isDefault !== true) {
-      row.isDefault = true;
-      dirty = true;
-    }
-    if (row.isDeleted) {
-      row.isDeleted = false;
-      dirty = true;
-    }
-    if (dirty) await row.save();
-  }
-  return row;
 }
 
 export async function listOrgProfiles() {
   await getOrCreateOrgProfile();
   const rows = await FinanceOrgProfile.find({});
-  for (const row of rows) {
-    if (!row.isDeleted) await ensureOrgDocumentCode(row);
-  }
   return rows
     .filter((r) => !r.isDeleted)
     .sort((a, b) => {
@@ -548,10 +458,10 @@ export async function createOrgProfile(body = {}, actor = {}) {
   while (await FinanceOrgProfile.findOne({ slug })) {
     slug = `${slugBase}-${++n}`;
   }
-  const documentCode = await uniquifyDocumentCode(
-    patch.documentCode || body.documentCode || inferDocumentCode({ name, legalName: patch.legalName || name }),
-  );
   const id = `org_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const documentCode = await assertDocumentCodeAvailable(
+    patch.documentCode || body.documentCode || DEFAULT_ORG_PROFILE.documentCode,
+  );
   const row = await FinanceOrgProfile.create({
     _id: id,
     name,
@@ -572,6 +482,7 @@ export async function createOrgProfile(body = {}, actor = {}) {
 export async function mergeOrgProfile(body = {}) {
   const fields = [
     'name',
+    'documentCode',
     'legalName',
     'brandLine',
     'cin',
@@ -600,7 +511,6 @@ export async function mergeOrgProfile(body = {}) {
     'proformaNotes',
     'defaultPoTerms',
     'defaultPurchaseTaxRate',
-    'documentCode',
   ];
   const out = {};
   for (const key of fields) {
@@ -613,11 +523,15 @@ export async function mergeOrgProfile(body = {}) {
                 .split('\n')
                 .map((t) => t.trim())
             .filter(Boolean);
+    } else if (key === 'documentCode') {
+      const raw = String(body[key] || '').trim().toUpperCase();
+      if (!raw) continue;
+      if (!isValidDocumentCode(raw)) {
+        throw new AppError('Document code must be 2–5 letters (e.g. TC, MD, RD, TYLO)', 400, 'VALIDATION_ERROR');
+      }
+      value = raw;
     } else if (key === 'defaultPaymentTermsDays' || key === 'defaultPurchaseTaxRate') {
       value = Number(body[key]) || 0;
-    } else if (key === 'documentCode') {
-      value = normalizeDocumentCode(body[key]);
-      if (!value) continue;
     } else {
       value = trimStr(body[key]);
       // Blank org master fields must not wipe GSTIN/PAN/bank on save.
@@ -635,116 +549,140 @@ export async function mergeOrgProfile(body = {}) {
   return out;
 }
 
-export async function nextProformaNumber(documentDate, documentCode) {
-  return nextCommercialDocumentNumber('proforma', documentDate, { documentCode });
+export async function nextProformaNumber(documentDate, options = {}) {
+  return nextCommercialDocumentNumber('proforma', documentDate, options);
 }
 
-export async function nextPurchaseOrderNumber(documentDate, documentCode) {
-  return nextCommercialDocumentNumber('purchase_order', documentDate, { documentCode });
+export async function nextPurchaseOrderNumber(documentDate, options = {}) {
+  return nextCommercialDocumentNumber('purchase_order', documentDate, options);
 }
 
-export async function nextClientInvoiceNumber(documentDate, documentCode) {
-  return nextCommercialDocumentNumber('client_invoice', documentDate, { documentCode });
+export async function nextClientInvoiceNumber(documentDate, options = {}) {
+  return nextCommercialDocumentNumber('client_invoice', documentDate, options);
 }
 
-export async function nextCreditNoteNumber(documentDate, documentCode) {
-  return nextCommercialDocumentNumber('credit_note', documentDate, { documentCode });
+export async function nextCreditNoteNumber(documentDate, options = {}) {
+  return nextCommercialDocumentNumber('credit_note', documentDate, options);
 }
 
-export async function nextDebitNoteNumber(documentDate, documentCode) {
-  return nextCommercialDocumentNumber('debit_note', documentDate, { documentCode });
+export async function nextDebitNoteNumber(documentDate, options = {}) {
+  return nextCommercialDocumentNumber('debit_note', documentDate, options);
 }
 
-export async function nextDeliveryChallanNumber(documentDate, documentCode) {
-  return nextCommercialDocumentNumber('delivery_challan', documentDate, { documentCode });
+export async function nextDeliveryChallanNumber(documentDate, options = {}) {
+  return nextCommercialDocumentNumber('delivery_challan', documentDate, options);
 }
 
-export async function nextBillOfSupplyNumber(documentDate, documentCode) {
-  return nextCommercialDocumentNumber('bill_of_supply', documentDate, { documentCode });
+export async function nextBillOfSupplyNumber(documentDate, options = {}) {
+  return nextCommercialDocumentNumber('bill_of_supply', documentDate, options);
 }
 
-async function orgCodeForRow(row) {
-  const snapCode = normalizeDocumentCode(row?.orgSnapshot?.documentCode);
-  if (snapCode) return snapCode;
-  const live = await resolveOrgProfileId(row?.orgProfileId || 'default');
-  return resolveOrgDocumentCode(live);
+function numberingOptionsForRow(row, orgProfile) {
+  const stage = normalizeCommercialStage(row?.status);
+  const frozen = (stage === 'Issued' || stage === 'Cancelled') ? row?.orgSnapshot : null;
+  return {
+    orgProfileId: row?.orgProfileId || frozen?.orgProfileId || orgProfile?._id || 'default',
+    documentCode: resolveDocumentCode(frozen || orgProfile || row?.orgSnapshot || row),
+  };
 }
 
-function applyParsedPeriod(row, number) {
-  const parsed = parseDocumentNumber(number);
-  if (parsed?.periodKey) {
-    row.documentPeriod = parsed.periodKey;
-    row.fiscalYear = parsed.fy;
-    return;
-  }
+function stampDocumentPeriod(row) {
   const period = documentNumberPeriod(row.documentDate);
   row.documentPeriod = period.periodKey;
   row.fiscalYear = period.fy;
 }
 
-/** Assign official document number on approval (PREFIXFY/MM/SEQ). */
-export async function assignCommercialDocumentNumber(row, { force = false } = {}) {
-  const existing = trimStr(row.documentNumber);
-  if (!force && existing) return existing;
+/**
+ * Admin-reserved number on Draft/Submitted. Blank + admin clears reservation
+ * (auto-assign on approve). Non-admin autosave keeps any existing reservation.
+ */
+export async function applyDraftDocumentNumber(row, requestedNumber, { orgProfile, permissions } = {}) {
+  const stage = normalizeCommercialStage(row.status);
+  if (!['Draft', 'Uploaded', 'Submitted'].includes(stage) && !['Draft', 'Uploaded', 'Submitted'].includes(row.status)) {
+    return row.documentNumber;
+  }
+  const isAdmin = Boolean(permissions?.has?.(PERMISSIONS.ALL) || permissions?.has?.('*'));
+  if (!isAdmin) return row.documentNumber;
+  // Omitted field (autosave/submit without a number) must keep a reserved value.
+  // Explicit blank from an admin clears the reservation so approve auto-assigns.
+  if (requestedNumber === undefined || requestedNumber === null) return row.documentNumber;
+  const requested = trimStr(requestedNumber);
+  if (!requested) {
+    row.documentNumber = '';
+    row.documentNumberSource = '';
+    return '';
+  }
+  const opts = numberingOptionsForRow(row, orgProfile);
+  const canonical = validateManualDocumentNumber(requested, row.documentType, opts);
+  await assertDocumentNumberAvailable(canonical, { excludeId: row._id });
+  row.documentNumber = canonical;
+  row.documentNumberSource = 'manual';
+  stampDocumentPeriod(row);
+  return canonical;
+}
 
-  const documentCode = await orgCodeForRow(row);
-  const requested = trimStr(row.requestedDocumentNumber);
-  if (requested) {
-    const canonical = validateManualDocumentNumber(requested, row.documentType, { documentCode });
+/** Assign official document number on approval (PREFIXFY/MM/SEQ). Keeps a reserved manual number. */
+export async function assignCommercialDocumentNumber(row, { force = false, orgProfile } = {}) {
+  const opts = numberingOptionsForRow(row, orgProfile);
+  const reserved = trimStr(row.documentNumber);
+  if (reserved && !force) {
+    const canonical = validateManualDocumentNumber(reserved, row.documentType, opts);
     await assertDocumentNumberAvailable(canonical, { excludeId: row._id });
     row.documentNumber = canonical;
-    applyParsedPeriod(row, canonical);
+    row.documentNumberSource = row.documentNumberSource || 'manual';
+    stampDocumentPeriod(row);
     return canonical;
   }
-
-  let number = '';
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    number = await nextCommercialDocumentNumber(row.documentType, row.documentDate, { documentCode });
+  if (reserved && force) {
     try {
-      await assertDocumentNumberAvailable(number, { excludeId: row._id });
-      break;
-    } catch (err) {
-      if (err?.code !== 'CONFLICT' || attempt === 11) throw err;
-      number = '';
+      const canonical = validateManualDocumentNumber(reserved, row.documentType, opts);
+      await assertDocumentNumberAvailable(canonical, { excludeId: row._id });
+      row.documentNumber = canonical;
+      row.documentNumberSource = row.documentNumberSource || 'manual';
+      stampDocumentPeriod(row);
+      return canonical;
+    } catch {
+      // Invalid reserved number — fall through to auto-assign.
     }
   }
-  if (!number) {
-    throw new AppError('Could not allocate a unique document number', 409, 'CONFLICT');
-  }
+  const number = await nextCommercialDocumentNumber(row.documentType, row.documentDate, opts);
+  await assertDocumentNumberAvailable(number, { excludeId: row._id });
   row.documentNumber = number;
-  applyParsedPeriod(row, number);
+  row.documentNumberSource = 'auto';
+  stampDocumentPeriod(row);
   return number;
 }
 
-export async function correctIssuedDocumentNumber(row, { documentNumber, remark, actor } = {}) {
-  const stage = String(row?.status || '');
-  if (stage !== 'Issued') {
-    throw new AppError('Only issued documents can have their number corrected', 400, 'VALIDATION_ERROR');
+export async function correctIssuedDocumentNumber(row, nextNumber, remark, actor = {}, orgProfile = null) {
+  const stage = normalizeCommercialStage(row.status);
+  if (stage !== 'Issued' && stage !== 'Cancelled') {
+    throw new AppError('Only issued documents can have their number corrected', 400, 'INVALID_TRANSITION');
   }
   const note = trimStr(remark);
   if (!note) {
-    throw new AppError('Correction remark is required', 400, 'VALIDATION_ERROR');
+    throw new AppError('Remark is required to correct a document number', 400, 'VALIDATION_ERROR');
   }
-  const documentCode = await orgCodeForRow(row);
-  const canonical = validateManualDocumentNumber(documentNumber, row.documentType, { documentCode });
-  if (numbersMatch(canonical, row.documentNumber)) {
-    throw new AppError('Enter a different document number', 400, 'VALIDATION_ERROR');
+  const opts = numberingOptionsForRow(row, orgProfile || row.orgSnapshot);
+  const canonical = validateManualDocumentNumber(nextNumber, row.documentType, opts);
+  const previous = trimStr(row.documentNumber);
+  if (canonical === previous) {
+    throw new AppError('New document number is the same as the current number', 400, 'VALIDATION_ERROR');
   }
   await assertDocumentNumberAvailable(canonical, { excludeId: row._id });
-  const previous = trimStr(row.documentNumber);
   const history = Array.isArray(row.documentNumberHistory) ? [...row.documentNumberHistory] : [];
   history.push({
     from: previous,
     to: canonical,
     remark: note,
     at: new Date().toISOString(),
-    byId: actor?._id || null,
-    byEmail: actor?.email || '',
+    byId: actor._id || null,
+    byEmail: actor.email || '',
   });
   row.documentNumberHistory = history;
   row.documentNumber = canonical;
-  applyParsedPeriod(row, canonical);
-  return row;
+  row.documentNumberSource = 'corrected';
+  stampDocumentPeriod(row);
+  return canonical;
 }
 
 export function normalizePoLineItem(raw = {}, index = 0, taxMode = 'igst') {
@@ -1284,8 +1222,8 @@ export function normalizeQuotationPayload(body = {}, orgProfile = DEFAULT_ORG_PR
   };
 }
 
-export async function nextQuotationNumber(documentDate, documentCode) {
-  return nextCommercialDocumentNumber('quotation', documentDate, { documentCode });
+export async function nextQuotationNumber(documentDate, options = {}) {
+  return nextCommercialDocumentNumber('quotation', documentDate, options);
 }
 
 export const validateClientInvoicePayload = validateProformaPayload;
