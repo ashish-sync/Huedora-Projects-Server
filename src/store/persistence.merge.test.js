@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeDocumentFields, assignPreservingExisting, isBlankValue } from './persistence.js';
+import { mergeDocumentFields, assignPreservingExisting, isBlankValue, mongoIndexOptions } from './persistence.js';
 
 test('mergeDocumentFields keeps existing GSTIN when incoming omits it', () => {
   const merged = mergeDocumentFields(
@@ -92,4 +92,20 @@ test('isBlankValue treats empty array as blank', () => {
   assert.equal(isBlankValue([1]), false);
   assert.equal(isBlankValue(0), false);
   assert.equal(isBlankValue(false), false);
+});
+
+test('mongoIndexOptions keeps unique and partial filters for document numbers', () => {
+  const options = mongoIndexOptions({
+    key: { documentNumber: 1 },
+    name: 'uniq_live_document_number',
+    unique: true,
+    blocking: false,
+    partialFilterExpression: {
+      isDeleted: false,
+      documentNumber: { $type: 'string', $gt: '' },
+    },
+  });
+  assert.equal(options.unique, true);
+  assert.equal(options.name, 'uniq_live_document_number');
+  assert.deepEqual(options.partialFilterExpression.documentNumber, { $type: 'string', $gt: '' });
 });

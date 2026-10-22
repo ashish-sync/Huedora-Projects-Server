@@ -17,6 +17,7 @@ import {
   validateManualDocumentNumber,
 } from './documentNumbering.js';
 import { FinanceCommercialDocument, FinanceOrgProfile } from './finance.model.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 export function trimStr(v) {
   return v == null ? '' : String(v).trim();
@@ -358,13 +359,31 @@ export async function assertDocumentCodeAvailable(documentCode, { excludeId } = 
   return code;
 }
 
+function documentNumberClashFilter(number) {
+  const exact = new RegExp(`^${escapeRegex(number)}$`, 'i');
+  return {
+    isDeleted: false,
+    $or: [
+      { documentNumber: exact },
+      { 'documentNumberHistory.from': exact },
+      { 'documentNumberHistory.to': exact },
+    ],
+  };
+}
+
 export async function assertDocumentNumberAvailable(documentNumber, { excludeId } = {}) {
   const number = String(documentNumber || '').trim().toUpperCase();
   if (!number) return;
-  const rows = await FinanceCommercialDocument.find({ isDeleted: false });
+  const rows = await FinanceCommercialDocument.find(documentNumberClashFilter(number));
   const clash = rows.find((row) => {
     if (excludeId && String(row._id) === String(excludeId)) return false;
-    return String(row.documentNumber || '').trim().toUpperCase() === number;
+    const current = String(row.documentNumber || '').trim().toUpperCase();
+    if (current === number) return true;
+    const history = Array.isArray(row.documentNumberHistory) ? row.documentNumberHistory : [];
+    return history.some((entry) => (
+      String(entry?.from || '').trim().toUpperCase() === number
+      || String(entry?.to || '').trim().toUpperCase() === number
+    ));
   });
   if (clash) {
     throw new AppError(
