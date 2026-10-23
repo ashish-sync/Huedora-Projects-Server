@@ -138,6 +138,7 @@ import {
   resolveCancelledClosureExecutionStatus,
   EXECUTION_DOC_TYPES,
   EXECUTION_STATUS,
+  isCampExecutedForPayout,
   resolveInTimeSelfieUrl,
   normalizePaymentSubmitStatus,
   PAYMENT_SUBMIT_STATUSES,
@@ -778,7 +779,10 @@ function campPayloadFromBody(body, existing = null, client = null, options = {})
       ? trimStr(body.source)
       : existing?.source || 'dashboard',
     remarks: trimStr(body.remarks ?? existing?.remarks),
-    ...lifecyclePayloadFromBody(body, existing, { pricing: options.pricing || null }),
+    ...lifecyclePayloadFromBody(body, existing, {
+      pricing: options.pricing || null,
+      allowExplicitExecutionStatus: options.allowExplicitExecutionStatus === true,
+    }),
   });
 }
 
@@ -1840,8 +1844,9 @@ router.put(
       'request',
     );
     const lifecycleOnly = req.body.lifecycleOnly === true;
+    const admin = isCampAdmin(req);
 
-    if (!canEditLifecycleStage(camp, stage, { isAdmin: isCampAdmin(req) })) {
+    if (!canEditLifecycleStage(camp, stage, { isAdmin: admin })) {
       throw new AppError(`Cannot edit ${stage} stage for this camp`, 400, 'VALIDATION_ERROR');
     }
 
@@ -1862,7 +1867,10 @@ router.put(
       campaignName: req.body.campaignName ?? camp.campaignName,
       clientName: client?.name || camp.clientName,
     });
-    const payload = campPayloadFromBody(req.body, camp, client, { pricing });
+    const payload = campPayloadFromBody(req.body, camp, client, {
+      pricing,
+      allowExplicitExecutionStatus: admin,
+    });
     const executionOnlyKeys = [
       'executionStatus', 'chargeableStatus', 'inTime', 'outTime', 'kmRoundTrip', 'punctuality',
       'attire', 'labCoat', 'patientsCount', 'rxCount', 'cancellationReason', 'actualPatients',
@@ -1873,7 +1881,8 @@ router.put(
     // Non-request stages must never rewrite duplicate identity fields.
     // The full form may still post request fields with defaulted start time / shifted dates
     // and false-positive the duplicate check (c9b9993 + follow-up).
-    if (lifecycleOnly || stage !== 'request') {
+    // Admin super-access may persist camp date / request date / expected patients from any stage.
+    if (!admin && (lifecycleOnly || stage !== 'request')) {
       DUPLICATE_IDENTITY_FIELDS.forEach((key) => { delete payload[key]; });
       REQUEST_STAGE_PRESERVE_FIELDS.forEach((key) => { delete payload[key]; });
     }
@@ -1939,7 +1948,11 @@ router.put(
     );
     if (stage === 'execution') {
       // Do not trust client lifecycle/status to jump to Financial — server auto-advances when ready.
-      if (normalizeExecutionStatus(payload.executionStatus) === EXECUTION_STATUS.CAMP_COMPLETED) {
+      // Admin may keep Camp Completed / Planned / Cancelled when correcting a later-stage camp.
+      if (
+        !admin
+        && normalizeExecutionStatus(payload.executionStatus) === EXECUTION_STATUS.CAMP_COMPLETED
+      ) {
         payload.executionStatus = EXECUTION_STATUS.MARKED_EXECUTED;
       }
       if (normalizeLifecycleStage(payload.lifecycleStage, '') === 'financial') {
@@ -1967,7 +1980,10 @@ router.put(
       }
     }
 
-    if (stage === 'assignment' && camp.status === 'approved') {
+    if (
+      stage === 'assignment'
+      && (camp.status === 'approved' || (admin && ['executed', 'cancelled'].includes(camp.status)))
+    ) {
       try {
         applyAssignmentStageOutcome(camp, req.body);
       } catch (err) {
@@ -2014,14 +2030,17 @@ router.put(
         campaignType: camp.campaignType,
         campaignName: camp.campaignName,
       });
+      const alreadyFinancial = normalizeLifecycleStage(before.lifecycleStage, 'request') === 'financial';
       try {
         assertExecutionStageSave(camp);
-        applyAutoPlannedToExecuted(camp);
+        if (!admin) applyAutoPlannedToExecuted(camp);
       } catch (err) {
         throw new AppError(err.message || 'Invalid execution stage', 400, 'VALIDATION_ERROR');
       }
 
-      if (isExecutionCancellationForFinance(camp)) {
+      if (alreadyFinancial) {
+        // Admin (or a financial camp) is correcting execution details — do not re-run Mark Complete.
+      } else if (isExecutionCancellationForFinance(camp)) {
         camp.lifecycleStage = 'financial';
         camp.paymentSubmitStatus = camp.paymentSubmitStatus || 'payment_not_checked';
       } else {
@@ -2060,7 +2079,11 @@ router.put(
       && normalizeLifecycleStage(camp.lifecycleStage, 'request') === 'financial'
     ) {
       seedCampRevenueFromPricing(camp, pricing);
-      if (!(Number(camp.campAmount) > 0) && trimStr(camp.hcwContactId)) {
+      if (
+        isCampExecutedForPayout(camp)
+        && !(Number(camp.campAmount) > 0)
+        && trimStr(camp.hcwContactId)
+      ) {
         try {
           const payeeResolved = await resolveCampPayoutPayeeContact(camp.hcwContactId);
           const payee = payeeResolved.payeeContact || payeeResolved.assignedContact;
