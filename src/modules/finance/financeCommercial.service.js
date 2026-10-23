@@ -1374,6 +1374,21 @@ export function netReceivableFromPreGst(subtotal) {
   return toAmount(preGst * 0.9);
 }
 
+export const APPLICABLE_TDS_RATES = [0, 1, 2, 10];
+
+export function normalizeTdsRate(value) {
+  const n = Number(value);
+  return APPLICABLE_TDS_RATES.includes(n) ? n : 0;
+}
+
+/** TDS Amount = Applicable TDS % of Taxable Value (subtotal), not Amount. */
+export function tdsAmountFromTaxableValue(taxableValue, rate) {
+  const taxable = toAmount(taxableValue);
+  const pct = normalizeTdsRate(rate);
+  if (!(taxable > 0) || pct === 0) return 0;
+  return toAmount((taxable * pct) / 100);
+}
+
 /** Calendar days from approvedAt (or issuedAt) to `now`. */
 export function daysSinceDocumentApproved(row, now = new Date()) {
   const raw = row?.approvedAt || row?.issuedAt;
@@ -1597,10 +1612,11 @@ export function applyCommercialLifecycleStatus(row, statusInput) {
 
 /**
  * Record a payment against an issued commercial document.
- * Same amount as Net Receivable → Paid; otherwise Partially Paid.
+ * TDS Amount = Applicable TDS % of Taxable Value (subtotal).
+ * Amount minus TDS → expected received. Matching that (or more, up to Amount) → Paid.
  * Does not change Stage.
  */
-export function applyCommercialPayment(row, amountInput) {
+export function applyCommercialPayment(row, amountInput, tdsRateInput) {
   if (!isIssuedStage(row.status)) {
     throw new AppError('Only issued documents can record payment', 400, 'VALIDATION_ERROR');
   }
@@ -1613,18 +1629,23 @@ export function applyCommercialPayment(row, amountInput) {
       'VALIDATION_ERROR'
     );
   }
+  const invoiceAmount = toAmount(row.grandTotal);
+  if (!(invoiceAmount > 0)) {
+    throw new AppError('Document has no Amount to pay against', 400, 'VALIDATION_ERROR');
+  }
+  const tdsRate = normalizeTdsRate(tdsRateInput ?? row.tdsRate);
+  const tdsAmount = tdsAmountFromTaxableValue(row.subtotal, tdsRate);
+  const expectedReceived = toAmount(Math.max(0, invoiceAmount - tdsAmount));
   const amount = toAmount(amountInput);
   if (!(amount > 0)) {
     throw new AppError('Enter a payment amount greater than zero', 400, 'VALIDATION_ERROR');
   }
-  const netReceivable = netReceivableFromPreGst(row.subtotal);
-  if (!(netReceivable > 0)) {
-    throw new AppError('Document has no Net Receivable amount to pay against', 400, 'VALIDATION_ERROR');
+  if (amount > invoiceAmount + 0.009) {
+    throw new AppError('Payment cannot exceed Amount', 400, 'VALIDATION_ERROR');
   }
-  if (amount > netReceivable + 0.009) {
-    throw new AppError('Payment cannot exceed Net Receivable', 400, 'VALIDATION_ERROR');
-  }
-  const fullyPaid = Math.abs(amount - netReceivable) < 0.01;
+  const fullyPaid = amount + 0.009 >= expectedReceived;
+  row.tdsRate = tdsRate;
+  row.tdsAmount = tdsAmount;
   row.paidAmount = amount;
   row.paymentStatus = fullyPaid ? 'Paid' : 'Partially Paid';
   row.paidAt = new Date().toISOString();

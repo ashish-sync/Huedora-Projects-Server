@@ -10,6 +10,7 @@ import {
   normalizeCommercialStage,
   resolveCommercialDisplayStatus,
   seedLifecycleStatusIfBlank,
+  tdsAmountFromTaxableValue,
 } from './financeCommercial.service.js';
 
 describe('commercial payment / Net Receivable', () => {
@@ -18,7 +19,14 @@ describe('commercial payment / Net Receivable', () => {
     assert.equal(netReceivableFromPreGst(1234.56), 1111.1);
   });
 
-  it('marks Paid when amount matches Net Receivable', () => {
+  it('computes TDS from Taxable Value, not Amount', () => {
+    assert.equal(tdsAmountFromTaxableValue(1000, 10), 100);
+    assert.equal(tdsAmountFromTaxableValue(1000, 1), 10);
+    assert.equal(tdsAmountFromTaxableValue(1000, 2), 20);
+    assert.notEqual(tdsAmountFromTaxableValue(1000, 10), 118);
+  });
+
+  it('marks Paid when amount matches Amount minus TDS', () => {
     const row = {
       status: 'Issued',
       documentType: 'client_invoice',
@@ -27,12 +35,28 @@ describe('commercial payment / Net Receivable', () => {
       paidAmount: 0,
       paymentStatus: 'Unpaid',
     };
-    applyCommercialPayment(row, 900);
+    applyCommercialPayment(row, 1080, 10);
     assert.equal(row.paymentStatus, 'Paid');
-    assert.equal(row.paidAmount, 900);
+    assert.equal(row.paidAmount, 1080);
+    assert.equal(row.tdsRate, 10);
+    assert.equal(row.tdsAmount, 100);
   });
 
-  it('marks Partially Paid when amount is below Net Receivable', () => {
+  it('marks Paid at full Amount when TDS is 0%', () => {
+    const row = {
+      status: 'Issued',
+      documentType: 'client_invoice',
+      subtotal: 1000,
+      grandTotal: 1180,
+      paidAmount: 0,
+      paymentStatus: 'Unpaid',
+    };
+    applyCommercialPayment(row, 1180, 0);
+    assert.equal(row.paymentStatus, 'Paid');
+    assert.equal(row.tdsAmount, 0);
+  });
+
+  it('marks Partially Paid when amount is below Amount minus TDS', () => {
     const row = {
       status: 'Issued',
       documentType: 'bill_of_supply',
@@ -41,18 +65,19 @@ describe('commercial payment / Net Receivable', () => {
       paidAmount: 0,
       paymentStatus: 'Unpaid',
     };
-    applyCommercialPayment(row, 500);
+    applyCommercialPayment(row, 500, 10);
     assert.equal(row.paymentStatus, 'Partially Paid');
+    assert.equal(row.tdsAmount, 100);
   });
 
-  it('rejects payment above Net Receivable', () => {
+  it('rejects payment above Amount', () => {
     const row = {
       status: 'Issued',
       documentType: 'client_invoice',
       subtotal: 1000,
       grandTotal: 1180,
     };
-    assert.throws(() => applyCommercialPayment(row, 901), /Net Receivable/);
+    assert.throws(() => applyCommercialPayment(row, 1181, 0), /Amount/);
   });
 
   it('rejects payment on manual-status document types', () => {
