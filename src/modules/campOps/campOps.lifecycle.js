@@ -119,6 +119,12 @@ export function isExecutionCancellationStatus(executionStatus) {
   return EXECUTION_CANCELLATION_STATUSES.includes(normalizeExecutionStatus(executionStatus));
 }
 
+/** Camp Payout auto-picks Contact Directory amount only when Execution Status is Executed. */
+export function isCampExecutedForPayout(camp = {}) {
+  const exec = normalizeExecutionStatus(camp?.executionStatus);
+  return exec === EXECUTION_STATUS.MARKED_EXECUTED || exec === EXECUTION_STATUS.CAMP_COMPLETED;
+}
+
 /** Cancelled-by closure camps advance to Finance without execution completion fields. */
 export function isExecutionCancellationForFinance(camp = {}) {
   if (isExecutionCancellationStatus(camp.executionStatus)) return true;
@@ -504,7 +510,7 @@ export function computeLifecycleDerived(camp = {}, { pricing = null } = {}) {
   };
 }
 
-export function lifecyclePayloadFromBody(body, existing = null, { pricing = null } = {}) {
+export function lifecyclePayloadFromBody(body, existing = null, { pricing = null, allowExplicitExecutionStatus = false } = {}) {
   const pick = (key, fallback = '') => {
     if (body[key] !== undefined) return body[key];
     return existing?.[key] ?? fallback;
@@ -541,12 +547,19 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
     : existing?.hcwContactId ?? null;
 
   const requestedExecutionStatus = normalizeExecutionStatus(pickStr('executionStatus'));
-  const executionStatus = requestedExecutionStatus === EXECUTION_STATUS.CAMP_COMPLETED
-    || isExecutionClosedOut(requestedExecutionStatus)
-    ? (EXECUTION_STATUSES.includes(requestedExecutionStatus)
-      ? requestedExecutionStatus
-      : existing?.executionStatus || EXECUTION_STATUS.CAMP_SCHEDULED)
-    : syncExecutionStatusForSave({ ...existing, ...body }, new Date());
+  const explicitExecutionAllowed = EXECUTION_STATUSES.includes(requestedExecutionStatus)
+    || EXECUTION_CANCELLATION_STATUSES.includes(requestedExecutionStatus)
+    || isExecutionClosedOut(requestedExecutionStatus);
+  const executionStatus = allowExplicitExecutionStatus && explicitExecutionAllowed
+    ? requestedExecutionStatus
+    : (
+      requestedExecutionStatus === EXECUTION_STATUS.CAMP_COMPLETED
+      || isExecutionClosedOut(requestedExecutionStatus)
+        ? (explicitExecutionAllowed
+          ? requestedExecutionStatus
+          : existing?.executionStatus || EXECUTION_STATUS.CAMP_SCHEDULED)
+        : syncExecutionStatusForSave({ ...existing, ...body }, new Date())
+    );
 
   const chargeableStatus = CHARGEABLE_STATUSES.includes(pickStr('chargeableStatus'))
     ? pickStr('chargeableStatus')
@@ -910,6 +923,12 @@ export function canEditLifecycleStage(camp, stage, { isAdmin = false } = {}) {
     return false;
   }
 
+  // Admin super-access: any reached stage stays editable (HCW, dates, patients, etc.).
+  if (isAdmin) {
+    if (target === 'financial') return reached === 'financial';
+    return hasReachedLifecycleStage(reached, target);
+  }
+
   if (status === 'cancelled') {
     if (target !== 'financial') return false;
     if (!isExecutionCancellationForFinance(camp)) return false;
@@ -923,7 +942,7 @@ export function canEditLifecycleStage(camp, stage, { isAdmin = false } = {}) {
   }
 
   // After Mark Complete / Financial entry, lock earlier stages for normal users.
-  if (reached === 'financial' && !isAdmin) {
+  if (reached === 'financial') {
     if (target === 'execution' || target === 'assignment') return false;
     if (target === 'request') return ['pending_review', 'rejected'].includes(status);
   }
