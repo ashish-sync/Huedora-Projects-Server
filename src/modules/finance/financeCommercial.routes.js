@@ -160,7 +160,16 @@ const COMMERCIAL_DOC_TYPES = [
   'bill_of_supply',
 ];
 
-function commercialListFilter(req) {
+async function orgProfileIdsForListQuery(rawId) {
+  const id = trimStr(rawId);
+  if (!id) return null;
+  const profile = await resolveOrgProfileId(id);
+  const ids = new Set([id, String(profile._id)]);
+  if (profile.isDefault) ids.add('default');
+  return [...ids];
+}
+
+function commercialListFilter(req, orgProfileIds = null) {
   const filter = { isDeleted: false };
   applyArchiveListFilter(filter, req.query);
   const type = trimStr(req.query.documentType);
@@ -189,6 +198,20 @@ function commercialListFilter(req) {
       { servicePeriod: re },
     ];
   }
+  if (Array.isArray(orgProfileIds) && orgProfileIds.length) {
+    const orgClause = {
+      $or: [
+        { orgProfileId: { $in: orgProfileIds } },
+        { 'orgSnapshot.orgProfileId': { $in: orgProfileIds } },
+      ],
+    };
+    if (filter.$or) {
+      filter.$and = [{ $or: filter.$or }, orgClause];
+      delete filter.$or;
+    } else {
+      Object.assign(filter, orgClause);
+    }
+  }
   return filter;
 }
 
@@ -203,7 +226,8 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const { page, limit, skip, sort } = parsePagination(req.query);
-    const filter = commercialListFilter(req);
+    const orgProfileIds = await orgProfileIdsForListQuery(req.query.orgProfileId);
+    const filter = commercialListFilter(req, orgProfileIds);
     const paymentStatus = trimStr(req.query.paymentStatus);
     const sortSpec = sort || '-documentDate';
 
@@ -482,7 +506,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const row = await loadCommercialById(req.params.id);
     const before = row.toObject ? row.toObject() : { ...row };
-    applyCommercialPayment(row, req.body?.amount);
+    applyCommercialPayment(row, req.body?.amount, req.body?.tdsRate);
     row.paidById = req.user._id;
     row.paidByEmail = req.user.email;
     stampUpdater(row, req.user);
@@ -492,6 +516,8 @@ router.post(
     const changes = buildAuditChanges(before, after, {
       paymentStatus: 'Status',
       paidAmount: 'Paid amount',
+      tdsRate: 'Applicable TDS',
+      tdsAmount: 'TDS Amount',
     });
     const display = resolveCommercialDisplayStatus(row);
     const recipients = [row.createdById, row.updatedById, row.submittedById].filter(Boolean);
