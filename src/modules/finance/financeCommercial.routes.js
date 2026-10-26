@@ -606,7 +606,11 @@ router.patch(
     if (patch.documentCode) {
       patch.documentCode = await assertDocumentCodeAvailable(patch.documentCode, { excludeId: profile._id });
     }
-    assignPreservingExisting(profile, patch);
+    assignPreservingExisting(profile, patch, {
+      clearKeys: Object.prototype.hasOwnProperty.call(patch, 'headerDisplayKeys')
+        ? ['headerDisplayKeys']
+        : [],
+    });
     profile.updatedById = req.user._id;
     profile.updatedByEmail = req.user.email;
     await profile.save();
@@ -667,7 +671,11 @@ router.patch(
     if (patch.documentCode) {
       patch.documentCode = await assertDocumentCodeAvailable(patch.documentCode, { excludeId: profile._id });
     }
-    assignPreservingExisting(profile, patch);
+    assignPreservingExisting(profile, patch, {
+      clearKeys: Object.prototype.hasOwnProperty.call(patch, 'headerDisplayKeys')
+        ? ['headerDisplayKeys']
+        : [],
+    });
     if (req.body.name !== undefined) {
       const name = String(req.body.name || '').trim();
       if (name) profile.name = name;

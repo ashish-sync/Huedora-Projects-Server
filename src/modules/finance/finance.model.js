@@ -101,6 +101,8 @@ export const FinanceOrgProfile = defineCollection('finance_org_profile', {
   website: '',
   udyam: '',
   udyamLabel: '',
+  /** Optional letterhead line-2 fields: gstin, cin, udyam, email, website. Missing = all. */
+  headerDisplayKeys: null,
   bankName: '',
   accountHolder: '',
   accountNumber: '',
