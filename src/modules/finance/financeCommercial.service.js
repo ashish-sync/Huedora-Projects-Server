@@ -17,6 +17,7 @@ import {
   validateManualDocumentNumber,
 } from './documentNumbering.js';
 import { FinanceCommercialDocument, FinanceOrgProfile } from './finance.model.js';
+import { sanitizeHeaderDisplayKeys } from './companyLetterhead.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 
 export function trimStr(v) {
@@ -259,6 +260,7 @@ const ORG_SNAPSHOT_KEYS = [
   'website',
   'udyam',
   'udyamLabel',
+  'headerDisplayKeys',
   'bankName',
   'accountHolder',
   'accountNumber',
@@ -532,6 +534,7 @@ export async function mergeOrgProfile(body = {}) {
     'website',
     'udyam',
     'udyamLabel',
+    'headerDisplayKeys',
     'bankName',
     'accountHolder',
     'accountNumber',
@@ -566,6 +569,10 @@ export async function mergeOrgProfile(body = {}) {
         throw new AppError('Document code must be 2–5 letters (e.g. TC, MD, RD, TYLO)', 400, 'VALIDATION_ERROR');
       }
       value = raw;
+    } else if (key === 'headerDisplayKeys') {
+      const sanitized = sanitizeHeaderDisplayKeys(body[key]);
+      if (sanitized == null) continue;
+      value = sanitized;
     } else if (key === 'defaultPaymentTermsDays' || key === 'defaultPurchaseTaxRate') {
       value = Number(body[key]) || 0;
     } else {
