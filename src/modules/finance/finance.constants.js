@@ -111,6 +111,8 @@ export const DEFAULT_ORG_PROFILE = {
   website: 'tylocare.com',
   udyam: 'UDYAM-MH-19-0446179',
   udyamLabel: 'Micro Enterprise',
+  primaryColor: '#203E64',
+  secondaryColor: '#E7EDF4',
   bankName: 'IDFC FIRST Bank',
   accountHolder: 'Tylo Care Private Limited',
   accountNumber: '10289978474',
