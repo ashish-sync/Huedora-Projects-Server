@@ -3,7 +3,7 @@
  * Keep in sync with client `shared/companyLetterhead.js`.
  *
  * Line 1: bold legal name + regular " • address"
- * Line 2: GSTIN | CIN | Udyam | Email | Website
+ * Line 2: picked header fields (GSTIN, CIN, Udyam, Email, Website)
  */
 
 function clean(value) {
@@ -16,6 +16,35 @@ function displayWebsite(value) {
     .replace(/\/$/, '');
 }
 
+export const HEADER_DISPLAY_OPTIONS = [
+  { key: 'gstin', label: 'GSTIN' },
+  { key: 'cin', label: 'CIN' },
+  { key: 'udyam', label: 'Udyam' },
+  { key: 'email', label: 'Email' },
+  { key: 'website', label: 'Website' },
+];
+
+export const DEFAULT_HEADER_DISPLAY_KEYS = HEADER_DISPLAY_OPTIONS.map((opt) => opt.key);
+
+const ALLOWED_HEADER_KEYS = new Set(DEFAULT_HEADER_DISPLAY_KEYS);
+
+/** Canonical ordered list, or null when the field was not sent. */
+export function sanitizeHeaderDisplayKeys(raw) {
+  if (!Array.isArray(raw)) return null;
+  const seen = new Set();
+  for (const item of raw) {
+    const key = String(item || '').trim().toLowerCase();
+    if (ALLOWED_HEADER_KEYS.has(key)) seen.add(key);
+  }
+  return DEFAULT_HEADER_DISPLAY_KEYS.filter((key) => seen.has(key));
+}
+
+/** Missing/invalid → all defaults. Explicit [] → none. */
+export function resolveHeaderDisplayKeys(source = {}) {
+  const sanitized = sanitizeHeaderDisplayKeys(source.headerDisplayKeys);
+  return sanitized === null ? [...DEFAULT_HEADER_DISPLAY_KEYS] : sanitized;
+}
+
 /**
  * @param {object} org - FinanceOrgProfile or company-shaped object
  * @returns {{
@@ -23,6 +52,7 @@ function displayWebsite(value) {
  *   address: string,
  *   line1: string,
  *   line2: string,
+ *   metaParts: string[],
  *   lines: string[],
  * }}
  */
@@ -30,18 +60,17 @@ export function formatCompanyLetterhead(org = {}) {
   const legalName = clean(org.legalName);
   const address = clean(org.registeredOffice || org.address);
   const line1 = [legalName, address].filter(Boolean).join(' • ');
-
-  const udyam = clean(org.udyam);
-  const udyamPart = udyam ? `Udyam: ${udyam}` : '';
-
+  const selected = new Set(resolveHeaderDisplayKeys(org));
   const website = displayWebsite(org.website);
-  const metaParts = [
-    org.gstin ? `GSTIN: ${clean(org.gstin)}` : '',
-    org.cin ? `CIN: ${clean(org.cin)}` : '',
-    udyamPart,
-    org.email ? `Email: ${clean(org.email)}` : '',
-    website ? `Website: ${website}` : '',
-  ].filter(Boolean);
+  const udyam = clean(org.udyam);
+  const cin = clean(org.cin);
+
+  const metaParts = [];
+  if (selected.has('gstin') && org.gstin) metaParts.push(`GSTIN: ${clean(org.gstin)}`);
+  if (selected.has('cin') && cin) metaParts.push(`CIN: ${cin}`);
+  if (selected.has('udyam') && udyam) metaParts.push(`Udyam: ${udyam}`);
+  if (selected.has('email') && org.email) metaParts.push(`Email: ${clean(org.email)}`);
+  if (selected.has('website') && website) metaParts.push(`Website: ${website}`);
 
   const line2 = metaParts.join(' | ');
 
