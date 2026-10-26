@@ -3,11 +3,10 @@
  */
 import PDFDocument from 'pdfkit';
 import { formatDisplayDateErp } from './financeCommercial.service.js';
-import { BRAND, resolveLogoPath } from './pdfBrand.js';
+import { attachOrgBrand, brandOf, BRAND, resolveLogoPath } from './pdfBrand.js';
 import { formatCompanyLetterhead, drawCompanyLetterheadLine1 } from './companyLetterhead.js';
 
 const PAGE = { width: 841.89, height: 595.28, margin: 22 };
-const GRAY = '#E5E7EB';
 const INK = '#111827';
 const MUTED = '#4B5563';
 const LINE = '#111827';
@@ -39,7 +38,7 @@ function cell(pdf, text, x, y, w, h, opts = {}) {
 }
 
 function sectionHead(pdf, title, x, y, w, h = 14) {
-  box(pdf, x, y, w, h, GRAY);
+  box(pdf, x, y, w, h, brandOf(pdf).royalLight);
   cell(pdf, title, x, y, w, h, { bold: true, size: 8, align: 'center', padY: 3 });
   return y + h;
 }
@@ -82,7 +81,7 @@ function drawHeader(pdf, org, x, y, w) {
   let ty = drawCompanyLetterheadLine1(pdf, letterhead, midX, y, midW, {
     size: 8.5,
     align: 'center',
-    ink: INK,
+    ink: brandOf(pdf).royal,
     muted: MUTED,
   });
   if (letterhead.line2) {
@@ -212,7 +211,7 @@ function drawItems(pdf, doc, x, y, w) {
   const rowH = 11;
   let cx = x;
   for (const col of cols) {
-    box(pdf, cx, y, col.width, rowH, GRAY);
+    box(pdf, cx, y, col.width, rowH, brandOf(pdf).royalLight);
     cell(pdf, col.label, cx, y, col.width, rowH, { bold: true, size: 5, align: 'center', padY: 2 });
     cx += col.width;
   }
@@ -327,6 +326,7 @@ export function buildDeliveryChallanTemplatePdf(docRow, orgProfile) {
     pdf.on('data', (c) => chunks.push(c));
     pdf.on('end', () => resolve(Buffer.concat(chunks)));
     pdf.on('error', reject);
+    attachOrgBrand(pdf, org);
 
     const x = PAGE.margin;
     let y = PAGE.margin;

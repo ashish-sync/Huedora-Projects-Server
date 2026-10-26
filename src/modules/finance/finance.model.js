@@ -103,6 +103,9 @@ export const FinanceOrgProfile = defineCollection('finance_org_profile', {
   udyamLabel: '',
   /** Optional letterhead line-2 fields: gstin, cin, udyam, email, website. Missing = all. */
   headerDisplayKeys: null,
+  /** Document brand colours (hex). Missing = Tylo Care defaults. */
+  primaryColor: '',
+  secondaryColor: '',
   bankName: '',
   accountHolder: '',
   accountNumber: '',

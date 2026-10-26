@@ -11,7 +11,7 @@ import {
   toAmount,
   usesIgst,
 } from './financeCommercial.service.js';
-import { BRAND, moneyInr, moneyPlain, resolveLogoPath } from './pdfBrand.js';
+import { BRAND, attachOrgBrand, brandOf, moneyInr, moneyPlain, resolveLogoPath } from './pdfBrand.js';
 import { formatCompanyLetterhead, drawCompanyLetterheadLine1 } from './companyLetterhead.js';
 import {
   drawClickToSignBlock,
@@ -284,7 +284,7 @@ function drawTableHeader(pdf, margin, y, cols) {
   const tableW = cols.reduce((s, c) => s + c.w, 0);
   const headerH = 24;
   pdf.save();
-  pdf.rect(margin, y, tableW, headerH).fill(BRAND.royal);
+  pdf.rect(margin, y, tableW, headerH).fill(brandOf(pdf).royal);
   pdf.restore();
   let cx = margin;
   pdf.font('Helvetica-Bold').fontSize(FONT.tableHeader).fillColor(BRAND.white);
@@ -300,7 +300,7 @@ function drawSlimHeader(pdf, margin, contentWidth, meta, pageNum) {
   pdf
     .font('Helvetica-Bold')
     .fontSize(FONT.slimTitle)
-    .fillColor(BRAND.royal)
+    .fillColor(brandOf(pdf).royal)
     .text(meta.typeLabel, margin, y + 4);
   pdf
     .font('Helvetica')
@@ -333,7 +333,7 @@ function drawFullHeader(pdf, org, margin, contentWidth, meta) {
   y = drawCompanyLetterheadLine1(pdf, letterhead, textX, y, textW, {
     size: FONT.headerBody + 2.5,
     align: 'left',
-    ink: BRAND.ink,
+    ink: brandOf(pdf).royal,
     muted: BRAND.muted,
   });
 
@@ -347,7 +347,7 @@ function drawFullHeader(pdf, org, margin, contentWidth, meta) {
   pdf
     .font('Helvetica-Bold')
     .fontSize(FONT.docType)
-    .fillColor(BRAND.royal)
+    .fillColor(brandOf(pdf).royal)
     .text(meta.typeLabel, rightX, ry, { width: rightW, align: 'right' });
   ry = pdf.y + 10;
 
@@ -387,7 +387,7 @@ function drawPartySection(pdf, margin, y, contentWidth, cfg, parties) {
   const headerH = 22;
 
   function drawBlock(x, title, party) {
-    pdf.roundedRect(x, y, colW, headerH, 3).fill(BRAND.royal);
+    pdf.roundedRect(x, y, colW, headerH, 3).fill(brandOf(pdf).royal);
     pdf
       .font('Helvetica-Bold')
       .fontSize(FONT.partyHeader)
@@ -446,12 +446,12 @@ function drawItemsTable(pdf, ctx, startY, lines) {
         y = drawTableHeader(pdf, margin, y, cols);
       }
       pdf.save();
-      pdf.rect(margin, y, tableW, sectionH).fill(BRAND.royalLight);
+      pdf.rect(margin, y, tableW, sectionH).fill(brandOf(pdf).royalLight);
       pdf.restore();
       pdf
         .font('Helvetica-Bold')
         .fontSize(FONT.tableSection)
-        .fillColor(BRAND.royalDark)
+        .fillColor(brandOf(pdf).royalDark)
         .text(item.sectionTitle, margin + 5, y + 5, { width: tableW - 10 });
       y += sectionH;
       continue;
@@ -483,7 +483,7 @@ function drawItemsTable(pdf, ctx, startY, lines) {
 
     if (sr % 2 === 0) {
       pdf.save();
-      pdf.rect(margin, y, tableW, rowH).fill(BRAND.rowAlt);
+      pdf.rect(margin, y, tableW, rowH).fill(brandOf(pdf).rowAlt);
       pdf.restore();
     }
 
@@ -512,7 +512,7 @@ function drawItemsTable(pdf, ctx, startY, lines) {
 
 function drawTaxSummary(pdf, margin, y, contentWidth, taxRows, taxMode) {
   if (!taxRows.length) return y;
-  pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(BRAND.royal).text('Tax Summary', margin, y);
+  pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(brandOf(pdf).royal).text('Tax Summary', margin, y);
   y += 14;
 
   const cols =
@@ -536,7 +536,7 @@ function drawTaxSummary(pdf, margin, y, contentWidth, taxRows, taxMode) {
   const rowH = 18;
 
   pdf.save();
-  pdf.rect(margin, y, tableW, headerH).fill(BRAND.royalMuted);
+  pdf.rect(margin, y, tableW, headerH).fill(brandOf(pdf).royalMuted);
   pdf.restore();
 
   let cx = margin;
@@ -550,7 +550,7 @@ function drawTaxSummary(pdf, margin, y, contentWidth, taxRows, taxMode) {
   taxRows.forEach((row, idx) => {
     if (idx % 2 === 1) {
       pdf.save();
-      pdf.rect(margin, y, tableW, rowH).fill(BRAND.rowAlt);
+      pdf.rect(margin, y, tableW, rowH).fill(brandOf(pdf).rowAlt);
       pdf.restore();
     }
     cx = margin;
@@ -581,7 +581,7 @@ function drawFinancialSummary(pdf, margin, y, contentWidth, docRow, showPayment)
   const panelX = margin + contentWidth - panelW;
   const startY = y;
 
-  pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(BRAND.royal).text('Amount in Words', margin, y);
+  pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(brandOf(pdf).royal).text('Amount in Words', margin, y);
   y = pdf.y + 4;
   pdf
     .font('Helvetica')
@@ -593,7 +593,7 @@ function drawFinancialSummary(pdf, margin, y, contentWidth, docRow, showPayment)
     });
   y = pdf.y + 10;
 
-  pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(BRAND.royal).text('Terms / Remarks', margin, y);
+  pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(brandOf(pdf).royal).text('Terms / Remarks', margin, y);
   y = pdf.y + 4;
   pdf
     .font('Helvetica')
@@ -604,7 +604,7 @@ function drawFinancialSummary(pdf, margin, y, contentWidth, docRow, showPayment)
 
   if (showPayment && (docRow._org?.bankName || docRow._org?.accountNumber)) {
     const org = docRow._org;
-    pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(BRAND.royal).text('Payment Details', margin, leftEnd);
+    pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(brandOf(pdf).royal).text('Payment Details', margin, leftEnd);
     leftEnd = pdf.y + 4;
     const payLines = [
       org.accountHolder ? `Account Holder: ${org.accountHolder}` : '',
@@ -640,7 +640,7 @@ function drawFinancialSummary(pdf, margin, y, contentWidth, docRow, showPayment)
   pdf.restore();
   py += 10;
 
-  pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(BRAND.royal).text('Financial Summary', panelX + 10, py);
+  pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(brandOf(pdf).royal).text('Financial Summary', panelX + 10, py);
   py += 14;
 
   for (const [label, value] of finRows) {
@@ -812,6 +812,7 @@ export function buildCommercialDocumentPdf(docRow, orgProfile, documentType) {
     pdf.on('data', (c) => chunks.push(c));
     pdf.on('end', () => resolve(Buffer.concat(chunks)));
     pdf.on('error', reject);
+    attachOrgBrand(pdf, org);
 
     const ctx = { margin, contentWidth: cw, meta, pageNum: 1 };
 
@@ -832,7 +833,7 @@ export function buildCommercialDocumentPdf(docRow, orgProfile, documentType) {
       Boolean
     );
     if (terms.length) {
-      pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(BRAND.royal).text('Additional Terms', margin, y);
+      pdf.font('Helvetica-Bold').fontSize(FONT.blockTitle).fillColor(brandOf(pdf).royal).text('Additional Terms', margin, y);
       y = pdf.y + 5;
       terms.slice(0, 4).forEach((t, i) => {
         pdf.font('Helvetica').fontSize(FONT.body).fillColor(BRAND.muted).text(`${i + 1}. ${t}`, margin, y, {
