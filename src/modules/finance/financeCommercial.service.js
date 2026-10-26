@@ -18,6 +18,7 @@ import {
 } from './documentNumbering.js';
 import { FinanceCommercialDocument, FinanceOrgProfile } from './finance.model.js';
 import { sanitizeHeaderDisplayKeys } from './companyLetterhead.js';
+import { sanitizeBrandColor } from './orgBrandColors.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 
 export function trimStr(v) {
@@ -261,6 +262,8 @@ const ORG_SNAPSHOT_KEYS = [
   'udyam',
   'udyamLabel',
   'headerDisplayKeys',
+  'primaryColor',
+  'secondaryColor',
   'bankName',
   'accountHolder',
   'accountNumber',
@@ -535,6 +538,8 @@ export async function mergeOrgProfile(body = {}) {
     'udyam',
     'udyamLabel',
     'headerDisplayKeys',
+    'primaryColor',
+    'secondaryColor',
     'bankName',
     'accountHolder',
     'accountNumber',
@@ -572,6 +577,10 @@ export async function mergeOrgProfile(body = {}) {
     } else if (key === 'headerDisplayKeys') {
       const sanitized = sanitizeHeaderDisplayKeys(body[key]);
       if (sanitized == null) continue;
+      value = sanitized;
+    } else if (key === 'primaryColor' || key === 'secondaryColor') {
+      const sanitized = sanitizeBrandColor(body[key]);
+      if (!sanitized) continue;
       value = sanitized;
     } else if (key === 'defaultPaymentTermsDays' || key === 'defaultPurchaseTaxRate') {
       value = Number(body[key]) || 0;

@@ -8,7 +8,7 @@ import {
   formatDisplayDateErp,
   toAmount,
 } from './financeCommercial.service.js';
-import { BRAND, moneyPlain, resolveLogoPath } from './pdfBrand.js';
+import { attachOrgBrand, brandOf, BRAND, moneyPlain, resolveLogoPath } from './pdfBrand.js';
 import { formatCompanyLetterhead, drawCompanyLetterheadLine1 } from './companyLetterhead.js';
 import {
   drawClickToSignBlock,
@@ -22,7 +22,6 @@ const PAGE = {
   margin: 28,
 };
 
-const GRAY = '#F3F4F6';
 const INK = '#111827';
 const MUTED = '#4B5563';
 const LINE = '#111827';
@@ -259,7 +258,7 @@ function drawHeader(pdf, org, cfg, x, y, w) {
   let ty = drawCompanyLetterheadLine1(pdf, letterhead, midX, y + 2, midW, {
     size: 9.5,
     align: 'center',
-    ink: INK,
+    ink: brandOf(pdf).royal,
     muted: MUTED,
   });
   if (letterhead.line2) {
@@ -313,8 +312,8 @@ function drawParties(pdf, doc, x, y, w) {
 
   box(pdf, x, y, half, h);
   box(pdf, x + half, y, half, h);
-  box(pdf, x, y, half, headH, GRAY);
-  box(pdf, x + half, y, half, headH, GRAY);
+  box(pdf, x, y, half, headH, brandOf(pdf).royalLight);
+  box(pdf, x + half, y, half, headH, brandOf(pdf).royalLight);
   cellText(pdf, 'BILL TO', x, y, half, headH, { bold: true, size: 8, align: 'center', padY: 3 });
   cellText(pdf, 'SHIP TO / SERVICE LOCATION', x + half, y, half, headH, {
     bold: true,
@@ -382,7 +381,7 @@ function drawItemsTable(pdf, doc, cfg, x, y, w) {
 
   let cx = x;
   for (const col of cols) {
-    box(pdf, cx, y, col.width, headH, GRAY);
+    box(pdf, cx, y, col.width, headH, brandOf(pdf).royalLight);
     cellText(pdf, col.label, cx, y, col.width, headH, { bold: true, size: 6.8, align: col.align, padY: 4 });
     cx += col.width;
   }
@@ -424,8 +423,8 @@ function drawItemsTable(pdf, doc, cfg, x, y, w) {
     [cfg.totalLabel, moneyPlain(doc.grandTotal), true],
   ];
   for (const [label, value, strong] of totalRows) {
-    box(pdf, totalX, cy, labelW, rowH, strong ? GRAY : null);
-    box(pdf, totalX + labelW, cy, valueW, rowH, strong ? GRAY : null);
+    box(pdf, totalX, cy, labelW, rowH, strong ? brandOf(pdf).royalLight : null);
+    box(pdf, totalX + labelW, cy, valueW, rowH, strong ? brandOf(pdf).royalLight : null);
     cellText(pdf, label, totalX, cy, labelW, rowH, { size: 7.2, bold: Boolean(strong), padY: 3 });
     cellText(pdf, value, totalX + labelW, cy, valueW, rowH, {
       size: 7.2,
@@ -458,8 +457,8 @@ function drawFooter(pdf, org, doc, cfg, x, y, w) {
 
   box(pdf, x, y, half, h);
   box(pdf, x + half, y, half, h);
-  box(pdf, x, y, half, headH, GRAY);
-  box(pdf, x + half, y, half, headH, GRAY);
+  box(pdf, x, y, half, headH, brandOf(pdf).royalLight);
+  box(pdf, x + half, y, half, headH, brandOf(pdf).royalLight);
   cellText(pdf, 'BANK DETAILS', x, y, half, headH, { bold: true, size: 8, align: 'center', padY: 3 });
   cellText(pdf, cfg.paymentTermsTitle, x + half, y, half, headH, {
     bold: true,
@@ -571,6 +570,7 @@ export function buildPortraitCommercialPdf(docRow, orgProfile, documentType) {
     pdf.on('data', (c) => chunks.push(c));
     pdf.on('end', () => resolve(Buffer.concat(chunks)));
     pdf.on('error', reject);
+    attachOrgBrand(pdf, org);
 
     pdf.strokeColor(LINE).fillColor(INK);
     const x = PAGE.margin;

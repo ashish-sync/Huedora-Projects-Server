@@ -4,7 +4,7 @@
  */
 import PDFDocument from 'pdfkit';
 import { formatDisplayDateErp } from './financeCommercial.service.js';
-import { BRAND, moneyInr, moneyPlain, moneyRs, resolveLogoPath } from './pdfBrand.js';
+import { attachOrgBrand, BRAND, brandOf, moneyInr, moneyPlain, moneyRs, resolveLogoPath } from './pdfBrand.js';
 
 export { BRAND, moneyInr, moneyPlain, moneyRs };
 export { formatDisplayDateErp };
@@ -60,7 +60,7 @@ export function aggregateTaxByRate(items = [], taxMode = 'igst') {
   }));
 }
 
-export function createCommercialPdf({ title, author, creator = 'TYLO One Finance' }) {
+export function createCommercialPdf({ title, author, creator = 'TYLO One Finance', org } = {}) {
   const margin = PAGE.margin;
   const pdf = new PDFDocument({
     size: 'A4',
@@ -68,6 +68,7 @@ export function createCommercialPdf({ title, author, creator = 'TYLO One Finance
     info: { Title: title, Author: author || 'TYLO', Creator: creator },
     bufferPages: true,
   });
+  attachOrgBrand(pdf, org);
 
   const chunks = [];
   pdf.on('data', (c) => chunks.push(c));
@@ -112,7 +113,7 @@ export function drawErpHeader(pdf, org, y, margin, contentW, { title, metaRows, 
   pdf
     .font('Helvetica-Bold')
     .fontSize(17)
-    .fillColor(BRAND.royal)
+    .fillColor(brandOf(pdf).royal)
     .text(title, titleX, y + 26, { width: titleW, align: 'center', characterSpacing: 0.8 });
 
   pdf.save();
@@ -206,7 +207,7 @@ export function drawErpTermsStack(pdf, x, y, w, items) {
     pdf
       .font('Helvetica-Bold')
       .fontSize(7)
-      .fillColor(BRAND.royal)
+      .fillColor(brandOf(pdf).royal)
       .text(item.label, x, cy, { width: w });
     cy = pdf.y + 3;
     pdf
@@ -234,7 +235,7 @@ export function drawErpPartyRow(pdf, y, margin, contentW, cols) {
       y,
       partyW,
       cols.first.title,
-      cols.first.color || BRAND.royal,
+      cols.first.color || brandOf(pdf).royal,
       cols.first.fields
     );
     maxEnd = Math.max(maxEnd, end);
@@ -284,7 +285,7 @@ export function drawErpTable(pdf, margin, y, contentW, columns, rows) {
   const headerH = 22;
 
   pdf.save();
-  pdf.rect(margin, y, tableW, headerH).fill(BRAND.royal);
+  pdf.rect(margin, y, tableW, headerH).fill(brandOf(pdf).royal);
   pdf.restore();
 
   let cx = margin;
@@ -299,12 +300,12 @@ export function drawErpTable(pdf, margin, y, contentW, columns, rows) {
     if (row._section) {
       const sectionH = 18;
       pdf.save();
-      pdf.rect(margin, y, tableW, sectionH).fill(BRAND.royalLight);
+      pdf.rect(margin, y, tableW, sectionH).fill(brandOf(pdf).royalLight);
       pdf.restore();
       pdf
         .font('Helvetica-Bold')
         .fontSize(7)
-        .fillColor(BRAND.royalDark)
+        .fillColor(brandOf(pdf).royalDark)
         .text(row._section, margin + 6, y + 5, { width: tableW - 12 });
       y += sectionH;
       return;
@@ -320,7 +321,7 @@ export function drawErpTable(pdf, margin, y, contentW, columns, rows) {
 
     if (index % 2 === 1) {
       pdf.save();
-      pdf.rect(margin, y, tableW, rowH).fill(BRAND.rowAlt);
+      pdf.rect(margin, y, tableW, rowH).fill(brandOf(pdf).rowAlt);
       pdf.restore();
     }
 
@@ -433,7 +434,7 @@ export function drawErpFooterSummary(pdf, margin, y, contentW, { amountWords, re
   const panelX = margin + contentW - panelW;
   const startY = y;
 
-  pdf.font('Helvetica-Bold').fontSize(7.5).fillColor(BRAND.royal).text('Amount in Words', margin, y);
+  pdf.font('Helvetica-Bold').fontSize(7.5).fillColor(brandOf(pdf).royal).text('Amount in Words', margin, y);
   y = pdf.y + 4;
   pdf
     .font('Helvetica')
@@ -442,7 +443,7 @@ export function drawErpFooterSummary(pdf, margin, y, contentW, { amountWords, re
     .text(amountWords ? `Rupees ${amountWords}` : '—', margin, y, { width: leftW, lineGap: 1 });
   y = pdf.y + 10;
 
-  pdf.font('Helvetica-Bold').fontSize(7.5).fillColor(BRAND.royal).text('Remarks', margin, y);
+  pdf.font('Helvetica-Bold').fontSize(7.5).fillColor(brandOf(pdf).royal).text('Remarks', margin, y);
   y = pdf.y + 4;
   pdf
     .font('Helvetica')
@@ -501,7 +502,7 @@ export function drawTaxSummaryTable(pdf, margin, y, contentW, items, taxMode) {
   const rows = aggregateTaxByRate(items, taxMode);
   if (!rows.length) return y;
 
-  pdf.font('Helvetica-Bold').fontSize(7.5).fillColor(BRAND.royal).text('Tax Summary', margin, y);
+  pdf.font('Helvetica-Bold').fontSize(7.5).fillColor(brandOf(pdf).royal).text('Tax Summary', margin, y);
   y += 14;
 
   const cols =
@@ -525,7 +526,7 @@ export function drawTaxSummaryTable(pdf, margin, y, contentW, items, taxMode) {
   const rowH = 15;
 
   pdf.save();
-  pdf.rect(margin, y, tableW, headerH).fill(BRAND.royalMuted);
+  pdf.rect(margin, y, tableW, headerH).fill(brandOf(pdf).royalMuted);
   pdf.restore();
 
   let cx = margin;
@@ -539,7 +540,7 @@ export function drawTaxSummaryTable(pdf, margin, y, contentW, items, taxMode) {
   rows.forEach((row, idx) => {
     if (idx % 2 === 1) {
       pdf.save();
-      pdf.rect(margin, y, tableW, rowH).fill(BRAND.rowAlt);
+      pdf.rect(margin, y, tableW, rowH).fill(brandOf(pdf).rowAlt);
       pdf.restore();
     }
     cx = margin;
@@ -567,7 +568,7 @@ export function drawTaxSummaryTable(pdf, margin, y, contentW, items, taxMode) {
 export function drawBankingPanel(pdf, x, y, w, org) {
   if (!org.bankName && !org.accountNumber) return y;
 
-  pdf.font('Helvetica-Bold').fontSize(7.5).fillColor(BRAND.royal).text('Banking Details', x, y);
+  pdf.font('Helvetica-Bold').fontSize(7.5).fillColor(brandOf(pdf).royal).text('Banking Details', x, y);
   y = pdf.y + 4;
   const lines = [
     org.bankName ? `Bank: ${org.bankName}` : '',
@@ -588,7 +589,7 @@ export function drawBankingPanel(pdf, x, y, w, org) {
 export function drawTermsSection(pdf, margin, y, contentW, terms) {
   if (!terms?.length) return y;
   y = ensureSpace(pdf, y, 50, PAGE.margin);
-  pdf.font('Helvetica-Bold').fontSize(7.5).fillColor(BRAND.royal).text('Terms & Conditions', margin, y);
+  pdf.font('Helvetica-Bold').fontSize(7.5).fillColor(brandOf(pdf).royal).text('Terms & Conditions', margin, y);
   y = pdf.y + 4;
   terms.forEach((term, index) => {
     y = ensureSpace(pdf, y, 18, PAGE.margin);
