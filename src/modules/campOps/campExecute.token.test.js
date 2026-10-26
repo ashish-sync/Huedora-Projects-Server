@@ -44,12 +44,14 @@ test('isExecutionInviteExpiredForCamp uses camp start + 72h', () => {
 });
 
 test('canMintExecutionActivityLink allows Assigned status without assignmentDecision', () => {
+  const now = new Date();
+  const campDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   assert.equal(
     canMintExecutionActivityLink({
       status: 'approved',
       assignmentStatus: 'Assigned',
       hcwName: 'Ravi Technician',
-      campDate: '2026-10-22',
+      campDate,
       startTime: '09:00',
     }),
     true,
