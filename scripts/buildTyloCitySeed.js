@@ -17,6 +17,11 @@ const STATE_ALIASES = {
   'jammu & kashmir': 'Jammu and Kashmir',
 };
 
+const DISTRICT_ALIASES = {
+  narmadapuram: 'Hoshangabad',
+  'sri potti sriramulu nellore': 'Nellore',
+};
+
 function norm(value) {
   return String(value || '')
     .toLowerCase()
@@ -34,6 +39,63 @@ function resolveStateName(stateName, stateByNorm) {
   const state = stateByNorm.get(norm(stateName));
   if (!state) throw new Error(`Unknown state in city master: ${stateName}`);
   return state.name;
+}
+
+function districtCandidates(districtName) {
+  const raw = String(districtName || '').trim();
+  if (!raw) return [];
+  const parts = raw.split('/').map((part) => part.trim()).filter(Boolean);
+  const out = [];
+  for (const part of [raw, ...parts]) {
+    const value = norm(part);
+    if (!value) continue;
+    out.push(value);
+    const alias = DISTRICT_ALIASES[value];
+    if (alias) out.push(norm(alias));
+  }
+  return [...new Set(out)];
+}
+
+function districtCore(name) {
+  return norm(name)
+    .replace(/\s*\(.*\)\s*/g, ' ')
+    .replace(/\s+(urban|rural)$/g, '')
+    .trim();
+}
+
+function matchDistrictId(stateDistricts, row) {
+  const candidates = districtCandidates(row.districtName);
+  for (const candidate of candidates) {
+    const exact = stateDistricts.find((district) => norm(district.name) === candidate);
+    if (exact) return exact._id;
+  }
+
+  for (const candidate of candidates) {
+    const hits = stateDistricts.filter((district) => {
+      const core = districtCore(district.name);
+      return core === candidate || (candidate.length >= 4 && candidate.endsWith(` ${core}`));
+    });
+    if (hits.length === 1) return hits[0]._id;
+    if (hits.length > 1) {
+      const cityNorm = norm(row.name);
+      const exactCity = hits.find((district) => norm(district.name) === cityNorm);
+      const urban = hits.find((district) => /urban/i.test(district.name));
+      return (exactCity || urban || hits[0])._id;
+    }
+  }
+
+  const cityNorm = norm(row.name);
+  for (const district of stateDistricts) {
+    const districtNorm = norm(district.name);
+    if (
+      cityNorm === districtNorm
+      || (districtNorm.length >= 4 && (cityNorm.startsWith(districtNorm) || districtNorm.startsWith(cityNorm)))
+    ) {
+      return district._id;
+    }
+  }
+
+  return null;
 }
 
 function buildCitiesFromMaster(cityMaster, states, districts) {
@@ -56,18 +118,7 @@ function buildCitiesFromMaster(cityMaster, states, districts) {
     if (seen.has(cityKey)) continue;
     seen.add(cityKey);
 
-    let districtId = null;
-    const cityNorm = norm(row.name);
-    for (const district of districtsByState.get(state._id) || []) {
-      const districtNorm = norm(district.name);
-      if (
-        cityNorm === districtNorm
-        || (districtNorm.length >= 4 && (cityNorm.startsWith(districtNorm) || districtNorm.startsWith(cityNorm)))
-      ) {
-        districtId = district._id;
-        break;
-      }
-    }
+    const districtId = matchDistrictId(districtsByState.get(state._id) || [], row);
 
     cities.push({
       _id: `${state._id}_c_${slug(row.name)}`,
