@@ -36,6 +36,9 @@ import {
   buildClientMasterBusinessKeyFilter,
   seedMasterBillingFromCompany,
   buildLegacyEmptyGstinMatchFilter,
+  hasExplicitMasterBilling,
+  applyMasterBillingFields,
+  trimMasterBillingAddress,
 } from './clientMaster.businessKey.js';
 import {
   isMeaningfulPurchaseOrder,
@@ -2705,29 +2708,6 @@ function masterBillingView(row = {}, client = null) {
   };
 }
 
-/** Map body.billing / flat aliases onto per-row billing fields (never onto the company). */
-function applyMasterBillingFields(payload, body = {}) {
-  const nested = body.billing && typeof body.billing === 'object' ? body.billing : {};
-  const read = (...keys) => {
-    for (const key of keys) {
-      if (body[key] !== undefined) return body[key];
-      if (nested[key] !== undefined) return nested[key];
-    }
-    return undefined;
-  };
-
-  const address = read('billingAddress', 'address');
-  const gstin = read('billingGstin', 'gstin', 'GSTIN');
-  const pan = read('billingPan', 'pan', 'panNumber');
-  const stateName = read('billingStateName', 'stateName', 'state');
-  const stateCode = read('billingStateCode', 'stateCode');
-
-  if (address !== undefined) payload.billingAddress = trimStr(address);
-  if (gstin !== undefined) payload.billingGstin = normalizeMasterBillingGstin(gstin);
-  if (pan !== undefined) payload.billingPan = trimStr(pan).toUpperCase();
-  if (stateName !== undefined) payload.billingStateName = trimStr(stateName);
-  if (stateCode !== undefined) payload.billingStateCode = trimStr(stateCode);
-}
 
 /**
  * Backend uniqueness: Client + GSTIN + Division + Method must not repeat.
@@ -3400,6 +3380,8 @@ function buildMasterPayload(body, client, existingRow = null) {
         payload[field] = normalizeCampTermsValue(body[field]);
       } else if (field === 'billingGstin' || field === 'billingPan') {
         payload[field] = trimStr(body[field]).toUpperCase();
+      } else if (field === 'billingAddress') {
+        payload[field] = trimMasterBillingAddress(body[field]);
       } else {
         payload[field] = trimStr(body[field]);
       }
@@ -3783,10 +3765,11 @@ router.get(
     const client = row.clientId
       ? await CampOpsClient.findOne({ _id: row.clientId, isDeleted: false })
       : null;
-    if (client && seedMasterBillingFromCompany(row, client)) {
-      await row.save();
-    }
     const plain = withSignedPoFile(row);
+    // Overlay company billing onto the response only. Never persist on GET —
+    // a write-on-read copied the old company address onto the row and later
+    // Billing & Tax saves appeared to revert.
+    if (client) seedMasterBillingFromCompany(plain, client);
     res.json({
       data: {
         ...plain,
@@ -3873,7 +3856,12 @@ router.put(
     // Those must use clearKeys so blank-preserve merge does not resurrect deleted POs.
     const clearKeys = clientMasterPoClearKeys(req.body, payload);
     assignPreservingExisting(row, payload, clearKeys.length ? { clearKeys } : undefined);
-    if (client) seedMasterBillingFromCompany(row, client);
+    if (hasExplicitMasterBilling(req.body)) {
+      // Section save: user's Billing & Tax values always win (including extra address lines).
+      applyMasterBillingFields(row, req.body);
+    } else if (client) {
+      seedMasterBillingFromCompany(row, client);
+    }
     row.billingGstin = normalizeMasterBillingGstin(row.billingGstin);
     assertClientMasterPayload(row);
     await assertClientMasterBusinessKeyUnique({

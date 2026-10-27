@@ -39,6 +39,14 @@ export function cleanSpaces(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+/** Street / billing address: keep extra lines; trim edges only. */
+export function cleanMultilineAddress(value) {
+  return String(value ?? '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/^\s+|\s+$/g, '');
+}
+
 function capitalizeWord(word, isFirst) {
   const lower = word.toLowerCase();
   if (!isFirst && MINOR_WORDS.has(lower)) return lower;
@@ -131,6 +139,7 @@ export function formatTextValue(value, fieldKey = '') {
   if (key === 'fieldPersonName' || key === 'contactPersonName' || key === 'hcwName') {
     return formatContactPersonName(value);
   }
+  if (key === 'billingAddress') return cleanMultilineAddress(value);
   if (key === 'campAddress' || key === 'address' || key === 'hospitalName' || key === 'clinicName') {
     return toProperTitleCase(value);
   }
