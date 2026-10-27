@@ -8,6 +8,7 @@ import {
 import { localTodayIso } from './campDatePolicy.js';
 import {
   computeCampRevenueFromPricing,
+  computeOvertimeHours,
   isCampCancelledForRevenue,
   isCampChargeable,
 } from './campOps.clientMasterPricing.js';
@@ -444,7 +445,6 @@ export function computeLifecycleDerived(camp = {}, { pricing = null } = {}) {
   const endTime = localTrim(camp.endTime);
   const inTime = localTrim(camp.inTime);
   const outTime = localTrim(camp.outTime);
-  const durationHours = num(camp.durationHours, 0);
 
   const campSlot = resolveCampSlot(startTime);
 
@@ -453,10 +453,10 @@ export function computeLifecycleDerived(camp = {}, { pricing = null } = {}) {
     totalHours = computeDurationHours(inTime, outTime);
   }
 
-  let extraHours = 0;
-  if (totalHours != null && durationHours > 0) {
-    extraHours = Math.max(0, Math.round((totalHours - durationHours) * 100) / 100);
-  }
+  const extraHours = computeOvertimeHours(totalHours, {
+    campDuration: pricing?.campDuration || camp.clientMasterCampDuration,
+    durationHours: camp.durationHours,
+  });
 
   const autoRevenue = pricing
     ? computeCampRevenueFromPricing({ ...camp, totalHours, extraHours }, pricing)
@@ -672,6 +672,11 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
     }
   }
 
+  payload.clientMasterCampDuration = localTrim(pricing?.campDuration)
+    || localTrim(existing?.clientMasterCampDuration)
+    || localTrim(payload.clientMasterCampDuration)
+    || '';
+
   const derived = computeLifecycleDerived({ ...existing, ...body, ...payload }, { pricing });
   const next = { ...payload, ...derived };
   // Prefer explicit body finance parts; never invent zeros for omitted finance keys in the merge patch.
@@ -768,10 +773,13 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
   return next;
 }
 
-export function withCampLifecycle(camp) {
+export function withCampLifecycle(camp, { pricing = null } = {}) {
   const obj = camp?.toObject ? camp.toObject() : { ...camp };
   obj.lifecycleStage = normalizeLifecycleStage(obj.lifecycleStage, 'request');
-  const derived = computeLifecycleDerived(obj);
+  if (pricing?.campDuration) {
+    obj.clientMasterCampDuration = localTrim(pricing.campDuration);
+  }
+  const derived = computeLifecycleDerived(obj, { pricing });
   Object.assign(obj, derived);
   delete obj.otherRevenuePatients;
   delete obj.otherRevenueDistance;
