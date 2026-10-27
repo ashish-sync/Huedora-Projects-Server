@@ -13,9 +13,10 @@ test('export includes Service Provider embedded staff as Healthcare Worker rows'
       contact: '9000000001',
       city: 'Pune',
       state: 'Maharashtra',
+      campAmount: 8000,
       providerEmployees: [
-        { id: 'e1', name: 'Ravi Kumar', mobile: '9111000001', profession: 'Nurse' },
-        { id: 'e2', name: 'Anita Desai', mobile: '9111000002', profession: 'Doctor' },
+        { id: 'e1', name: 'Ravi Kumar', mobile: '9111000001', profession: 'Nurse', campAmount: 1600 },
+        { id: 'e2', name: 'Anita Desai', mobile: '9111000002', profession: 'Doctor', campAmount: 2200 },
       ],
     },
     {
@@ -33,6 +34,7 @@ test('export includes Service Provider embedded staff as Healthcare Worker rows'
   const agency = rows.find((r) => r[0] === 'Care Agency');
   assert.ok(agency);
   assert.equal(agency[3], 'Service Provider');
+  assert.equal(agency[12], '', 'agency row must not export a Camp Amount');
 
   const ravi = rows.find((r) => r[0] === 'Ravi Kumar');
   assert.ok(ravi, 'embedded staff must appear in export');
@@ -40,6 +42,7 @@ test('export includes Service Provider embedded staff as Healthcare Worker rows'
   assert.equal(ravi[3], 'Individual');
   assert.equal(ravi[4], 'Nurse');
   assert.equal(ravi[7], '9111000001');
+  assert.equal(ravi[12], 1600);
   assert.equal(ravi[17], 'Care Agency');
   assert.equal(ravi[8], 'Pune');
 

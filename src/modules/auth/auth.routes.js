@@ -2,9 +2,11 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import * as authService from './auth.service.js';
+import { clearRefreshCookie, setRefreshCookie } from './auth.cookies.js';
 import { authenticate } from '../../middleware/auth.js';
-import { asyncHandler } from '../../utils/helpers.js';
+import { asyncHandler, AppError } from '../../utils/helpers.js';
 import { env } from '../../config/env.js';
+import { isAllowedClientOrigin } from '../../config/corsOrigins.js';
 import { User } from '../users/user.model.js';
 
 const router = Router();
@@ -46,36 +48,11 @@ const passwordChangeLimiter = rateLimit({
   message: { error: { message: 'Too many password change attempts. Try again later.', code: 'RATE_LIMIT' } },
 });
 
-function refreshCookieOptions({ secure } = {}) {
-  return {
-    httpOnly: true,
-    // QA uses NODE_ENV=qa (not "production") but is still served over HTTPS.
-    // Always mark cookies Secure outside local development so clear/set attributes match.
-    secure: typeof secure === 'boolean' ? secure : env.nodeEnv !== 'development',
-    sameSite: 'lax',
-    path: '/api/v1/auth',
-  };
-}
-
-function setRefreshCookie(res, token) {
-  res.cookie('refreshToken', token, {
-    ...refreshCookieOptions(),
-    maxAge: env.jwtRefreshExpiresDays * 24 * 60 * 60 * 1000,
-  });
-}
-
-function clearRefreshCookie(res) {
-  // Browsers only drop a cookie when clear attributes match how it was set.
-  // Clear both Secure and non-Secure + primary path variants to cover NODE_ENV drift.
-  const variants = [
-    refreshCookieOptions({ secure: true }),
-    refreshCookieOptions({ secure: false }),
-    { ...refreshCookieOptions({ secure: true }), path: '/' },
-    { ...refreshCookieOptions({ secure: false }), path: '/' },
-  ];
-  for (const opts of variants) {
-    res.clearCookie('refreshToken', opts);
-    res.cookie('refreshToken', '', { ...opts, maxAge: 0, expires: new Date(0) });
+function assertTrustedOrigin(req) {
+  const origin = String(req.headers.origin || '').trim();
+  if (!origin) return;
+  if (!isAllowedClientOrigin(origin)) {
+    throw new AppError('Forbidden origin', 403, 'FORBIDDEN');
   }
 }
 
@@ -83,6 +60,7 @@ router.post(
   '/login',
   loginLimiter,
   asyncHandler(async (req, res) => {
+    assertTrustedOrigin(req);
     const result = await authService.login({
       email: req.body.email,
       password: req.body.password,
@@ -104,6 +82,7 @@ router.post(
   '/refresh',
   refreshLimiter,
   asyncHandler(async (req, res) => {
+    assertTrustedOrigin(req);
     const refreshToken = req.cookies.refreshToken || req.body.refreshToken;
     try {
       const result = await authService.refresh({
@@ -149,6 +128,7 @@ router.post(
   // Do not require Bearer auth — the client clears the access token before calling
   // logout for a snappy UI. Prefer refresh cookie; fall back to optional Bearer.
   asyncHandler(async (req, res) => {
+    assertTrustedOrigin(req);
     const user = await resolveLogoutActor(req);
     await authService.logout({
       refreshToken: req.cookies.refreshToken || req.body?.refreshToken,

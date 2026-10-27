@@ -55,7 +55,7 @@ import {
 import { LogisticsProduct, LogisticsUom, LogisticsExpenseSubCategory } from '../logistics/logistics.model.js';
 import { Contact } from '../contacts/contact.model.js';
 import { getHcwFinanceBlockers } from '../contacts/hcwFinanceReadiness.js';
-import { resolveCampPayoutPayeeContact } from '../contacts/campPayoutPayee.js';
+import { campAmountForAssignedHcw, resolveCampPayoutPayeeContact } from '../contacts/campPayoutPayee.js';
 import { formatTextValue, getDoctorNameFormatError } from '../../utils/textFormat.js';
 import {
   CAMP_FINANCE_EXPENSE_CATEGORY,

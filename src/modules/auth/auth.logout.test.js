@@ -117,3 +117,35 @@ test('refresh rejects revoked token after logout', async () => {
     await cleanup(user);
   }
 });
+
+test('refresh allows the same live token twice so concurrent tabs do not wipe the session', async () => {
+  const user = await createUser('twice', 0);
+  const { refreshToken, tokenHash } = await createRefresh(user, 0);
+
+  try {
+    const first = await authService.refresh({
+      refreshToken,
+      ip: '127.0.0.1',
+      userAgent: 'test',
+      requestId: 't4a',
+    });
+    assert.ok(first.accessToken);
+
+    const second = await authService.refresh({
+      refreshToken,
+      ip: '127.0.0.1',
+      userAgent: 'test',
+      requestId: 't4b',
+    });
+    assert.ok(second.accessToken);
+    assert.equal(second.refreshToken, refreshToken);
+
+    const fresh = await User.findById(user._id);
+    assert.equal(fresh.tokenVersion, 0, 'must not treat concurrent refresh as theft');
+
+    const stored = await RefreshToken.findOne({ tokenHash });
+    assert.equal(stored?.revokedAt, null);
+  } finally {
+    await cleanup(user);
+  }
+});
