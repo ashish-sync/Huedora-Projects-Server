@@ -147,6 +147,80 @@ test('seedCampRevenueFromPricing forces zero for cancelled non-chargeable even i
   assert.equal(camp.totalRevenue, 0);
 });
 
+test('existing camp extra hours uses stored Client Master duration without live pricing', () => {
+  const derived = computeLifecycleDerived({
+    inTime: '09:00',
+    outTime: '15:00',
+    durationHours: 3,
+    extraHours: 3, // previously persisted with scheduled-slot math
+    clientMasterCampDuration: '4:00',
+  });
+  assert.equal(derived.totalHours, 6);
+  assert.equal(derived.extraHours, 2);
+});
+
+test('new and existing camps both recompute extra hours from live Client Master pricing', () => {
+  const existing = computeLifecycleDerived({
+    inTime: '09:00',
+    outTime: '15:00',
+    durationHours: 3,
+    extraHours: 3,
+  }, { pricing });
+  const created = computeLifecycleDerived({
+    inTime: '09:00',
+    outTime: '15:00',
+    durationHours: 3,
+  }, { pricing });
+  assert.equal(existing.extraHours, 2);
+  assert.equal(created.extraHours, 2);
+});
+
+test('lifecyclePayloadFromBody snapshots Client Master duration onto new and existing camps', () => {
+  const created = lifecyclePayloadFromBody(
+    { inTime: '09:00', outTime: '15:00', durationHours: 3 },
+    null,
+    { pricing },
+  );
+  assert.equal(created.clientMasterCampDuration, '4:00');
+  assert.equal(created.extraHours, 2);
+
+  const updated = lifecyclePayloadFromBody(
+    { inTime: '09:00', outTime: '15:00' },
+    { durationHours: 3, extraHours: 3, clientMasterCampDuration: '' },
+    { pricing },
+  );
+  assert.equal(updated.clientMasterCampDuration, '4:00');
+  assert.equal(updated.extraHours, 2);
+});
+
+test('computeLifecycleDerived extra hours uses Client Master duration, not scheduled slot', () => {
+  const derived = computeLifecycleDerived({
+    inTime: '09:00',
+    outTime: '15:00',
+    durationHours: 3, // scheduled 09:00–12:00 — must not drive OT
+  }, { pricing });
+  assert.equal(derived.totalHours, 6);
+  assert.equal(derived.extraHours, 2);
+});
+
+test('computeLifecycleDerived extra hours updates when out time changes', () => {
+  const first = computeLifecycleDerived({
+    inTime: '09:00',
+    outTime: '13:00',
+    durationHours: 3,
+  }, { pricing });
+  assert.equal(first.totalHours, 4);
+  assert.equal(first.extraHours, 0);
+
+  const later = computeLifecycleDerived({
+    inTime: '09:00',
+    outTime: '15:00',
+    durationHours: 3,
+  }, { pricing });
+  assert.equal(later.totalHours, 6);
+  assert.equal(later.extraHours, 2);
+});
+
 test('computeLifecycleDerived keeps stored revenue when Client Master pricing is provided', () => {
   const derived = computeLifecycleDerived({
     status: 'executed',

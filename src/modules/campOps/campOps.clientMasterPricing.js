@@ -56,6 +56,17 @@ export function parseCampDurationToHours(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * OT Hours = Total Hours − Client Master Camp Duration.
+ * Falls back to the camp's scheduled durationHours only when Client Master duration is missing.
+ */
+export function computeOvertimeHours(totalHours, { campDuration = '', durationHours = 0 } = {}) {
+  const billedHours = parseCampDurationToHours(campDuration) || num(durationHours, 0);
+  const hours = num(totalHours, NaN);
+  if (!Number.isFinite(hours) || billedHours <= 0) return 0;
+  return Math.max(0, Math.round((hours - billedHours) * 100) / 100);
+}
+
 function normalizeExecutionStatus(executionStatus) {
   const value = trimStr(executionStatus);
   if (value === 'Rejected') return 'Refused';
@@ -204,12 +215,10 @@ export function computeCampRevenueFromPricing(camp = {}, pricing = null) {
     campRevenue = num(pricing.executedCampUnit);
   }
 
-  const totalHours = num(camp.totalHours, NaN);
-  const campDurationHours = parseCampDurationToHours(pricing.campDuration) || num(camp.durationHours, 0);
-  let overtimeHours = 0;
-  if (Number.isFinite(totalHours) && campDurationHours > 0) {
-    overtimeHours = Math.max(0, Math.round((totalHours - campDurationHours) * 100) / 100);
-  }
+  const overtimeHours = computeOvertimeHours(camp.totalHours, {
+    campDuration: pricing.campDuration || camp.clientMasterCampDuration,
+    durationHours: camp.durationHours,
+  });
   const overtimeRevenue = roundMoney(overtimeHours * num(pricing.otUnit));
 
   const patientsScreened = num(

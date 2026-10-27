@@ -311,8 +311,19 @@ function withSignedCampFiles(camp) {
   return obj;
 }
 
-function enrichCamp(camp) {
-  const obj = withRequestReview(withCampLifecycle(withCampSchedule(camp)));
+async function enrichCamp(camp) {
+  const row = camp?.toObject ? camp.toObject() : camp;
+  let pricing = null;
+  try {
+    pricing = await resolveClientMasterPricingForCamp(row?.clientId, {
+      campaignType: row?.campaignType,
+      campaignName: row?.campaignName,
+      clientName: row?.clientName,
+    });
+  } catch {
+    pricing = null;
+  }
+  const obj = withRequestReview(withCampLifecycle(withCampSchedule(camp), { pricing }));
   obj.inTimeSelfieUrl = resolveInTimeSelfieUrl(obj);
   const approvalBlockers = getRequestStageBlockers(obj);
   if (obj.requestIncomplete) {
@@ -1436,7 +1447,7 @@ router.get(
     if (overdue.becameOverdue) {
       await notifyCampWorkflow({ camp, action: 'review_overdue', actorId: null });
     }
-    const enriched = enrichCamp(camp);
+    const enriched = await enrichCamp(camp);
     if (enriched.isOverdue && camp.status === 'approved' && !camp.executionOverdueNotifiedAt) {
       camp.executionOverdueNotifiedAt = new Date().toISOString();
       await camp.save();
@@ -1500,7 +1511,7 @@ router.post(
     await camp.save();
     await audit(req, 'camp_ops.execution_docs', 'camp_ops_camp', camp._id, before, camp.toObject());
     logMemory('route:exec-doc-confirm:done', { docType, count: added.length });
-    res.json({ data: enrichCamp(camp) });
+    res.json({ data: await enrichCamp(camp) });
   }),
 );
 
@@ -1635,7 +1646,7 @@ router.post(
 
     await camp.save();
     await audit(req, 'camp_ops.execution_docs', 'camp_ops_camp', camp._id, before, camp.toObject());
-    res.json({ data: enrichCamp(camp) });
+    res.json({ data: await enrichCamp(camp) });
   })
 );
 
@@ -1684,7 +1695,7 @@ router.delete(
       await deleteLocalUpload(path.join(campUploadRoot, removed.storedName));
     }
     await audit(req, 'camp_ops.execution_docs_delete', 'camp_ops_camp', camp._id, before, camp.toObject());
-    res.json({ data: enrichCamp(camp) });
+    res.json({ data: await enrichCamp(camp) });
   })
 );
 
@@ -1815,7 +1826,7 @@ router.post(
 
     await audit(req, 'camp_ops.create', 'camp_ops_camp', camp._id, null, camp.toObject());
     await notifyCampWorkflow({ camp, action: 'create', actorId: a.id });
-    res.status(201).json({ data: enrichCamp(camp) });
+    res.status(201).json({ data: await enrichCamp(camp) });
   })
 );
 
@@ -2138,7 +2149,7 @@ router.put(
       }
     }
     await audit(req, 'camp_ops.update', 'camp_ops_camp', camp._id, before, camp.toObject());
-    res.json({ data: enrichCamp(camp) });
+    res.json({ data: await enrichCamp(camp) });
   })
 );
 
@@ -2224,7 +2235,7 @@ router.post(
 
     await camp.save();
     await audit(req, 'camp_ops.submit_to_finance', 'camp_ops_camp', camp._id, before, camp.toObject());
-    res.json({ data: enrichCamp(camp) });
+    res.json({ data: await enrichCamp(camp) });
   })
 );
 
@@ -2300,7 +2311,7 @@ async function transitionCamp(req, res, nextStatus, action) {
       syncExecutionCaptureProvenance(camp, before, a);
       await camp.save();
       await audit(req, 'camp_ops.execute', 'camp_ops_camp', camp._id, before, camp.toObject());
-      return res.json({ data: enrichCamp(camp) });
+      return res.json({ data: await enrichCamp(camp) });
     }
     applyMarkCompleteTransition(camp, mappedConsumables);
     camp.executedById = a.id;
@@ -2341,7 +2352,7 @@ async function transitionCamp(req, res, nextStatus, action) {
       note: trimStr(req.body?.rejectionReason || req.body?.remarks),
     });
   }
-  res.json({ data: enrichCamp(camp) });
+  res.json({ data: await enrichCamp(camp) });
 }
 
 router.post(
@@ -2381,7 +2392,7 @@ router.post(
       actorId: actor(req).id,
       note,
     });
-    res.json({ data: enrichCamp(camp) });
+    res.json({ data: await enrichCamp(camp) });
   })
 );
 router.post(
@@ -2451,7 +2462,7 @@ router.post(
     }
     await camp.save();
     await audit(req, 'camp_ops.close', 'camp_ops_camp', camp._id, before, camp.toObject());
-    res.json({ data: enrichCamp(camp) });
+    res.json({ data: await enrichCamp(camp) });
   })
 );
 router.post(
@@ -2473,7 +2484,7 @@ router.post(
     }
     await camp.save();
     await audit(req, 'camp_ops.confirm_payment', 'camp_ops_camp', camp._id, before, camp.toObject());
-    res.json({ data: enrichCamp(camp) });
+    res.json({ data: await enrichCamp(camp) });
   })
 );
 
@@ -2491,7 +2502,7 @@ router.post(
     }
     await camp.save();
     await audit(req, 'camp_ops.payment_hold', 'camp_ops_camp', camp._id, before, camp.toObject());
-    res.json({ data: enrichCamp(camp) });
+    res.json({ data: await enrichCamp(camp) });
   })
 );
 
@@ -2511,7 +2522,7 @@ router.post(
     }
     await camp.save();
     await audit(req, 'camp_ops.release_hold', 'camp_ops_camp', camp._id, before, camp.toObject());
-    res.json({ data: enrichCamp(camp) });
+    res.json({ data: await enrichCamp(camp) });
   })
 );
 
@@ -4709,7 +4720,7 @@ router.post(
         }
         throw err;
       }
-      created.push(enrichCamp(camp));
+      created.push(await enrichCamp(camp));
     }
 
     await audit(req, 'camp_ops.import_confirm', 'camp_ops_import', null, null, {
