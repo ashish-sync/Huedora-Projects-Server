@@ -5,6 +5,9 @@ import {
   buildClientMasterBusinessKeyFilter,
   seedMasterBillingFromCompany,
   buildLegacyEmptyGstinMatchFilter,
+  hasExplicitMasterBilling,
+  applyMasterBillingFields,
+  trimMasterBillingAddress,
 } from './clientMaster.businessKey.js';
 import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 
@@ -137,6 +140,44 @@ test('updating one row billing must not mutate another via assignPreservingExist
   assert.equal(rowB.billingGstin, 'GSTIN-B');
   assert.equal(rowB.billingAddress, 'Addr B');
   assert.equal(rowB.spocName, 'Bob');
+});
+
+test('explicit Billing & Tax save keeps extra address lines and is not reverted by company seed', () => {
+  const row = {
+    billingGstin: '27AABCU9603R1ZM',
+    billingAddress: 'Pune HQ',
+    billingStateName: 'Maharashtra',
+    billingStateCode: '27',
+  };
+  const client = {
+    gstin: '27AABCU9603R1ZM',
+    address: 'Pune HQ',
+    stateName: 'Maharashtra',
+    stateCode: '27',
+  };
+  const body = {
+    billingAddress: 'Pune HQ\n3rd Floor, Extra Landmark',
+    billing: {
+      address: 'Pune HQ\n3rd Floor, Extra Landmark',
+      gstin: '27AABCU9603R1ZM',
+      stateName: 'Maharashtra',
+      stateCode: '27',
+    },
+  };
+  assert.equal(hasExplicitMasterBilling(body), true);
+  assignPreservingExisting(row, { billingAddress: trimMasterBillingAddress(body.billingAddress) });
+  applyMasterBillingFields(row, body);
+  if (!hasExplicitMasterBilling(body)) seedMasterBillingFromCompany(row, client);
+  assert.equal(row.billingAddress, 'Pune HQ\n3rd Floor, Extra Landmark');
+});
+
+test('program-only patch still seeds empty billing from company', () => {
+  const row = { billingAddress: '', billingGstin: '' };
+  const client = { address: 'Pune HQ', gstin: '27AABCU9603R1ZM' };
+  const body = { programName: 'Cardiology', campName: 'BMD' };
+  assert.equal(hasExplicitMasterBilling(body), false);
+  if (!hasExplicitMasterBilling(body)) seedMasterBillingFromCompany(row, client);
+  assert.equal(row.billingAddress, 'Pune HQ');
 });
 
 test('legacy empty-GSTIN match filter targets Client + Division + Method only', () => {

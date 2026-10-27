@@ -1,4 +1,5 @@
 import { normalizeCampName } from './campOps.constants.js';
+import { cleanMultilineAddress } from '../../utils/textFormat.js';
 
 /** Normalize GSTIN for the Client + GSTIN + Division + Method business key. */
 export function normalizeMasterBillingGstin(value) {
@@ -64,6 +65,62 @@ export function seedMasterBillingFromCompany(row, client) {
   }
 
   return changed;
+}
+
+export function trimMasterBillingAddress(value) {
+  return cleanMultilineAddress(value);
+}
+
+const EXPLICIT_BILLING_KEYS = [
+  'billingAddress',
+  'address',
+  'billingGstin',
+  'gstin',
+  'GSTIN',
+  'billingPan',
+  'pan',
+  'panNumber',
+  'billingStateName',
+  'stateName',
+  'state',
+  'billingStateCode',
+  'stateCode',
+];
+
+/** True when the client sent Billing & Tax fields (section save), not a program-only patch. */
+export function hasExplicitMasterBilling(body = {}) {
+  if (body?.billing != null && typeof body.billing === 'object') return true;
+  return EXPLICIT_BILLING_KEYS.some((key) => body[key] !== undefined);
+}
+
+/**
+ * Map body.billing / flat aliases onto per-row billing fields (never onto the company).
+ * Explicit values always win — including extra address lines — so company fallback
+ * cannot restore an older address after a Billing & Tax save.
+ */
+export function applyMasterBillingFields(target, body = {}) {
+  if (!target || typeof target !== 'object') return target;
+  const nested = body.billing && typeof body.billing === 'object' ? body.billing : {};
+  const read = (...keys) => {
+    for (const key of keys) {
+      if (body[key] !== undefined) return body[key];
+      if (nested[key] !== undefined) return nested[key];
+    }
+    return undefined;
+  };
+
+  const address = read('billingAddress', 'address');
+  const gstin = read('billingGstin', 'gstin', 'GSTIN');
+  const pan = read('billingPan', 'pan', 'panNumber');
+  const stateName = read('billingStateName', 'stateName', 'state');
+  const stateCode = read('billingStateCode', 'stateCode');
+
+  if (address !== undefined) target.billingAddress = trimMasterBillingAddress(address);
+  if (gstin !== undefined) target.billingGstin = normalizeMasterBillingGstin(gstin);
+  if (pan !== undefined) target.billingPan = trimStr(pan).toUpperCase();
+  if (stateName !== undefined) target.billingStateName = trimStr(stateName);
+  if (stateCode !== undefined) target.billingStateCode = trimStr(stateCode);
+  return target;
 }
 
 /**
