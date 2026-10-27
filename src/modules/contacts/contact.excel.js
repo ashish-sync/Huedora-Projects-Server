@@ -38,7 +38,9 @@ function contactToExportCells(c = {}) {
     c.state || '',
     c.address || '',
     c.pinCode || '',
-    c.campAmount != null && c.campAmount !== '' ? c.campAmount : '',
+    isServiceProviderContact(c)
+      ? ''
+      : (c.campAmount != null && c.campAmount !== '' ? c.campAmount : ''),
     c.panNumber || '',
     c.ifscCode || '',
     c.bankName || '',
@@ -99,7 +101,7 @@ export function buildContactExportRows(contacts = []) {
         c.state || '',
         c.address || '',
         c.pinCode || '',
-        c.campAmount != null && c.campAmount !== '' ? c.campAmount : '',
+        emp.campAmount != null && emp.campAmount !== '' ? emp.campAmount : '',
         '',
         '',
         '',
