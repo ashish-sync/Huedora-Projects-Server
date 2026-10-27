@@ -53,7 +53,7 @@ export const Contact = defineCollection('contacts', {
   campAmount: 0,
   /** Healthcare Worker staff → parent Service Provider contact */
   serviceProviderContactId: null,
-  /** Employees under a Service Provider (name, mobile, profession) */
+  /** Employees under a Service Provider (name, mobile, profession, campAmount) */
   providerEmployees: [],
 });
 
@@ -167,7 +167,7 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
     districtId: body.districtId || null,
     cityId: body.cityId || null,
     campAmount:
-      !isClient && contactCategory === 'Healthcare Worker'
+      !isClient && contactCategory === 'Healthcare Worker' && resourceType !== 'Service Provider'
         ? Math.max(0, Number(body.campAmount ?? body['Camp Amount'] ?? body.camp_amount) || 0)
         : 0,
   };

@@ -297,3 +297,19 @@ test('HCW PATCH must forward campAmount or normalize defaults to 0 and wipes', (
   });
   assert.equal(updated.campAmount, 3200);
 });
+
+test('Service Provider campAmount lives on employees, not the agency', () => {
+  const payload = normalizeContactPayload({
+    name: 'Care Agency',
+    contactCategory: 'Healthcare Worker',
+    resourceType: 'Service Provider',
+    contact: '9000000001',
+    state: 'Maharashtra',
+    campAmount: 8000,
+    providerEmployees: [
+      { id: 'e1', name: 'Karan', mobile: '9111000001', profession: 'Nurse', campAmount: 1600 },
+    ],
+  });
+  assert.equal(payload.campAmount, 0);
+  assert.equal(payload.providerEmployees[0].campAmount, 1600);
+});

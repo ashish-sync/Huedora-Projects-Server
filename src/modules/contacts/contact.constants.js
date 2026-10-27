@@ -35,6 +35,11 @@ export function isServiceProviderContact(contact) {
   );
 }
 
+export function parseCampAmount(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.max(0, n) : 0;
+}
+
 /** Lightweight staff roster stored on Service Provider contacts */
 export function normalizeProviderEmployees(raw, contactCategory, resourceType) {
   if (contactCategory !== 'Healthcare Worker' || resourceType !== 'Service Provider') {
@@ -52,6 +57,7 @@ export function normalizeProviderEmployees(raw, contactCategory, resourceType) {
         name,
         mobile,
         profession,
+        campAmount: parseCampAmount(entry?.campAmount ?? entry?.['Camp Amount'] ?? entry?.camp_amount),
       };
     })
     .filter(Boolean);

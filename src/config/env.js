@@ -50,7 +50,11 @@ export const env = {
   mongoUri: mongoUriRaw || 'mongodb://127.0.0.1:27017/tylo-one',
   jwtAccessSecret: strongSecret('JWT_ACCESS_SECRET', process.env.JWT_ACCESS_SECRET),
   jwtRefreshSecret: strongSecret('JWT_REFRESH_SECRET', process.env.JWT_REFRESH_SECRET),
-  /** Access JWT lifetime — default 24h so one login lasts a full work day. */
+  /**
+   * Access JWT lifetime. Default 24h so one login lasts a work day even if the
+   * httpOnly refresh cookie is not sent (Prod SPA and API are different origins).
+   * Keep JWT_ACCESS_EXPIRES at 12h+ in hosted .env; 15m only works when refresh cookies succeed.
+   */
   jwtAccessExpires: process.env.JWT_ACCESS_EXPIRES || '24h',
   jwtRefreshExpiresDays: (() => {
     const n = Number(process.env.JWT_REFRESH_EXPIRES_DAYS || 7);

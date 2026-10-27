@@ -5,6 +5,7 @@ import morgan from 'morgan';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import { env } from './config/env.js';
+import { isAllowedClientOrigin } from './config/corsOrigins.js';
 import { checkPersistenceReady as defaultCheckPersistenceReady } from './config/db.js';
 import { correlationId, errorHandler, notFound } from './middleware/error.js';
 import { responseSizeGuard } from './middleware/responseSizeGuard.js';

@@ -215,18 +215,13 @@ export async function refresh({ refreshToken, ip, userAgent, requestId }) {
     throw new AppError('Session invalidated', 401, 'UNAUTHORIZED');
   }
 
-  stored.revokedAt = new Date();
-  const newRefresh = signRefresh(user);
-  stored.replacedByTokenHash = hashToken(newRefresh);
+  // Do not rotate the refresh token. Concurrent tabs all 401 when the access JWT
+  // expires and would otherwise race: the loser is treated as theft and every
+  // session (including the winner) is wiped. Reuse detection still applies after logout.
+  stored.lastUsedAt = new Date();
+  stored.ip = ip || stored.ip;
+  stored.userAgent = userAgent || stored.userAgent;
   await stored.save();
-
-  await RefreshToken.create({
-    userId: user._id,
-    tokenHash: hashToken(newRefresh),
-    expiresAt: new Date(Date.now() + env.jwtRefreshExpiresDays * 24 * 60 * 60 * 1000),
-    userAgent,
-    ip,
-  });
 
   await writeAudit({
     actorId: user._id,
@@ -237,7 +232,7 @@ export async function refresh({ refreshToken, ip, userAgent, requestId }) {
     requestId,
   });
 
-  return { accessToken: signAccess(user), refreshToken: newRefresh, user: publicUser(user) };
+  return { accessToken: signAccess(user), refreshToken, user: publicUser(user) };
 }
 
 export async function logout({ refreshToken, user, ip, userAgent, requestId }) {
