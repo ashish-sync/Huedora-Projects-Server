@@ -71,6 +71,8 @@ export const CampOpsCamp = defineCollection('camp_ops_camps', {
   outTime: '',
   totalHours: null,
   extraHours: 0,
+  /** Client Master Camp Duration snapshot (`4:00`) used for OT Hours on existing camps. */
+  clientMasterCampDuration: '',
   kmRoundTrip: 0,
   punctuality: '',
   attire: '',
