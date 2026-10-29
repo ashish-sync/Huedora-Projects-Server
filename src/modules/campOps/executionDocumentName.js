@@ -7,7 +7,7 @@ import { stripDoctorNamePrefix } from '../../utils/textFormat.js';
  * Display / logical:  {DOCTOR}{CODE}[.ext]           e.g. ADIPF.webp
  * Stored on disk/R2:  {campId}__{DOCTOR}{CODE}[.ext] e.g. 26-10-0001__ADIPF.webp
  *
- * Codes: DF doctor_form · PF patient_form · GS gps_selfie · OT other
+ * Codes: DF doctor_form · PF patient_form · GS gps_selfie · GO gps_selfie_out · OT other
  * No camp-date / numeric suffix after the doctor+code token.
  * Collisions: -2, -3, … before the extension (ADIPF-2.webp).
  */
@@ -16,10 +16,11 @@ export const EXECUTION_DOC_TYPE_CODES = {
   doctor_form: 'DF',
   patient_form: 'PF',
   gps_selfie: 'GS',
+  gps_selfie_out: 'GO',
   other: 'OT',
 };
 
-const DOC_CODE_PATTERN = 'DF|PF|GS|OT|DOC';
+const DOC_CODE_PATTERN = 'DF|PF|GS|GO|OT|DOC';
 
 /** Doctor token for file names: "Dr. Karan" / "Karan Sharma" → KARAN / KARANSHARMA */
 export function doctorNameFileToken(doctorName = '') {

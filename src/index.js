@@ -329,9 +329,11 @@ async function main() {
     const {
       maybeRecomputeCampDuplicateKeysOnBoot,
       maybeRefreshDocumentTemplateDatePlaceholdersOnBoot,
+      maybeBackfillExistingCampBusinessLogicOnBoot,
     } = await import('./utils/applyRulesToExistingDataOnBoot.js');
     await maybeRecomputeCampDuplicateKeysOnBoot();
     await maybeRefreshDocumentTemplateDatePlaceholdersOnBoot();
+    await maybeBackfillExistingCampBusinessLogicOnBoot();
   } catch (err) {
     console.error('[rules-boot] existing-data rules apply failed:', err.message);
   }

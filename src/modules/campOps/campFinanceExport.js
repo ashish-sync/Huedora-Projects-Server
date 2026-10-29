@@ -1,5 +1,6 @@
 import { formatDate, formatDateTime, formatTimeOfDay } from '../../utils/dateFormat.js';
 import {
+  campSnapshotPricing,
   computeLifecycleDerived,
   FINANCE_PAYMENT_STATUSES,
   PAYMENT_SUBMIT_STATUSES,
@@ -91,7 +92,7 @@ function financePaymentLabel(value) {
 
 export function buildCampFinanceExportRow(camp = {}) {
   const row = camp?.toObject ? camp.toObject() : { ...camp };
-  const derived = computeLifecycleDerived(row);
+  const derived = computeLifecycleDerived(row, { pricing: campSnapshotPricing(row) });
   const values = {
     ...row,
     ...derived,

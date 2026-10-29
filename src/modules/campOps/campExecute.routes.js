@@ -15,6 +15,8 @@ import { buildExecutionDocumentFileName } from './executionDocumentName.js';
 import { EXEC_DOC_MAX_FILES_PER_REQUEST } from '../../storage/media/uploadLimits.js';
 import {
   applyExecutorDraft,
+  applyGpsCaptureInTime,
+  applyGpsCaptureOutTime,
   assertInviteEditable,
   createOrRefreshExecutionInvite,
   evaluateGpsAgainstCamp,
@@ -24,7 +26,7 @@ import {
   publicExecutionContext,
   resolveExecutionInvite,
 } from './campExecute.service.js';
-import { normalizeExecutionDocType } from './campOps.lifecycle.js';
+import { isGpsSelfieDocType, normalizeExecutionDocType } from './campOps.lifecycle.js';
 
 const router = Router();
 const campUploadRoot = uploadDir('camp-ops');
@@ -127,10 +129,9 @@ async function appendExecutionDocs(camp, { files, docType, docNote }) {
   }
 
   camp.executionDocuments = [...existing, ...added];
-  if (docType === 'gps_selfie') {
-    const selfie = added[added.length - 1];
-    if (selfie?.url) camp.inTimeSelfieUrl = selfie.url;
-  }
+  const selfie = added[added.length - 1];
+  if (docType === 'gps_selfie' && selfie?.url) camp.inTimeSelfieUrl = selfie.url;
+  if (docType === 'gps_selfie_out' && selfie?.url) camp.outTimeSelfieUrl = selfie.url;
   return added;
 }
 
@@ -190,7 +191,7 @@ router.post(
     }
     const files = Array.isArray(req.files) ? req.files : [];
     if (!files.length) throw new AppError('Select at least one file', 400, 'VALIDATION_ERROR');
-    if (docType === 'gps_selfie') {
+    if (isGpsSelfieDocType(docType)) {
       const invalid = files.find((file) => !String(file.mimetype || '').startsWith('image/'));
       if (invalid) throw new AppError('GPS Selfie must be an image file', 400, 'VALIDATION_ERROR');
       const gps = evaluateGpsAgainstCamp(camp, {
@@ -198,7 +199,13 @@ router.post(
         longitude: req.body?.longitude ?? req.body?.lng,
         accuracy: req.body?.accuracy,
       });
-      camp.executorGps = gps;
+      if (docType === 'gps_selfie_out') {
+        camp.executorGpsOut = gps;
+        applyGpsCaptureOutTime(camp, req.body?.outTime);
+      } else {
+        camp.executorGps = gps;
+        applyGpsCaptureInTime(camp, req.body?.inTime);
+      }
     }
 
     try {
@@ -254,6 +261,9 @@ router.delete(
     camp.executionDocuments = next;
     if (!next.some((d) => normalizeExecutionDocType(d.docType) === 'gps_selfie')) {
       camp.inTimeSelfieUrl = '';
+    }
+    if (!next.some((d) => normalizeExecutionDocType(d.docType) === 'gps_selfie_out')) {
+      camp.outTimeSelfieUrl = '';
     }
     await camp.save();
     if (removed?.storedName) {

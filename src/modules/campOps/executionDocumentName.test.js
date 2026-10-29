@@ -21,6 +21,7 @@ test('executionDocTypeCode maps DF PF GS', () => {
   assert.equal(executionDocTypeCode('doctor_form'), 'DF');
   assert.equal(executionDocTypeCode('patient_form'), 'PF');
   assert.equal(executionDocTypeCode('gps_selfie'), 'GS');
+  assert.equal(executionDocTypeCode('gps_selfie_out'), 'GO');
   assert.equal(executionDocTypeCode('other'), 'OT');
 });
 

@@ -13,6 +13,7 @@ import {
 import {
   recomputeCampDuplicateKeys,
   refreshDocumentTemplateDatePlaceholders,
+  backfillExistingCampBusinessLogic,
 } from './applyRulesToExistingDataOnBoot.js';
 import { buildCampDuplicateKey } from '../modules/campOps/campDuplicate.js';
 
@@ -87,4 +88,63 @@ test('refreshDocumentTemplateDatePlaceholders upgrades Todays Date to type date'
   const rows = await loadCollection('document_templates');
   assert.equal(rows[0].placeholders[0].type, 'date');
   assert.equal(rows[0].placeholders[1].type, 'text');
+});
+
+test('backfillExistingCampBusinessLogic updates Extra hours on legacy camps without rewriting campId', async () => {
+  clearPersistenceCache();
+  await saveCollection(
+    'camp_ops_client_masters',
+    [
+      {
+        _id: 'cm1',
+        clientId: 'client-1',
+        clientName: 'Acme',
+        programName: 'Screening',
+        campName: 'BMD',
+        campDuration: '4:00',
+        otUnit: 400,
+        executedCampUnit: 5000,
+        isActive: true,
+        isDeleted: false,
+      },
+    ],
+    { allowDestructiveSync: true },
+  );
+  await saveCollection(
+    'camp_ops_camps',
+    [
+      {
+        _id: 'c-legacy',
+        campId: '26-08-0001',
+        clientId: 'client-1',
+        clientName: 'Acme',
+        campaignType: 'Screening',
+        campaignName: 'BMD',
+        inTime: '09:00',
+        outTime: '15:00',
+        durationHours: 3,
+        extraHours: 3,
+        overtimeRevenue: 1200,
+        campRevenue: 5000,
+        travelRevenue: 0,
+        otherRevenue: 0,
+        totalRevenue: 6200,
+        campAmount: 0,
+        executionStatus: 'Camp Completed',
+        isDeleted: false,
+      },
+    ],
+    { allowDestructiveSync: true },
+  );
+
+  const first = await backfillExistingCampBusinessLogic({ dryRun: false });
+  assert.equal(first.updated, 1);
+  const rows = await loadCollection('camp_ops_camps');
+  assert.equal(rows[0].campId, '26-08-0001');
+  assert.equal(rows[0].clientMasterCampDuration, '4:00');
+  assert.equal(rows[0].extraHours, 2);
+  assert.equal(rows[0].overtimeRevenue, 800);
+
+  const second = await backfillExistingCampBusinessLogic({ dryRun: false });
+  assert.equal(second.updated, 0);
 });

@@ -126,6 +126,7 @@ import {
 } from './campRequestParser.service.js';
 import {
   lifecyclePayloadFromBody,
+  applyCampBusinessLogic,
   withCampLifecycle,
   canEditLifecycleStage,
   applyAssignmentStageOutcome,
@@ -141,8 +142,10 @@ import {
   resolveCancelledClosureExecutionStatus,
   EXECUTION_DOC_TYPES,
   EXECUTION_STATUS,
+  isGpsSelfieDocType,
   isCampExecutedForPayout,
   resolveInTimeSelfieUrl,
+  resolveOutTimeSelfieUrl,
   normalizePaymentSubmitStatus,
   PAYMENT_SUBMIT_STATUSES,
 } from './campOps.lifecycle.js';
@@ -164,7 +167,6 @@ import {
 import {
   parseCampDurationToHours,
   resolveClientMasterPricingForCamp,
-  seedCampRevenueFromPricing,
 } from './campOps.clientMasterPricing.js';
 import {
   assertCampSubmittedToFinance,
@@ -311,6 +313,9 @@ function withSignedCampFiles(camp) {
   if (obj.inTimeSelfieUrl) {
     obj.inTimeSelfieUrl = signStoredUploadUrl(obj.inTimeSelfieUrl);
   }
+  if (obj.outTimeSelfieUrl) {
+    obj.outTimeSelfieUrl = signStoredUploadUrl(obj.outTimeSelfieUrl);
+  }
   return obj;
 }
 
@@ -328,6 +333,7 @@ async function enrichCamp(camp) {
   }
   const obj = withRequestReview(withCampLifecycle(withCampSchedule(camp), { pricing }));
   obj.inTimeSelfieUrl = resolveInTimeSelfieUrl(obj);
+  obj.outTimeSelfieUrl = resolveOutTimeSelfieUrl(obj);
   const approvalBlockers = getRequestStageBlockers(obj);
   if (obj.requestIncomplete) {
     approvalBlockers.unshift('Request data is incomplete — complete all required fields before approval');
@@ -338,6 +344,28 @@ async function enrichCamp(camp) {
   obj.canApprove = pendingReview && approvalBlockers.length === 0;
   obj.canRequestInformation = pendingReview;
   return withSignedCampFiles(obj);
+}
+
+/** Extra hours, Client Master snapshot, empty revenue/payout seeds — same for new and existing camps. */
+async function applyCampBusinessLogicToDocument(camp, pricing) {
+  let payeeAmount = null;
+  if (
+    isCampExecutedForPayout(camp)
+    && !(Number(camp.campAmount) > 0)
+    && trimStr(camp.hcwContactId)
+  ) {
+    try {
+      const payeeResolved = await resolveCampPayoutPayeeContact(camp.hcwContactId);
+      payeeAmount = campAmountForAssignedHcw({
+        assignmentId: camp.hcwContactId,
+        assignedContact: payeeResolved.assignedContact,
+        payeeContact: payeeResolved.payeeContact,
+      }) || Number(payeeResolved.payeeContact?.campAmount) || null;
+    } catch {
+      // Contact lookup is best-effort for Camp Payout defaults.
+    }
+  }
+  applyCampBusinessLogic(camp, { pricing, payeeAmount });
 }
 
 /** Projection for list queries — exclude heavy blobs.
@@ -1324,7 +1352,7 @@ router.post(
               campaignName: camp.campaignName,
               clientName: camp.clientName,
             });
-            seedCampRevenueFromPricing(camp, pricing);
+            await applyCampBusinessLogicToDocument(camp, pricing);
           }
         }
         if (config.action === 'confirmPayment') {
@@ -1504,10 +1532,11 @@ router.post(
 
     const existing = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
     camp.executionDocuments = [...existing, ...added];
-    if (docType === 'gps_selfie') {
+    if (isGpsSelfieDocType(docType)) {
       const selfie = added[added.length - 1];
       if (selfie?.url) {
-        camp.inTimeSelfieUrl = selfie.url;
+        if (docType === 'gps_selfie_out') camp.outTimeSelfieUrl = selfie.url;
+        else camp.inTimeSelfieUrl = selfie.url;
         camp.lifecycleStage = camp.lifecycleStage || 'execution';
       }
     }
@@ -1537,7 +1566,7 @@ router.post(
     }
     const files = Array.isArray(req.files) ? req.files : [];
     if (!files.length) throw new AppError('Select at least one file', 400, 'VALIDATION_ERROR');
-    if (docType === 'gps_selfie') {
+    if (isGpsSelfieDocType(docType)) {
       const invalid = files.find((file) => !String(file.mimetype || '').startsWith('image/'));
       if (invalid) {
         throw new AppError('GPS Selfie must be an image file', 400, 'VALIDATION_ERROR');
@@ -1639,10 +1668,11 @@ router.post(
 
     camp.executionDocuments = [...existing, ...added];
 
-    if (docType === 'gps_selfie') {
+    if (isGpsSelfieDocType(docType)) {
       const selfie = added[added.length - 1];
       if (selfie?.url) {
-        camp.inTimeSelfieUrl = selfie.url;
+        if (docType === 'gps_selfie_out') camp.outTimeSelfieUrl = selfie.url;
+        else camp.inTimeSelfieUrl = selfie.url;
         camp.lifecycleStage = camp.lifecycleStage || 'execution';
       }
     }
@@ -1678,18 +1708,20 @@ router.delete(
     const [removed] = existing.splice(idx, 1);
     camp.executionDocuments = existing;
 
-    if (String(removed?.docType || '').toLowerCase() === 'gps_selfie') {
+    const removedType = String(removed?.docType || '').toLowerCase();
+    if (removedType === 'gps_selfie' || removedType === 'gps_selfie_out') {
       const remainingSelfie = existing.find(
-        (doc) => String(doc.docType || '').toLowerCase() === 'gps_selfie',
+        (doc) => String(doc.docType || '').toLowerCase() === removedType,
       );
+      const urlKey = removedType === 'gps_selfie_out' ? 'outTimeSelfieUrl' : 'inTimeSelfieUrl';
       if (remainingSelfie?.url) {
-        camp.inTimeSelfieUrl = remainingSelfie.url;
+        camp[urlKey] = remainingSelfie.url;
       } else if (
-        !camp.inTimeSelfieUrl
-        || camp.inTimeSelfieUrl === removed?.url
-        || (removed?.storedName && String(camp.inTimeSelfieUrl).includes(String(removed.storedName)))
+        !camp[urlKey]
+        || camp[urlKey] === removed?.url
+        || (removed?.storedName && String(camp[urlKey]).includes(String(removed.storedName)))
       ) {
-        camp.inTimeSelfieUrl = '';
+        camp[urlKey] = '';
       }
     }
 
@@ -1783,7 +1815,17 @@ router.post(
     if (!resolved) throw new AppError('Client not found', 404, 'NOT_FOUND');
 
     assertRawDoctorName(req.body);
-    const payload = campPayloadFromBody(req.body, null, resolved);
+    let pricing = null;
+    try {
+      pricing = await resolveClientMasterPricingForCamp(resolved._id, {
+        campaignType: req.body.campaignType,
+        campaignName: req.body.campaignName,
+        clientName: resolved.name,
+      });
+    } catch {
+      pricing = null;
+    }
+    const payload = campPayloadFromBody(req.body, null, resolved, { pricing });
     try {
       assertRequestStageComplete({ ...payload, clientId: resolved._id, clientName: resolved.name });
     } catch (err) {
@@ -2088,34 +2130,7 @@ router.put(
       camp.lifecycleStage = 'financial';
     }
 
-    if (
-      normalizeLifecycleStage(before.lifecycleStage, 'request') !== 'financial'
-      && normalizeLifecycleStage(camp.lifecycleStage, 'request') === 'financial'
-    ) {
-      seedCampRevenueFromPricing(camp, pricing);
-      if (
-        isCampExecutedForPayout(camp)
-        && !(Number(camp.campAmount) > 0)
-        && trimStr(camp.hcwContactId)
-      ) {
-        try {
-          const payeeResolved = await resolveCampPayoutPayeeContact(camp.hcwContactId);
-          const payee = payeeResolved.payeeContact || payeeResolved.assignedContact;
-          const fromContact = Number(payee?.campAmount);
-          if (Number.isFinite(fromContact) && fromContact > 0) {
-            camp.campAmount = fromContact;
-            const travelling = Number(camp.travelling) || 0;
-            const overtimeExpense = Number(camp.overtimeExpense) || 0;
-            const otherExpenses = Number(camp.otherExpenses) || 0;
-            camp.totalPayout = Math.round(
-              (fromContact + travelling + overtimeExpense + otherExpenses) * 100,
-            ) / 100;
-          }
-        } catch {
-          // Contact lookup is best-effort for Camp Payout defaults.
-        }
-      }
-    }
+    await applyCampBusinessLogicToDocument(camp, pricing);
 
     syncExecutionCaptureProvenance(camp, before, actor(req));
     // Duplicate check only when the five-field identity fingerprint actually changes.
@@ -2177,6 +2192,7 @@ router.post(
     });
     const payload = lifecyclePayloadFromBody(req.body, camp, { pricing });
     assignPreservingExisting(camp, payload);
+    await applyCampBusinessLogicToDocument(camp, pricing);
 
     const paymentSubmitStatus = normalizePaymentSubmitStatus(camp.paymentSubmitStatus);
     if (paymentSubmitStatus !== 'payment_confirmed') {
@@ -2328,7 +2344,7 @@ async function transitionCamp(req, res, nextStatus, action) {
       campaignName: camp.campaignName,
       clientName: camp.clientName,
     });
-    seedCampRevenueFromPricing(camp, pricing);
+    await applyCampBusinessLogicToDocument(camp, pricing);
   }
   if (nextStatus === 'cancelled') {
     throw new AppError(
@@ -2461,7 +2477,7 @@ router.post(
         campaignName: camp.campaignName,
         clientName: camp.clientName,
       });
-      seedCampRevenueFromPricing(camp, pricing);
+      await applyCampBusinessLogicToDocument(camp, pricing);
     }
     await camp.save();
     await audit(req, 'camp_ops.close', 'camp_ops_camp', camp._id, before, camp.toObject());
