@@ -22,6 +22,7 @@ import { DOCUMENT_NUMBER_LABELS, DOCUMENT_NUMBER_STANDARDS, documentNumberPeriod
 import { sendExcel } from '../../utils/excelExport.js';
 import { MAX_EXPORT_ROWS } from '../../utils/spreadsheetLimits.js';
 import { commercialDocumentDateRange } from './commercialDocumentDateRange.js';
+import { commercialExportValue } from './commercialDocumentExport.js';
 import {
   assertApprovable,
   assertCancellable,
@@ -218,19 +219,6 @@ function commercialListFilter(req, orgProfileIds = null) {
   const dateRange = commercialDocumentDateRange(req.query.dateFrom, req.query.dateTo);
   if (dateRange) filter.documentDate = dateRange;
   return filter;
-}
-
-function commercialExportValue(row, key) {
-  if (key === 'documentType') {
-    return DOCUMENT_NUMBER_LABELS[row.documentType] || row.documentType || '';
-  }
-  if (key === 'stage') return displayCommercialStage(row.status);
-  if (key === 'status') return resolveCommercialDisplayStatus(row) || '';
-  if (key === 'reference') return row.servicePeriod || row.projectName || '';
-  if (key === 'organisation') {
-    return row.orgSnapshot?.name || row.orgSnapshot?.legalName || '';
-  }
-  return row[key] ?? '';
 }
 
 async function exportCommercialDocuments(req, res) {
