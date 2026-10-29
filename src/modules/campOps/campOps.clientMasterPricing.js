@@ -67,6 +67,27 @@ export function computeOvertimeHours(totalHours, { campDuration = '', durationHo
   return Math.max(0, Math.round((hours - billedHours) * 100) / 100);
 }
 
+/**
+ * True when overtime $ still matches the old Extra hours formula
+ * (Total Hours − scheduled durationHours) × OT Unit. Those rows were stored
+ * before Client Master camp duration drove Extra hours.
+ */
+export function looksLikeStaleScheduledOvertime(camp = {}, pricing = null) {
+  const otUnit = num(pricing?.otUnit);
+  if (!(otUnit > 0)) return false;
+  const stored = num(camp.overtimeRevenue);
+  if (!(stored > 0)) return false;
+  const hours = num(camp.totalHours, NaN);
+  if (!Number.isFinite(hours)) return false;
+  const staleHours = computeOvertimeHours(hours, { durationHours: camp.durationHours });
+  const billedHours = computeOvertimeHours(hours, {
+    campDuration: pricing.campDuration || camp.clientMasterCampDuration,
+    durationHours: camp.durationHours,
+  });
+  if (!(staleHours > 0) || staleHours === billedHours) return false;
+  return stored === roundMoney(staleHours * otUnit);
+}
+
 function normalizeExecutionStatus(executionStatus) {
   const value = trimStr(executionStatus);
   if (value === 'Rejected') return 'Refused';

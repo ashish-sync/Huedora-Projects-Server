@@ -152,7 +152,7 @@ export async function finalizeExecutionDocumentUploads(req, { docType = '' } = {
       'UPLOAD_TOO_MANY_FILES',
     );
   }
-  const isGpsSelfie = String(docType) === 'gps_selfie';
+  const isGpsSelfie = String(docType) === 'gps_selfie' || String(docType) === 'gps_selfie_out';
   logMemory('finalize:exec-docs:start', { docType, fileCount: files.length });
 
   const startMem = warnIfHighMemory('finalize:exec-docs', { rssWarnMb: 350 });

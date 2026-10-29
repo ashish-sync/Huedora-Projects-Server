@@ -7,6 +7,7 @@ import {
 } from './campExportFieldSchema.js';
 import {
   CAMP_LIFECYCLE_STAGES,
+  campSnapshotPricing,
   computeLifecycleDerived,
   normalizeExecutionDocType,
   withCampLifecycle,
@@ -81,7 +82,7 @@ function countExecutionDocs(docs = [], targetType) {
 export function prepareCampForFullExport(camp = {}) {
   const base = camp?.toObject ? camp.toObject() : { ...camp };
   const enriched = withRequestReview(withCampLifecycle(withCampSchedule(base)));
-  const derived = computeLifecycleDerived(enriched);
+  const derived = computeLifecycleDerived(enriched, { pricing: campSnapshotPricing(enriched) });
   const docs = Array.isArray(enriched.executionDocuments) ? enriched.executionDocuments : [];
   const source = String(enriched.source || '').trim();
 

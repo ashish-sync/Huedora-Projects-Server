@@ -7,6 +7,7 @@ import { isDateFieldToken } from '../modules/templates/docxPlaceholders.js';
 
 const DUP_LOCK_ID = 'recompute_camp_duplicate_keys:v3';
 const TPL_LOCK_ID = 'refresh_doc_template_date_placeholders:v1';
+const CAMP_LOGIC_LOCK_ID = 'backfill_camp_business_logic:v1';
 
 function campCreatedMs(camp) {
   const t = Date.parse(camp?.createdAt || camp?.updatedAt || 0);
@@ -211,5 +212,86 @@ export async function maybeRefreshDocumentTemplateDatePlaceholdersOnBoot() {
     dryRunEnv: 'REFRESH_DOC_TEMPLATE_DATE_PLACEHOLDERS_ON_BOOT_DRY_RUN',
     runner: refreshDocumentTemplateDatePlaceholders,
     logPrefix: 'doc-templates-dates',
+  });
+}
+
+/**
+ * Apply current Extra hours / Client Master duration / empty payout seeds to
+ * every existing camp. Idempotent. Never rewrites campId or non-zero manual
+ * amounts except stale Extra-hours overtime.
+ */
+export async function backfillExistingCampBusinessLogic({ dryRun = false } = {}) {
+  const { CampOpsCamp } = await import('../modules/campOps/campOps.model.js');
+  const { applyCampBusinessLogic, isCampExecutedForPayout } = await import(
+    '../modules/campOps/campOps.lifecycle.js'
+  );
+  const { resolveClientMasterPricingForCamp } = await import(
+    '../modules/campOps/campOps.clientMasterPricing.js'
+  );
+  const { campAmountForAssignedHcw, resolveCampPayoutPayeeContact } = await import(
+    '../modules/contacts/campPayoutPayee.js'
+  );
+
+  const rows = await CampOpsCamp.find({ isDeleted: false });
+  const pricingCache = new Map();
+  const payeeCache = new Map();
+  let updated = 0;
+  let scanned = 0;
+
+  for (const camp of rows) {
+    scanned += 1;
+    const pricingKey = `${camp.clientId || ''}|${camp.campaignType || ''}|${camp.campaignName || ''}|${camp.clientName || ''}`;
+    if (!pricingCache.has(pricingKey)) {
+      pricingCache.set(
+        pricingKey,
+        await resolveClientMasterPricingForCamp(camp.clientId, {
+          campaignType: camp.campaignType,
+          campaignName: camp.campaignName,
+          clientName: camp.clientName,
+        }),
+      );
+    }
+    const pricing = pricingCache.get(pricingKey);
+
+    let payeeAmount = null;
+    const hcwId = String(camp.hcwContactId || '').trim();
+    if (isCampExecutedForPayout(camp) && !(Number(camp.campAmount) > 0) && hcwId) {
+      if (!payeeCache.has(hcwId)) {
+        try {
+          const resolved = await resolveCampPayoutPayeeContact(hcwId);
+          payeeCache.set(
+            hcwId,
+            campAmountForAssignedHcw({
+              assignmentId: hcwId,
+              assignedContact: resolved.assignedContact,
+              payeeContact: resolved.payeeContact,
+            }) || 0,
+          );
+        } catch {
+          payeeCache.set(hcwId, 0);
+        }
+      }
+      payeeAmount = payeeCache.get(hcwId) || null;
+    }
+
+    const campIdBefore = camp.campId;
+    const { changed } = applyCampBusinessLogic(camp, { pricing, payeeAmount });
+    if (camp.campId !== campIdBefore) camp.campId = campIdBefore;
+    if (!changed) continue;
+    updated += 1;
+    if (!dryRun) await camp.save();
+  }
+
+  return { dryRun: Boolean(dryRun), scanned, updated };
+}
+
+export async function maybeBackfillExistingCampBusinessLogicOnBoot() {
+  return runLockedJob({
+    lockId: CAMP_LOGIC_LOCK_ID,
+    job: 'backfill_camp_business_logic',
+    flagEnv: 'BACKFILL_CAMP_BUSINESS_LOGIC_ON_BOOT',
+    dryRunEnv: 'BACKFILL_CAMP_BUSINESS_LOGIC_ON_BOOT_DRY_RUN',
+    runner: backfillExistingCampBusinessLogic,
+    logPrefix: 'camps-business-logic',
   });
 }
