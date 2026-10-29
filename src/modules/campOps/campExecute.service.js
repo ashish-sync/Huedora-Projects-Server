@@ -12,6 +12,7 @@ import {
   normalizeExecutionDocType,
 } from './campOps.lifecycle.js';
 import { getCampStartDateTime } from './campOps.helpers.js';
+import { normalizeTimeOfDay } from '../../utils/dateFormat.js';
 import {
   getConsumablesCompletionBlockers,
   normalizeConsumablesUsed,
@@ -117,6 +118,7 @@ function docsByType(docs = []) {
     doctor_form: has('doctor_form'),
     patient_form: has('patient_form'),
     gps_selfie: has('gps_selfie'),
+    gps_selfie_out: has('gps_selfie_out'),
   };
 }
 
@@ -152,6 +154,7 @@ export function publicExecutionContext(invite, camp, mappedConsumables = []) {
       consumablesUsed: Array.isArray(camp.consumablesUsed) ? camp.consumablesUsed : [],
       executorFormStatus: camp.executorFormStatus || (locked ? 'submitted' : 'draft'),
       executorGps: camp.executorGps || null,
+      executorGpsOut: camp.executorGpsOut || null,
     },
     documents: docs.map((doc) => ({
       fileId: doc.fileId || doc._id || doc.storedName || doc.url,
@@ -164,6 +167,7 @@ export function publicExecutionContext(invite, camp, mappedConsumables = []) {
       doctor_form: required.doctor_form ? 'uploaded' : 'required',
       patient_form: required.patient_form ? 'uploaded' : 'required',
       gps_selfie: required.gps_selfie ? 'uploaded' : 'required',
+      gps_selfie_out: required.gps_selfie_out ? 'uploaded' : 'required',
     },
     consumableOptions: (mappedConsumables || []).map((item) => ({
       productId: item.productId,
@@ -271,6 +275,21 @@ export async function assertInviteEditable(invite, camp) {
   }
 }
 
+/** In Time on the Activity Form follows the HCW phone clock at GPS selfie capture. */
+export function applyGpsCaptureInTime(camp, inTime) {
+  const clock = normalizeTimeOfDay(inTime);
+  if (!clock || !camp) return camp;
+  camp.inTime = clock;
+  return camp;
+}
+
+export function applyGpsCaptureOutTime(camp, outTime) {
+  const clock = normalizeTimeOfDay(outTime);
+  if (!clock || !camp) return camp;
+  camp.outTime = clock;
+  return camp;
+}
+
 export function applyExecutorDraft(camp, body = {}) {
   const patch = {};
   if (body.inTime !== undefined) patch.inTime = String(body.inTime || '').trim();
@@ -305,9 +324,9 @@ function hasNonNegativeNumber(value) {
 }
 
 export function executorSubmitBlockers(camp, mappedConsumables = []) {
+  void mappedConsumables;
   const blockers = [];
-  if (!String(camp.inTime || '').trim()) blockers.push('Enter In Time');
-  if (!String(camp.outTime || '').trim()) blockers.push('Enter Out Time');
+  if (!String(camp.inTime || '').trim()) blockers.push('Capture GPS Selfie to set In Time');
   if (!hasNonNegativeNumber(camp.actualPatients) && !hasNonNegativeNumber(camp.patientsCount)) {
     blockers.push('Enter Patients Screened');
   }
@@ -319,19 +338,27 @@ export function executorSubmitBlockers(camp, mappedConsumables = []) {
   if (!types.doctor_form) blockers.push('Upload Doctor Form (DF)');
   if (!types.patient_form) blockers.push('Upload Patient Form (PF)');
   if (!types.gps_selfie) blockers.push('Capture GPS Selfie (GS)');
+  if (!types.gps_selfie_out) blockers.push('Capture Out GPS Selfie (GO)');
 
-  const gps = camp.executorGps || {};
   const campHasCoords = camp.latitude !== null && camp.latitude !== undefined && camp.latitude !== ''
     && camp.longitude !== null && camp.longitude !== undefined && camp.longitude !== ''
     && Number.isFinite(Number(camp.latitude))
     && Number.isFinite(Number(camp.longitude));
-  if (!Number.isFinite(Number(gps.latitude)) || !Number.isFinite(Number(gps.longitude))) {
-    blockers.push('Capture GPS location with the selfie');
-  } else if (campHasCoords && gps.withinRadius === false) {
-    blockers.push(`Move within ${EXECUTOR_GPS_RADIUS_M} m of the clinic to submit`);
+  function gpsLocationBlocker(gps, label) {
+    if (!Number.isFinite(Number(gps?.latitude)) || !Number.isFinite(Number(gps?.longitude))) {
+      return `Capture GPS location with the ${label}`;
+    }
+    if (campHasCoords && gps.withinRadius === false) {
+      return `Move within ${EXECUTOR_GPS_RADIUS_M} m of the clinic to submit`;
+    }
+    return '';
   }
+  const inGpsBlocker = gpsLocationBlocker(camp.executorGps || {}, 'selfie');
+  if (inGpsBlocker) blockers.push(inGpsBlocker);
+  const outGpsBlocker = gpsLocationBlocker(camp.executorGpsOut || {}, 'out selfie');
+  if (outGpsBlocker) blockers.push(outGpsBlocker);
 
-  blockers.push(...getConsumablesCompletionBlockers(mappedConsumables, camp.consumablesUsed));
+  blockers.push(...getConsumablesCompletionBlockers([], camp.consumablesUsed));
   // Deduplicate
   return [...new Set(blockers)];
 }

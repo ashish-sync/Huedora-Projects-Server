@@ -11,6 +11,8 @@ import {
   computeOvertimeHours,
   isCampCancelledForRevenue,
   isCampChargeable,
+  looksLikeStaleScheduledOvertime,
+  seedCampRevenueFromPricing,
 } from './campOps.clientMasterPricing.js';
 import { clearCampHcwAssignment } from './hcwAssignmentGap.js';
 
@@ -203,7 +205,14 @@ export function normalizeExecutionDocType(docType) {
   const raw = String(docType || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
   if (raw === 'doctor_form' || raw === 'df' || raw.includes('doctor')) return 'doctor_form';
   if (raw === 'patient_form' || raw === 'pf' || raw.includes('patient')) return 'patient_form';
+  if (raw === 'gps_selfie_out' || raw === 'go' || raw === 'gso') return 'gps_selfie_out';
+  if (raw === 'gps_selfie' || raw === 'gs') return 'gps_selfie';
   return raw;
+}
+
+export function isGpsSelfieDocType(docType) {
+  const type = normalizeExecutionDocType(docType);
+  return type === 'gps_selfie' || type === 'gps_selfie_out';
 }
 
 function hasExecutionDocType(docs, targetType) {
@@ -323,7 +332,7 @@ export const HCW_CATEGORIES = [
   'Other',
 ];
 
-export const EXECUTION_DOC_TYPES = ['doctor_form', 'patient_form', 'other', 'gps_selfie'];
+export const EXECUTION_DOC_TYPES = ['doctor_form', 'patient_form', 'other', 'gps_selfie', 'gps_selfie_out'];
 
 export const PAYMENT_SUBMIT_STATUSES = [
   'payment_confirmed',
@@ -400,15 +409,23 @@ export function formatInTimeIst(date = new Date()) {
   return `${hour}:${minute}`;
 }
 
-export function resolveInTimeSelfieUrl(camp = {}) {
-  if (camp.inTimeSelfieUrl) return camp.inTimeSelfieUrl;
+function resolveSelfieUrl(camp = {}, urlKey, docType) {
+  if (camp[urlKey]) return camp[urlKey];
   const docs = Array.isArray(camp.executionDocuments) ? camp.executionDocuments : [];
-  const selfies = docs.filter((d) => d.docType === 'gps_selfie');
+  const selfies = docs.filter((d) => d.docType === docType);
   if (!selfies.length) return '';
   const latest = selfies.sort((a, b) =>
     String(b.uploadedAt || '').localeCompare(String(a.uploadedAt || ''))
   )[0];
   return latest?.url || '';
+}
+
+export function resolveInTimeSelfieUrl(camp = {}) {
+  return resolveSelfieUrl(camp, 'inTimeSelfieUrl', 'gps_selfie');
+}
+
+export function resolveOutTimeSelfieUrl(camp = {}) {
+  return resolveSelfieUrl(camp, 'outTimeSelfieUrl', 'gps_selfie_out');
 }
 
 export function resolveCampSlot(startTime) {
@@ -440,6 +457,12 @@ function num(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** Snapshot pricing so Extra hours stay consistent after Client Master records change. */
+export function campSnapshotPricing(camp) {
+  const campDuration = localTrim(camp?.clientMasterCampDuration);
+  return campDuration ? { campDuration } : null;
+}
+
 export function computeLifecycleDerived(camp = {}, { pricing = null } = {}) {
   const startTime = localTrim(camp.startTime);
   const endTime = localTrim(camp.endTime);
@@ -463,9 +486,16 @@ export function computeLifecycleDerived(camp = {}, { pricing = null } = {}) {
     : null;
 
   // Editable persisted values win; Client Master formula is only a default/suggestion.
+  // Exception: overtime $ that still matches the pre-Client-Master Extra hours formula
+  // is treated as stale auto data, not a manual override.
   const campRevenue = num(camp.campRevenue);
   const travelRevenue = num(camp.travelRevenue);
-  const overtimeRevenue = num(camp.overtimeRevenue);
+  const overtimeRevenue = autoRevenue && looksLikeStaleScheduledOvertime(
+    { ...camp, totalHours },
+    pricing,
+  )
+    ? autoRevenue.overtimeRevenue
+    : num(camp.overtimeRevenue);
   const otherRevenue = num(camp.otherRevenue);
   const otherRevenuePatients = autoRevenue ? autoRevenue.otherRevenuePatients : 0;
   const otherRevenueDistance = autoRevenue ? autoRevenue.otherRevenueDistance : 0;
@@ -616,6 +646,10 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
         ? pickStr('inTimeSelfieUrl')
         : existing?.inTimeSelfieUrl || resolveInTimeSelfieUrl(existing || {}),
     outTime: pickStr('outTime'),
+    outTimeSelfieUrl:
+      body.outTimeSelfieUrl !== undefined
+        ? pickStr('outTimeSelfieUrl')
+        : existing?.outTimeSelfieUrl || resolveOutTimeSelfieUrl(existing || {}),
     kmRoundTrip: pickNum('kmRoundTrip'),
     attire,
     labCoat,
@@ -692,6 +726,18 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
     }
   }
 
+  const cancellationLockedPayouts = isExecutionCancellationForFinance({
+    ...existing,
+    ...body,
+    ...next,
+  });
+  if (cancellationLockedPayouts) {
+    delete next.campAmount;
+    delete next.travelling;
+    delete next.overtimeExpense;
+    delete next.totalPayout;
+  }
+
   const bodyTouchedRevenue = ['campRevenue', 'travelRevenue', 'overtimeRevenue', 'otherRevenue']
     .some((key) => body[key] !== undefined && body[key] !== '');
   const bodyTouchedPayout = ['campAmount', 'travelling', 'overtimeExpense', 'otherExpenses']
@@ -740,13 +786,13 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
       + num(next.overtimeExpense ?? existing?.overtimeExpense)
       + num(next.otherExpenses ?? existing?.otherExpenses)
     ) * 100) / 100;
-    if (body.totalPayout !== undefined && body.totalPayout !== '') {
+    if (!cancellationLockedPayouts && body.totalPayout !== undefined && body.totalPayout !== '') {
       const bodyTotal = Math.max(0, num(body.totalPayout));
       next.totalPayout = bodyTotal === 0 && partsSum > 0 ? partsSum : bodyTotal;
     } else {
       next.totalPayout = partsSum;
     }
-  } else if (body.totalPayout !== undefined && body.totalPayout !== '') {
+  } else if (!cancellationLockedPayouts && body.totalPayout !== undefined && body.totalPayout !== '') {
     next.totalPayout = Math.max(0, num(body.totalPayout));
   } else if (!Object.prototype.hasOwnProperty.call(body, 'totalPayout')
     && next.totalPayout === undefined
@@ -773,12 +819,65 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
   return next;
 }
 
-export function withCampLifecycle(camp, { pricing = null } = {}) {
+/**
+ * Apply current Camp One business rules to an existing or new camp document.
+ * Idempotent. Does not rewrite campId. Does not overwrite non-zero manual
+ * revenue/payout except stale Extra-hours overtime that still matches the
+ * old scheduled-slot formula.
+ */
+export function applyCampBusinessLogic(camp, { pricing = null, payeeAmount = null } = {}) {
+  if (!camp) return { camp, changed: false };
+  const before = {
+    extraHours: camp.extraHours,
+    clientMasterCampDuration: camp.clientMasterCampDuration || '',
+    totalHours: camp.totalHours,
+    overtimeRevenue: camp.overtimeRevenue,
+    campRevenue: camp.campRevenue,
+    travelRevenue: camp.travelRevenue,
+    otherRevenue: camp.otherRevenue,
+    totalRevenue: camp.totalRevenue,
+    campAmount: camp.campAmount,
+    totalPayout: camp.totalPayout,
+    punctuality: camp.punctuality || '',
+  };
+
+  if (pricing?.campDuration) {
+    camp.clientMasterCampDuration = localTrim(pricing.campDuration);
+  }
+
+  const derived = computeLifecycleDerived(camp, { pricing });
+  camp.totalHours = derived.totalHours;
+  camp.extraHours = derived.extraHours;
+  if (derived.punctuality) camp.punctuality = derived.punctuality;
+  camp.overtimeRevenue = derived.overtimeRevenue;
+
+  seedCampRevenueFromPricing(camp, pricing);
+
+  if (isCampExecutedForPayout(camp) && !(num(camp.campAmount) > 0)) {
+    const amount = num(payeeAmount);
+    if (amount > 0) {
+      camp.campAmount = amount;
+    }
+  }
+
+  camp.totalRevenue = Math.round((
+    num(camp.campRevenue) + num(camp.travelRevenue) + num(camp.overtimeRevenue) + num(camp.otherRevenue)
+  ) * 100) / 100;
+  camp.totalPayout = Math.round((
+    num(camp.campAmount) + num(camp.travelling) + num(camp.overtimeExpense) + num(camp.otherExpenses)
+  ) * 100) / 100;
+  camp.netContribution = Math.round((num(camp.totalRevenue) - num(camp.totalPayout)) * 100) / 100;
+
+  const changed = Object.entries(before).some(
+    ([key, value]) => String(value ?? '') !== String(camp[key] ?? ''),
+  );
+  return { camp, changed };
+}
+
+export function withCampLifecycle(camp, { pricing = null, payeeAmount = null } = {}) {
   const obj = camp?.toObject ? camp.toObject() : { ...camp };
   obj.lifecycleStage = normalizeLifecycleStage(obj.lifecycleStage, 'request');
-  if (pricing?.campDuration) {
-    obj.clientMasterCampDuration = localTrim(pricing.campDuration);
-  }
+  applyCampBusinessLogic(obj, { pricing, payeeAmount });
   const derived = computeLifecycleDerived(obj, { pricing });
   Object.assign(obj, derived);
   delete obj.otherRevenuePatients;

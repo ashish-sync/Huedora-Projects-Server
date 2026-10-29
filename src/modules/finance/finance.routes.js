@@ -16,6 +16,7 @@ import financeCommercialRoutes from './financeCommercial.routes.js';
 import vendorBillRoutes from './vendorBill.routes.js';
 import { CampOpsCamp } from '../campOps/campOps.model.js';
 import {
+  campSnapshotPricing,
   computeLifecycleDerived,
   deriveFinanceSettlementStatus,
   normalizeFinancePaymentStatus,
@@ -411,7 +412,7 @@ function campMonthKey(campDate) {
 
 function campPayoutSummary(camp) {
   const row = camp?.toObject ? camp.toObject() : { ...camp };
-  const derived = computeLifecycleDerived(row);
+  const derived = computeLifecycleDerived(row, { pricing: campSnapshotPricing(row) });
   const month = campMonthKey(row.campDate);
   return {
     _id: row._id,
@@ -460,7 +461,7 @@ async function campPayoutSummaryWithPayeeBank(camp) {
 }
 
 function applyCampPayoutFields(camp, body = {}, actor = {}, options = {}) {
-  const derivedBefore = computeLifecycleDerived(camp);
+  const derivedBefore = computeLifecycleDerived(camp, { pricing: campSnapshotPricing(camp) });
   const paidAmount = body.paidAmount !== undefined
     ? toAmount(body.paidAmount)
     : toAmount(camp.paidAmount);
@@ -541,7 +542,7 @@ function applyCampPayoutFields(camp, body = {}, actor = {}, options = {}) {
 
   if (idempotencyKey) camp.financePaymentIdempotencyKey = idempotencyKey;
 
-  const derived = computeLifecycleDerived(camp);
+  const derived = computeLifecycleDerived(camp, { pricing: campSnapshotPricing(camp) });
   camp.balance = derived.balance;
   camp.totalPayout = derived.totalPayout;
   camp.financeProcessedById = actor?._id || null;
@@ -622,7 +623,7 @@ const bulkUpdateCampPayouts = asyncHandler(async (req, res) => {
   }
 
   const campTotals = camps.map((camp) => {
-    const derived = computeLifecycleDerived(camp);
+    const derived = computeLifecycleDerived(camp, { pricing: campSnapshotPricing(camp) });
     return toAmount(derived.totalPayout || camp.totalPayout);
   });
   const combinedTotal = Math.round(campTotals.reduce((sum, n) => sum + n, 0) * 100) / 100;

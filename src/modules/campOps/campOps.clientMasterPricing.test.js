@@ -2,10 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   computeCampRevenueFromPricing,
+  looksLikeStaleScheduledOvertime,
   resolveClientMasterPricingFromRecords,
   seedCampRevenueFromPricing,
 } from './campOps.clientMasterPricing.js';
-import { computeLifecycleDerived, lifecyclePayloadFromBody } from './campOps.lifecycle.js';
+import {
+  applyCampBusinessLogic,
+  campSnapshotPricing,
+  computeLifecycleDerived,
+  lifecyclePayloadFromBody,
+} from './campOps.lifecycle.js';
 
 const pricing = {
   executedCampUnit: 5000,
@@ -147,6 +153,81 @@ test('seedCampRevenueFromPricing forces zero for cancelled non-chargeable even i
   assert.equal(camp.totalRevenue, 0);
 });
 
+test('stale overtime matches the old scheduled-slot Extra hours formula', () => {
+  const camp = {
+    totalHours: 6,
+    durationHours: 3,
+    extraHours: 3,
+    overtimeRevenue: 1200, // 3h × 400
+    clientMasterCampDuration: '',
+  };
+  assert.equal(looksLikeStaleScheduledOvertime(camp, pricing), true);
+  const derived = computeLifecycleDerived({
+    ...camp,
+    inTime: '09:00',
+    outTime: '15:00',
+  }, { pricing });
+  assert.equal(derived.extraHours, 2);
+  assert.equal(derived.overtimeRevenue, 800);
+});
+
+test('applyCampBusinessLogic backfills Extra hours on existing camps without rewriting campId', () => {
+  const camp = {
+    campId: '26-10-1326',
+    inTime: '09:00',
+    outTime: '15:00',
+    durationHours: 3,
+    extraHours: 3,
+    overtimeRevenue: 1200,
+    campRevenue: 5000,
+    travelRevenue: 0,
+    otherRevenue: 0,
+    campAmount: 0,
+    executionStatus: 'Camp Completed',
+  };
+  const { changed } = applyCampBusinessLogic(camp, { pricing, payeeAmount: 2500 });
+  assert.equal(changed, true);
+  assert.equal(camp.campId, '26-10-1326');
+  assert.equal(camp.clientMasterCampDuration, '4:00');
+  assert.equal(camp.extraHours, 2);
+  assert.equal(camp.overtimeRevenue, 800);
+  assert.equal(camp.campAmount, 2500);
+  assert.equal(camp.totalPayout, 2500);
+});
+
+test('applyCampBusinessLogic is idempotent and keeps a manual overtime override', () => {
+  const camp = {
+    campId: '26-10-0001',
+    inTime: '09:00',
+    outTime: '15:00',
+    durationHours: 3,
+    extraHours: 2,
+    clientMasterCampDuration: '4:00',
+    overtimeRevenue: 333,
+    campRevenue: 5000,
+    campAmount: 1800,
+    executionStatus: 'Camp Completed',
+  };
+  const first = applyCampBusinessLogic(camp, { pricing, payeeAmount: 2500 });
+  assert.equal(camp.overtimeRevenue, 333);
+  assert.equal(camp.campAmount, 1800);
+  const second = applyCampBusinessLogic(camp, { pricing, payeeAmount: 2500 });
+  assert.equal(second.changed, false);
+  assert.equal(camp.campId, '26-10-0001');
+  void first;
+});
+
+test('campSnapshotPricing uses the stored duration so exports and finance match GET overlay', () => {
+  const derived = computeLifecycleDerived({
+    inTime: '09:00',
+    outTime: '15:00',
+    durationHours: 3,
+    extraHours: 3,
+    clientMasterCampDuration: '4:00',
+  }, { pricing: campSnapshotPricing({ clientMasterCampDuration: '4:00' }) });
+  assert.equal(derived.extraHours, 2);
+});
+
 test('existing camp extra hours uses stored Client Master duration without live pricing', () => {
   const derived = computeLifecycleDerived({
     inTime: '09:00',
@@ -281,6 +362,32 @@ test('lifecyclePayloadFromBody preserves manual revenue overrides even with pric
   assert.equal(next.totalRevenue, 4725);
   assert.equal(next.totalPayout, 1000);
   assert.equal(next.netContribution, 3725);
+});
+
+test('lifecyclePayloadFromBody ignores Camp/Travel/OT payout edits on cancelled-by camps', () => {
+  const next = lifecyclePayloadFromBody(
+    {
+      campAmount: 9999,
+      travelling: 500,
+      overtimeExpense: 250,
+      otherExpenses: 150,
+      totalPayout: 10899,
+    },
+    {
+      lifecycleStage: 'financial',
+      status: 'cancelled',
+      executionStatus: 'Cancelled by Tylo',
+      campAmount: 0,
+      travelling: 0,
+      overtimeExpense: 0,
+      otherExpenses: 0,
+    },
+  );
+  assert.equal(Object.prototype.hasOwnProperty.call(next, 'campAmount'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(next, 'travelling'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(next, 'overtimeExpense'), false);
+  assert.equal(next.otherExpenses, 150);
+  assert.equal(next.totalPayout, 150);
 });
 
 test('lifecyclePayloadFromBody recomputes totalPayout from parts when body totalPayout is stale zero', () => {

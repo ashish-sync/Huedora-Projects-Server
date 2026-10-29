@@ -69,6 +69,7 @@ export const CampOpsCamp = defineCollection('camp_ops_camps', {
   inTime: '',
   inTimeSelfieUrl: '',
   outTime: '',
+  outTimeSelfieUrl: '',
   totalHours: null,
   extraHours: 0,
   /** Client Master Camp Duration snapshot (`4:00`) used for OT Hours on existing camps. */
@@ -83,6 +84,14 @@ export const CampOpsCamp = defineCollection('camp_ops_camps', {
   executorFormStatus: '',
   executorSubmittedAt: null,
   executorGps: {
+    latitude: null,
+    longitude: null,
+    accuracy: null,
+    withinRadius: null,
+    distanceMeters: null,
+    capturedAt: null,
+  },
+  executorGpsOut: {
     latitude: null,
     longitude: null,
     accuracy: null,

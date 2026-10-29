@@ -90,7 +90,7 @@ export async function presignExecutionDocumentUploads({
     const size = Number(file?.size) || 0;
     assertUploadByteLimit(size, EXEC_DOC_MAX_BYTES);
 
-    if (docType === 'gps_selfie' && !contentType.startsWith('image/')) {
+    if ((docType === 'gps_selfie' || docType === 'gps_selfie_out') && !contentType.startsWith('image/')) {
       throw new AppError('GPS Selfie must be an image file', 400, 'VALIDATION_ERROR');
     }
 
@@ -257,7 +257,7 @@ export async function confirmExecutionDocumentUploads({
       tempKeys.push(objectKey);
 
       // Fast path: GPS Selfie WebP — CopyObject only (no Sharp decode / palette re-encode).
-      if (docType === 'gps_selfie' && isWebpUpload({ originalName, contentType })) {
+      if ((docType === 'gps_selfie' || docType === 'gps_selfie_out') && isWebpUpload({ originalName, contentType })) {
         const passthrough = await confirmPassthroughWebpInR2({
           camp,
           docType,
