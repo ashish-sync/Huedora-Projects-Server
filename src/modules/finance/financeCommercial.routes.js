@@ -18,7 +18,10 @@ import { nextSequence } from '../../utils/counters.js';
 import { FinanceCommercialDocument } from './finance.model.js';
 import { COMMERCIAL_DOC_STATUSES } from './finance.constants.js';
 import { applyArchiveListFilter } from '../retention/archivePolicy.js';
-import { DOCUMENT_NUMBER_STANDARDS, documentNumberPeriod, releaseCommercialDocumentNumber, validateManualDocumentNumber } from './documentNumbering.js';
+import { DOCUMENT_NUMBER_LABELS, DOCUMENT_NUMBER_STANDARDS, documentNumberPeriod, releaseCommercialDocumentNumber, validateManualDocumentNumber } from './documentNumbering.js';
+import { sendExcel } from '../../utils/excelExport.js';
+import { MAX_EXPORT_ROWS } from '../../utils/spreadsheetLimits.js';
+import { commercialDocumentDateRange } from './commercialDocumentDateRange.js';
 import {
   assertApprovable,
   assertCancellable,
@@ -212,7 +215,56 @@ function commercialListFilter(req, orgProfileIds = null) {
       Object.assign(filter, orgClause);
     }
   }
+  const dateRange = commercialDocumentDateRange(req.query.dateFrom, req.query.dateTo);
+  if (dateRange) filter.documentDate = dateRange;
   return filter;
+}
+
+function commercialExportValue(row, key) {
+  if (key === 'documentType') {
+    return DOCUMENT_NUMBER_LABELS[row.documentType] || row.documentType || '';
+  }
+  if (key === 'stage') return displayCommercialStage(row.status);
+  if (key === 'status') return resolveCommercialDisplayStatus(row) || '';
+  if (key === 'reference') return row.servicePeriod || row.projectName || '';
+  if (key === 'organisation') {
+    return row.orgSnapshot?.name || row.orgSnapshot?.legalName || '';
+  }
+  return row[key] ?? '';
+}
+
+async function exportCommercialDocuments(req, res) {
+  const orgProfileIds = await orgProfileIdsForListQuery(req.query.orgProfileId);
+  const filter = commercialListFilter(req, orgProfileIds);
+  const paymentStatus = trimStr(req.query.paymentStatus);
+  const sortSpec = '-documentDate';
+  let rows = await FinanceCommercialDocument.find(filter)
+    .select('-builderForm')
+    .sort(sortSpec)
+    .limit(MAX_EXPORT_ROWS);
+  if (paymentStatus) {
+    rows = rows.filter((row) => resolveCommercialDisplayStatus(row) === paymentStatus);
+  }
+  const columns = [
+    { key: 'documentNumber', label: 'Number' },
+    { key: 'documentType', label: 'Type' },
+    { key: 'recipientName', label: 'Recipient' },
+    { key: 'reference', label: 'Reference' },
+    { key: 'documentDate', label: 'Date' },
+    { key: 'grandTotal', label: 'Amount' },
+    { key: 'paidAmount', label: 'Received' },
+    { key: 'stage', label: 'Stage' },
+    { key: 'status', label: 'Status' },
+    { key: 'organisation', label: 'Organisation' },
+  ];
+  const headers = columns.map((col) => col.label);
+  const excelRows = rows.map((row) => {
+    const obj = row.toObject ? row.toObject() : row;
+    return columns.map((col) => commercialExportValue(obj, col.key));
+  });
+  sendExcel(res, `Saved_Documents_${todayIso()}.xlsx`, headers, excelRows, {
+    sheetName: 'Saved Documents',
+  });
 }
 
 function sendPreviewPdf(res, pdfBuffer, filename = 'preview.pdf') {
@@ -257,6 +309,7 @@ router.get(
 );
 
 
+router.get('/commercial-documents/export', canRead, asyncHandler(exportCommercialDocuments));
 /**
  * Live org for draft normalize; frozen snapshot for Issued/Cancelled.
  * Issued/Cancelled docs lock orgProfileId (body cannot rebind the issuer).
