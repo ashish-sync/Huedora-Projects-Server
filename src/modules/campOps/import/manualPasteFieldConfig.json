@@ -149,6 +149,18 @@
       "label": "PM Number",
       "required": false,
       "aliases": ["pm number", "pm mobile", "pm contact", "product manager number", "product manager mobile"]
+    },
+    "hq": {
+      "label": "HQ",
+      "required": false,
+      "aliases": [
+        "hq",
+        "headquarter",
+        "headquarters",
+        "hq headquarter",
+        "hq (headquarter)",
+        "base location"
+      ]
     }
   },
   "canonical_fields": {

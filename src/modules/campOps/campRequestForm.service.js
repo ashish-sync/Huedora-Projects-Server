@@ -13,7 +13,12 @@ import {
   generateCampId,
   captureSubmissionTracking,
 } from './campOps.helpers.js';
-import { resolveContactPersonFields } from './campContactPersons.js';
+import { CONTACT_LEVEL_IMPORT_FIELDS, resolveContactPersonFields } from './campContactPersons.js';
+import { parsePasteImportFile } from './pasteImport.service.js';
+import { mapRows } from './communications/utils/importMapper.js';
+import { normalizePasteStartTime } from './pasteTimeNormalize.js';
+import { importAppError } from '../../utils/importErrors.js';
+import { MAX_IMPORT_ROWS } from '../../utils/spreadsheetLimits.js';
 import { lifecyclePayloadFromBody } from './campOps.lifecycle.js';
 import {
   parseCampDurationToHours,
@@ -29,6 +34,46 @@ import { hashExecutionToken, mintExecutionToken } from './campExecute.service.js
 
 export const PROGRAM_REQUEST_FORM_SOURCE = 'program_form';
 export const PROGRAM_REQUEST_NOT_FOUND_MESSAGE = 'This camp request form is not available';
+
+/** Public form columns — Client / Division / Method stay locked from the program token. */
+export const PROGRAM_FORM_SAMPLE_FIELDS = [
+  { key: 'doctorName', label: 'Doctor Name', required: true },
+  { key: 'doctorCode', label: 'Doctor Code', required: true },
+  { key: 'speciality', label: 'Doctor Type / Specialty', required: false },
+  { key: 'campDate', label: 'Camp Date', required: true },
+  { key: 'startTime', label: 'Camp Start Time', required: true },
+  { key: 'endTime', label: 'Camp End Time', required: true },
+  { key: 'campAddress', label: 'Camp / Clinic Address', required: true },
+  { key: 'contactPersonLevel', label: 'Contact Person Level', required: true },
+  { key: 'fieldPersonName', label: 'Contact Person Name', required: true },
+  { key: 'fieldPersonPhone', label: 'Contact Person Number', required: true },
+  { key: 'hq', label: 'HQ (Headquarter)', required: true },
+  { key: 'expectedPatients', label: 'Expected Patients', required: true },
+  { key: 'remarks', label: 'Remarks', required: false },
+];
+
+export const PROGRAM_FORM_SAMPLE_ROW = [
+  'Anita Sharma',
+  'D001',
+  'General Practitioner',
+  '15-11-2026',
+  '09:00',
+  '13:00',
+  '12 Main Street',
+  'Territory Manager',
+  'Rep One',
+  '9999999999',
+  'Mumbai',
+  '40',
+  '',
+];
+
+export const PROGRAM_FORM_IMPORT_KEYS = [
+  ...new Set([
+    ...PROGRAM_FORM_SAMPLE_FIELDS.map((field) => field.key),
+    ...CONTACT_LEVEL_IMPORT_FIELDS.flatMap((field) => [field.nameKey, field.phoneKey]),
+  ]),
+];
 
 function publicGeoRow(row) {
   if (!row) return null;
@@ -236,8 +281,38 @@ function buildCampFromProgramForm(safeBody, client, pricing) {
   return payload;
 }
 
-export async function submitProgramCampRequest(rawToken, body = {}) {
-  const { master, client } = await resolveProgramByRequestToken(rawToken);
+export function isBlankProgramFormRow(row = {}) {
+  return PROGRAM_FORM_IMPORT_KEYS.every((key) => !trimStr(row[key]));
+}
+
+export function missingProgramFormImportColumns(mapping = {}) {
+  const missing = [];
+  const contactKeys = new Set(['contactPersonLevel', 'fieldPersonName', 'fieldPersonPhone']);
+  for (const field of PROGRAM_FORM_SAMPLE_FIELDS) {
+    if (!field.required || contactKeys.has(field.key)) continue;
+    if (!mapping[field.key]) missing.push(field.label);
+  }
+  const hasFormContact = mapping.fieldPersonName && mapping.fieldPersonPhone;
+  const hasLevelContact = CONTACT_LEVEL_IMPORT_FIELDS.some(
+    (field) => mapping[field.nameKey] && mapping[field.phoneKey],
+  );
+  if (!hasFormContact && !hasLevelContact) {
+    missing.push('Contact Person Name', 'Contact Person Number');
+  }
+  return missing;
+}
+
+export function normalizeProgramFormImportRow(row = {}) {
+  return {
+    ...row,
+    campDate: parseLocalDateInput(row.campDate) || trimStr(row.campDate),
+    startTime: normalizePasteStartTime(row.startTime) || trimStr(row.startTime),
+    endTime: normalizePasteStartTime(row.endTime) || trimStr(row.endTime),
+    expectedPatients: trimStr(row.expectedPatients),
+  };
+}
+
+async function createProgramCampFromBody(master, client, body = {}) {
   const safeBody = sanitizeProgramRequestBody(body, { client, master });
   assertRawDoctorName(safeBody);
 
@@ -299,6 +374,80 @@ export async function submitProgramCampRequest(rawToken, body = {}) {
   }
 
   return camp;
+}
+
+export async function submitProgramCampRequest(rawToken, body = {}) {
+  const { master, client } = await resolveProgramByRequestToken(rawToken);
+  return createProgramCampFromBody(master, client, body);
+}
+
+export async function importProgramFormFile(rawToken, file) {
+  const { master, client } = await resolveProgramByRequestToken(rawToken);
+  const parsed = await parsePasteImportFile(file, { fieldKeys: PROGRAM_FORM_IMPORT_KEYS });
+  if (!parsed.rows?.length) {
+    throw importAppError('NO_DATA_ROWS');
+  }
+  if (parsed.rows.length > MAX_IMPORT_ROWS) {
+    throw importAppError('TOO_MANY_ROWS');
+  }
+
+  const missing = missingProgramFormImportColumns(parsed.mapping || {});
+  if (missing.length) {
+    throw new AppError(
+      `The file is missing required columns: ${missing.join(', ')}. Download the sample template and try again.`,
+      400,
+      'VALIDATION_ERROR',
+    );
+  }
+
+  const mappedRows = mapRows(parsed.rows, parsed.mapping);
+  const created = [];
+  const skipped = [];
+  const failed = [];
+
+  for (const mapped of mappedRows) {
+    const rowNumber = mapped.rowNumber || created.length + skipped.length + failed.length + 2;
+    if (isBlankProgramFormRow(mapped)) continue;
+    const row = normalizeProgramFormImportRow(mapped);
+    try {
+      const camp = await createProgramCampFromBody(master, client, row);
+      created.push({
+        rowNumber,
+        campId: camp.campId,
+        id: camp._id,
+      });
+    } catch (err) {
+      if (err instanceof CampDuplicateError || err.code === 'DUPLICATE_CAMP') {
+        skipped.push({
+          rowNumber,
+          campId: err.existingCamp?.campId || '',
+          reason: err.message,
+          skipReason: 'duplicate',
+        });
+        continue;
+      }
+      failed.push({
+        rowNumber,
+        reason: err.message || 'Could not import this row',
+      });
+    }
+  }
+
+  if (!created.length && !skipped.length && !failed.length) {
+    throw importAppError('NO_DATA_ROWS');
+  }
+
+  return {
+    summary: {
+      created: created.length,
+      skipped: skipped.length,
+      skippedDuplicates: skipped.filter((row) => row.skipReason === 'duplicate').length,
+      failed: failed.length,
+    },
+    created,
+    skipped,
+    failed,
+  };
 }
 
 export async function lookupProgramFormPin(pinCode) {

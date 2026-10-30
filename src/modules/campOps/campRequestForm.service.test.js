@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { matchImportColumns } from './import/importColumnMatcher.js';
 import {
+  missingProgramFormImportColumns,
+  PROGRAM_FORM_IMPORT_KEYS,
+  PROGRAM_FORM_SAMPLE_FIELDS,
   PROGRAM_REQUEST_FORM_SOURCE,
   publicProgramRequestContext,
   sanitizeProgramRequestBody,
@@ -56,4 +60,30 @@ test('publicProgramRequestContext only exposes program identity', () => {
   assert.equal(ctx.campDuration, '4:00');
   assert.equal(ctx.requestFormTokenHash, undefined);
   assert.equal(ctx.billingGstin, undefined);
+});
+
+test('sample template headers map onto the public camp request form fields', () => {
+  const headers = PROGRAM_FORM_SAMPLE_FIELDS.map((field) => field.label);
+  const matched = matchImportColumns(headers, PROGRAM_FORM_IMPORT_KEYS);
+  assert.deepEqual(missingProgramFormImportColumns(matched.mapping), []);
+  assert.equal(matched.mapping.doctorName, 'Doctor Name');
+  assert.equal(matched.mapping.hq, 'HQ (Headquarter)');
+  assert.equal(matched.mapping.fieldPersonName, 'Contact Person Name');
+  assert.equal(matched.mapping.expectedPatients, 'Expected Patients');
+});
+
+test('missingProgramFormImportColumns allows TM Name/Number in place of contact person columns', () => {
+  const missing = missingProgramFormImportColumns({
+    doctorName: 'Doctor Name',
+    doctorCode: 'Doctor Code',
+    campDate: 'Camp Date',
+    startTime: 'Camp Start Time',
+    endTime: 'Camp End Time',
+    campAddress: 'Camp / Clinic Address',
+    hq: 'HQ (Headquarter)',
+    expectedPatients: 'Expected Patients',
+    tmName: 'TM Name',
+    tmPhone: 'TM Number',
+  });
+  assert.deepEqual(missing, []);
 });
