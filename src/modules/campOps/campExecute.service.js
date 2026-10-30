@@ -167,7 +167,7 @@ export function publicExecutionContext(invite, camp, mappedConsumables = []) {
       doctor_form: required.doctor_form ? 'uploaded' : 'required',
       patient_form: required.patient_form ? 'uploaded' : 'required',
       gps_selfie: required.gps_selfie ? 'uploaded' : 'required',
-      gps_selfie_out: required.gps_selfie_out ? 'uploaded' : 'required',
+      gps_selfie_out: required.gps_selfie_out ? 'uploaded' : 'optional',
     },
     consumableOptions: (mappedConsumables || []).map((item) => ({
       productId: item.productId,
@@ -338,7 +338,6 @@ export function executorSubmitBlockers(camp, mappedConsumables = []) {
   if (!types.doctor_form) blockers.push('Upload Doctor Form (DF)');
   if (!types.patient_form) blockers.push('Upload Patient Form (PF)');
   if (!types.gps_selfie) blockers.push('Capture GPS Selfie (GS)');
-  if (!types.gps_selfie_out) blockers.push('Capture Out GPS Selfie (GO)');
 
   const campHasCoords = camp.latitude !== null && camp.latitude !== undefined && camp.latitude !== ''
     && camp.longitude !== null && camp.longitude !== undefined && camp.longitude !== ''
@@ -355,8 +354,10 @@ export function executorSubmitBlockers(camp, mappedConsumables = []) {
   }
   const inGpsBlocker = gpsLocationBlocker(camp.executorGps || {}, 'selfie');
   if (inGpsBlocker) blockers.push(inGpsBlocker);
-  const outGpsBlocker = gpsLocationBlocker(camp.executorGpsOut || {}, 'out selfie');
-  if (outGpsBlocker) blockers.push(outGpsBlocker);
+  if (types.gps_selfie_out) {
+    const outGpsBlocker = gpsLocationBlocker(camp.executorGpsOut || {}, 'out selfie');
+    if (outGpsBlocker) blockers.push(outGpsBlocker);
+  }
 
   blockers.push(...getConsumablesCompletionBlockers([], camp.consumablesUsed));
   // Deduplicate
