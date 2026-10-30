@@ -71,7 +71,7 @@ test('applyGpsCaptureOutTime overwrites a previous Out Time on recapture', () =>
   assert.equal(camp.outTime, '13:40');
 });
 
-test('Activity Form submit requires Out GPS Selfie', () => {
+test('Activity Form submit does not require Out GPS Selfie', () => {
   const blockers = executorSubmitBlockers({
     inTime: '09:02',
     actualPatients: 0,
@@ -83,7 +83,8 @@ test('Activity Form submit requires Out GPS Selfie', () => {
     ],
     executorGps: { latitude: 19.1558, longitude: 72.8509 },
   });
-  assert.ok(blockers.includes('Capture Out GPS Selfie (GO)'));
+  assert.equal(blockers.includes('Capture Out GPS Selfie (GO)'), false);
+  assert.deepEqual(blockers, []);
 });
 
 test('Activity Form submit does not require Out Time', () => {
@@ -102,6 +103,22 @@ test('Activity Form submit does not require Out Time', () => {
   });
   assert.equal(blockers.includes('Enter Out Time'), false);
   assert.deepEqual(blockers, []);
+});
+
+test('Activity Form submit still validates Out GPS when a GO selfie is captured', () => {
+  const blockers = executorSubmitBlockers({
+    inTime: '09:02',
+    actualPatients: 0,
+    rxCount: 0,
+    executionDocuments: [
+      { docType: 'doctor_form' },
+      { docType: 'patient_form' },
+      { docType: 'gps_selfie' },
+      { docType: 'gps_selfie_out' },
+    ],
+    executorGps: { latitude: 19.1558, longitude: 72.8509 },
+  });
+  assert.ok(blockers.includes('Capture GPS location with the out selfie'));
 });
 
 test('Activity Form submit does not require mapped consumables when none were used', () => {
