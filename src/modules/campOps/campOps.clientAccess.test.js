@@ -4,6 +4,7 @@ import {
   parseAssignedUserEmails,
   applyClientScopeToFilter,
   applyClientScopeToIdField,
+  filterRowsByCampClientScope,
   isClientIdInScope,
   isClientMasterInScope,
   isHealthcareCampCoordinator,
@@ -79,6 +80,17 @@ test('isClientMasterInScope matches client + division + method', () => {
     programName: 'Cardio',
     campName: 'BMD',
   }), false);
+});
+
+test('filterRowsByCampClientScope drops camps outside assigned programs', () => {
+  const scoped = [{ clientId: 'abc', programName: 'Ortho', campName: 'BMD' }];
+  const rows = [
+    { clientId: 'abc', campaignType: 'Ortho', campaignName: 'BMD' },
+    { clientId: 'abc', campaignType: 'Ortho', campaignName: 'Screening' },
+  ];
+  const out = filterRowsByCampClientScope(rows, scoped, { camp: true });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].campaignName, 'BMD');
 });
 
 test('campMatchesProgramAssignment matches camp division and method', () => {

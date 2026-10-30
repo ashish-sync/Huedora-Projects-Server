@@ -16,6 +16,7 @@ export const CAMP_OPS_SOURCES = [
   'api',
   'paste',
   'parser',
+  'program_form',
 ];
 
 export const CONTACT_PERSON_LEVELS = [
