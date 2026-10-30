@@ -216,6 +216,8 @@ import {
 import {
   campMatchesProgramAssignment,
   syncAssignedUserEmailsForProgramScope,
+  applyAssignedUserCampFilter,
+  buildOpsBoardFilterCatalog,
 } from './clientMaster.programScope.js';
 import {
   withRequestReview,
@@ -458,9 +460,10 @@ async function loadCampForUser(req, campId) {
 }
 
 async function scopeCampFilter(req, filter) {
+  let next = filter;
   const scoped = await resolveCampClientScope(req.user);
-  if (!scoped) return filter;
-  return applyClientScopeToFilter(filter, scoped);
+  if (scoped) next = applyClientScopeToFilter(next, scoped);
+  return applyAssignedUserCampFilter(next, req.query);
 }
 
 async function resolveScopedCampPredicate(req) {
@@ -3675,6 +3678,38 @@ function idsEqualClient(a, b) {
 }
 
 router.get(
+  '/client-masters/ops-board-filters',
+  canReadClientMaster,
+  asyncHandler(async (req, res) => {
+    let rows = await CampOpsClientMaster.find({ isDeleted: false })
+      .select('clientId clientName programName campName assignedUserEmails isActive isDeleted');
+    const scoped = await resolveCampClientScope(req.user);
+    if (scoped) {
+      rows = rows.filter((row) => isClientMasterInScope(scoped, row));
+    }
+
+    const clientIds = [...new Set(rows.map((row) => String(row.clientId || '').trim()).filter(Boolean))];
+    const assignedEmails = [...new Set(rows.flatMap((row) => parseAssignedUserEmails(row.assignedUserEmails)))];
+
+    const [clients, users] = await Promise.all([
+      clientIds.length
+        ? CampOpsClient.find({ isDeleted: false, _id: { $in: clientIds } }).select('name displayName')
+        : [],
+      assignedEmails.length
+        ? User.find({
+          isDeleted: false,
+          $or: assignedEmails.map((email) => ({
+            email: new RegExp(`^${escapeRegex(email)}$`, 'i'),
+          })),
+        }).select('fullName name email')
+        : [],
+    ]);
+
+    res.json(buildOpsBoardFilterCatalog(rows, { clients, users }));
+  })
+);
+
+router.get(
   '/client-masters/by-client/:clientId',
   canReadClientMaster,
   asyncHandler(async (req, res) => {
@@ -3756,6 +3791,8 @@ router.get(
         divisionMap.set(division, {
           programName: division,
           campNames: [],
+          assignedUserEmails: [],
+          assignedUsersByCamp: {},
           isActive: false,
         });
       }
@@ -3764,12 +3801,47 @@ router.get(
       if (campName && !entry.campNames.includes(campName)) {
         entry.campNames.push(campName);
       }
-      if (record.isActive !== false) entry.isActive = true;
+      if (record.isActive !== false) {
+        entry.isActive = true;
+        const emails = parseAssignedUserEmails(record.assignedUserEmails);
+        for (const email of emails) {
+          if (!entry.assignedUserEmails.some((item) => item.toLowerCase() === email)) {
+            entry.assignedUserEmails.push(email);
+          }
+          if (campName) {
+            if (!entry.assignedUsersByCamp[campName]) entry.assignedUsersByCamp[campName] = [];
+            const list = entry.assignedUsersByCamp[campName];
+            if (!list.some((item) => item.toLowerCase() === email)) list.push(email);
+          }
+        }
+      }
+    }
+
+    const uniqueEmails = [...new Set(
+      [...divisionMap.values()].flatMap((entry) => entry.assignedUserEmails),
+    )];
+    const nameByEmail = new Map();
+    if (uniqueEmails.length) {
+      const users = await User.find({
+        isDeleted: false,
+        $or: uniqueEmails.map((email) => ({
+          email: new RegExp(`^${escapeRegex(email)}$`, 'i'),
+        })),
+      }).select('fullName name email');
+      for (const user of users) {
+        const key = String(user.email || '').trim().toLowerCase();
+        if (!key) continue;
+        nameByEmail.set(key, String(user.fullName || user.name || '').trim());
+      }
     }
 
     res.json({
       data: [...divisionMap.values()],
       divisions: [...divisionMap.keys()],
+      assignedUsers: uniqueEmails.map((email) => ({
+        email,
+        name: nameByEmail.get(email.toLowerCase()) || '',
+      })),
     });
   })
 );

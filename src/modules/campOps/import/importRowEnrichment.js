@@ -72,6 +72,7 @@ export async function enrichMappedImportRowsFromPin(rows = []) {
       out.push({
         ...row,
         pincode: pin,
+        pinMasterMissing: true,
         district: trimStr(row.district) || trimStr(row.city),
         hq: trimStr(row.hq) || trimStr(row.city) || trimStr(row.district),
         zone: trimStr(row.zone) || (state ? resolveZoneNameForState(state) || '' : ''),

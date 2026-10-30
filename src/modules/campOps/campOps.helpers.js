@@ -742,7 +742,12 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
       remarks: trimStr(row.remarks),
     });
 
-    const blockers = getRequestStageBlockers(normalized);
+    delete normalized.pinMasterMissing;
+
+    const blockers = getRequestStageBlockers({
+      ...normalized,
+      pinMasterMissing: Boolean(row.pinMasterMissing),
+    });
     const completion = getRequestStageCompletion(normalized);
     const pasteCreationBlockers = isPaste ? getPasteCreationBlockers(normalized) : [];
     const pasteMissingKeys = isPaste ? getPasteCreationMissingKeys(normalized) : [];
