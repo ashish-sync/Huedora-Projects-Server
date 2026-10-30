@@ -145,8 +145,9 @@ const REQUEST_COMPLETION_CHECKS = [
   },
 ];
 
-export function getRequestStageBlockers(camp = {}) {
+export function getRequestStageBlockers(camp = {}, options = {}) {
   const errors = [];
+  const skipLocation = options.skipLocation === true;
   const source = trimStr(camp.source);
   if (!source || !CAMP_OPS_SOURCES.includes(source)) {
     errors.push('Source of request is required');
@@ -179,21 +180,23 @@ export function getRequestStageBlockers(camp = {}) {
   }
   if (!hasText(camp.doctorCode)) errors.push('Doctor code is required');
   if (!hasText(camp.campAddress)) errors.push('Camp address is required');
-  if (!hasText(camp.state)) errors.push('State is required');
-  if (!hasText(camp.district)) errors.push('District is required');
-  if (!hasText(camp.city)) errors.push('City is required');
-  if (!/^\d{6}$/.test(trimStr(camp.pincode))) errors.push('Valid 6-digit pin code is required');
-  if (!hasText(camp.hq)) errors.push('HQ is required');
-  const stateName = trimStr(camp.state);
-  const zone = trimStr(camp.zone);
-  if (!zone) {
-    errors.push('Zone is required');
-  } else if (stateName) {
-    const expected = resolveZoneNameForState(stateName);
-    if (expected && expected !== zone) {
-      errors.push(`Zone must be ${expected} for ${stateName}`);
+  if (!skipLocation) {
+    if (!hasText(camp.state)) errors.push('State is required');
+    if (!hasText(camp.district)) errors.push('District is required');
+    if (!hasText(camp.city)) errors.push('City is required');
+    if (!/^\d{6}$/.test(trimStr(camp.pincode))) errors.push('Valid 6-digit pin code is required');
+    const stateName = trimStr(camp.state);
+    const zone = trimStr(camp.zone);
+    if (!zone) {
+      errors.push('Zone is required');
+    } else if (stateName) {
+      const expected = resolveZoneNameForState(stateName);
+      if (expected && expected !== zone) {
+        errors.push(`Zone must be ${expected} for ${stateName}`);
+      }
     }
   }
+  if (!hasText(camp.hq)) errors.push('HQ is required');
 
   const expectedPatientsRaw = String(camp.expectedPatients ?? '').trim();
   if (!expectedPatientsRaw) {
@@ -242,8 +245,8 @@ export function getRequestStageCompletion(camp = {}) {
   };
 }
 
-export function assertRequestStageComplete(camp = {}) {
-  const blockers = getRequestStageBlockers(camp);
+export function assertRequestStageComplete(camp = {}, options = {}) {
+  const blockers = getRequestStageBlockers(camp, options);
   if (blockers.length) {
     const err = new Error(blockers[0]);
     err.blockers = blockers;

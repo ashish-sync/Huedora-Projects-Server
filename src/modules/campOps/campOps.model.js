@@ -244,6 +244,9 @@ export const CampOpsClientMaster = defineCollection('camp_ops_client_masters', {
   kmsUnit: 0,
   mappedConsumables: [],
   isActive: true,
+  /** SHA-256 of the public New Camp Request form token. Raw token is never stored. */
+  requestFormTokenHash: '',
+  requestFormTokenCreatedAt: '',
   createdById: null,
   updatedById: null,
 });
