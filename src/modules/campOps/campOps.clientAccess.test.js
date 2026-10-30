@@ -14,6 +14,9 @@ import {
 import {
   campMatchesProgramAssignment,
   resolveAssignedUserEmailsFromRecords,
+  programAssignmentsForAssignedUser,
+  applyAssignedUserAssignmentsToFilter,
+  buildOpsBoardFilterCatalog,
 } from './clientMaster.programScope.js';
 import { CampOpsClientMaster } from './campOps.model.js';
 import { PERMISSIONS } from '../../config/constants.js';
@@ -239,4 +242,109 @@ test('resolveCampClientScope hides camps from unassigned Healthcare Camp Coordin
   });
   assert.ok(Array.isArray(scope));
   assert.equal(scope.length, 0);
+});
+
+test('programAssignmentsForAssignedUser maps Client Master emails to camp program scopes', () => {
+  const records = [
+    {
+      clientId: 'client-1',
+      programName: 'Oncology',
+      campName: 'BMD',
+      assignedUserEmails: ['ops@tylo.test', 'lead@tylo.test'],
+      isActive: true,
+    },
+    {
+      clientId: 'client-1',
+      programName: 'Cardio',
+      campName: 'Dietician',
+      assignedUserEmails: ['ops@tylo.test'],
+      isActive: true,
+    },
+    {
+      clientId: 'client-2',
+      programName: 'Oncology',
+      campName: 'BMD',
+      assignedUserEmails: ['ops@tylo.test'],
+      isActive: true,
+    },
+  ];
+
+  assert.equal(programAssignmentsForAssignedUser(records, {}), null);
+  assert.deepEqual(
+    programAssignmentsForAssignedUser(records, { email: 'ops@tylo.test', clientId: 'client-1' }),
+    [
+      { clientId: 'client-1', programName: 'Oncology', campName: 'BMD' },
+      { clientId: 'client-1', programName: 'Cardio', campName: 'Dietician' },
+    ],
+  );
+  assert.deepEqual(
+    programAssignmentsForAssignedUser(records, {
+      email: 'ops@tylo.test',
+      clientId: 'client-1',
+      programName: 'Oncology',
+      campName: 'BMD',
+    }),
+    [{ clientId: 'client-1', programName: 'Oncology', campName: 'BMD' }],
+  );
+  assert.deepEqual(
+    programAssignmentsForAssignedUser(records, { email: 'missing@tylo.test', clientId: 'client-1' }),
+    [],
+  );
+});
+
+test('buildOpsBoardFilterCatalog cascades method → division → client and lists assigned users independently', () => {
+  const catalog = buildOpsBoardFilterCatalog([
+    {
+      clientId: 'client-1',
+      clientName: 'Acme',
+      programName: 'Oncology',
+      campName: 'BMD',
+      assignedUserEmails: ['ops@tylo.test'],
+      isActive: true,
+    },
+    {
+      clientId: 'client-2',
+      clientName: 'Beta',
+      programName: 'Cardio',
+      campName: 'Dietician',
+      assignedUserEmails: ['lead@tylo.test'],
+      isActive: true,
+    },
+  ], {
+    clients: [
+      { _id: 'client-1', name: 'Acme' },
+      { _id: 'client-2', name: 'Beta' },
+    ],
+    users: [
+      { email: 'ops@tylo.test', fullName: 'Ops User' },
+      { email: 'lead@tylo.test', fullName: 'Lead User' },
+    ],
+  });
+
+  assert.deepEqual(catalog.methods, ['BMD', 'Dietician']);
+  assert.deepEqual(catalog.divisionsByMethod.BMD, ['Oncology']);
+  assert.deepEqual(catalog.clientsByMethod.BMD, [{ _id: 'client-1', name: 'Acme' }]);
+  assert.deepEqual(catalog.clientsByMethodDivision.BMD.Oncology, [{ _id: 'client-1', name: 'Acme' }]);
+  assert.deepEqual(catalog.assignedUsers.map((user) => user.email).sort(), [
+    'lead@tylo.test',
+    'ops@tylo.test',
+  ]);
+});
+
+test('applyAssignedUserAssignmentsToFilter scopes camps to assigned programs', () => {
+  assert.deepEqual(
+    applyAssignedUserAssignmentsToFilter({ isDeleted: false }, null),
+    { isDeleted: false },
+  );
+  assert.equal(
+    applyAssignedUserAssignmentsToFilter({ isDeleted: false }, [])._id,
+    '__none__',
+  );
+  const next = applyAssignedUserAssignmentsToFilter(
+    { isDeleted: false, clientId: 'client-1' },
+    [{ clientId: 'client-1', programName: 'Oncology', campName: 'BMD' }],
+  );
+  assert.deepEqual(next.$and[0].$or, [
+    { clientId: 'client-1', campaignType: 'Oncology', campaignName: 'BMD' },
+  ]);
 });
