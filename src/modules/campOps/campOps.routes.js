@@ -185,6 +185,7 @@ import {
   fetchCampsForExport,
   parseExportColumnKeys,
   parseExportFormat,
+  serializeExportTemplate,
 } from './campOps.export.js';
 import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.requestValidation.js';
 import { assertHistoricalCampDatesAllowed, localTodayIso } from './campDatePolicy.js';
@@ -234,6 +235,7 @@ import {
   notifyCampBulkSummary,
   notifyCampHcwGapApproval,
 } from './campOps.notifications.js';
+import { createOrRefreshProgramRequestLink } from './campRequestForm.service.js';
 import { computeClientMasterPoBalanceMap } from '../finance/poUtilization.service.js';
 import {
   handleEmailArchive,
@@ -1154,8 +1156,8 @@ router.get(
   '/camps/export/templates',
   canRead,
   asyncHandler(async (_req, res) => {
-    const data = await CampOpsExportTemplate.find({ isDeleted: false }).sort('-updatedAt');
-    res.json({ data });
+    const rows = await CampOpsExportTemplate.find({ isDeleted: false }).sort('-updatedAt');
+    res.json({ data: rows.map(serializeExportTemplate) });
   }),
 );
 
@@ -1180,15 +1182,17 @@ router.post(
       createdById: a.id,
       createdByEmail: a.email,
     });
-    res.status(201).json({ data: row });
+    res.status(201).json({ data: serializeExportTemplate(row) });
   }),
 );
 
 router.delete(
   '/camps/export/templates/:id',
-  requireAdmin,
+  canRequest,
   asyncHandler(async (req, res) => {
-    const row = await CampOpsExportTemplate.findOne({ _id: req.params.id, isDeleted: false });
+    const id = trimStr(req.params.id);
+    if (!id) throw new AppError('Template not found', 404, 'NOT_FOUND');
+    const row = await CampOpsExportTemplate.findOne({ _id: id, isDeleted: false });
     if (!row) throw new AppError('Template not found', 404, 'NOT_FOUND');
     row.isDeleted = true;
     row.deletedAt = new Date().toISOString();
@@ -3802,6 +3806,31 @@ router.get(
       },
     });
   })
+);
+
+/** Mint a program-specific public New Camp Request form link. */
+router.post(
+  '/client-masters/:id/request-form-link',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, row.clientId);
+    await assertClientMasterAccess(req.user, row);
+    const a = actor(req);
+    const { url, path, token, createdAt } = await createOrRefreshProgramRequestLink(row, a);
+    await audit(req, 'camp_ops.program_request_link_mint', 'camp_ops_client_master', row._id, null, {
+      createdAt,
+    });
+    res.json({
+      data: {
+        url,
+        path,
+        token,
+        createdAt,
+      },
+    });
+  }),
 );
 
 router.post(
