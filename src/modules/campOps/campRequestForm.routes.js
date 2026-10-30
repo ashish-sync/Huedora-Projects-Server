@@ -2,12 +2,18 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { asyncHandler } from '../../utils/helpers.js';
 import { writeAudit } from '../../utils/audit.js';
-import { notifyCampWorkflow } from './campOps.notifications.js';
+import { sendCsv } from '../../utils/excelExport.js';
+import { excelUpload, assertSpreadsheetUpload, discardUploadBuffer, sampleCsvFilename } from '../../utils/masterExcel.js';
+import { importRateLimiter } from '../../middleware/importRateLimit.js';
+import { notifyCampWorkflow, notifyCampBulkSummary } from './campOps.notifications.js';
 import {
+  importProgramFormFile,
   listProgramFormCities,
   listProgramFormDistricts,
   listProgramFormStates,
   lookupProgramFormPin,
+  PROGRAM_FORM_SAMPLE_FIELDS,
+  PROGRAM_FORM_SAMPLE_ROW,
   publicProgramRequestContext,
   resolveProgramByRequestToken,
   submitProgramCampRequest,
@@ -61,6 +67,51 @@ router.post(
         status: camp.status,
       },
     });
+  }),
+);
+
+router.get(
+  '/:token/import/sample',
+  asyncHandler(async (req, res) => {
+    await resolveProgramByRequestToken(req.params.token);
+    sendCsv(
+      res,
+      sampleCsvFilename('camp-request-form'),
+      PROGRAM_FORM_SAMPLE_FIELDS.map((field) => field.label),
+      [PROGRAM_FORM_SAMPLE_ROW],
+    );
+  }),
+);
+
+router.post(
+  '/:token/import',
+  importRateLimiter,
+  excelUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    try {
+      assertSpreadsheetUpload(req.file);
+      const result = await importProgramFormFile(req.params.token, req.file);
+      await writeAudit({
+        action: 'camp_ops.program_form_import',
+        entityType: 'camp_ops_import',
+        entityId: null,
+        after: result.summary,
+        actorEmail: 'program-form',
+        requestId: req.correlationId,
+        actorType: 'SYSTEM',
+        ip: req.ip,
+      });
+      await notifyCampBulkSummary({
+        action: 'import',
+        actorId: null,
+        success: result.created.map((row) => ({ id: row.id, campId: row.campId })),
+        skipped: result.skipped,
+        failed: result.failed,
+      });
+      res.status(result.summary.created ? 201 : 200).json({ data: result });
+    } finally {
+      discardUploadBuffer(req.file);
+    }
   }),
 );
 
