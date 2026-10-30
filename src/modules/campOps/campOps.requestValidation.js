@@ -9,6 +9,8 @@ import { normalizePasteStartTime } from './pasteTimeNormalize.js';
 
 export const REQUEST_PARTIAL_THRESHOLD = 0.6;
 
+export const PIN_CODE_MISSING_IN_MASTER = 'Pin Code Missing in Master';
+
 /**
  * Manual Paste creation gate (only these four). Everything else is optional enrichment.
  * Full request-stage blockers still apply later for approval completeness.
@@ -180,23 +182,28 @@ export function getRequestStageBlockers(camp = {}, options = {}) {
   }
   if (!hasText(camp.doctorCode)) errors.push('Doctor code is required');
   if (!hasText(camp.campAddress)) errors.push('Camp address is required');
+  const pinMissingInMaster = camp.pinMasterMissing === true && /^\d{6}$/.test(trimStr(camp.pincode));
   if (!skipLocation) {
-    if (!hasText(camp.state)) errors.push('State is required');
-    if (!hasText(camp.district)) errors.push('District is required');
-    if (!hasText(camp.city)) errors.push('City is required');
-    if (!/^\d{6}$/.test(trimStr(camp.pincode))) errors.push('Valid 6-digit pin code is required');
-    const stateName = trimStr(camp.state);
-    const zone = trimStr(camp.zone);
-    if (!zone) {
-      errors.push('Zone is required');
-    } else if (stateName) {
-      const expected = resolveZoneNameForState(stateName);
-      if (expected && expected !== zone) {
-        errors.push(`Zone must be ${expected} for ${stateName}`);
+    if (pinMissingInMaster) {
+      errors.push(PIN_CODE_MISSING_IN_MASTER);
+    } else {
+      if (!hasText(camp.state)) errors.push('State is required');
+      if (!hasText(camp.district)) errors.push('District is required');
+      if (!hasText(camp.city)) errors.push('City is required');
+      if (!/^\d{6}$/.test(trimStr(camp.pincode))) errors.push('Valid 6-digit pin code is required');
+      const stateName = trimStr(camp.state);
+      const zone = trimStr(camp.zone);
+      if (!zone) {
+        errors.push('Zone is required');
+      } else if (stateName) {
+        const expected = resolveZoneNameForState(stateName);
+        if (expected && expected !== zone) {
+          errors.push(`Zone must be ${expected} for ${stateName}`);
+        }
       }
     }
   }
-  if (!hasText(camp.hq)) errors.push('HQ is required');
+  if (!hasText(camp.hq) && !pinMissingInMaster) errors.push('HQ is required');
 
   const expectedPatientsRaw = String(camp.expectedPatients ?? '').trim();
   if (!expectedPatientsRaw) {

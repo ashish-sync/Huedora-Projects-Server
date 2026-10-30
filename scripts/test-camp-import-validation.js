@@ -111,6 +111,20 @@ const cases = [
     expectErrorIncludes: '6-digit pin code',
   },
   {
+    name: 'PIN missing from geography master reports Pin Code Missing in Master instead of State or Zone',
+    rows: [{
+      ...validRow,
+      pincode: '999999',
+      state: '',
+      zone: '',
+      pinMasterMissing: true,
+    }],
+    expectValid: 0,
+    expectInvalid: 1,
+    expectErrorIncludes: 'Pin Code Missing in Master',
+    expectErrorExcludes: ['State is required', 'Zone is required'],
+  },
+  {
     name: 'zone mismatch for state',
     rows: [{ ...validRow, zone: 'North Zone' }],
     expectValid: 0,
@@ -315,6 +329,15 @@ for (const testCase of cases) {
           errors.some((err) => String(err).includes(testCase.expectErrorIncludes)),
           `expected error containing "${testCase.expectErrorIncludes}", got: ${errors.join('; ')}`,
         );
+      }
+      if (testCase.expectErrorExcludes) {
+        const errors = invalidRows[0]?.errors || [];
+        for (const needle of testCase.expectErrorExcludes) {
+          assert(
+            !errors.some((err) => String(err).includes(needle)),
+            `did not expect error containing "${needle}", got: ${errors.join('; ')}`,
+          );
+        }
       }
       if (testCase.assertRow && validRows[0]) {
         testCase.assertRow(validRows[0]);
