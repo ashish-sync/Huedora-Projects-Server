@@ -203,3 +203,14 @@ test('buildCampFilter maps campaign and campaignName to campaignName', () => {
   const byName = buildCampFilter({ campaignName: 'Dietician' });
   assert.equal(byName.campaignName, 'Dietician');
 });
+
+test('buildCampFilter applies client, division, and method together', () => {
+  const filter = buildCampFilter({
+    client: 'client-1',
+    campaignType: 'Oncology',
+    campaign: 'BMD',
+  });
+  assert.equal(filter.clientId, 'client-1');
+  assert.equal(filter.campaignType, 'Oncology');
+  assert.equal(filter.campaignName, 'BMD');
+});
