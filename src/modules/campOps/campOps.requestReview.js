@@ -62,6 +62,35 @@ export function isReviewOverdue(submittedAt, now = new Date()) {
   return elapsedWorkingMs(submittedAt, now) >= SIX_WORKING_HOURS_MS;
 }
 
+/**
+ * Latest submittedAt that is already review-overdue at `now`
+ * (exactly 6 working hours earlier). Used by the Mongo operations-board
+ * pipeline so dashboard counts match list/export SLA math without $function.
+ */
+export function reviewOverdueThreshold(now = new Date()) {
+  const t1 = new Date(now).getTime();
+  if (!Number.isFinite(t1)) return new Date(0);
+
+  let remaining = SIX_WORKING_HOURS_MS;
+  const cursor = new Date(t1);
+  cursor.setHours(0, 0, 0, 0);
+
+  for (let i = 0; i < 366 && remaining > 0; i += 1) {
+    const window = workWindowForDate(cursor);
+    if (window) {
+      const segEnd = Math.min(t1, window.end);
+      const segStart = window.start;
+      if (segEnd > segStart) {
+        const available = segEnd - segStart;
+        if (remaining <= available) return new Date(segEnd - remaining);
+        remaining -= available;
+      }
+    }
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return new Date(t1 - SIX_WORKING_HOURS_MS);
+}
+
 /** True when required request-stage camp details are incomplete. */
 export function hasIncompleteRequestDetails(camp = {}) {
   if (camp.requestIncomplete) return true;
@@ -81,6 +110,26 @@ export function resolveRequestReviewStatus(camp = {}, now = new Date()) {
   if (camp.status === 'pending_review') {
     if (hasIncompleteRequestDetails(camp)) return 'information_requested';
     if (isReviewOverdue(camp.submittedAt, now)) return 'review_overdue';
+    return 'review_pending';
+  }
+  return camp.requestReviewStatus || '';
+}
+
+/**
+ * Operations-board request bucket — stored flags + 6 working-hour clock.
+ * Does not run full request-detail blockers (those belong on list/export).
+ */
+export function resolveRequestReviewBoardStatus(camp = {}, now = new Date()) {
+  if (camp.status === 'rejected' || camp.requestReviewStatus === 'request_rejected') {
+    return 'request_rejected';
+  }
+  if (camp.requestReviewStatus === 'information_requested' || camp.requestIncomplete) {
+    return 'information_requested';
+  }
+  if (camp.status === 'pending_review') {
+    if (camp.requestReviewStatus === 'review_overdue' || isReviewOverdue(camp.submittedAt, now)) {
+      return 'review_overdue';
+    }
     return 'review_pending';
   }
   return camp.requestReviewStatus || '';

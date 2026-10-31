@@ -8,6 +8,7 @@ import {
   finalizeOperationsBoard,
   OPERATIONS_BOARD_STAGES,
 } from './campOps.operationsBoard.js';
+import { reviewOverdueThreshold } from './campOps.requestReview.js';
 
 function groupRowsToMap(rows = []) {
   const map = new Map();
@@ -167,11 +168,91 @@ export function formatCampDashboardStats(bucket = {}, { clients = [], campaigns 
   };
 }
 
+function submittedAtDateExpr() {
+  return {
+    $convert: {
+      input: '$submittedAt',
+      to: 'date',
+      onError: null,
+      onNull: null,
+    },
+  };
+}
+
+/** Request-stage board status — stored flags plus 6 working-hour SLA from submittedAt. */
+function requestBoardStatusExpr(now = new Date()) {
+  const overdueAt = reviewOverdueThreshold(now);
+  const submittedAt = submittedAtDateExpr();
+  return {
+    $let: {
+      vars: {
+        rrs: { $ifNull: ['$requestReviewStatus', ''] },
+        st: { $ifNull: ['$status', ''] },
+        incomplete: { $eq: [{ $ifNull: ['$requestIncomplete', false] }, true] },
+      },
+      in: {
+        $switch: {
+          branches: [
+            {
+              case: {
+                $or: [
+                  { $eq: ['$$st', 'rejected'] },
+                  { $eq: ['$$rrs', 'request_rejected'] },
+                ],
+              },
+              then: 'request_rejected',
+            },
+            {
+              case: {
+                $or: [
+                  { $eq: ['$$rrs', 'information_requested'] },
+                  { $eq: ['$$incomplete', true] },
+                ],
+              },
+              then: 'information_requested',
+            },
+            {
+              case: {
+                $and: [
+                  { $eq: ['$$st', 'pending_review'] },
+                  {
+                    $or: [
+                      { $eq: ['$$rrs', 'review_overdue'] },
+                      {
+                        $and: [
+                          { $ne: [submittedAt, null] },
+                          { $lte: [submittedAt, { $toDate: overdueAt.toISOString() }] },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+              then: 'review_overdue',
+            },
+            {
+              case: {
+                $or: [
+                  { $eq: ['$$rrs', 'review_pending'] },
+                  { $eq: ['$$st', 'pending_review'] },
+                ],
+              },
+              then: 'review_pending',
+            },
+          ],
+          default: '',
+        },
+      },
+    },
+  };
+}
+
 /**
  * Operations board: group by derived stage + status in Mongo (no per-camp hydrate).
- * Uses stored lifecycle / review / payment fields (same vocabulary as Manage filters).
+ * Request review pending vs overdue uses the same 6 working-hour SLA as
+ * resolveRequestReviewStatus / list / export — not the stored snapshot alone.
  */
-export function campOperationsBoardPipeline(filter = {}) {
+export function campOperationsBoardPipeline(filter = {}, { now = new Date() } = {}) {
   return [
     { $match: filter },
     {
@@ -229,36 +310,7 @@ export function campOperationsBoardPipeline(filter = {}) {
             branches: [
               {
                 case: { $eq: ['$_boardStage', 'request'] },
-                then: {
-                  $let: {
-                    vars: {
-                      rrs: { $ifNull: ['$requestReviewStatus', ''] },
-                      st: { $ifNull: ['$status', ''] },
-                    },
-                    in: {
-                      $switch: {
-                        branches: [
-                          { case: { $eq: ['$$rrs', 'request_rejected'] }, then: 'request_rejected' },
-                          {
-                            case: { $eq: ['$$rrs', 'information_requested'] },
-                            then: 'information_requested',
-                          },
-                          { case: { $eq: ['$$rrs', 'review_overdue'] }, then: 'review_overdue' },
-                          {
-                            case: {
-                              $or: [
-                                { $eq: ['$$rrs', 'review_pending'] },
-                                { $eq: ['$$st', 'pending_review'] },
-                              ],
-                            },
-                            then: 'review_pending',
-                          },
-                        ],
-                        default: '',
-                      },
-                    },
-                  },
-                },
+                then: requestBoardStatusExpr(now),
               },
               {
                 case: { $eq: ['$_boardStage', 'assignment'] },

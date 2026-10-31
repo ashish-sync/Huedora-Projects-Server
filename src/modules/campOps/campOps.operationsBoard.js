@@ -4,7 +4,7 @@
  */
 
 import { normalizeLifecycleStage, resolveEffectiveExecutionStatus, EXECUTION_STATUS } from './campOps.lifecycle.js';
-import { resolveRequestReviewStatus } from './campOps.requestReview.js';
+import { resolveRequestReviewBoardStatus } from './campOps.requestReview.js';
 import { matchesExecutionFilter } from './campStageFilters.js';
 
 const REQUEST_STATUSES = [
@@ -56,7 +56,7 @@ export function resolveOperationsBoardStage(camp = {}) {
 
 export function resolveOperationsBoardStatus(camp = {}, stage = resolveOperationsBoardStage(camp), now = new Date()) {
   if (stage === 'request') {
-    const resolved = resolveRequestReviewStatus(camp, now);
+    const resolved = resolveRequestReviewBoardStatus(camp, now);
     if (resolved === 'request_rejected') return 'request_rejected';
     if (resolved === 'information_requested') return 'information_requested';
     if (resolved === 'review_overdue') return 'review_overdue';
