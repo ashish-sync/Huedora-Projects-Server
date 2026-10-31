@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   elapsedWorkingMs,
   isReviewOverdue,
+  reviewOverdueThreshold,
   resolveRequestReviewStatus,
+  resolveRequestReviewBoardStatus,
   hasIncompleteRequestDetails,
   applyRequestReviewTransition,
 } from './campOps.requestReview.js';
@@ -32,6 +34,24 @@ test('isReviewOverdue is true at exactly 6 working hours', () => {
   const submitted = atLocal(2026, 8, 10, 9, 0);
   const now = atLocal(2026, 8, 10, 15, 0);
   assert.equal(isReviewOverdue(submitted, now), true);
+});
+
+test('reviewOverdueThreshold matches isReviewOverdue on either side of the cut', () => {
+  const samples = [
+    atLocal(2026, 8, 10, 15, 0), // Mon 15:00
+    atLocal(2026, 8, 10, 11, 0), // Mon 11:00 — spans Sunday
+    atLocal(2026, 8, 7, 20, 0), // Fri after hours
+    atLocal(2026, 8, 9, 12, 0), // Sunday midday
+  ];
+  for (const now of samples) {
+    const threshold = reviewOverdueThreshold(now);
+    assert.equal(isReviewOverdue(threshold, now), true, `threshold overdue at ${now.toISOString()}`);
+    assert.equal(
+      isReviewOverdue(new Date(threshold.getTime() + 1), now),
+      false,
+      `threshold+1ms still pending at ${now.toISOString()}`,
+    );
+  }
 });
 
 test('resolveRequestReviewStatus: incomplete wins over overdue clock', () => {
@@ -120,6 +140,35 @@ test('resolveRequestReviewStatus: complete + past SLA → review_overdue', () =>
   assert.equal(
     resolveRequestReviewStatus(camp, atLocal(2026, 8, 10, 12, 0)),
     'review_overdue',
+  );
+});
+
+test('resolveRequestReviewBoardStatus uses stored flags and SLA without full camp fields', () => {
+  const now = atLocal(2026, 8, 10, 16, 0);
+  assert.equal(
+    resolveRequestReviewBoardStatus({
+      status: 'pending_review',
+      requestReviewStatus: 'review_pending',
+      submittedAt: atLocal(2026, 8, 10, 9, 0).toISOString(),
+    }, now),
+    'review_overdue',
+  );
+  assert.equal(
+    resolveRequestReviewBoardStatus({
+      status: 'pending_review',
+      requestReviewStatus: 'review_pending',
+      submittedAt: atLocal(2026, 8, 10, 12, 0).toISOString(),
+    }, now),
+    'review_pending',
+  );
+  assert.equal(
+    resolveRequestReviewBoardStatus({
+      status: 'pending_review',
+      requestReviewStatus: 'review_pending',
+      requestIncomplete: true,
+      submittedAt: atLocal(2026, 8, 5, 10, 0).toISOString(),
+    }, now),
+    'information_requested',
   );
 });
 

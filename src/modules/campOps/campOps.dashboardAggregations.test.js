@@ -47,6 +47,17 @@ test('operations board pipeline groups by stage and status', () => {
   assert.ok(pipeline.some((s) => s.$group?._id?.stage === '$_boardStage'));
 });
 
+test('operations board pipeline applies working-hour SLA to stored review_pending', () => {
+  const now = new Date(2026, 7, 10, 15, 0, 0, 0);
+  const pipeline = campOperationsBoardPipeline({ isDeleted: false }, { now });
+  const statusStep = pipeline.find((step) => step.$addFields?._boardStatus);
+  const encoded = JSON.stringify(statusStep);
+  assert.match(encoded, /submittedAt/);
+  assert.match(encoded, /review_overdue/);
+  assert.match(encoded, /requestIncomplete/);
+  assert.ok(encoded.includes(now.getFullYear().toString()) || encoded.includes('2026'));
+});
+
 test('formatOperationsBoardFromGroups fills stage totals', () => {
   const board = formatOperationsBoardFromGroups([
     { _id: { stage: 'request', status: 'review_pending' }, count: 4 },
