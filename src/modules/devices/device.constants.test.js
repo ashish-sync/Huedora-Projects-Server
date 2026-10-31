@@ -14,7 +14,7 @@ test('Individual and Service Provider custody require a directory contact', () =
   assert.equal(custodyRequiresCustodianContact(''), false);
 });
 
-test('contactMatchesCustody requires Healthcare Worker type to match custody', () => {
+test('contactMatchesCustody accepts any Healthcare Worker for Individual or Service Provider custody', () => {
   const individual = {
     contactCategory: 'Healthcare Worker',
     resourceType: 'Individual',
@@ -27,16 +27,21 @@ test('contactMatchesCustody requires Healthcare Worker type to match custody', (
     contactCategory: 'Healthcare Worker',
     resourceType: 'Full-Time',
   };
+  const other = {
+    contactCategory: 'Healthcare Worker',
+    resourceType: 'Other',
+  };
   const client = { contactCategory: 'Client', resourceType: '' };
 
   assert.equal(contactMatchesCustody(individual, 'Individual'), true);
   assert.equal(contactMatchesCustody(serviceProvider, 'Service Provider'), true);
-  assert.equal(contactMatchesCustody(serviceProvider, 'Individual'), false);
-  assert.equal(contactMatchesCustody(individual, 'Service Provider'), false);
-  assert.equal(contactMatchesCustody(fullTime, 'Individual'), false);
+  assert.equal(contactMatchesCustody(serviceProvider, 'Individual'), true);
+  assert.equal(contactMatchesCustody(individual, 'Service Provider'), true);
+  assert.equal(contactMatchesCustody(fullTime, 'Individual'), true);
+  assert.equal(contactMatchesCustody(other, 'Service Provider'), true);
   assert.equal(contactMatchesCustody(client, 'Individual'), false);
   assert.equal(contactMatchesCustody(individual, 'Tylo Office'), true);
   assert.equal(contactMatchesCustody(null, 'Individual'), false);
-  assert.match(custodyContactTypeError('Individual'), /Individual/);
-  assert.match(custodyContactTypeError('Service Provider'), /Service Provider/);
+  assert.match(custodyContactTypeError('Individual'), /Healthcare Worker/);
+  assert.match(custodyContactTypeError('Service Provider'), /Healthcare Worker/);
 });

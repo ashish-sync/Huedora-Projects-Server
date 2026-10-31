@@ -4,6 +4,7 @@ import { asyncHandler, parsePagination, paginated } from '../../utils/helpers.js
 import { PERMISSIONS } from '../../config/constants.js';
 import { AuditLog } from './audit.model.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import { applyActivityLogFilters } from './activityLog.js';
 
 const router = Router();
 router.use(authenticate);
@@ -23,6 +24,7 @@ router.get(
       if (req.query.from) filter.at.$gte = new Date(req.query.from);
       if (req.query.to) filter.at.$lte = new Date(req.query.to);
     }
+    applyActivityLogFilters(filter, req.query);
     const [data, total] = await Promise.all([
       AuditLog.find(filter).sort({ at: -1 }).skip(skip).limit(limit),
       AuditLog.countDocuments(filter),

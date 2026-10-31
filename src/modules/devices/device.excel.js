@@ -125,7 +125,7 @@ export const ASSET_SAMPLE_ROWS = [
     'Not Initiated',
     'Individual',
     '9876543210',
-    'Custodian Contact = Healthcare Worker / Individual phone or email from Contact Directory',
+    'Custodian Contact = Healthcare Worker (Individual, Full-Time, Service Provider, or Other) phone or email from Contact Directory',
   ],
   [
     'Medical Device',
@@ -137,7 +137,7 @@ export const ASSET_SAMPLE_ROWS = [
     'Not Initiated',
     'Service Provider',
     '9123456780',
-    'Custodian Contact = Healthcare Worker / Service Provider phone or email from Contact Directory',
+    'Custodian Contact = Healthcare Worker (Individual, Full-Time, Service Provider, or Other) phone or email from Contact Directory',
   ],
 ];
 

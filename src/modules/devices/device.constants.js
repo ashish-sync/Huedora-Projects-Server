@@ -48,32 +48,18 @@ export function custodyRequiresCustodianContact(custody) {
 }
 
 /**
- * Individual custody → Healthcare Worker / Individual.
- * Service Provider custody → Healthcare Worker / Service Provider.
- * Full-Time HCW staff does not satisfy Individual custody.
+ * Individual or Service Provider custody can be linked to any Healthcare Worker
+ * (Individual, Full-Time, Service Provider, or Other).
  */
 export function contactMatchesCustody(contact, custody) {
   if (!custodyRequiresCustodianContact(custody)) return true;
   if (!contact) return false;
-  const c = String(custody).trim();
-  const category = String(contact.contactCategory || '').trim();
-  const resourceType = String(contact.resourceType || '').trim();
-  if (c === 'Service Provider') {
-    return category === 'Healthcare Worker' && resourceType === 'Service Provider';
-  }
-  if (c === 'Individual') {
-    return category === 'Healthcare Worker' && resourceType === 'Individual';
-  }
-  return true;
+  return String(contact.contactCategory || '').trim() === 'Healthcare Worker';
 }
 
 export function custodyContactTypeError(custody) {
-  const c = String(custody).trim();
-  if (c === 'Service Provider') {
-    return 'Custodian Contact must be a Healthcare Worker with Type “Service Provider”.';
-  }
-  if (c === 'Individual') {
-    return 'Custodian Contact must be a Healthcare Worker with Type “Individual”.';
+  if (custodyRequiresCustodianContact(custody)) {
+    return 'Custodian Contact must be a Healthcare Worker from Contact Directory (Individual, Full-Time, Service Provider, or Other).';
   }
   return 'Custodian Contact type does not match Asset Custody.';
 }

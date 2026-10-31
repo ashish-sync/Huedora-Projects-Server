@@ -15,7 +15,7 @@ export const RESOURCE_TYPES = [
 ];
 
 /** Engagement type — only when Contact Category is Healthcare Worker */
-export const HCW_RESOURCE_TYPES = ['Full-Time', 'Individual', 'Service Provider'];
+export const HCW_RESOURCE_TYPES = ['Full-Time', 'Individual', 'Service Provider', 'Other'];
 
 export function resourceTypesForCategory(contactCategory) {
   if (contactCategory === 'Resource') return RESOURCE_TYPES;

@@ -13,6 +13,8 @@ import { Movement } from '../movements/movement.model.js';
 import { ImportJob } from '../imports/importJob.model.js';
 import { Notification } from '../notifications/notification.model.js';
 import { AuditLog } from '../audit/audit.model.js';
+import { describeActivity } from '../audit/activityLog.js';
+import { importKindLabel, importStatusLabel, notificationReadLabel, personStatusLabel } from './opsReviewLabels.js';
 import { User } from '../users/user.model.js';
 import {
   reviewLimit,
@@ -91,26 +93,26 @@ export const REVIEW_MODULES = [
   },
   {
     id: 'imports',
-    label: 'Imports',
+    label: 'Spreadsheet uploads',
     linkTo: '/imports',
     permissions: [PERMISSIONS.IMPORTS_EXECUTE],
   },
   {
     id: 'notifications',
-    label: 'Notifications',
+    label: 'Updates & approvals',
     linkTo: '/notifications',
     permissions: [PERMISSIONS.NOTIFICATIONS_READ],
   },
   {
     id: 'audit',
-    label: 'Audit',
+    label: 'Activity Log',
     linkTo: '/audit',
     permissions: [PERMISSIONS.AUDIT_READ],
   },
   {
     id: 'users',
-    label: 'Users',
-    linkTo: '/role-permission-master',
+    label: 'Team',
+    linkTo: '/access-control',
     permissions: [PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE],
   },
 ];
@@ -648,23 +650,26 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
         },
       });
       return {
-        dateFieldLabel: 'Started',
-        summary: { total: facetTotal(bucket), byStatus: facetCounts(bucket) },
+        dateFieldLabel: 'When',
+        summary: {
+          total: facetTotal(bucket),
+          byStatus: Object.fromEntries(
+            Object.entries(facetCounts(bucket)).map(([key, count]) => [importStatusLabel(key), count]),
+          ),
+        },
         columns: [
-          { key: 'type', label: 'Type' },
-          { key: 'status', label: 'Status' },
-          { key: 'totalRows', label: 'Rows' },
-          { key: 'successRows', label: 'Success' },
-          { key: 'errorRows', label: 'Errors' },
-          { key: 'when', label: 'Date' },
+          { key: 'what', label: 'What happened' },
+          { key: 'status', label: 'How it went' },
+          { key: 'saved', label: 'Rows saved' },
+          { key: 'attention', label: 'Need attention' },
+          { key: 'when', label: 'When' },
         ],
         rows: (bucket.rows || []).map((r) => ({
           id: r._id,
-          type: r.type || r.importType || '-',
-          status: r.status || '-',
-          totalRows: r.totalRows ?? 0,
-          successRows: r.successRows ?? 0,
-          errorRows: r.errorRows ?? 0,
+          what: importKindLabel(r),
+          status: importStatusLabel(r.status),
+          saved: r.successRows ?? 0,
+          attention: r.errorRows ?? 0,
           when: fmtReviewDate(r._reviewDate),
         })),
         total: facetTotal(bucket),
@@ -704,16 +709,14 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
         dateFieldLabel: 'Created',
         summary: { total, byType, unread, read: total - unread },
         columns: [
-          { key: 'title', label: 'Title' },
-          { key: 'type', label: 'Type' },
-          { key: 'read', label: 'Read' },
-          { key: 'when', label: 'Date' },
+          { key: 'title', label: 'What it is about' },
+          { key: 'status', label: 'Status' },
+          { key: 'when', label: 'When' },
         ],
         rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           title: r.title || '-',
-          type: r.type || '-',
-          read: r.readAt ? 'Yes' : 'No',
+          status: notificationReadLabel(r.readAt),
           when: fmtReviewDate(r._reviewDate),
         })),
         total,
@@ -726,47 +729,48 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
         fromDate,
         toDate,
         limit,
-        groupField: 'action',
+        groupField: 'result',
         rowProject: {
           _id: 1,
           action: 1,
           entityType: 1,
+          entityId: 1,
           actorEmail: 1,
+          actorType: 1,
           result: 1,
+          message: 1,
           _reviewDate: 1,
         },
       });
-      const resultBucket = await runFacet(AuditLog, {
-        baseMatch: {},
-        dateFields: ['at', 'createdAt'],
-        fromDate,
-        toDate,
-        limit: 1,
-        groupField: 'result',
-        rowProject: { _id: 1 },
-      });
       return {
-        dateFieldLabel: 'At',
+        dateFieldLabel: 'When',
         summary: {
           total: facetTotal(bucket),
-          byAction: facetCounts(bucket),
-          byResult: facetCounts(resultBucket),
+          byStatus: Object.fromEntries(
+            Object.entries(facetCounts(bucket)).map(([key, count]) => [
+              key === 'SUCCESS' ? 'Completed' : key === 'FAILURE' ? 'Failed' : key,
+              count,
+            ]),
+          ),
         },
         columns: [
-          { key: 'action', label: 'Action' },
-          { key: 'entityType', label: 'Entity' },
-          { key: 'actorEmail', label: 'Actor' },
-          { key: 'result', label: 'Result' },
-          { key: 'when', label: 'Date' },
+          { key: 'what', label: 'What happened' },
+          { key: 'module', label: 'Module' },
+          { key: 'employee', label: 'Employee' },
+          { key: 'status', label: 'Status' },
+          { key: 'when', label: 'When' },
         ],
-        rows: (bucket.rows || []).map((r) => ({
-          id: r._id,
-          action: r.action || '-',
-          entityType: r.entityType || '-',
-          actorEmail: r.actorEmail || '-',
-          result: r.result || '-',
-          when: fmtReviewDate(r._reviewDate),
-        })),
+        rows: (bucket.rows || []).map((r) => {
+          const described = describeActivity(r);
+          return {
+            id: r._id,
+            what: described.title,
+            module: described.moduleLabel,
+            employee: described.employee,
+            status: described.status,
+            when: fmtReviewDate(r._reviewDate),
+          };
+        }),
         total: facetTotal(bucket),
       };
     }
@@ -788,7 +792,7 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
                   _id: 1,
                   fullName: 1,
                   email: 1,
-                  username: 1,
+                  designation: 1,
                   isActive: 1,
                   _reviewDate: 1,
                 },
@@ -810,16 +814,16 @@ async function loadModuleRows(moduleId, req, fromDate, toDate) {
         columns: [
           { key: 'fullName', label: 'Name' },
           { key: 'email', label: 'Email' },
-          { key: 'username', label: 'Username' },
-          { key: 'active', label: 'Active' },
-          { key: 'when', label: 'Date' },
+          { key: 'role', label: 'Role' },
+          { key: 'status', label: 'Status' },
+          { key: 'when', label: 'Added' },
         ],
         rows: (bucket.rows || []).map((r) => ({
           id: r._id,
           fullName: r.fullName || '-',
           email: r.email || '-',
-          username: r.username || '-',
-          active: r.isActive === false ? 'No' : 'Yes',
+          role: r.designation || '-',
+          status: personStatusLabel(r.isActive),
           when: fmtReviewDate(r._reviewDate),
         })),
         total,
