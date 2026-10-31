@@ -79,3 +79,26 @@ test('buildOperationsBoard totals match reference shape', () => {
   assert.equal(byId.financial.byStatus.payment_done, 1);
   assert.equal(byId.execution.byStatus.cancelled_by_tylo, 1);
 });
+
+test('operations board counts stored review_pending as overdue after the SLA', () => {
+  const now = new Date(2026, 7, 10, 16, 0, 0, 0); // Mon 16:00
+  const board = buildOperationsBoard([
+    {
+      status: 'pending_review',
+      lifecycleStage: 'request',
+      requestReviewStatus: 'review_pending',
+      requestIncomplete: false,
+      submittedAt: new Date(2026, 7, 10, 9, 0, 0, 0).toISOString(),
+    },
+    {
+      status: 'pending_review',
+      lifecycleStage: 'request',
+      requestReviewStatus: 'review_pending',
+      requestIncomplete: false,
+      submittedAt: new Date(2026, 7, 10, 12, 0, 0, 0).toISOString(),
+    },
+  ], now);
+  const request = board.stages.find((s) => s.id === 'request');
+  assert.equal(request.byStatus.review_overdue, 1);
+  assert.equal(request.byStatus.review_pending, 1);
+});

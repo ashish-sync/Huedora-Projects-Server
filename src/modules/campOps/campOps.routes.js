@@ -998,8 +998,9 @@ router.get(
     const { getPersistenceMode, aggregateCollection } = await import('../../store/persistence.js');
     let board;
     if (getPersistenceMode() === 'mongo') {
-      const groups = await aggregateCollection('camp_ops_camps', campOperationsBoardPipeline(filter));
-      board = formatOperationsBoardFromGroups(groups || []);
+      const now = new Date();
+      const groups = await aggregateCollection('camp_ops_camps', campOperationsBoardPipeline(filter, { now }));
+      board = formatOperationsBoardFromGroups(groups || [], now);
     } else {
       const { scanCollection } = await import('../../store/filedb.js');
       const state = createOperationsBoardState();
@@ -1022,6 +1023,7 @@ router.get(
           endTime: 1,
           submittedAt: 1,
           requestReviewStatus: 1,
+          requestIncomplete: 1,
           isDeleted: 1,
         },
         forEach: (camp) => {
