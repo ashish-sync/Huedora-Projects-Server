@@ -67,7 +67,9 @@ export async function isDirectReportingManager(actorUserId, subjectUserId) {
   const managerId = subject.reportingManagerId
     ? String(subject.reportingManagerId._id || subject.reportingManagerId)
     : '';
-  return Boolean(managerId && managerId === actorId);
+  if (!managerId || managerId !== actorId) return false;
+  const manager = await User.findOne({ _id: actorId, isDeleted: false, isActive: true });
+  return Boolean(manager);
 }
 
 /**
@@ -111,7 +113,7 @@ export async function assertApprovalAuthority({
   if (isRm) return { mode: 'reporting_manager' };
 
   throw new AppError(
-    `Only the submitter's Reporting Manager (or Director / Business Head / Admin) can ${action} this item`,
+    `Only the submitter's current Reporting Manager (or Director / Business Head / Admin) can ${action} this item`,
     403,
     'FORBIDDEN',
   );

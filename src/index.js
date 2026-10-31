@@ -545,6 +545,23 @@ async function main() {
         if (typeof t.unref === 'function') t.unref();
       })
       .catch(() => {});
+    import('./modules/users/rmSweeps.js')
+      .then(({ runRmSweeps }) => {
+        const run = () =>
+          runRmSweeps()
+            .then((r) => {
+              if (r.unsigned.notified || r.info.notified || r.links.notified || r.monthly.sent) {
+                console.warn(
+                  `[rm-sweeps] unsigned=${r.unsigned.notified} info=${r.info.notified} links=${r.links.notified} monthly=${r.monthly.sent}`,
+                );
+              }
+            })
+            .catch((err) => console.error('[rm-sweeps] failed:', err.message));
+        setTimeout(run, 20_000);
+        const t = setInterval(run, 60 * 60 * 1000);
+        if (typeof t.unref === 'function') t.unref();
+      })
+      .catch(() => {});
     import('./modules/notifications/notificationArchive.js')
       .then(({ archiveExpiredNotifications }) => {
         const run = () =>

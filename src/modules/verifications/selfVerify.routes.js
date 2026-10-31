@@ -9,6 +9,7 @@ import { VerificationRecord, VerificationInvite } from './verification.model.js'
 import { Asset } from '../assets/asset.model.js';
 import { Contact } from '../contacts/contact.model.js';
 import { findInviteByAccessKey } from './verificationAccess.js';
+import { notifyRmVerificationLinkExpired } from '../users/rmNotify.js';
 import {
   completeVerificationRound,
   completeInviteAfterSelfVerify,
@@ -101,6 +102,14 @@ async function resolveInvite(token) {
 
   if (invite.expiresAt && new Date(invite.expiresAt).getTime() < Date.now()) {
     invite.status = 'EXPIRED';
+    if (!invite.rmExpiredNotifiedAt) {
+      try {
+        await notifyRmVerificationLinkExpired({ invite });
+        invite.rmExpiredNotifiedAt = new Date().toISOString();
+      } catch (err) {
+        console.warn('[rm] verification link expired notify failed:', err?.message || err);
+      }
+    }
     await invite.save();
     throw new AppError('This verification link has expired', 410, 'LINK_EXPIRED');
   }

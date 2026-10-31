@@ -163,6 +163,7 @@ export const CampOpsCamp = defineCollection('camp_ops_camps', {
   informationRequestedAt: null,
   informationRequestedById: null,
   informationRequestedByEmail: '',
+  informationOverdueNotifiedAt: null,
   rejectionReason: '',
   whatsappMessageId: '',
   whatsappSenderPhone: '',

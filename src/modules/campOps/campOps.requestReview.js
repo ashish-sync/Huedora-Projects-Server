@@ -150,6 +150,7 @@ export function applyRequestReviewTransition(camp, action, { actor = null, reaso
     camp.informationRequestNote = '';
     camp.informationRequestedAt = null;
     camp.informationRequestedByEmail = '';
+    camp.informationOverdueNotifiedAt = null;
     camp.reviewOverdueAt = null;
     return;
   }
@@ -168,6 +169,7 @@ export function applyRequestReviewTransition(camp, action, { actor = null, reaso
     camp.informationRequestedAt = new Date().toISOString();
     camp.informationRequestedById = actor?.id || null;
     camp.informationRequestedByEmail = actor?.email || '';
+    camp.informationOverdueNotifiedAt = null;
     camp.reviewOverdueAt = null;
   }
 }

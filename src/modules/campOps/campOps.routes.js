@@ -1856,7 +1856,7 @@ router.post(
         campId: await generateCampId(payload.campDate),
         status: 'pending_review',
         lifecycleStage: 'request',
-        requestDate: payload.requestDate || new Date().toISOString().slice(0, 10),
+        requestDate: payload.requestDate || localTodayIso(),
         createdById: a.id,
         createdByEmail: a.email,
         requestReviewStatus: 'review_pending',
@@ -2490,6 +2490,22 @@ router.post(
     }
     await camp.save();
     await audit(req, 'camp_ops.close', 'camp_ops_camp', camp._id, before, camp.toObject());
+    const closedAs = normalizeClosureType(closureType);
+    if (closedAs === 'Refused' || camp.status === 'rejected') {
+      await notifyCampWorkflow({
+        camp,
+        action: 'reject',
+        actorId: actor(req).id,
+        note: closureRemarks,
+      });
+    } else if (closedAs === 'Cancelled by Tylo') {
+      await notifyCampWorkflow({
+        camp,
+        action: 'cancel_tylo',
+        actorId: actor(req).id,
+        note: closureRemarks,
+      });
+    }
     res.json({ data: await enrichCamp(camp) });
   })
 );
@@ -4792,7 +4808,7 @@ router.post(
           hq: row.hq || row.city || '',
           zone: row.zone || '',
           campDate: row.campDate,
-          requestDate: row.requestDate || new Date().toISOString().slice(0, 10),
+          requestDate: row.requestDate || localTodayIso(),
           lifecycleStage: 'request',
           ...schedule,
           expectedPatients: row.expectedPatients || 0,

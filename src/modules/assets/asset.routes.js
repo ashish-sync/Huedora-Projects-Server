@@ -11,6 +11,7 @@ import { env } from '../../config/env.js';
 import { Asset } from './asset.model.js';
 import { AssetEvent } from './assetEvent.model.js';
 import { createAsset, transitionAsset } from './asset.service.js';
+import { notifyRmAssetChanged } from '../users/rmNotify.js';
 import { assertSerialNumberAvailable } from './serialNumber.js';
 import { DeviceMaster } from '../devices/device.model.js';
 import { LogisticsProduct } from '../logistics/logistics.model.js';
@@ -919,6 +920,23 @@ router.patch(
     if (Object.keys(masterPatch).length && !auditBits.length) {
       auditBits.push(`Updated: ${Object.keys(masterPatch).join(', ')}`);
     }
+    if (statusChanged || custodyChanged) {
+      try {
+        await notifyRmAssetChanged({
+          asset,
+          actor: req.user,
+          statusChanged,
+          custodyChanged,
+          fromStatus: previousAgreementStatus,
+          toStatus: asset.agreementStatus,
+          fromCustody: previousCustody,
+          toCustody: asset.custody,
+        });
+      } catch (err) {
+        console.warn('[rm] asset change notify failed:', err?.message || err);
+      }
+    }
+
     if (auditBits.length) {
       const eventType = custodyChanged || contactChanged ? 'CUSTODY_CHANGE' : 'FIELD_UPDATE';
       await AssetEvent.create({

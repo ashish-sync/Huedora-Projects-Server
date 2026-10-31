@@ -25,7 +25,7 @@ import {
   resolveClientMasterPricingForCamp,
 } from './campOps.clientMasterPricing.js';
 import { assertRequestStageComplete } from './campOps.requestValidation.js';
-import { assertHistoricalCampDatesAllowed } from './campDatePolicy.js';
+import { assertHistoricalCampDatesAllowed, localTodayIso } from './campDatePolicy.js';
 import {
   createCampEnsuringNoDuplicate,
   CampDuplicateError,
@@ -351,7 +351,7 @@ async function createProgramCampFromBody(master, client, body = {}) {
       campId: await generateCampId(payload.campDate),
       status: 'pending_review',
       lifecycleStage: 'request',
-      requestDate: payload.requestDate || new Date().toISOString().slice(0, 10),
+      requestDate: payload.requestDate || localTodayIso(),
       createdById: null,
       createdByEmail: 'program-form',
       requestReviewStatus: 'review_pending',

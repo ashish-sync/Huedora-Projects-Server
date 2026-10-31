@@ -68,6 +68,28 @@ describe('notificationCatalog', () => {
     );
     assert.equal(
       isApprovalRequestNotification({
+        type: 'CAMP_T2_APPROVAL',
+        title: 'Approval required — camp 26-11-0002 (scheduled camp date is within the next 2 days)',
+      }),
+      true
+    );
+    assert.equal(
+      isApprovalRequestNotification({
+        type: 'ASSET_CREATE_APPROVAL',
+        title: 'Approval required — new asset Probe X',
+      }),
+      true
+    );
+    assert.equal(
+      isApprovalRequestNotification({
+        type: 'ASSET_CHANGE',
+        title: 'Probe X status updated',
+        meta: { kind: 'update', involvement: 'inform' },
+      }),
+      false
+    );
+    assert.equal(
+      isApprovalRequestNotification({
         type: 'ASSET_REQUEST_APPROVAL',
         title: 'Request X approved',
       }),

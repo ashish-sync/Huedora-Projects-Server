@@ -255,12 +255,23 @@ router.get(
       filtered = rows.filter((r) => r.condition.condition === want);
     }
 
+    const methodRows = await VerificationActivity.find({ periodKey });
+    const methodCounts = methodRows.reduce(
+      (acc, row) => {
+        if (row.action === 'MANUAL_VERIFY') acc.manual += 1;
+        if (row.action === 'SELF_VERIFY') acc.selfVerify += 1;
+        return acc;
+      },
+      { manual: 0, selfVerify: 0 }
+    );
+
     res.json({
       data: {
         periodKey,
         from: from ? formatYmd(from) : null,
         to: to ? formatYmd(to) : null,
         campaign: { _id: campaign._id, periodKey: campaign.periodKey, label: campaign.label },
+        methodCounts,
         counts: filtered.reduce(
           (acc, r) => {
             acc[r.condition.condition] = (acc[r.condition.condition] || 0) + 1;

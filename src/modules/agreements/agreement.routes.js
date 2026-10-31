@@ -23,6 +23,7 @@ import { SignatureMaster } from '../signatures/signature.model.js';
 import { previewStore } from '../templates/previewStore.js';
 import { nextSequence } from '../../utils/counters.js';
 import { writeAudit } from '../../utils/audit.js';
+import { notifyRmAgreementTerminated } from '../users/rmNotify.js';
 import { AssetEvent } from '../assets/assetEvent.model.js';
 import {
   syncAssetContactFromAgreement,
@@ -1089,6 +1090,11 @@ router.post(
       );
     }
     await logActivity(agreement._id, req, 'TERMINATED', 'Agreement terminated');
+    try {
+      await notifyRmAgreementTerminated({ agreement, actor: req.user });
+    } catch (err) {
+      console.warn('[rm] agreement terminate notify failed:', err?.message || err);
+    }
     res.json({ data: agreement });
   })
 );

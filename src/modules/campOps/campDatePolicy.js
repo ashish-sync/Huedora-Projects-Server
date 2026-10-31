@@ -4,6 +4,9 @@ import { parseLocalDateInput } from './campOps.helpers.js';
 /** Dates more than this many days before today require Team Leader or Admin. */
 export const CAMP_HISTORICAL_DATE_THRESHOLD_DAYS = 2;
 
+/** Same 2-day window: backdated request dates and imminent camp dates need RM approval. */
+export const CAMP_T2_WINDOW_DAYS = CAMP_HISTORICAL_DATE_THRESHOLD_DAYS;
+
 const ADMIN_DESIGNATION_KEYS = new Set(['admin', 'administrator']);
 const ADMIN_ROLE_KEYS = new Set(['admin', 'administrator']);
 
@@ -61,8 +64,38 @@ export function daysFromToday(dateValue, now = new Date()) {
 }
 
 /** Camp / request date is more than 2 days before today. */
-export function isHistoricalCampDate(dateValue) {
-  return daysFromToday(dateValue) < -CAMP_HISTORICAL_DATE_THRESHOLD_DAYS;
+export function isHistoricalCampDate(dateValue, now = new Date()) {
+  return daysFromToday(dateValue, now) < -CAMP_HISTORICAL_DATE_THRESHOLD_DAYS;
+}
+
+/** Request date is yesterday or the day before (T-1 / T-2), not today. */
+export function isT2RequestDate(dateValue, now = new Date()) {
+  const days = daysFromToday(dateValue, now);
+  return days < 0 && days >= -CAMP_T2_WINDOW_DAYS;
+}
+
+/** Scheduled camp date is today through two days ahead. */
+export function isT2UpcomingCampDate(dateValue, now = new Date()) {
+  const days = daysFromToday(dateValue, now);
+  return days >= 0 && days <= CAMP_T2_WINDOW_DAYS;
+}
+
+/**
+ * Reasons a camp create needs Reporting Manager approval.
+ * Routine creates (request date today, camp date more than 2 days out) return [].
+ */
+export function campCreateApprovalReasons(
+  { campDate, requestDate } = {},
+  now = new Date(),
+) {
+  const reasons = [];
+  if (isT2RequestDate(requestDate, now) || isHistoricalCampDate(requestDate, now)) {
+    reasons.push('request_date_t2');
+  }
+  if (isT2UpcomingCampDate(campDate, now)) {
+    reasons.push('camp_date_t2');
+  }
+  return reasons;
 }
 
 export function canSetHistoricalCampDates(user, permissions = null) {

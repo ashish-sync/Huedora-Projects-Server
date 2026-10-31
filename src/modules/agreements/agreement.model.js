@@ -39,6 +39,7 @@ export const Agreement = defineCollection('agreements', {
   envelopeMessage: '',
   recipientAccessToken: null,
   recipientShortCode: null,
+  unsignedRmNotifiedAt: null,
 });
 
 export const AgreementAsset = defineCollection('agreement_assets', {

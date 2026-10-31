@@ -5,6 +5,7 @@ import { AppError } from '../../utils/helpers.js';
 import { writeAudit } from '../../utils/audit.js';
 import { nextSequence } from '../../utils/counters.js';
 import { Contact } from '../contacts/contact.model.js';
+import { notifyRmAssetChanged, notifyRmAssetCreated } from '../users/rmNotify.js';
 import { assertSerialNumberAvailable, normalizeSerialNumber } from './serialNumber.js';
 
 export async function transitionAsset({
@@ -95,6 +96,20 @@ export async function transitionAsset({
     requestId,
   });
 
+  if (relatedEntityType !== 'VerificationRecord') {
+    try {
+      await notifyRmAssetChanged({
+        asset,
+        actor,
+        statusChanged: fromStatus !== toStatus,
+        fromStatus,
+        toStatus,
+      });
+    } catch (err) {
+      console.warn('[rm] asset status notify failed:', err?.message || err);
+    }
+  }
+
   return asset;
 }
 
@@ -133,5 +148,10 @@ export async function createAsset(payload, actor) {
     entityId: asset._id,
     after: asset.toObject(),
   });
+  try {
+    await notifyRmAssetCreated({ asset, actor });
+  } catch (err) {
+    console.warn('[rm] asset create approval notify failed:', err?.message || err);
+  }
   return asset;
 }

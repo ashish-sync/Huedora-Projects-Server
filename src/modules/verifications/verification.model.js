@@ -34,6 +34,7 @@ export const VerificationInvite = defineCollection('verification_invites', {
   sentBy: null,
   completedAt: null,
   expiresAt: null,
+  rmExpiredNotifiedAt: null,
 });
 
 /** Append-only verification audit trail. */

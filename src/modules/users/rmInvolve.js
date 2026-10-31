@@ -57,24 +57,68 @@ export async function listPlatformAdminIds({ excludeUserIds = [] } = {}) {
     .map((user) => String(user._id));
 }
 
-/**
- * Direct RM only. No skip-level. No tenant-wide Approver fan-out.
- * @returns {Promise<{ mode: 'direct_rm'|'admin_fallback'|'none', managerId: string|null, recipientIds: string[] }>}
- */
-export async function resolveRmAudience({ subjectUserId } = {}) {
+async function storedReportingManagerId(subjectUserId) {
   const subjectId = asId(subjectUserId);
-  const chain = subjectId ? await resolveManagerChainIds(subjectId, { maxDepth: 1 }) : [];
-  const managerId = chain[0] || null;
-  if (managerId) {
-    return { mode: 'direct_rm', managerId, recipientIds: [managerId] };
-  }
+  if (!subjectId) return '';
+  const subject = await User.findOne({ _id: subjectId, isDeleted: false });
+  return asId(subject?.reportingManagerId);
+}
+
+async function managerHasRequiredPermission(managerId, requiredPermission) {
+  const needed = String(requiredPermission || '').trim();
+  if (!needed) return true;
+  const manager = await User.findOne({ _id: managerId, isDeleted: false, isActive: true });
+  if (!manager) return false;
+  const roles = await Role.find({ isDeleted: false });
+  const roleById = new Map(roles.map((role) => [String(role._id), role]));
+  const perms = collectUserPermissions(manager, roleById);
+  if (isPlatformAdminApprover(manager, perms)) return true;
+  return perms.has(needed);
+}
+
+async function adminFallbackAudience(subjectId, unavailableReason) {
   const adminIds = await listPlatformAdminIds({
     excludeUserIds: subjectId ? [subjectId] : [],
   });
   if (adminIds.length) {
-    return { mode: 'admin_fallback', managerId: null, recipientIds: adminIds };
+    return {
+      mode: 'admin_fallback',
+      managerId: null,
+      recipientIds: adminIds,
+      unavailableReason,
+    };
   }
-  return { mode: 'none', managerId: null, recipientIds: [] };
+  return { mode: 'none', managerId: null, recipientIds: [], unavailableReason };
+}
+
+/**
+ * Direct RM only. No skip-level. No tenant-wide Approver fan-out.
+ * Inactive, deleted, or permission-ineligible RMs fall back to platform Admins.
+ * @returns {Promise<{ mode: 'direct_rm'|'admin_fallback'|'none', managerId: string|null, recipientIds: string[], unavailableReason: string|null }>}
+ */
+export async function resolveRmAudience({ subjectUserId, requiredPermission } = {}) {
+  const subjectId = asId(subjectUserId);
+  const storedRmId = await storedReportingManagerId(subjectId);
+  const chain = subjectId ? await resolveManagerChainIds(subjectId, { maxDepth: 1 }) : [];
+  const managerId = chain[0] || null;
+
+  if (managerId) {
+    const eligible = await managerHasRequiredPermission(managerId, requiredPermission);
+    if (eligible) {
+      return {
+        mode: 'direct_rm',
+        managerId,
+        recipientIds: [managerId],
+        unavailableReason: null,
+      };
+    }
+    return adminFallbackAudience(subjectId, 'no_permission');
+  }
+
+  if (storedRmId) {
+    return adminFallbackAudience(subjectId, 'inactive');
+  }
+  return adminFallbackAudience(subjectId, 'no_rm');
 }
 
 export function involvementKind(level) {
@@ -99,6 +143,7 @@ export async function notifyRmInvolvement({
   includeWatchers = false,
   module,
   priority,
+  requiredPermission,
   meta = {},
   group = true,
 } = {}) {
@@ -107,7 +152,10 @@ export async function notifyRmInvolvement({
     throw new Error(`Unknown RM involvement level: ${level}`);
   }
 
-  const audience = await resolveRmAudience({ subjectUserId, level: normalized });
+  const audience = await resolveRmAudience({
+    subjectUserId,
+    requiredPermission,
+  });
   const kind = KIND_BY_LEVEL[normalized];
   const actorId = asId(actor);
 
@@ -126,11 +174,13 @@ export async function notifyRmInvolvement({
     module,
     priority,
     group,
+    mergeWindowMs: kind === 'approval' || kind === 'review' ? Infinity : undefined,
     meta: {
       ...(meta && typeof meta === 'object' ? meta : {}),
       involvement: normalized,
       managerId: audience.managerId,
       audienceMode: audience.mode,
+      unavailableReason: audience.unavailableReason,
       kind,
     },
   });

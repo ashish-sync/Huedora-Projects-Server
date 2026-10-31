@@ -45,6 +45,15 @@ const EVENT_META = {
   CAMP_BULK_REJECT: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
   // Short HCW gap override — reporting manager must approve (Approvals inbox).
   CAMP_HCW_GAP_APPROVAL: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
+  CAMP_T2_APPROVAL: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
+  CAMP_CANCELLED_TYLO: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
+  CAMP_INFO_UNANSWERED: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'camp' },
+  ASSET_CREATE_APPROVAL: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'assets' },
+  ASSET_CHANGE: { priority: NOTIFICATION_PRIORITIES.INFORMATIONAL, module: 'assets' },
+  AGREEMENT_TERMINATED: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'documents' },
+  AGREEMENT_UNSIGNED: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'documents' },
+  VERIFICATION_LINK_EXPIRED: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'assets' },
+  VERIFICATION_MONTHLY_REPORT: { priority: NOTIFICATION_PRIORITIES.INFORMATIONAL, module: 'assets' },
   ASSET_REQUEST_APPROVAL: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'assets' },
   MOVEMENT_APPROVAL: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'assets' },
   VERIFICATION_CALLBACK: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'assets' },
@@ -109,6 +118,8 @@ export function canMergePriorities(existingPriority, incomingPriority) {
 export const APPROVAL_REQUEST_TYPES = Object.freeze([
   'PICKLIST_SUGGESTION',
   'CAMP_HCW_GAP_APPROVAL',
+  'CAMP_T2_APPROVAL',
+  'ASSET_CREATE_APPROVAL',
   'COMMERCIAL_SUBMIT',
   'VENDOR_BILL_VERIFIED',
 ]);
@@ -129,6 +140,8 @@ export const CAMP_FYI_NOTIFICATION_TYPES = Object.freeze([
   'CAMP_BULK_SUCCESS',
   'CAMP_BULK_PARTIAL',
   'CAMP_BULK_REJECT',
+  'CAMP_CANCELLED_TYLO',
+  'CAMP_INFO_UNANSWERED',
 ]);
 
 export function isCampFyiNotificationType(type) {

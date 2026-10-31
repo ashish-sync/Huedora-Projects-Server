@@ -13,6 +13,7 @@ import { notifyEvent } from '../notifications/notifyEvent.js';
 import { Notification } from '../notifications/notification.model.js';
 import { resolveEventMeta, NOTIFICATION_PRIORITIES } from '../notifications/notificationCatalog.js';
 import { notifyCampBulkSummary, notifyCampHcwGapApproval, notifyCampWorkflow } from './campOps.notifications.js';
+import { localTodayIso } from './campDatePolicy.js';
 
 let tempDir = '';
 
@@ -32,6 +33,7 @@ async function resetNotifications(users = []) {
   await saveCollection('notifications', [], { allowDestructiveSync: true });
   await saveCollection('roles', [
     { _id: 'role-user', name: 'User', permissions: [], isDeleted: false },
+    { _id: 'role-camp-rm', name: 'Camp RM', permissions: ['camps:approve'], isDeleted: false },
   ], { allowDestructiveSync: true });
   await saveCollection('users', users, { allowDestructiveSync: true });
 }
@@ -43,7 +45,7 @@ function rmUsers() {
       email: 'mgr@tylo.local',
       isActive: true,
       isDeleted: false,
-      roleIds: ['role-user'],
+      roleIds: ['role-camp-rm'],
     },
     {
       _id: 'rep-1',
@@ -173,7 +175,53 @@ test('camp submit informs the requester RM and does not fan out to coordinators'
   assert.equal(forCoord.length, 0);
 });
 
-test('camp off-hours and overdue become Review, not Approval', async () => {
+test('routine camp create does not notify the RM', async () => {
+  await resetNotifications(rmUsers());
+  const future = new Date();
+  future.setDate(future.getDate() + 10);
+  const y = future.getFullYear();
+  const m = String(future.getMonth() + 1).padStart(2, '0');
+  const d = String(future.getDate()).padStart(2, '0');
+  await notifyCampWorkflow({
+    camp: {
+      _id: 'c-routine',
+      campId: '26-11-0001',
+      createdById: 'rep-1',
+      campDate: `${y}-${m}-${d}`,
+      requestDate: localTodayIso(),
+    },
+    action: 'create',
+    actorId: 'rep-1',
+  });
+  const rows = await Notification.find({ userId: 'mgr-1' });
+  assert.equal(rows.length, 0);
+});
+
+test('T-2 camp create asks the RM to approve', async () => {
+  await resetNotifications(rmUsers());
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 1);
+  const y = soon.getFullYear();
+  const m = String(soon.getMonth() + 1).padStart(2, '0');
+  const d = String(soon.getDate()).padStart(2, '0');
+  await notifyCampWorkflow({
+    camp: {
+      _id: 'c-t2',
+      campId: '26-11-0002',
+      createdById: 'rep-1',
+      campDate: `${y}-${m}-${d}`,
+      requestDate: localTodayIso(),
+    },
+    action: 'create',
+    actorId: 'rep-1',
+  });
+  const rows = await Notification.find({ userId: 'mgr-1' });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].type, 'CAMP_T2_APPROVAL');
+  assert.equal(rows[0].kind, 'approval');
+});
+
+test('camp off-hours stay Review; overdue informs the RM', async () => {
   await resetNotifications(rmUsers());
   await notifyCampWorkflow({
     camp: {
@@ -191,9 +239,24 @@ test('camp off-hours and overdue become Review, not Approval', async () => {
   });
   const rows = await Notification.find({ userId: 'mgr-1' });
   const reviews = rows.filter((row) => row.kind === 'review');
+  const informs = rows.filter((row) => row.kind === 'update' && row.type === 'CAMP_REVIEW_OVERDUE');
   assert.ok(reviews.some((row) => row.type === 'CAMP_OFF_HOURS'));
-  assert.ok(reviews.some((row) => row.type === 'CAMP_REVIEW_OVERDUE'));
-  assert.equal(reviews.every((row) => row.kind !== 'approval'), true);
+  assert.equal(informs.length, 1);
+  assert.equal(informs[0].meta.involvement, 'inform');
+});
+
+test('Tylo Care cancellation informs the requester RM', async () => {
+  await resetNotifications(rmUsers());
+  await notifyCampWorkflow({
+    camp: { _id: 'c5', campId: '26-11-0005', createdById: 'rep-1' },
+    action: 'cancel_tylo',
+    actorId: 'coord-1',
+    note: 'Client site closed',
+  });
+  const rows = await Notification.find({ userId: 'mgr-1' });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].type, 'CAMP_CANCELLED_TYLO');
+  assert.equal(rows[0].kind, 'update');
 });
 
 test('HCW gap stays Approve for the assigner RM', async () => {

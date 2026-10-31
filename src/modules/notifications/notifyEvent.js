@@ -57,7 +57,7 @@ export async function resolveNotificationRecipients({
   return dedupeIds(ids).filter((id) => !exclude.has(id));
 }
 
-async function findOpenGroup({ userId, groupKey, priority, nowMs }) {
+async function findOpenGroup({ userId, groupKey, priority, nowMs, mergeWindowMs = GROUP_WINDOW_MS }) {
   if (!groupKey) return null;
   const candidates = await Notification.find({
     userId,
@@ -72,7 +72,7 @@ async function findOpenGroup({ userId, groupKey, priority, nowMs }) {
     if (!canMergePriorities(row.priority, priority)) continue;
     const updated = new Date(row.updatedAt || row.groupedAt || row.createdAt).getTime();
     if (Number.isNaN(updated)) continue;
-    if (nowMs - updated > GROUP_WINDOW_MS) continue;
+    if (Number.isFinite(mergeWindowMs) && nowMs - updated > mergeWindowMs) continue;
     return row;
   }
   return null;
@@ -106,6 +106,7 @@ export async function notifyEvent({
   includeReportingManagers = false,
   excludeUserIds = [],
   excludeActor = false,
+  mergeWindowMs,
   meta = undefined,
   channel = 'IN_APP',
   emailStatus = 'SKIPPED',
@@ -169,14 +170,24 @@ export async function notifyEvent({
   for (const userId of userIds) {
     let row = null;
     if (group && groupKey && !scheduledFor) {
-      row = await findOpenGroup({ userId, groupKey, priority, nowMs });
+      row = await findOpenGroup({
+        userId,
+        groupKey,
+        priority,
+        nowMs,
+        mergeWindowMs: mergeWindowMs ?? (kind === 'approval' || kind === 'review'
+          ? Infinity
+          : GROUP_WINDOW_MS),
+      });
     }
 
     if (row) {
       const nextCount = Math.max(1, Number(row.groupCount) || 1) + 1;
       row.groupCount = nextCount;
       row.groupedAt = nowIso;
-      row.title = buildGroupedTitle(title, nextCount);
+      row.title = kind === 'approval' || kind === 'review'
+        ? String(title || row.title)
+        : buildGroupedTitle(title, nextCount);
       row.body = body || row.body;
       row.priority =
         priority === NOTIFICATION_PRIORITIES.CRITICAL

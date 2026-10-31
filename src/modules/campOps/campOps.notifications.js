@@ -1,8 +1,10 @@
+import { PERMISSIONS } from '../../config/constants.js';
 import { notifyEvent } from '../notifications/notifyEvent.js';
 import { notifyRmInvolvement } from '../users/rmInvolve.js';
 import {
   NOTIFICATION_PRIORITIES,
 } from '../notifications/notificationCatalog.js';
+import { campCreateApprovalReasons } from './campDatePolicy.js';
 
 function campSummary(camp = {}) {
   const parts = [
@@ -44,6 +46,8 @@ export async function notifyCampApprovers({
     includeWatchers: false,
     module: 'camp',
     priority,
+    requiredPermission:
+      level === 'approve' ? PERMISSIONS.CAMPS_APPROVE : undefined,
   });
 }
 
@@ -67,6 +71,7 @@ export async function notifyCampHcwGapApproval({ camp, actorId }) {
     excludeActor: true,
     includeWatchers: false,
     module: 'camp',
+    requiredPermission: PERMISSIONS.CAMPS_APPROVE,
     meta: { reason: 'hcw_gap_override' },
   });
 }
@@ -197,8 +202,25 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
   const summary = campSummary(camp);
 
   switch (action) {
+    case 'create': {
+      const t2Reasons = campCreateApprovalReasons(camp);
+      if (t2Reasons.length) {
+        const why = t2Reasons.includes('camp_date_t2')
+          ? 'scheduled camp date is within the next 2 days'
+          : 'request date is within the last 2 days';
+        await notifyCampApprovers({
+          camp,
+          actorId,
+          type: 'CAMP_T2_APPROVAL',
+          title: `Approval required — camp ${label} (${why})`,
+          body: summary,
+          priority: NOTIFICATION_PRIORITIES.IMPORTANT,
+          level: 'approve',
+        });
+      }
+      break;
+    }
     case 'submit_review':
-    case 'create':
       await notifyCampApprovers({
         camp,
         actorId,
@@ -269,7 +291,17 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
         title: `Camp review overdue: ${label}`,
         body: summary,
         priority: NOTIFICATION_PRIORITIES.IMPORTANT,
-        level: 'review',
+        level: 'inform',
+      });
+      break;
+    case 'cancel_tylo':
+      await notifyCampRequester({
+        camp,
+        actorId,
+        type: 'CAMP_CANCELLED_TYLO',
+        title: `Camp ${label} cancelled by Tylo Care`,
+        body: note || summary,
+        priority: NOTIFICATION_PRIORITIES.IMPORTANT,
       });
       break;
     case 'execution_overdue':

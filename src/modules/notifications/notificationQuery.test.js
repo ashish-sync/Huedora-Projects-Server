@@ -36,6 +36,8 @@ describe('notificationQuery', () => {
     assert.ok(or.some((part) => part.kind === 'approval'));
     assert.ok(or.some((part) => part.type?.$in?.includes('PICKLIST_SUGGESTION')));
     assert.ok(or.some((part) => part.type?.$in?.includes('CAMP_HCW_GAP_APPROVAL')));
+    assert.ok(or.some((part) => part.type?.$in?.includes('CAMP_T2_APPROVAL')));
+    assert.ok(or.some((part) => part.type?.$in?.includes('ASSET_CREATE_APPROVAL')));
     assert.ok(!or.some((part) => part.type?.$in?.includes('CAMP_REVIEW')));
   });
 

@@ -1,3 +1,4 @@
+import { PERMISSIONS } from '../../config/constants.js';
 import { notifyEvent } from '../notifications/notifyEvent.js';
 import { notifyRmInvolvement } from '../users/rmInvolve.js';
 
@@ -22,6 +23,7 @@ export async function notifyCommercialSubmitted({ row, actor }) {
     module: 'finance',
     excludeActor: true,
     includeWatchers: false,
+    requiredPermission: PERMISSIONS.FINANCE_WRITE,
   });
 }
 
@@ -75,6 +77,7 @@ export async function notifyVendorBillVerified({ row, actor }) {
     module: 'finance',
     excludeActor: true,
     includeWatchers: false,
+    requiredPermission: PERMISSIONS.FINANCE_APPROVE,
   });
 }
 

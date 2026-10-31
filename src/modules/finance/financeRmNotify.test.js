@@ -35,6 +35,7 @@ describe('finance RM notify', () => {
     clearPersistenceCache();
     await saveCollection('roles', [
       { _id: 'role-user', name: 'User', permissions: [], isDeleted: false },
+      { _id: 'role-finance-rm', name: 'Finance RM', permissions: ['finance:write', 'finance:approve'], isDeleted: false },
     ], { allowDestructiveSync: true });
     await saveCollection('users', [
       {
@@ -42,7 +43,7 @@ describe('finance RM notify', () => {
         email: 'mgr@tylo.local',
         isActive: true,
         isDeleted: false,
-        roleIds: ['role-user'],
+        roleIds: ['role-finance-rm'],
       },
       {
         _id: 'rep-1',
@@ -106,6 +107,19 @@ describe('finance RM notify', () => {
     assert.equal(rows[0].userId, 'mgr-1');
     assert.equal(rows[0].kind, 'approval');
     assert.equal(rows[0].type, 'VENDOR_BILL_VERIFIED');
+  });
+
+  it('commercial submit retry does not create a second Approval', async () => {
+    const args = {
+      row: { _id: 'doc-1', documentNumber: 'INV-9', documentType: 'client_invoice' },
+      actor: { _id: 'rep-1' },
+    };
+    const first = await notifyCommercialSubmitted(args);
+    const second = await notifyCommercialSubmitted(args);
+    assert.equal(first.length, 1);
+    assert.equal(String(first[0]._id), String(second[0]._id));
+    const all = await Notification.find({ type: 'COMMERCIAL_SUBMIT' });
+    assert.equal(all.length, 1);
   });
 
   it('vendor bill decision informs the submitter', async () => {

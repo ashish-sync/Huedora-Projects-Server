@@ -719,6 +719,7 @@ router.patch(
         { userId: user._id, revokedAt: null },
         { $set: { revokedAt: new Date() } }
       );
+      await clearReportingManagerForUser(user._id);
     }
     await user.populate('roleIds');
     await user.populate('reportingManagerId', 'fullName email designation');
