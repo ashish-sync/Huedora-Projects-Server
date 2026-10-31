@@ -210,6 +210,54 @@ export function describeActivity(row = {}) {
   };
 }
 
+export const ACTIVITY_DEFAULT_WINDOW_DAYS = 30;
+
+const SUBJECT_KEYS = [
+  'campId',
+  'clientName',
+  'fullName',
+  'name',
+  'documentNumber',
+  'invoiceNumber',
+  'title',
+  'assetName',
+  'email',
+];
+
+/** Keep list rows small — full before/after snapshots time out the Activity Log. */
+export function slimActivityListRow(row) {
+  if (!row || typeof row !== 'object') return row;
+  const afterSrc = row.after && typeof row.after === 'object' ? row.after : {};
+  const after = {};
+  for (const key of SUBJECT_KEYS) {
+    if (afterSrc[key] != null && afterSrc[key] !== '') after[key] = afterSrc[key];
+  }
+  return {
+    _id: row._id,
+    at: row.at,
+    actorEmail: row.actorEmail,
+    actorType: row.actorType,
+    action: row.action,
+    entityType: row.entityType,
+    entityId: row.entityId,
+    result: row.result,
+    message: row.message,
+    ip: row.ip,
+    after: Object.keys(after).length ? after : null,
+  };
+}
+
+/** Bound unfiltered reads so Mongo does not scan the whole audit collection. */
+export function applyDefaultActivityWindow(filter, query = {}, now = new Date()) {
+  if (query.from || query.to || filter.at) return filter;
+  const end = new Date(now);
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - (ACTIVITY_DEFAULT_WINDOW_DAYS - 1));
+  start.setUTCHours(0, 0, 0, 0);
+  filter.at = { $gte: start, $lte: end };
+  return filter;
+}
+
 export function applyActivityLogFilters(filter, query = {}) {
   const result = normalizeActivityResult(query.result || query.status);
   if (result) filter.result = result;

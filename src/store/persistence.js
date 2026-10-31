@@ -261,9 +261,12 @@ export async function queryCollection(name, opts = {}) {
     if (skip) cursor.skip(skip);
     if (limit != null) cursor.limit(limit);
     if (projection) cursor.project(projection);
+    const maxTimeMS = Number(opts.maxTimeMS) > 0 ? Number(opts.maxTimeMS) : 0;
+    if (maxTimeMS) cursor.maxTimeMS(maxTimeMS);
+    const countOpts = maxTimeMS ? { maxTimeMS } : {};
     const [data, total] = await Promise.all([
       cursor.toArray(),
-      col.countDocuments(filter),
+      col.countDocuments(filter, countOpts),
     ]);
     return { data, total };
   }
@@ -495,6 +498,14 @@ export async function ensureListIndexes() {
       name: 'repair_tickets',
       indexes: [
         { key: { isDeleted: 1, status: 1, slaDueAt: 1 }, name: 'dash_deleted_status_sla' },
+      ],
+    },
+    {
+      name: 'audit_logs',
+      indexes: [
+        { key: { at: -1 }, name: 'list_at' },
+        { key: { actorEmail: 1, at: -1 }, name: 'list_actor_at' },
+        { key: { result: 1, at: -1 }, name: 'list_result_at' },
       ],
     },
     {

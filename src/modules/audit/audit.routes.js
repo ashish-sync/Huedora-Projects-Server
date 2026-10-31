@@ -1,10 +1,15 @@
 import { Router } from 'express';
 import { authenticate, requirePermission } from '../../middleware/auth.js';
-import { asyncHandler, parsePagination, paginated } from '../../utils/helpers.js';
+import { AppError, asyncHandler, parsePagination, paginated } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { AuditLog } from './audit.model.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
-import { applyActivityLogFilters } from './activityLog.js';
+import {
+  applyActivityLogFilters,
+  applyDefaultActivityWindow,
+  slimActivityListRow,
+} from './activityLog.js';
+import { queryCollection } from '../../store/persistence.js';
 
 const router = Router();
 router.use(authenticate);
@@ -24,12 +29,25 @@ router.get(
       if (req.query.from) filter.at.$gte = new Date(req.query.from);
       if (req.query.to) filter.at.$lte = new Date(req.query.to);
     }
+    applyDefaultActivityWindow(filter, req.query);
     applyActivityLogFilters(filter, req.query);
-    const [data, total] = await Promise.all([
-      AuditLog.find(filter).sort({ at: -1 }).skip(skip).limit(limit),
-      AuditLog.countDocuments(filter),
-    ]);
-    res.json(paginated(data, total, page, limit));
+    const { data, total } = await queryCollection('audit_logs', {
+      filter,
+      sort: { at: -1 },
+      skip,
+      limit,
+      maxTimeMS: 8000,
+    });
+    res.json(paginated(data.map(slimActivityListRow), total, page, limit));
+  })
+);
+
+router.get(
+  '/:id',
+  asyncHandler(async (req, res) => {
+    const row = await AuditLog.findById(req.params.id);
+    if (!row) throw new AppError('Activity not found', 404, 'NOT_FOUND');
+    res.json({ data: row });
   })
 );
 
