@@ -111,4 +111,42 @@ describe('notificationQuery', () => {
       true
     );
   });
+
+  it('builds reviews and team category clauses', () => {
+    const reviews = buildCategoryClause('reviews');
+    assert.ok(reviews.$or.some((part) => part.kind === 'review'));
+
+    const team = buildCategoryClause('team', { userId: 'mgr-1' });
+    assert.ok(team.$and.some((part) => part['meta.involvement'] === 'inform'));
+    assert.ok(team.$and.some((part) => part.$or?.some((inner) => inner['meta.managerId'] === 'mgr-1')));
+  });
+
+  it('resolves review kind from involvement', () => {
+    assert.equal(
+      resolveNotificationKind({ type: 'CAMP_OFF_HOURS', meta: { kind: 'review', involvement: 'review' } }),
+      'review'
+    );
+    assert.equal(
+      resolveNotificationKind({ type: 'COMMERCIAL_SUBMIT', meta: { kind: 'approval', involvement: 'approve' } }),
+      'approval'
+    );
+  });
+
+  it('safety-filters reviews out of Approvals and Updates', () => {
+    const review = {
+      type: 'CAMP_REVIEW_OVERDUE',
+      kind: 'review',
+      meta: { kind: 'review', involvement: 'review' },
+    };
+    assert.equal(passesCategorySafety(review, 'reviews'), true);
+    assert.equal(passesCategorySafety(review, 'approvals'), false);
+    assert.equal(passesCategorySafety(review, 'updates'), false);
+    assert.equal(
+      passesCategorySafety(
+        { type: 'CAMP_REVIEW', kind: 'update', meta: { involvement: 'inform', managerId: 'mgr-1' } },
+        'team'
+      ),
+      true
+    );
+  });
 });

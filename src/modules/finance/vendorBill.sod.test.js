@@ -55,14 +55,24 @@ test('verifier cannot approve', async () => {
   );
 });
 
-test('exempt manager may approve another submitter', async () => {
+test('Director may approve another submitter; Manager may not', async () => {
   await assert.doesNotReject(() =>
     assertVendorBillSegregationOfDuties(
       { status: 'verified', submittedById: 'u1', verifiedById: 'u2' },
       'approved',
-      { _id: 'u3', designation: 'Manager' },
+      { _id: 'u3', designation: 'Director' },
       new Set()
     )
+  );
+  await assert.rejects(
+    () =>
+      assertVendorBillSegregationOfDuties(
+        { status: 'verified', submittedById: 'u1', verifiedById: 'u2' },
+        'approved',
+        { _id: 'u3', designation: 'Manager' },
+        new Set()
+      ),
+    (err) => err.status === 403
   );
 });
 

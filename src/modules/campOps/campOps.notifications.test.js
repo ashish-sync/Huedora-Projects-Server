@@ -12,7 +12,7 @@ import {
 import { notifyEvent } from '../notifications/notifyEvent.js';
 import { Notification } from '../notifications/notification.model.js';
 import { resolveEventMeta, NOTIFICATION_PRIORITIES } from '../notifications/notificationCatalog.js';
-import { notifyCampBulkSummary, notifyCampWorkflow } from './campOps.notifications.js';
+import { notifyCampBulkSummary, notifyCampHcwGapApproval, notifyCampWorkflow } from './campOps.notifications.js';
 
 let tempDir = '';
 
@@ -27,11 +27,40 @@ test.after(async () => {
   if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-async function resetNotifications() {
+async function resetNotifications(users = []) {
   clearPersistenceCache();
   await saveCollection('notifications', [], { allowDestructiveSync: true });
-  await saveCollection('users', [], { allowDestructiveSync: true });
-  await saveCollection('roles', [], { allowDestructiveSync: true });
+  await saveCollection('roles', [
+    { _id: 'role-user', name: 'User', permissions: [], isDeleted: false },
+  ], { allowDestructiveSync: true });
+  await saveCollection('users', users, { allowDestructiveSync: true });
+}
+
+function rmUsers() {
+  return [
+    {
+      _id: 'mgr-1',
+      email: 'mgr@tylo.local',
+      isActive: true,
+      isDeleted: false,
+      roleIds: ['role-user'],
+    },
+    {
+      _id: 'rep-1',
+      email: 'rep@tylo.local',
+      isActive: true,
+      isDeleted: false,
+      reportingManagerId: 'mgr-1',
+      roleIds: ['role-user'],
+    },
+    {
+      _id: 'coord-1',
+      email: 'coord@tylo.local',
+      isActive: true,
+      isDeleted: false,
+      roleIds: ['role-user'],
+    },
+  ];
 }
 
 test('catalog maps camp bulk events to camp module priorities', () => {
@@ -103,18 +132,19 @@ test('notifyCampWorkflow ignores routine lifecycle actions', async () => {
   assert.equal(rows.length, 0);
 });
 
-test('notifyCampBulkSummary creates one summary for the actor', async () => {
-  await resetNotifications();
-  const actorId = 'bulk-actor';
+test('notifyCampBulkSummary informs the actor RM, not the actor', async () => {
+  await resetNotifications(rmUsers());
   const created = await notifyCampBulkSummary({
     action: 'import',
-    actorId,
+    actorId: 'rep-1',
     success: Array.from({ length: 100 }, (_, i) => ({ id: `c${i}`, campId: `C${i}` })),
     skipped: [{ reason: 'duplicate' }, { reason: 'missing client' }],
     failed: [{ reason: 'invalid date' }],
   });
   assert.equal(created.length, 1);
-  assert.equal(created[0].userId, actorId);
+  assert.equal(created[0].userId, 'mgr-1');
+  assert.equal(created[0].kind, 'update');
+  assert.equal(created[0].meta.involvement, 'inform');
   assert.match(created[0].title, /100 succeeded/);
   assert.match(created[0].title, /2 skipped/);
   assert.match(created[0].title, /1 failed/);
@@ -123,8 +153,59 @@ test('notifyCampBulkSummary creates one summary for the actor', async () => {
   assert.equal(created[0].meta.skippedCount, 2);
   assert.equal(created[0].meta.failedCount, 1);
 
-  const all = await Notification.find({ userId: actorId });
-  assert.equal(all.length, 1);
+  const forActor = await Notification.find({ userId: 'rep-1' });
+  assert.equal(forActor.length, 0);
+});
+
+test('camp submit informs the requester RM and does not fan out to coordinators', async () => {
+  await resetNotifications(rmUsers());
+  await notifyCampWorkflow({
+    camp: { _id: 'c1', campId: '26-08-0001', createdById: 'rep-1' },
+    action: 'submit_review',
+    actorId: 'rep-1',
+  });
+  const forMgr = await Notification.find({ userId: 'mgr-1' });
+  const forCoord = await Notification.find({ userId: 'coord-1' });
+  assert.equal(forMgr.length, 1);
+  assert.equal(forMgr[0].type, 'CAMP_REVIEW');
+  assert.equal(forMgr[0].kind, 'update');
+  assert.equal(forMgr[0].meta.involvement, 'inform');
+  assert.equal(forCoord.length, 0);
+});
+
+test('camp off-hours and overdue become Review, not Approval', async () => {
+  await resetNotifications(rmUsers());
+  await notifyCampWorkflow({
+    camp: {
+      _id: 'c2',
+      campId: '26-08-0002',
+      createdById: 'rep-1',
+      submittedOffHours: true,
+    },
+    action: 'submit_review',
+    actorId: 'rep-1',
+  });
+  await notifyCampWorkflow({
+    camp: { _id: 'c3', campId: '26-08-0003', createdById: 'rep-1' },
+    action: 'review_overdue',
+  });
+  const rows = await Notification.find({ userId: 'mgr-1' });
+  const reviews = rows.filter((row) => row.kind === 'review');
+  assert.ok(reviews.some((row) => row.type === 'CAMP_OFF_HOURS'));
+  assert.ok(reviews.some((row) => row.type === 'CAMP_REVIEW_OVERDUE'));
+  assert.equal(reviews.every((row) => row.kind !== 'approval'), true);
+});
+
+test('HCW gap stays Approve for the assigner RM', async () => {
+  await resetNotifications(rmUsers());
+  const rows = await notifyCampHcwGapApproval({
+    camp: { _id: 'c4', campId: '26-08-0004', hcwName: 'Asha' },
+    actorId: 'rep-1',
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].userId, 'mgr-1');
+  assert.equal(rows[0].kind, 'approval');
+  assert.equal(rows[0].type, 'CAMP_HCW_GAP_APPROVAL');
 });
 
 test('notifyCampBulkSummary is a no-op without actor or rows', async () => {

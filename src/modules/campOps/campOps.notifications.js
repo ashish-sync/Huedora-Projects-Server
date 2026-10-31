@@ -1,52 +1,8 @@
-import { notifyCampCoordinatorStakeholders } from './campOps.coordinatorNotify.js';
 import { notifyEvent } from '../notifications/notifyEvent.js';
-import { scopeApproversToSubjectManagers } from '../notifications/notificationRecipients.js';
-import { User } from '../users/user.model.js';
-import { Role } from '../users/role.model.js';
-import { PERMISSIONS } from '../../config/constants.js';
+import { notifyRmInvolvement } from '../users/rmInvolve.js';
 import {
   NOTIFICATION_PRIORITIES,
 } from '../notifications/notificationCatalog.js';
-
-function isPlatformAdminUser(user, roleById) {
-  const roleIds = (user.roleIds || []).map((id) => String(id?._id || id));
-  return roleIds.some((roleId) => {
-    const role = roleById.get(roleId);
-    if (!role) return false;
-    const perms = role.permissions || [];
-    return (
-      perms.includes(PERMISSIONS.ALL)
-      || perms.includes('*')
-      || ['Admin'].includes(role.name)
-    );
-  });
-}
-
-function isCampApproverUser(user, roleById) {
-  const roleIds = (user.roleIds || []).map((id) => String(id?._id || id));
-  return roleIds.some((roleId) => {
-    const role = roleById.get(roleId);
-    if (!role) return false;
-    const perms = role.permissions || [];
-    return (
-      perms.includes(PERMISSIONS.ALL)
-      || perms.includes('*')
-      || perms.includes(PERMISSIONS.CAMPS_APPROVE)
-      || ['Approver', 'Admin'].includes(role.name)
-    );
-  });
-}
-
-async function findCampApprovers(excludeUserId = null) {
-  const roles = await Role.find({ isDeleted: false });
-  const roleById = new Map(roles.map((role) => [String(role._id), role]));
-  const users = await User.find({ isDeleted: false, isActive: true });
-
-  return users.filter((user) => {
-    if (excludeUserId && String(user._id) === String(excludeUserId)) return false;
-    return isCampApproverUser(user, roleById);
-  });
-}
 
 function campSummary(camp = {}) {
   const parts = [
@@ -62,33 +18,32 @@ function campRequesterId(camp = {}) {
 }
 
 /**
- * Camp One review queue FYI for Approvers/Admins on the requester's reporting line
- * (managers of the requester + platform admins). Not reporting-manager Approvals inbox.
+ * Direct-RM Inform / Review. Never fans out to every camps:approve user.
  */
-export async function notifyCampApprovers({ camp, actorId, type, title, body, priority }) {
-  const roles = await Role.find({ isDeleted: false });
-  const roleById = new Map(roles.map((role) => [String(role._id), role]));
-  const allApprovers = await findCampApprovers(actorId);
-  const subjectId = campRequesterId(camp);
-  const scoped = await scopeApproversToSubjectManagers(allApprovers, subjectId, {
-    isPlatformAdmin: (user) => isPlatformAdminUser(user, roleById),
-  });
-
-  await notifyEvent({
+export async function notifyCampApprovers({
+  camp,
+  actorId,
+  type,
+  title,
+  body,
+  priority,
+  level = 'inform',
+}) {
+  const subjectId = campRequesterId(camp) || actorId;
+  if (!subjectId) return [];
+  return notifyRmInvolvement({
+    level,
+    subjectUserId: subjectId,
+    actor: actorId ? { _id: actorId } : null,
     type,
     title,
     body,
     entityType: 'camp_ops_camp',
     entityId: camp._id,
-    recipients: scoped.map((user) => user._id),
-    includeWatchers: true,
-    excludeUserIds: actorId ? [actorId] : [],
     excludeActor: true,
-    actor: actorId ? { _id: actorId } : null,
+    includeWatchers: false,
     module: 'camp',
     priority,
-    group: true,
-    meta: { kind: 'update' },
   });
 }
 
@@ -100,57 +55,56 @@ export async function notifyCampHcwGapApproval({ camp, actorId }) {
   if (!assignerId) return [];
   const label = camp.campId || String(camp._id || '').slice(-6);
   const hcw = camp.hcwName || camp.hcwContactId || 'HCW';
-  return notifyEvent({
+  return notifyRmInvolvement({
+    level: 'approve',
+    subjectUserId: assignerId,
+    actor: { _id: assignerId },
     type: 'CAMP_HCW_GAP_APPROVAL',
     title: `Camp ${label} needs approval — HCW gap under 30 minutes`,
     body: `${hcw} · ${campSummary(camp)}. Short gap between same-day camps needs approval from your reporting manager.`,
     entityType: 'camp_ops_camp',
     entityId: camp._id,
-    recipients: [assignerId],
-    includeWatchers: false,
-    includeReportingManagers: 'chain',
-    excludeUserIds: [assignerId],
     excludeActor: true,
-    actor: { _id: assignerId },
+    includeWatchers: false,
     module: 'camp',
-    group: true,
-    meta: { kind: 'approval', reason: 'hcw_gap_override' },
+    meta: { reason: 'hcw_gap_override' },
   });
 }
 
-/** Requester + their reporting managers (FYI for managers of the submitter). */
-export async function notifyCampRequester({ camp, type, title, body, priority }) {
+/** Requester (no manager fan-out) plus Inform to the requester's direct RM. */
+export async function notifyCampRequester({ camp, type, title, body, priority, actorId }) {
   const requesterId = campRequesterId(camp);
-  if (!requesterId) return;
-  await notifyEvent({
+  if (requesterId) {
+    await notifyEvent({
+      type,
+      title,
+      body,
+      entityType: 'camp_ops_camp',
+      entityId: camp._id,
+      recipients: [requesterId],
+      includeWatchers: false,
+      includeReportingManagers: false,
+      module: 'camp',
+      priority,
+      group: true,
+      meta: { kind: 'update' },
+    });
+  }
+  const subjectId = requesterId || actorId;
+  if (!subjectId) return [];
+  return notifyRmInvolvement({
+    level: 'inform',
+    subjectUserId: subjectId,
+    actor: actorId ? { _id: actorId } : null,
     type,
     title,
     body,
     entityType: 'camp_ops_camp',
     entityId: camp._id,
-    recipients: [requesterId],
+    excludeActor: true,
     includeWatchers: false,
-    includeReportingManagers: 'chain',
     module: 'camp',
     priority,
-    group: true,
-    meta: { kind: 'update' },
-  });
-}
-
-async function notifyCoordinatorTeam({
-  camp,
-  type,
-  title,
-  body,
-  excludeUserIds = [],
-}) {
-  await notifyCampCoordinatorStakeholders({
-    camp,
-    type,
-    title,
-    body,
-    excludeUserIds,
   });
 }
 
@@ -208,23 +162,22 @@ export async function notifyCampBulkSummary({
       ? NOTIFICATION_PRIORITIES.CRITICAL
       : NOTIFICATION_PRIORITIES.IMPORTANT;
 
-  const recipients = actorId ? [actorId] : [];
-  if (!recipients.length) return [];
+  if (!actorId) return [];
 
-  return notifyEvent({
+  return notifyRmInvolvement({
+    level: 'inform',
+    subjectUserId: actorId,
+    actor: { _id: actorId },
     type,
     title,
     body: bodyParts.join(' · '),
     entityType: entityId ? 'camp_ops_camp' : null,
     entityId,
-    recipients,
+    excludeActor: true,
     includeWatchers: false,
-    includeReportingManagers: 'direct',
-    excludeUserIds: [],
     module: 'camp',
     priority,
     group: false,
-    groupKey: `camp_bulk:${action}:${Date.now()}`,
     meta: {
       action,
       successCount: ok,
@@ -250,33 +203,38 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
         camp,
         actorId,
         type: 'CAMP_REVIEW',
-        title: `Camp ${label} submitted for Camp One review`,
+        title: `Camp ${label} submitted`,
         body: summary,
         priority: NOTIFICATION_PRIORITIES.INFORMATIONAL,
+        level: 'inform',
       });
       if (camp.submittedOffHours) {
-        await notifyCoordinatorTeam({
+        await notifyCampApprovers({
           camp,
+          actorId,
           type: 'CAMP_OFF_HOURS',
           title: `Off-hours camp submitted: ${label}`,
           body: summary,
-          excludeUserIds: [actorId],
+          priority: NOTIFICATION_PRIORITIES.IMPORTANT,
+          level: 'review',
         });
       }
       if (camp.submittedWeekendAttention) {
-        await notifyCoordinatorTeam({
+        await notifyCampApprovers({
           camp,
+          actorId,
           type: 'CAMP_WEEKEND_ATTENTION',
           title: `Weekend camp submitted: ${label}`,
           body: summary,
-          excludeUserIds: [actorId],
+          priority: NOTIFICATION_PRIORITIES.IMPORTANT,
+          level: 'review',
         });
       }
       break;
     case 'approve':
-      // Requester + reporting managers — no fan-out to every coordinator.
       await notifyCampRequester({
         camp,
+        actorId,
         type: 'CAMP_APPROVED',
         title: `Camp ${label} approved`,
         body: summary,
@@ -286,6 +244,7 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
     case 'reject':
       await notifyCampRequester({
         camp,
+        actorId,
         type: 'CAMP_REJECTED',
         title: `Camp ${label} refused`,
         body: note || camp.rejectionReason || summary,
@@ -295,6 +254,7 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
     case 'request_information':
       await notifyCampRequester({
         camp,
+        actorId,
         type: 'CAMP_INFO_REQUESTED',
         title: `Information requested for camp ${label}`,
         body: note || camp.informationRequestNote || summary,
@@ -309,14 +269,18 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
         title: `Camp review overdue: ${label}`,
         body: summary,
         priority: NOTIFICATION_PRIORITIES.IMPORTANT,
+        level: 'review',
       });
       break;
     case 'execution_overdue':
-      await notifyCoordinatorTeam({
+      await notifyCampApprovers({
         camp,
+        actorId: null,
         type: 'CAMP_EXECUTION_OVERDUE',
         title: `Camp execution overdue: ${label}`,
         body: summary,
+        priority: NOTIFICATION_PRIORITIES.CRITICAL,
+        level: 'review',
       });
       break;
     default:

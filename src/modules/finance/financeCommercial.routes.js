@@ -100,6 +100,7 @@ import {
   computeClientMasterPoUtilization,
 } from './poUtilization.service.js';
 import { notifyEvent } from '../notifications/notifyEvent.js';
+import { notifyCommercialDecision, notifyCommercialSubmitted } from './financeRmNotify.js';
 import { buildAuditChanges } from '../notifications/fieldDiff.js';
 import { NOTIFICATION_PRIORITIES } from '../notifications/notificationCatalog.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
@@ -416,6 +417,7 @@ router.post(
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.COMMERCIAL.SUBMIT', row, before);
+    await notifyCommercialSubmitted({ row, actor: req.user });
     res.json({ data: await commercialPayload(row) });
   })
 );
@@ -474,6 +476,7 @@ router.post(
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.COMMERCIAL.APPROVE', row, before);
+    await notifyCommercialDecision({ row, actor: req.user, approved: true });
     res.json({ data: await commercialPayload(row) });
   })
 );
@@ -519,6 +522,7 @@ router.post(
     stampUpdater(row, req.user);
     await row.save();
     await auditCommercial(req, 'FINANCE.COMMERCIAL.REJECT', row, before);
+    await notifyCommercialDecision({ row, actor: req.user, approved: false });
     res.json({ data: await commercialPayload(row) });
   })
 );

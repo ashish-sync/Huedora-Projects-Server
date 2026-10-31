@@ -27,6 +27,11 @@ import {
   permissionForVendorBillTransition,
 } from './vendorBill.sod.js';
 import { resolveApprovalSubject } from '../users/approvalAuthority.js';
+import {
+  notifyVendorBillDecision,
+  notifyVendorBillSubmitted,
+  notifyVendorBillVerified,
+} from './financeRmNotify.js';
 import { rejectUnsafeUploadedFiles } from '../../utils/rejectUnsafeUpload.js';
 import { assertEntityNotStale, beginIdempotentCreate, readIdempotencyKey } from '../../utils/mutationGuards.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
@@ -498,6 +503,13 @@ async function transitionVendorBill(req, res) {
     after: row.toObject ? row.toObject() : row,
     requestId: req.requestId,
   });
+  if (next === 'under_verification') {
+    await notifyVendorBillSubmitted({ row, actor });
+  } else if (next === 'verified') {
+    await notifyVendorBillVerified({ row, actor });
+  } else if (next === 'approved' || next === 'rejected') {
+    await notifyVendorBillDecision({ row, actor, approved: next === 'approved' });
+  }
   const [enriched] = await enrichVendorBills([row]);
   res.json({ data: enriched });
 }

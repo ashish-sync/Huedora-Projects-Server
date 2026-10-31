@@ -63,11 +63,13 @@ router.get(
   asyncHandler(async (req, res) => {
     const userId = req.user._id;
     const approvalFilter = buildUnreadBadgeFilter(userId, 'approvals');
+    const reviewFilter = buildUnreadBadgeFilter(userId, 'reviews');
     // FYI bucket includes informational notices (bell “FYI / Notifications”).
     const fyiFilter = buildUnreadBadgeFilter(userId, 'updates', { informational: '1' });
 
-    const [approvals, fyi, sample] = await Promise.all([
+    const [approvals, reviews, fyi, sample] = await Promise.all([
       Notification.countDocuments(approvalFilter),
+      Notification.countDocuments(reviewFilter),
       Notification.countDocuments(fyiFilter),
       Notification.find(approvalFilter)
         .sort({ createdAt: -1 })
@@ -76,7 +78,8 @@ router.get(
     ]);
 
     const sampleIds = sample.map((n) => String(n._id));
-    const etag = weakUnreadEtag(approvals, fyi, sampleIds);
+    const actionable = approvals + reviews;
+    const etag = weakUnreadEtag(actionable, fyi, sampleIds);
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, no-cache');
 
@@ -86,11 +89,12 @@ router.get(
 
     res.json({
       data: {
-        count: approvals,
+        count: actionable,
         approvals,
+        reviews,
         updates: fyi,
         fyi,
-        total: approvals + fyi,
+        total: actionable + fyi,
         sampleIds,
       },
     });
@@ -186,7 +190,7 @@ router.post(
     const filter = buildInboxBaseFilter(req.user._id, { unread: 'true' });
 
     if (category && category !== 'all') {
-      const clause = buildCategoryClause(category);
+      const clause = buildCategoryClause(category, { userId: req.user._id });
       if (clause) filter.$and = [...(filter.$and || []), clause];
     }
 

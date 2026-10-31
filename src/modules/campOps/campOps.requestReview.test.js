@@ -172,21 +172,3 @@ test('resolveRequestReviewBoardStatus uses stored flags and SLA without full cam
   );
 });
 
-test('resolveRequestReviewStatus maps approved/rejected', () => {
-  assert.equal(resolveRequestReviewStatus({ status: 'approved' }), 'request_approved');
-  assert.equal(resolveRequestReviewStatus({ status: 'rejected' }), 'request_rejected');
-});
-
-test('applyRequestReviewTransition resets clock on resubmit after info request', () => {
-  const camp = {
-    requestReviewStatus: 'information_requested',
-    informationRequestNote: 'Need phone',
-    informationRequestedAt: '2026-08-01T10:00:00.000Z',
-    reviewOverdueAt: '2026-08-02T10:00:00.000Z',
-  };
-  applyRequestReviewTransition(camp, 'submit');
-  assert.equal(camp.requestReviewStatus, 'review_pending');
-  assert.equal(camp.informationRequestNote, '');
-  assert.equal(camp.informationRequestedAt, null);
-  assert.equal(camp.reviewOverdueAt, null);
-});

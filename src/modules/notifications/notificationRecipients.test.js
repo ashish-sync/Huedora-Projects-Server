@@ -103,6 +103,24 @@ describe('reporting manager notification recipients', () => {
     );
   });
 
+  it('does not fall back to every approver when the RM is missing from the list', async () => {
+    const scoped = await scopeApproversToSubjectManagers(
+      [{ _id: 'other-1' }, { _id: 'admin-1' }],
+      'rep-1',
+      { isPlatformAdmin: (u) => String(u._id) === 'admin-1' },
+    );
+    assert.deepEqual(scoped.map((u) => u._id), ['admin-1']);
+  });
+
+  it('returns nobody when the subject has an RM and no admins are in the list', async () => {
+    const scoped = await scopeApproversToSubjectManagers(
+      [{ _id: 'other-1' }],
+      'rep-1',
+      { isPlatformAdmin: () => false },
+    );
+    assert.deepEqual(scoped, []);
+  });
+
   it('notifyEvent with includeReportingManagers creates manager copy', async () => {
     await notifyEvent({
       type: 'CAMP_APPROVED',

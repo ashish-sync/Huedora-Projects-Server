@@ -8,6 +8,7 @@ import {
   APPROVAL_REQUEST_TYPES,
   CAMP_FYI_NOTIFICATION_TYPES,
   isApprovalRequestNotification,
+  isReviewNotification,
 } from './notificationCatalog.js';
 
 export const LIST_SELECT =
@@ -21,6 +22,15 @@ const APPROVAL_TITLE_RE =
 
 /** Persistable inbox bucket for a notification payload. */
 export function resolveNotificationKind(n = {}) {
+  const kind = String(n?.meta?.kind || n?.kind || '').toLowerCase();
+  if (kind === 'review' || kind === 'escalate' || kind === 'approval' || kind === 'update') {
+    return kind;
+  }
+  const involvement = String(n?.meta?.involvement || '').toLowerCase();
+  if (involvement === 'review') return 'review';
+  if (involvement === 'approve' || involvement === 'approval') return 'approval';
+  if (involvement === 'escalate') return 'escalate';
+  if (involvement === 'inform') return 'update';
   return isApprovalRequestNotification(n) ? 'approval' : 'update';
 }
 
@@ -76,6 +86,16 @@ export function buildInboxBaseFilter(userId, query = {}, { now = new Date() } = 
 const CAMP_FYI_TYPE_CLAUSE = { type: { $in: [...CAMP_FYI_NOTIFICATION_TYPES] } };
 const NOT_CAMP_FYI_TYPE = { type: { $nin: [...CAMP_FYI_NOTIFICATION_TYPES] } };
 
+export function buildBadgeReviewClause() {
+  return {
+    $or: [
+      { kind: 'review' },
+      { 'meta.kind': 'review' },
+      { 'meta.involvement': 'review' },
+    ],
+  };
+}
+
 export function buildBadgeApprovalClause() {
   // Exclude Camp One FYI types — even if legacy rows stored kind=approval.
   return {
@@ -110,7 +130,11 @@ export function buildBadgeUpdatesClause() {
 /** Unread inbox filter for Layout badge — prefers kind/type indexes over title regex. */
 export function buildUnreadBadgeFilter(userId, bucket, query = {}, { now = new Date() } = {}) {
   const filter = buildInboxBaseFilter(userId, { ...query, unread: 'true' }, { now });
-  const clause = bucket === 'approvals' ? buildBadgeApprovalClause() : buildBadgeUpdatesClause();
+  const clause = bucket === 'approvals'
+    ? buildBadgeApprovalClause()
+    : bucket === 'reviews'
+      ? buildBadgeReviewClause()
+      : buildBadgeUpdatesClause();
   filter.$and = [...(filter.$and || []), clause];
   if (bucket === 'updates') {
     applyInformationalFilter(filter, query, 'updates');
@@ -118,9 +142,44 @@ export function buildUnreadBadgeFilter(userId, bucket, query = {}, { now = new D
   return filter;
 }
 
-export function buildCategoryClause(category) {
+export function buildCategoryClause(category, { userId } = {}) {
   const cat = String(category || '').trim().toLowerCase();
   if (!cat || cat === 'all') return null;
+
+  if (cat === 'reviews') {
+    return {
+      $or: [
+        { kind: 'review' },
+        { 'meta.kind': 'review' },
+        { 'meta.involvement': 'review' },
+      ],
+    };
+  }
+
+  if (cat === 'team') {
+    const uid = String(userId || '').trim();
+    return {
+      $and: [
+        {
+          $or: [
+            { kind: 'update' },
+            { 'meta.kind': 'update' },
+            { kind: { $exists: false } },
+          ],
+        },
+        { 'meta.involvement': 'inform' },
+        ...(uid
+          ? [{
+            $or: [
+              { 'meta.managerId': uid },
+              { 'meta.audienceMode': 'direct_rm' },
+              { 'meta.audienceMode': 'admin_fallback' },
+            ],
+          }]
+          : []),
+      ],
+    };
+  }
 
   if (cat === 'approvals') {
     return {
@@ -197,7 +256,7 @@ export function applyInformationalFilter(filter, query = {}, category = '') {
 export function buildListFilter(userId, query = {}, { now = new Date() } = {}) {
   const filter = buildInboxBaseFilter(userId, query, { now });
   const category = String(query.category || '').trim().toLowerCase();
-  const categoryClause = buildCategoryClause(category);
+  const categoryClause = buildCategoryClause(category, { userId });
   if (categoryClause) {
     filter.$and = [...(filter.$and || []), categoryClause];
   }
@@ -226,7 +285,13 @@ export function buildListFilter(userId, query = {}, { now = new Date() } = {}) {
 export function passesCategorySafety(n, category) {
   const cat = String(category || '').trim().toLowerCase();
   if (cat === 'approvals') return isApprovalRequestNotification(n);
-  if (cat === 'updates') return !isApprovalRequestNotification(n);
+  if (cat === 'reviews') return isReviewNotification(n);
+  if (cat === 'team') {
+    return String(n?.meta?.involvement || '').toLowerCase() === 'inform'
+      && !isApprovalRequestNotification(n)
+      && !isReviewNotification(n);
+  }
+  if (cat === 'updates') return !isApprovalRequestNotification(n) && !isReviewNotification(n);
   return true;
 }
 

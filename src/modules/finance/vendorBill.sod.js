@@ -11,7 +11,7 @@ function sameActor(a, b) {
 /**
  * Enforce segregation of duties on vendor-bill lifecycle transitions.
  * Approve/reject uses Reporting Manager authority (Director / Business Head /
- * Manager may self-approve). Verify stays submitter ≠ verifier.
+ * Admin may self-approve). Verify stays submitter ≠ verifier and is not approve.
  */
 export async function assertVendorBillSegregationOfDuties(row, nextStatus, actor, permissions) {
   const to = normalizeVendorBillStatus(nextStatus);

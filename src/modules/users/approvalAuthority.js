@@ -4,8 +4,8 @@
  * Standard: creator/requestor/submitter cannot approve their own item — only their
  * designated Reporting Manager may approve.
  *
- * Exempt: Director, Business Head, or any Manager designation (and platform Admin)
- * may create and approve their own submissions and approve others'.
+ * Exempt: Director, Business Head, and platform Admin may create and approve
+ * their own submissions. Other Manager titles use their direct RM.
  */
 
 import { AppError } from '../../utils/helpers.js';
@@ -20,16 +20,13 @@ export function normalizeDesignationKey(designation) {
 }
 
 /**
- * Director, Business Head, or any Manager-title designation.
- * Matches: Manager, Senior Manager, Operations Manager, Training Manager, Product Manager, etc.
+ * Director or Business Head only. Generic "Manager" titles are not exempt.
  */
 export function isApprovalExemptDesignation(designation) {
   const key = normalizeDesignationKey(designation);
   if (!key) return false;
   if (key === 'director' || key.endsWith(' director') || key.startsWith('director ')) return true;
   if (key === 'business head' || key.includes('business head')) return true;
-  // Word-boundary style: "... manager" or "manager ..."
-  if (/(^|\s)manager(\s|$)/.test(key)) return true;
   return false;
 }
 
@@ -114,7 +111,7 @@ export async function assertApprovalAuthority({
   if (isRm) return { mode: 'reporting_manager' };
 
   throw new AppError(
-    `Only the submitter's Reporting Manager (or Director / Business Head / Manager) can ${action} this item`,
+    `Only the submitter's Reporting Manager (or Director / Business Head / Admin) can ${action} this item`,
     403,
     'FORBIDDEN',
   );
