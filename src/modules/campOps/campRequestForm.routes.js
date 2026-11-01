@@ -18,6 +18,7 @@ import {
   resolveProgramByRequestToken,
   submitProgramCampRequest,
 } from './campRequestForm.service.js';
+import { autocompleteOlaMaps } from '../geo/olaMaps.service.js';
 
 const router = Router();
 
@@ -28,6 +29,15 @@ const linkLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => req.ip || 'unknown',
   message: { error: { message: 'Too many requests. Try again later.', code: 'RATE_LIMIT' } },
+});
+
+const olaAutocompleteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.ip || 'unknown',
+  message: { error: { message: 'Too many address searches. Try again shortly.', code: 'RATE_LIMIT' } },
 });
 
 router.use(linkLimiter);
@@ -144,6 +154,16 @@ router.get(
   asyncHandler(async (req, res) => {
     await resolveProgramByRequestToken(req.params.token);
     res.json({ data: await listProgramFormCities(req.query.stateId) });
+  }),
+);
+
+router.get(
+  '/:token/geo/ola/autocomplete',
+  olaAutocompleteLimiter,
+  asyncHandler(async (req, res) => {
+    await resolveProgramByRequestToken(req.params.token);
+    const data = await autocompleteOlaMaps(req.query.input);
+    res.json({ data });
   }),
 );
 

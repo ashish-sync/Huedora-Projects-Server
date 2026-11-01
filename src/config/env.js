@@ -101,6 +101,8 @@ export const env = {
   googleMapsApiKey: String(
     process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || ''
   ).trim(),
+  /** Server-only Ola Maps key for the public Camp Request Form autocomplete. */
+  olaMapsApiKey: String(process.env.OLA_MAPS_API_KEY || '').trim(),
   /** OpenAI key for Manual Paste hybrid event extraction (server-only). */
   openaiApiKey: String(process.env.OPENAI_API_KEY || '').trim(),
   openaiModel: String(process.env.OPENAI_MODEL || 'gpt-4o-mini').trim() || 'gpt-4o-mini',

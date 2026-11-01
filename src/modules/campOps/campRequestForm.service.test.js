@@ -39,6 +39,27 @@ test('sanitizeProgramRequestBody locks client and program fields from the master
   assert.equal(safe.campAmount, undefined);
 });
 
+test('sanitizeProgramRequestBody keeps selected address coordinates', () => {
+  const safe = sanitizeProgramRequestBody({
+    campAddress: 'Kempegowda International Airport Bengaluru (BLR), KIAL Rd, Devanahalli',
+    googlePlaceId: 'ola-platform:abc',
+    addressManualEntry: false,
+    latitude: '13.05158',
+    longitude: '77.61194',
+    doctorName: 'Anita Sharma',
+    campDate: '2026-11-02',
+  }, {
+    client: { _id: 'client-1', name: 'Acme Health' },
+    master: { programName: 'Viva BMD', campName: 'BMD' },
+  });
+
+  assert.equal(safe.campAddress, 'Kempegowda International Airport Bengaluru (BLR), KIAL Rd, Devanahalli');
+  assert.equal(safe.googlePlaceId, 'ola-platform:abc');
+  assert.equal(safe.addressManualEntry, false);
+  assert.equal(safe.latitude, '13.05158');
+  assert.equal(safe.longitude, '77.61194');
+});
+
 test('publicProgramRequestContext only exposes program identity', () => {
   const ctx = publicProgramRequestContext(
     {
