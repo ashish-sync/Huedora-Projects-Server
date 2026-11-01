@@ -14,6 +14,7 @@ import { extractManualPasteFields, formatManualPasteOutput } from './manualPaste
 import { enrichPasteLocationFromPin } from './manualPaste.enrich.js';
 import {
   assertHistoricalCampDatesAllowed,
+  assertRequestDateNotFuture,
   canSetHistoricalCampDates,
   getHistoricalCampDateErrors,
   localTodayIso,
@@ -35,6 +36,7 @@ import {
   formatDuplicateCampMessage,
 } from './campDuplicate.js';
 import { findImportDuplicateToSkip } from './import/importSkipDuplicates.js';
+import { notifyCampCreates } from './campOps.notifications.js';
 
 const BLOCK_SEPARATOR = /(?:^|\n)\s*(?:---+|===+|\*\*\*+)\s*(?:\n|$)/;
 
@@ -488,6 +490,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
           requestDate: payload.requestDate,
         },
       );
+      assertRequestDateNotFuture(payload.requestDate);
 
       const liveHit = await findImportDuplicateToSkip({
         client,
@@ -549,6 +552,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
         throw error;
       }
 
+      createdCamps.push(camp);
       results.push({
         status: incomplete ? 'created_partial' : 'created',
         rowNumber: entry.rowNumber,
@@ -585,6 +589,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
     throw new AppError(firstError || 'No camps could be created from the pasted content', 400, 'VALIDATION_ERROR');
   }
 
+  await notifyCampCreates(createdCamps, actor?.id);
   return {
     created: created.length,
     campIds: created.map((item) => item.campId),

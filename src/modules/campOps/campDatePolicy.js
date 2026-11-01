@@ -1,11 +1,15 @@
 import { AppError } from '../../utils/helpers.js';
 import { parseLocalDateInput } from './campOps.helpers.js';
 
-/** Dates more than this many days before today require Team Leader or Admin. */
+/** Dates more than this many days before today need Reporting Manager approval. */
 export const CAMP_HISTORICAL_DATE_THRESHOLD_DAYS = 2;
 
-/** Same 2-day window: backdated request dates and imminent camp dates need RM approval. */
+/** Same 2-day window used by historical-date and RM-approval checks. */
 export const CAMP_T2_WINDOW_DAYS = CAMP_HISTORICAL_DATE_THRESHOLD_DAYS;
+
+export const FUTURE_REQUEST_DATE_ERROR = 'Request date cannot be in the future';
+export const REQUEST_DATE_APPROVAL_REASON = 'request_date_historical';
+export const CAMP_DATE_APPROVAL_REASON = 'camp_date_historical';
 
 const ADMIN_DESIGNATION_KEYS = new Set(['admin', 'administrator']);
 const ADMIN_ROLE_KEYS = new Set(['admin', 'administrator']);
@@ -80,22 +84,38 @@ export function isT2UpcomingCampDate(dateValue, now = new Date()) {
   return days >= 0 && days <= CAMP_T2_WINDOW_DAYS;
 }
 
+export function isFutureRequestDate(dateValue, now = new Date()) {
+  if (!dateValue) return false;
+  return daysFromToday(dateValue, now) > 0;
+}
+
+export function getFutureRequestDateError(dateValue, now = new Date()) {
+  return isFutureRequestDate(dateValue, now) ? FUTURE_REQUEST_DATE_ERROR : '';
+}
+
 /**
  * Reasons a camp create needs Reporting Manager approval.
- * Routine creates (request date today, camp date more than 2 days out) return [].
+ * Request date and camp date earlier than today minus 2 days.
  */
 export function campCreateApprovalReasons(
   { campDate, requestDate } = {},
   now = new Date(),
 ) {
   const reasons = [];
-  if (isT2RequestDate(requestDate, now) || isHistoricalCampDate(requestDate, now)) {
-    reasons.push('request_date_t2');
+  if (isHistoricalCampDate(requestDate, now)) {
+    reasons.push(REQUEST_DATE_APPROVAL_REASON);
   }
-  if (isT2UpcomingCampDate(campDate, now)) {
-    reasons.push('camp_date_t2');
+  if (isHistoricalCampDate(campDate, now)) {
+    reasons.push(CAMP_DATE_APPROVAL_REASON);
   }
   return reasons;
+}
+
+export function assertRequestDateNotFuture(requestDate, now = new Date()) {
+  const error = getFutureRequestDateError(requestDate, now);
+  if (error) {
+    throw new AppError(error, 400, 'VALIDATION_ERROR');
+  }
 }
 
 export function canSetHistoricalCampDates(user, permissions = null) {
@@ -103,47 +123,12 @@ export function canSetHistoricalCampDates(user, permissions = null) {
   return isTeamLeaderDesignation(user.designation) || isAdminUser(user, permissions);
 }
 
-function normalizeDateKey(value) {
-  return parseLocalDateInput(value) || String(value || '').slice(0, 10);
+export function getHistoricalCampDateErrors() {
+  return [];
 }
 
-export function getHistoricalCampDateErrors(
-  { campDate, requestDate } = {},
-  { canSetHistorical = false, existing = null } = {},
-) {
-  if (canSetHistorical) return [];
-
-  const errors = [];
-  const checks = [
-    ['campDate', 'Camp date', campDate],
-    ['requestDate', 'Request date', requestDate],
-  ];
-
-  for (const [key, label, value] of checks) {
-    if (!value) continue;
-    const normalized = normalizeDateKey(value);
-    if (!normalized || !isHistoricalCampDate(normalized)) continue;
-
-    const existingNormalized = existing ? normalizeDateKey(existing[key]) : '';
-    if (existing && normalized === existingNormalized) continue;
-
-    errors.push(
-      `${label} is more than ${CAMP_HISTORICAL_DATE_THRESHOLD_DAYS} days before today `
-        + 'and can only be set by Team Leaders or Admins',
-    );
-  }
-
-  return errors;
-}
-
-export function assertHistoricalCampDatesAllowed(user, permissions, dates, { existing = null } = {}) {
-  const errors = getHistoricalCampDateErrors(dates, {
-    canSetHistorical: canSetHistoricalCampDates(user, permissions),
-    existing,
-  });
-  if (errors.length) {
-    throw new AppError(errors[0], 403, 'FORBIDDEN');
-  }
+export function assertHistoricalCampDatesAllowed() {
+  // Anyone may enter dates earlier than today minus 2 days; RM approval is the gate.
 }
 
 export function localTodayIso(now = new Date()) {

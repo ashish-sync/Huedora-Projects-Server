@@ -25,11 +25,12 @@ import {
   resolveClientMasterPricingForCamp,
 } from './campOps.clientMasterPricing.js';
 import { assertRequestStageComplete } from './campOps.requestValidation.js';
-import { assertHistoricalCampDatesAllowed, localTodayIso } from './campDatePolicy.js';
+import { assertHistoricalCampDatesAllowed, assertRequestDateNotFuture, localTodayIso } from './campDatePolicy.js';
 import {
   createCampEnsuringNoDuplicate,
   CampDuplicateError,
 } from './campDuplicate.js';
+import { notifyCampCreates } from './campOps.notifications.js';
 import { hashExecutionToken, mintExecutionToken } from './campExecute.service.js';
 
 export const PROGRAM_REQUEST_FORM_SOURCE = 'program_form';
@@ -342,6 +343,7 @@ async function createProgramCampFromBody(master, client, body = {}) {
     campDate: payload.campDate,
     requestDate: payload.requestDate,
   });
+  assertRequestDateNotFuture(payload.requestDate);
 
   const tracking = captureSubmissionTracking();
   let camp;
@@ -372,6 +374,10 @@ async function createProgramCampFromBody(master, client, body = {}) {
     }
     throw err;
   }
+
+  await notifyCampCreates([camp], null, {
+    fallbackSubjectId: master.updatedById || master.createdById || null,
+  });
 
   return camp;
 }

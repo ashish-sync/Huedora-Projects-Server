@@ -230,6 +230,7 @@ function applyVendorBillFields(row, body = {}, { creating = false } = {}) {
   }
 
   if (body.contactId !== undefined) row.contactId = body.contactId || null;
+  if (body.vendorMasterId !== undefined) row.vendorMasterId = body.vendorMasterId || null;
   applyMoneyFields(row, body);
 
   const billDate = trimStr(body.billDate ?? body.invoiceDate);

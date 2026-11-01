@@ -188,7 +188,7 @@ import {
   serializeExportTemplate,
 } from './campOps.export.js';
 import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.requestValidation.js';
-import { assertHistoricalCampDatesAllowed, localTodayIso } from './campDatePolicy.js';
+import { assertHistoricalCampDatesAllowed, assertRequestDateNotFuture, localTodayIso } from './campDatePolicy.js';
 import { assertHcwAssignmentGap } from './hcwAssignmentGap.js';
 import {
   createCampEnsuringNoDuplicate,
@@ -234,9 +234,12 @@ import {
 } from './campOps.closure.js';
 import {
   notifyCampWorkflow,
+  notifyCampCreates,
   notifyCampBulkSummary,
   notifyCampHcwGapApproval,
+  notifyCampHcwGapDecision,
 } from './campOps.notifications.js';
+import { markMatchingNotificationsActioned } from '../notifications/notificationActioned.js';
 import { createOrRefreshProgramRequestLink } from './campRequestForm.service.js';
 import { computeClientMasterPoBalanceMap } from '../finance/poUtilization.service.js';
 import {
@@ -1845,6 +1848,7 @@ router.post(
       campDate: payload.campDate,
       requestDate: payload.requestDate,
     });
+    assertRequestDateNotFuture(payload.requestDate);
     await assertClientIdAccess(req.user, resolved._id);
 
     const tracking = captureSubmissionTracking();
@@ -2004,6 +2008,7 @@ router.put(
         },
         { existing: camp },
       );
+      assertRequestDateNotFuture(payload.requestDate ?? camp.requestDate);
     }
 
     // Client may still send markComplete; Financial advance is decided after field checks.
@@ -2371,8 +2376,20 @@ async function transitionCamp(req, res, nextStatus, action) {
   if (nextStatus === 'pending_review') {
     await notifyCampWorkflow({ camp, action: 'submit_review', actorId: a.id });
   } else if (nextStatus === 'approved') {
+    await markMatchingNotificationsActioned({
+      type: 'CAMP_T2_APPROVAL',
+      entityId: camp._id,
+      decision: 'approve',
+      actorId: a.id,
+    });
     await notifyCampWorkflow({ camp, action: 'approve', actorId: a.id });
   } else if (nextStatus === 'rejected') {
+    await markMatchingNotificationsActioned({
+      type: 'CAMP_T2_APPROVAL',
+      entityId: camp._id,
+      decision: 'refuse',
+      actorId: a.id,
+    });
     await notifyCampWorkflow({
       camp,
       action: 'reject',
@@ -2387,6 +2404,60 @@ router.post(
   '/camps/:id/submit-review',
   canRequest,
   asyncHandler(async (req, res) => transitionCamp(req, res, 'pending_review', 'submit_review'))
+);
+router.post(
+  '/camps/:id/hcw-gap/approve',
+  canApprove,
+  asyncHandler(async (req, res) => {
+    const camp = await loadCampForUser(req, req.params.id);
+    if (!camp.hcwGapOverridePendingApproval) {
+      throw new AppError('This assignment is not waiting for a gap approval', 400, 'VALIDATION_ERROR');
+    }
+    const before = camp.toObject();
+    camp.hcwGapOverridePendingApproval = false;
+    await camp.save();
+    await audit(req, 'camp_ops.hcw_gap_approve', 'camp_ops_camp', camp._id, before, camp.toObject());
+    await markMatchingNotificationsActioned({
+      type: 'CAMP_HCW_GAP_APPROVAL',
+      entityId: camp._id,
+      decision: 'approve',
+      actorId: actor(req).id,
+    });
+    await notifyCampHcwGapDecision({
+      camp,
+      actorId: actor(req).id,
+      approved: true,
+    });
+    res.json({ data: await enrichCamp(camp) });
+  })
+);
+router.post(
+  '/camps/:id/hcw-gap/reject',
+  canApprove,
+  asyncHandler(async (req, res) => {
+    const camp = await loadCampForUser(req, req.params.id);
+    if (!camp.hcwGapOverridePendingApproval) {
+      throw new AppError('This assignment is not waiting for a gap approval', 400, 'VALIDATION_ERROR');
+    }
+    const before = camp.toObject();
+    const note = trimStr(req.body?.reason || req.body?.note || req.body?.remarks);
+    clearCampHcwAssignment(camp);
+    await camp.save();
+    await audit(req, 'camp_ops.hcw_gap_reject', 'camp_ops_camp', camp._id, before, camp.toObject());
+    await markMatchingNotificationsActioned({
+      type: 'CAMP_HCW_GAP_APPROVAL',
+      entityId: camp._id,
+      decision: 'refuse',
+      actorId: actor(req).id,
+    });
+    await notifyCampHcwGapDecision({
+      camp,
+      actorId: actor(req).id,
+      approved: false,
+      note,
+    });
+    res.json({ data: await enrichCamp(camp) });
+  })
 );
 router.post(
   '/camps/:id/approve',
@@ -4748,6 +4819,7 @@ router.post(
     const clientMap = new Map(clients.map((c) => [c.name.toLowerCase(), c]));
     const a = actor(req);
     const created = [];
+    const createdCamps = [];
     const skipped = [];
 
     for (const row of validRows) {
@@ -4771,6 +4843,7 @@ router.post(
         campDate: row.campDate,
         requestDate: row.requestDate,
       });
+      assertRequestDateNotFuture(row.requestDate);
       await assertClientIdAccess(req.user, client._id);
 
       // Never update/replace an existing camp — skip identity matches unchanged.
@@ -4843,8 +4916,11 @@ router.post(
         }
         throw err;
       }
+      createdCamps.push(camp);
       created.push(await enrichCamp(camp));
     }
+
+    await notifyCampCreates(createdCamps, a.id);
 
     await audit(req, 'camp_ops.import_confirm', 'camp_ops_import', null, null, {
       created: created.length,
@@ -5129,6 +5205,7 @@ router.post(
       campDate: payload.campDate,
       requestDate: payload.requestDate,
     });
+    assertRequestDateNotFuture(payload.requestDate);
     await assertClientIdAccess(req.user, client?._id || payload.clientId);
 
     const tracking = captureSubmissionTracking();
@@ -5160,6 +5237,7 @@ router.post(
       throw err;
     }
     await audit(req, 'camp_ops.create', 'camp_ops_camp', camp._id, null, camp.toObject());
+    await notifyCampCreates([camp], actor(req).id);
     res.status(201).json({
       data: withCampSchedule(camp),
       message: `Created camp ${camp.campId} from parser output`,

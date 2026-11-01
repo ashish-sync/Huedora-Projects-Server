@@ -31,6 +31,7 @@ const UPLOAD_SUBDIRS = [
   'import-temp',
   'logistics',
   'logistics/products',
+  'logistics/vendors',
   'previews',
   'templates',
   'tmp',

@@ -27,6 +27,20 @@ const completeCamp = {
   tmPhone: '9876543210',
 };
 
+test('request date cannot be in the future', () => {
+  const tomorrow = new Date();
+  tomorrow.setHours(0, 0, 0, 0);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const y = tomorrow.getFullYear();
+  const m = String(tomorrow.getMonth() + 1).padStart(2, '0');
+  const d = String(tomorrow.getDate()).padStart(2, '0');
+  const errors = getRequestStageBlockers({
+    ...completeCamp,
+    requestDate: `${y}-${m}-${d}`,
+  });
+  assert.ok(errors.includes('Request date cannot be in the future'));
+});
+
 test('unknown PIN in bulk upload reports Pin Code Missing in Master instead of State or Zone', () => {
   const errors = getRequestStageBlockers({
     ...completeCamp,

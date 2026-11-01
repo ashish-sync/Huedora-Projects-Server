@@ -12,7 +12,7 @@ import {
 import { notifyEvent } from '../notifications/notifyEvent.js';
 import { Notification } from '../notifications/notification.model.js';
 import { resolveEventMeta, NOTIFICATION_PRIORITIES } from '../notifications/notificationCatalog.js';
-import { notifyCampBulkSummary, notifyCampHcwGapApproval, notifyCampWorkflow } from './campOps.notifications.js';
+import { notifyCampBulkSummary, notifyCampCreates, notifyCampHcwGapApproval, notifyCampWorkflow } from './campOps.notifications.js';
 import { localTodayIso } from './campDatePolicy.js';
 
 let tempDir = '';
@@ -34,6 +34,7 @@ async function resetNotifications(users = []) {
   await saveCollection('roles', [
     { _id: 'role-user', name: 'User', permissions: [], isDeleted: false },
     { _id: 'role-camp-rm', name: 'Camp RM', permissions: ['camps:approve'], isDeleted: false },
+    { _id: 'role-admin', name: 'Admin', permissions: ['*'], isDeleted: false },
   ], { allowDestructiveSync: true });
   await saveCollection('users', users, { allowDestructiveSync: true });
 }
@@ -61,6 +62,14 @@ function rmUsers() {
       isActive: true,
       isDeleted: false,
       roleIds: ['role-user'],
+    },
+    {
+      _id: 'admin-1',
+      email: 'admin@tylo.local',
+      isActive: true,
+      isDeleted: false,
+      roleIds: ['role-admin'],
+      grantedPermissions: ['*'],
     },
   ];
 }
@@ -197,13 +206,64 @@ test('routine camp create does not notify the RM', async () => {
   assert.equal(rows.length, 0);
 });
 
-test('T-2 camp create asks the RM to approve', async () => {
+test('imminent camp create does not ask the RM to approve', async () => {
   await resetNotifications(rmUsers());
   const soon = new Date();
   soon.setDate(soon.getDate() + 1);
   const y = soon.getFullYear();
   const m = String(soon.getMonth() + 1).padStart(2, '0');
   const d = String(soon.getDate()).padStart(2, '0');
+  await notifyCampWorkflow({
+    camp: {
+      _id: 'c-soon',
+      campId: '26-11-0003',
+      createdById: 'rep-1',
+      campDate: `${y}-${m}-${d}`,
+      requestDate: localTodayIso(),
+    },
+    action: 'create',
+    actorId: 'rep-1',
+  });
+  const rows = await Notification.find({ userId: 'mgr-1' });
+  assert.equal(rows.length, 0);
+});
+
+test('historical request date create asks the RM to approve', async () => {
+  await resetNotifications(rmUsers());
+  const old = new Date();
+  old.setDate(old.getDate() - 3);
+  const y = old.getFullYear();
+  const m = String(old.getMonth() + 1).padStart(2, '0');
+  const d = String(old.getDate()).padStart(2, '0');
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 10);
+  const cy = soon.getFullYear();
+  const cm = String(soon.getMonth() + 1).padStart(2, '0');
+  const cd = String(soon.getDate()).padStart(2, '0');
+  await notifyCampWorkflow({
+    camp: {
+      _id: 'c-old-req',
+      campId: '26-11-0004',
+      createdById: 'rep-1',
+      campDate: `${cy}-${cm}-${cd}`,
+      requestDate: `${y}-${m}-${d}`,
+    },
+    action: 'create',
+    actorId: 'rep-1',
+  });
+  const rows = await Notification.find({ userId: 'mgr-1' });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].type, 'CAMP_T2_APPROVAL');
+  assert.match(rows[0].title, /request date is more than 2 days before today/);
+});
+
+test('historical camp create asks the RM to approve', async () => {
+  await resetNotifications(rmUsers());
+  const old = new Date();
+  old.setDate(old.getDate() - 3);
+  const y = old.getFullYear();
+  const m = String(old.getMonth() + 1).padStart(2, '0');
+  const d = String(old.getDate()).padStart(2, '0');
   await notifyCampWorkflow({
     camp: {
       _id: 'c-t2',
@@ -219,6 +279,7 @@ test('T-2 camp create asks the RM to approve', async () => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0].type, 'CAMP_T2_APPROVAL');
   assert.equal(rows[0].kind, 'approval');
+  assert.match(rows[0].title, /more than 2 days before today/);
 });
 
 test('camp off-hours stay Review; overdue informs the RM', async () => {
@@ -269,6 +330,90 @@ test('HCW gap stays Approve for the assigner RM', async () => {
   assert.equal(rows[0].userId, 'mgr-1');
   assert.equal(rows[0].kind, 'approval');
   assert.equal(rows[0].type, 'CAMP_HCW_GAP_APPROVAL');
+});
+
+test('public-form historical create uses the program owner RM when there is no actor', async () => {
+  await resetNotifications(rmUsers());
+  const old = new Date();
+  old.setDate(old.getDate() - 3);
+  const y = old.getFullYear();
+  const m = String(old.getMonth() + 1).padStart(2, '0');
+  const d = String(old.getDate()).padStart(2, '0');
+  await notifyCampCreates([
+    {
+      _id: 'import-public',
+      campId: '26-11-pub-1',
+      createdById: null,
+      campDate: `${y}-${m}-${d}`,
+      requestDate: localTodayIso(),
+    },
+  ], null, { fallbackSubjectId: 'rep-1' });
+  const forMgr = await Notification.find({ userId: 'mgr-1' });
+  const forAdmin = await Notification.find({ userId: 'admin-1' });
+  assert.equal(forMgr.length, 1);
+  assert.equal(forMgr[0].type, 'CAMP_T2_APPROVAL');
+  assert.equal(forAdmin.length, 0);
+});
+
+test('anonymous historical create falls back to platform Admins, not every Approver', async () => {
+  await resetNotifications(rmUsers());
+  const old = new Date();
+  old.setDate(old.getDate() - 3);
+  const y = old.getFullYear();
+  const m = String(old.getMonth() + 1).padStart(2, '0');
+  const d = String(old.getDate()).padStart(2, '0');
+  await notifyCampCreates([
+    {
+      _id: 'import-anon',
+      campId: '26-11-anon-1',
+      createdById: null,
+      campDate: `${y}-${m}-${d}`,
+      requestDate: localTodayIso(),
+    },
+  ], null);
+  const forAdmin = await Notification.find({ userId: 'admin-1' });
+  const forMgr = await Notification.find({ userId: 'mgr-1' });
+  const forCoord = await Notification.find({ userId: 'coord-1' });
+  assert.equal(forAdmin.length, 1);
+  assert.equal(forAdmin[0].type, 'CAMP_T2_APPROVAL');
+  assert.equal(forMgr.length, 0);
+  assert.equal(forCoord.length, 0);
+});
+
+test('imported historical camps use the same RM create approval as dashboard create', async () => {
+  await resetNotifications(rmUsers());
+  const old = new Date();
+  old.setDate(old.getDate() - 3);
+  const y = old.getFullYear();
+  const m = String(old.getMonth() + 1).padStart(2, '0');
+  const d = String(old.getDate()).padStart(2, '0');
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 10);
+  const cy = soon.getFullYear();
+  const cm = String(soon.getMonth() + 1).padStart(2, '0');
+  const cd = String(soon.getDate()).padStart(2, '0');
+
+  await notifyCampCreates([
+    {
+      _id: 'import-hist',
+      campId: '26-11-imp-1',
+      createdById: 'rep-1',
+      campDate: `${y}-${m}-${d}`,
+      requestDate: localTodayIso(),
+    },
+    {
+      _id: 'import-ok',
+      campId: '26-11-imp-2',
+      createdById: 'rep-1',
+      campDate: `${cy}-${cm}-${cd}`,
+      requestDate: localTodayIso(),
+    },
+  ], 'rep-1');
+
+  const rows = await Notification.find({ userId: 'mgr-1' });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].type, 'CAMP_T2_APPROVAL');
+  assert.equal(rows[0].entityId, 'import-hist');
 });
 
 test('notifyCampBulkSummary is a no-op without actor or rows', async () => {

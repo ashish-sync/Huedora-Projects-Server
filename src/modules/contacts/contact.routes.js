@@ -479,6 +479,13 @@ router.post(
   requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
   asyncHandler(async (req, res) => {
     const payload = normalizeContactPayload(req.body, { validate: true });
+    if (payload.contactCategory === 'Vendor') {
+      throw new AppError(
+        'Vendors are created in Vendor Master for Finance One, not in Contact Directory.',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
     await validateServiceProviderLink(payload);
     const { contact, created, reused } = await resolveOrCreateContact(payload, req.user._id);
 

@@ -6,6 +6,7 @@ import { isValidPhone } from '../../utils/identityNormalize.js';
 import { normalizeContactPersons } from './campContactPersons.js';
 import { getDoctorNameFormatError } from '../../utils/textFormat.js';
 import { normalizePasteStartTime } from './pasteTimeNormalize.js';
+import { getFutureRequestDateError } from './campDatePolicy.js';
 
 export const REQUEST_PARTIAL_THRESHOLD = 0.6;
 
@@ -230,6 +231,9 @@ export function getRequestStageBlockers(camp = {}, options = {}) {
       }
     });
   }
+
+  const futureRequestDateError = getFutureRequestDateError(camp.requestDate);
+  if (futureRequestDateError) errors.push(futureRequestDateError);
 
   return errors;
 }

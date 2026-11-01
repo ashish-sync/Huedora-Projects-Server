@@ -5,7 +5,7 @@ import { writeAudit } from '../../utils/audit.js';
 import { sendCsv } from '../../utils/excelExport.js';
 import { excelUpload, assertSpreadsheetUpload, discardUploadBuffer, sampleCsvFilename } from '../../utils/masterExcel.js';
 import { importRateLimiter } from '../../middleware/importRateLimit.js';
-import { notifyCampWorkflow, notifyCampBulkSummary } from './campOps.notifications.js';
+import { notifyCampBulkSummary } from './campOps.notifications.js';
 import {
   importProgramFormFile,
   listProgramFormCities,
@@ -60,7 +60,6 @@ router.post(
       actorType: 'SYSTEM',
       ip: req.ip,
     });
-    await notifyCampWorkflow({ camp, action: 'create', actorId: null });
     res.status(201).json({
       data: {
         campId: camp.campId,

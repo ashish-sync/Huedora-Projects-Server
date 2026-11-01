@@ -19,8 +19,13 @@ function campRequesterId(camp = {}) {
   return camp.createdById || camp.submittedById || null;
 }
 
+export function resolveCampNotifySubject({ camp = {}, actorId = null, fallbackSubjectId = null } = {}) {
+  return campRequesterId(camp) || actorId || fallbackSubjectId || null;
+}
+
 /**
  * Direct-RM Inform / Review. Never fans out to every camps:approve user.
+ * Missing subject uses the existing no-RM Admin fallback — never every Approver.
  */
 export async function notifyCampApprovers({
   camp,
@@ -30,9 +35,11 @@ export async function notifyCampApprovers({
   body,
   priority,
   level = 'inform',
+  fallbackSubjectId = null,
+  allowMissingSubject = false,
 }) {
-  const subjectId = campRequesterId(camp) || actorId;
-  if (!subjectId) return [];
+  const subjectId = resolveCampNotifySubject({ camp, actorId, fallbackSubjectId });
+  if (!subjectId && !allowMissingSubject) return [];
   return notifyRmInvolvement({
     level,
     subjectUserId: subjectId,
@@ -73,6 +80,22 @@ export async function notifyCampHcwGapApproval({ camp, actorId }) {
     module: 'camp',
     requiredPermission: PERMISSIONS.CAMPS_APPROVE,
     meta: { reason: 'hcw_gap_override' },
+  });
+}
+
+export async function notifyCampHcwGapDecision({ camp, actorId, approved, note = '' }) {
+  const label = camp.campId || String(camp._id || '').slice(-6);
+  return notifyCampRequester({
+    camp,
+    actorId,
+    type: approved ? 'CAMP_APPROVED' : 'CAMP_REJECTED',
+    title: approved
+      ? `HCW gap approved for camp ${label}`
+      : `HCW gap refused for camp ${label}`,
+    body: note || campSummary(camp),
+    priority: approved
+      ? NOTIFICATION_PRIORITIES.INFORMATIONAL
+      : NOTIFICATION_PRIORITIES.IMPORTANT,
   });
 }
 
@@ -197,20 +220,28 @@ export async function notifyCampBulkSummary({
  * Actionable Camp One notifications only.
  * Routine stage saves / success chatter stay in Audit Trail — not the inbox.
  */
-export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
+export async function notifyCampWorkflow({
+  camp,
+  action,
+  actorId,
+  note = '',
+  fallbackSubjectId = null,
+} = {}) {
   const label = camp.campId || String(camp._id || '').slice(-6);
   const summary = campSummary(camp);
 
   switch (action) {
     case 'create': {
-      const t2Reasons = campCreateApprovalReasons(camp);
-      if (t2Reasons.length) {
-        const why = t2Reasons.includes('camp_date_t2')
-          ? 'scheduled camp date is within the next 2 days'
-          : 'request date is within the last 2 days';
+      const approvalReasons = campCreateApprovalReasons(camp);
+      if (approvalReasons.length) {
+        const why = approvalReasons.includes('camp_date_historical')
+          ? 'camp date is more than 2 days before today'
+          : 'request date is more than 2 days before today';
         await notifyCampApprovers({
           camp,
           actorId,
+          fallbackSubjectId,
+          allowMissingSubject: true,
           type: 'CAMP_T2_APPROVAL',
           title: `Approval required — camp ${label} (${why})`,
           body: summary,
@@ -319,4 +350,24 @@ export async function notifyCampWorkflow({ camp, action, actorId, note = '' }) {
       // Intentionally no inbox noise for routine lifecycle saves.
       break;
   }
+}
+
+/**
+ * Same create-time RM approval as dashboard create.
+ * Historical request/camp dates raise CAMP_T2_APPROVAL; routine dates stay silent.
+ */
+export async function notifyCampCreates(camps, actorId, { fallbackSubjectId = null } = {}) {
+  const rows = Array.isArray(camps) ? camps : [camps];
+  const notified = [];
+  for (const camp of rows) {
+    if (!camp) continue;
+    await notifyCampWorkflow({
+      camp,
+      action: 'create',
+      actorId,
+      fallbackSubjectId,
+    });
+    notified.push(camp);
+  }
+  return notified;
 }

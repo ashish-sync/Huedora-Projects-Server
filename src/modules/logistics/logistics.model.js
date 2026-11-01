@@ -33,8 +33,18 @@ export const LogisticsSupplier = defineCollection('logistics_suppliers', {
   phone: '',
   city: '',
   state: '',
+  pinCode: '',
+  stateCode: '',
+  address: '',
+  supplyCategory: '',
   gstin: '',
   panCard: '',
+  ifscCode: '',
+  bankName: '',
+  accountNumber: '',
+  remarks: '',
+  /** Optional vendor PDF: { filename, name, url, mimeType } */
+  document: null,
   isActive: true,
 });
 

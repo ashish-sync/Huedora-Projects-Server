@@ -30,6 +30,7 @@ import {
   LogisticsExpenseCategory,
 } from '../logistics/logistics.model.js';
 import { Contact, normalizeContactPayload } from '../contacts/contact.model.js';
+import { normalizeSupplyCategory } from '../contacts/contact.constants.js';
 import { assertContactIdentityAvailable } from '../contacts/contactIdentity.js';
 import { resolvePinTargets, upsertNormalizedPin, enrichPinRecord } from '../geo/pinCode.service.js';
 import { DocumentTemplate } from '../templates/template.model.js';
@@ -526,18 +527,32 @@ export async function createMasterFromPayload({
         required: ['name'],
         resolveCodePrefix: () => (wantType === 'Vendor' ? 'VEN' : 'SUP'),
         checkIdentity: true,
-        normalize: (b) => ({
-          name: trimStr(b.name),
-          partyType: wantType,
-          contactName: trimStr(b.contactName),
-          email: trimStr(b.email).toLowerCase(),
-          phone: trimStr(b.phone),
-          city: trimStr(b.city),
-          state: trimStr(b.state),
-          gstin: trimStr(b.gstin).toUpperCase(),
-          panCard: trimStr(b.panCard).toUpperCase(),
-          isActive: true,
-        }),
+        normalize: (b) => {
+          const supplyCategory = normalizeSupplyCategory(b.supplyCategory);
+          if (wantType === 'Vendor' && !supplyCategory) {
+            throw new AppError('Supply Category is required for Vendor', 400, 'VALIDATION_ERROR');
+          }
+          return {
+            name: trimStr(b.name),
+            partyType: wantType,
+            contactName: trimStr(b.contactName),
+            email: trimStr(b.email).toLowerCase(),
+            phone: trimStr(b.phone),
+            city: trimStr(b.city),
+            state: trimStr(b.state),
+            pinCode: String(b.pinCode || '').replace(/\D+/g, '').slice(0, 6),
+            stateCode: String(b.stateCode || '').replace(/\D+/g, '').slice(0, 2),
+            address: trimStr(b.address),
+            supplyCategory,
+            remarks: trimStr(b.remarks),
+            gstin: trimStr(b.gstin).toUpperCase(),
+            panCard: trimStr(b.panCard).toUpperCase(),
+            ifscCode: trimStr(b.ifscCode).toUpperCase(),
+            bankName: trimStr(b.bankName),
+            accountNumber: String(b.accountNumber || '').replace(/\D+/g, ''),
+            isActive: true,
+          };
+        },
         payload,
         actor,
         requestId,

@@ -11,6 +11,7 @@ import { Contact } from './modules/contacts/contact.model.js';
 import { ensureLogisticsSeed } from './modules/logistics/logistics.seed.js';
 import { ensureGeoSeed, ensureDistrictSupplements } from './modules/geo/geo.seed.js';
 import { ensureCampOpsSeed, CAMP_ONE_DEMO } from './modules/campOps/campOps.seed.js';
+import { ensureDemoNotifications } from './modules/notifications/notification.seed.js';
 import { alternateLegacyLocalEmail } from './utils/legacyMigration.js';
 
 const LEASE_TEMPLATE = `ASSET LEASE AGREEMENT
@@ -295,6 +296,15 @@ export async function ensureSeed() {
       );
     }
     console.log(`[seed] Camp One operator: ${CAMP_ONE_DEMO.adminEmail}`);
+  }
+
+  if (env.seedDemoNotifications) {
+    const inboxSeed = await ensureDemoNotifications();
+    if (inboxSeed.created > 0) {
+      console.log(
+        `[seed] Demo notifications: ${inboxSeed.created} created for ${inboxSeed.users} user(s)`,
+      );
+    }
   }
 
   return {};

@@ -29,6 +29,7 @@ export const FinanceInvoice = defineCollection('finance_invoices', {
   billNumber: '',
   vendorName: '',
   contactId: null,
+  vendorMasterId: null,
   amount: 0,
   taxAmount: 0,
   totalAmount: 0,
@@ -149,6 +150,7 @@ export const FinanceCommercialDocument = defineCollection('finance_commercial_do
   orgSnapshot: null,
   clientId: null,
   clientMasterId: null,
+  vendorMasterId: null,
   /** Links Tax Invoice / Bill of Supply to a Client Master customer PO row */
   clientPurchaseOrderId: null,
   recipientName: '',

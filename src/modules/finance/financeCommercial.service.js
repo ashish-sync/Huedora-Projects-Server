@@ -833,6 +833,7 @@ export function normalizePurchaseOrderPayload(body = {}, orgProfile = DEFAULT_OR
     fiscalYear: fiscalYearLabel(documentDate),
     documentPeriod: period.periodKey,
     contactId: body.contactId || null,
+    vendorMasterId: body.vendorMasterId || null,
     recipientName: trimStr(body.vendorName || body.recipientName),
     placeOfSupply: trimStr(body.vendorAddress || body.placeOfSupply),
     deliveryAddress: trimStr(body.deliveryAddress),
@@ -1697,6 +1698,12 @@ export function extractBuilderExtras(body = {}) {
   }
   if (body.clientPurchaseOrderId !== undefined) {
     out.clientPurchaseOrderId = trimStr(body.clientPurchaseOrderId) || null;
+  }
+  if (body.vendorMasterId !== undefined) {
+    out.vendorMasterId = trimStr(body.vendorMasterId) || null;
+  }
+  if (body.contactId !== undefined) {
+    out.contactId = trimStr(body.contactId) || null;
   }
   if (body.declaration !== undefined) out.declaration = trimStr(body.declaration);
   if (body.shipToName !== undefined) out.shipToName = trimStr(body.shipToName);

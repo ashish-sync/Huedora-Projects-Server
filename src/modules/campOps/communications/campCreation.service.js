@@ -7,7 +7,7 @@ import {
   captureSubmissionTracking,
 } from '../campOps.helpers.js';
 import { normalizeCampName } from '../campOps.constants.js';
-import { assertHistoricalCampDatesAllowed } from '../campDatePolicy.js';
+import { assertHistoricalCampDatesAllowed, assertRequestDateNotFuture } from '../campDatePolicy.js';
 import {
   CampDuplicateError,
   createCampEnsuringNoDuplicate,

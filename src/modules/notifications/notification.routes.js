@@ -17,6 +17,7 @@ import {
   serializeNotification,
 } from './notificationQuery.js';
 import { shouldReturnNotModified, weakUnreadEtag } from './unreadCountBadge.js';
+import { markMatchingNotificationsActioned } from './notificationActioned.js';
 
 const router = Router();
 router.use(authenticate);
@@ -168,6 +169,33 @@ router.get(
         /* ignore */
       }
     }
+  })
+);
+
+router.post(
+  '/:id/actioned',
+  asyncHandler(async (req, res) => {
+    const n = await Notification.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!n || n.cancelledAt) throw new AppError('Notification not found', 404);
+    const decision = String(req.body?.decision || 'done').trim().toLowerCase() || 'done';
+    const now = new Date().toISOString();
+    n.readAt = n.readAt || now;
+    n.meta = {
+      ...(n.meta && typeof n.meta === 'object' ? n.meta : {}),
+      decision,
+      actionedAt: now,
+      actionedBy: req.user._id,
+    };
+    await n.save();
+    if (n.type && n.entityId) {
+      await markMatchingNotificationsActioned({
+        type: n.type,
+        entityId: n.entityId,
+        decision,
+        actorId: req.user._id,
+      });
+    }
+    res.json({ data: serializeNotification(n, { lean: true }) });
   })
 );
 

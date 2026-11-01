@@ -10,6 +10,7 @@ import {
   normalizePicklistValue,
 } from './picklist.registry.js';
 import { notifyEvent, notifyUser } from '../notifications/notifyEvent.js';
+import { markMatchingNotificationsActioned } from '../notifications/notificationActioned.js';
 import { User } from '../users/user.model.js';
 import { Role } from '../users/role.model.js';
 import { writeAudit } from '../../utils/audit.js';

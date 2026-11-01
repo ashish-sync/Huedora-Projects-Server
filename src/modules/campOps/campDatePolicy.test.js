@@ -3,7 +3,9 @@ import {
   campCreateApprovalReasons,
   canSetHistoricalCampDates,
   daysFromToday,
+  getFutureRequestDateError,
   getHistoricalCampDateErrors,
+  isFutureRequestDate,
   isHistoricalCampDate,
   isT2RequestDate,
   isT2UpcomingCampDate,
@@ -42,38 +44,16 @@ test('historical camp date is more than 2 days before today', () => {
   assert.equal(isHistoricalCampDate(iso(5)), false);
 });
 
-test('non-leaders cannot set historical dates', () => {
+test('anyone can enter historical dates; RM approval is the gate', () => {
   const errors = getHistoricalCampDateErrors(
     { campDate: iso(-5), requestDate: iso(-4) },
     { canSetHistorical: false },
   );
-  assert.equal(errors.length, 2);
-});
-
-test('team leaders can set historical dates', () => {
-  const user = { designation: 'Team Leader' };
-  assert.equal(canSetHistoricalCampDates(user), true);
-  const errors = getHistoricalCampDateErrors(
-    { campDate: iso(-10) },
-    { canSetHistorical: canSetHistoricalCampDates(user) },
-  );
   assert.equal(errors.length, 0);
-});
-
-test('admin designation can set historical dates', () => {
-  const adminUser = { designation: 'Administrator' };
-  assert.equal(canSetHistoricalCampDates(adminUser), true);
-  const errors = getHistoricalCampDateErrors(
-    { campDate: iso(-5) },
-    { canSetHistorical: canSetHistoricalCampDates(adminUser) },
-  );
-  assert.equal(errors.length, 0);
-});
-
-test('admin permission * can set historical dates', () => {
+  assert.equal(canSetHistoricalCampDates({ designation: 'Team Leader' }), true);
+  assert.equal(canSetHistoricalCampDates({ designation: 'Administrator' }), true);
   const user = { designation: 'Healthcare Camp Coordinator' };
-  const permissions = new Set(['*']);
-  assert.equal(canSetHistoricalCampDates(user, permissions), true);
+  assert.equal(canSetHistoricalCampDates(user, new Set(['*'])), true);
 });
 
 test('T-2 request date is yesterday or the day before, not today', () => {
@@ -92,13 +72,21 @@ test('T-2 upcoming camp date is today through +2 days', () => {
 
 test('routine camp create does not need RM approval', () => {
   assert.deepEqual(campCreateApprovalReasons({ campDate: iso(10), requestDate: iso(0) }), []);
+  assert.deepEqual(campCreateApprovalReasons({ campDate: iso(1), requestDate: iso(-2) }), []);
 });
 
-test('short-notice camp date or backdated request needs RM approval', () => {
-  const soon = campCreateApprovalReasons({ campDate: iso(1), requestDate: iso(0) });
-  assert.ok(soon.includes('camp_date_t2'));
-  const late = campCreateApprovalReasons({ campDate: iso(10), requestDate: iso(-2) });
-  assert.ok(late.includes('request_date_t2'));
+test('request or camp dates earlier than today minus 2 days need RM approval', () => {
+  const oldCamp = campCreateApprovalReasons({ campDate: iso(-3), requestDate: iso(0) });
+  assert.ok(oldCamp.includes('camp_date_historical'));
+  const oldRequest = campCreateApprovalReasons({ campDate: iso(10), requestDate: iso(-3) });
+  assert.ok(oldRequest.includes('request_date_historical'));
+});
+
+test('request date cannot be in the future', () => {
+  assert.equal(isFutureRequestDate(iso(0)), false);
+  assert.equal(isFutureRequestDate(iso(-1)), false);
+  assert.equal(isFutureRequestDate(iso(1)), true);
+  assert.match(getFutureRequestDateError(iso(2)), /cannot be in the future/i);
 });
 
 test('unchanged historical dates on edit are allowed for non-leaders', () => {

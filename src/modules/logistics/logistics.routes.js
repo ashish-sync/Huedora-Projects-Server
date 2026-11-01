@@ -120,6 +120,8 @@ import { uploadDir } from '../../config/paths.js';
 import { requireSafeUploads, UPLOAD_RULES } from '../../utils/rejectUnsafeUpload.js';
 import { createUploadStorage } from '../../storage/createUploadStorage.js';
 import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
+import { isPdfUpload, vendorPdfFileRef } from './vendorDocument.js';
+import { normalizeSupplyCategory } from '../contacts/contact.constants.js';
 
 const inwardUploadRoot = uploadDir('logistics');
 
@@ -143,6 +145,16 @@ const productFiles = productUpload.fields([
   { name: 'file', maxCount: 1 },
   { name: 'images', maxCount: 8 },
 ]);
+
+const vendorUploadRoot = uploadDir('logistics', 'vendors');
+fs.mkdirSync(vendorUploadRoot, { recursive: true });
+
+const vendorPdfUpload = multer({
+  storage: createUploadStorage({
+    destination: (_req, _file, cb) => cb(null, vendorUploadRoot),
+  }),
+  limits: { fileSize: env.uploadMaxBytes },
+});
 
 const inwardFiles = inwardUpload.fields([
   { name: 'productPhoto', maxCount: 1 },
@@ -173,6 +185,7 @@ function withSignedLogisticsFiles(row) {
   if (obj.productPhoto) obj.productPhoto = signLogisticsFileRef(obj.productPhoto);
   if (obj.invoiceDoc) obj.invoiceDoc = signLogisticsFileRef(obj.invoiceDoc);
   if (obj.image) obj.image = signLogisticsFileRef(obj.image);
+  if (obj.document) obj.document = signLogisticsFileRef(obj.document);
   if (Array.isArray(obj.attachments)) {
     obj.attachments = obj.attachments.map(signLogisticsFileRef);
   }
@@ -295,6 +308,22 @@ const canReadExpenseMaster = requirePermission(
 
 function trimStr(v) {
   return v == null ? '' : String(v).trim();
+}
+
+function partyBillingFields(b, existing) {
+  const gstin = trimStr(b.gstin ?? existing?.gstin ?? '').toUpperCase();
+  const pinCode = String(b.pinCode ?? existing?.pinCode ?? '').replace(/\D+/g, '').slice(0, 6);
+  let stateCode = String(b.stateCode ?? existing?.stateCode ?? '').replace(/\D+/g, '').slice(0, 2);
+  if (!stateCode && /^\d{2}/.test(gstin)) stateCode = gstin.slice(0, 2);
+  return {
+    pinCode,
+    stateCode,
+    ifscCode: trimStr(b.ifscCode ?? existing?.ifscCode ?? '').toUpperCase(),
+    bankName: trimStr(b.bankName ?? existing?.bankName ?? ''),
+    accountNumber: String(b.accountNumber ?? existing?.accountNumber ?? '').replace(/\D+/g, ''),
+    gstin,
+    panCard: trimStr(b.panCard ?? existing?.panCard ?? '').toUpperCase(),
+  };
 }
 
 function registerMasterCrud({
@@ -651,11 +680,16 @@ registerMasterCrud({
   path: 'parties',
   Model: LogisticsSupplier,
   entityType: 'LogisticsParty',
-  searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city', 'gstin', 'panCard', 'partyType'],
+  searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city', 'state', 'address', 'supplyCategory', 'gstin', 'panCard', 'partyType'],
   checkIdentity: true,
+  serializeRow: withSignedLogisticsFiles,
   resolveCodePrefix: (body) => (trimStr(body.partyType) === 'Vendor' ? 'VEN' : 'SUP'),
   normalize: (b, existing) => {
     const partyType = trimStr(b.partyType ?? existing?.partyType) === 'Vendor' ? 'Vendor' : 'Supplier';
+    const supplyCategory = normalizeSupplyCategory(b.supplyCategory ?? existing?.supplyCategory ?? '');
+    if (partyType === 'Vendor' && !supplyCategory) {
+      throw new AppError('Supply Category is required for Vendor', 400, 'VALIDATION_ERROR');
+    }
     return {
       code: trimStr(b.code ?? existing?.code).toUpperCase(),
       name: trimStr(b.name ?? existing?.name),
@@ -667,8 +701,10 @@ registerMasterCrud({
       phone: trimStr(b.phone ?? existing?.phone ?? ''),
       city: trimStr(b.city ?? existing?.city ?? ''),
       state: trimStr(b.state ?? existing?.state ?? ''),
-      gstin: trimStr(b.gstin ?? existing?.gstin ?? '').toUpperCase(),
-      panCard: trimStr(b.panCard ?? existing?.panCard ?? '').toUpperCase(),
+      address: trimStr(b.address ?? existing?.address ?? ''),
+      supplyCategory,
+      remarks: trimStr(b.remarks ?? existing?.remarks ?? ''),
+      ...partyBillingFields(b, existing),
       isActive: b.isActive !== undefined ? b.isActive !== false : existing?.isActive !== false,
     };
   },
@@ -685,8 +721,15 @@ registerMasterCrud({
       r.phone,
       r.city,
       r.state,
+      r.pinCode,
+      r.stateCode,
+      r.address,
+      r.supplyCategory,
       r.gstin,
       r.panCard,
+      r.ifscCode,
+      r.bankName,
+      r.accountNumber,
       r.isActive === false ? 'No' : 'Yes',
     ],
     sampleRows: PARTY_SAMPLE_ROWS,
@@ -698,9 +741,10 @@ registerMasterCrud({
   path: 'suppliers',
   Model: LogisticsSupplier,
   entityType: 'LogisticsSupplier',
-  searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city', 'gstin', 'panCard'],
+  searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city', 'state', 'address', 'supplyCategory', 'gstin', 'panCard'],
   listFilter: { partyType: 'Supplier' },
   checkIdentity: true,
+  serializeRow: withSignedLogisticsFiles,
   codePrefix: 'SUP',
   normalize: (b, existing) => ({
     code: trimStr(b.code ?? existing?.code).toUpperCase(),
@@ -712,8 +756,10 @@ registerMasterCrud({
     phone: trimStr(b.phone ?? existing?.phone ?? ''),
     city: trimStr(b.city ?? existing?.city ?? ''),
     state: trimStr(b.state ?? existing?.state ?? ''),
-    gstin: trimStr(b.gstin ?? existing?.gstin ?? '').toUpperCase(),
-    panCard: trimStr(b.panCard ?? existing?.panCard ?? '').toUpperCase(),
+    address: trimStr(b.address ?? existing?.address ?? ''),
+    supplyCategory: normalizeSupplyCategory(b.supplyCategory ?? existing?.supplyCategory ?? ''),
+    remarks: trimStr(b.remarks ?? existing?.remarks ?? ''),
+    ...partyBillingFields(b, existing),
     isActive: b.isActive !== undefined ? b.isActive !== false : existing?.isActive !== false,
   }),
 });
@@ -722,50 +768,68 @@ registerMasterCrud({
   path: 'vendors',
   Model: LogisticsSupplier,
   entityType: 'LogisticsVendor',
-  searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city', 'gstin', 'panCard'],
+  searchFields: ['name', 'code', 'email', 'phone', 'contactName', 'city', 'state', 'pinCode', 'address', 'supplyCategory', 'gstin', 'panCard', 'ifscCode', 'bankName'],
   listFilter: { partyType: 'Vendor' },
   checkIdentity: true,
+  serializeRow: withSignedLogisticsFiles,
   codePrefix: 'VEN',
-  normalize: (b, existing) => ({
-    code: trimStr(b.code ?? existing?.code).toUpperCase(),
-    name: trimStr(b.name ?? existing?.name),
-    partyType: 'Vendor',
-    contactId: b.contactId !== undefined ? b.contactId || null : existing?.contactId || null,
-    contactName: trimStr(b.contactName ?? existing?.contactName ?? ''),
-    email: trimStr(b.email ?? existing?.email ?? '').toLowerCase(),
-    phone: trimStr(b.phone ?? existing?.phone ?? ''),
-    city: trimStr(b.city ?? existing?.city ?? ''),
-    state: trimStr(b.state ?? existing?.state ?? ''),
-    gstin: trimStr(b.gstin ?? existing?.gstin ?? '').toUpperCase(),
-    panCard: trimStr(b.panCard ?? existing?.panCard ?? '').toUpperCase(),
-    isActive: b.isActive !== undefined ? b.isActive !== false : existing?.isActive !== false,
-  }),
+  normalize: (b, existing) => {
+    const supplyCategory = normalizeSupplyCategory(b.supplyCategory ?? existing?.supplyCategory ?? '');
+    if (!supplyCategory) {
+      throw new AppError('Supply Category is required', 400, 'VALIDATION_ERROR');
+    }
+    return {
+      code: trimStr(b.code ?? existing?.code).toUpperCase(),
+      name: trimStr(b.name ?? existing?.name),
+      partyType: 'Vendor',
+      contactId: b.contactId !== undefined ? b.contactId || null : existing?.contactId || null,
+      contactName: trimStr(b.contactName ?? existing?.contactName ?? ''),
+      email: trimStr(b.email ?? existing?.email ?? '').toLowerCase(),
+      phone: trimStr(b.phone ?? existing?.phone ?? ''),
+      city: trimStr(b.city ?? existing?.city ?? ''),
+      state: trimStr(b.state ?? existing?.state ?? ''),
+      address: trimStr(b.address ?? existing?.address ?? ''),
+      supplyCategory,
+      remarks: trimStr(b.remarks ?? existing?.remarks ?? ''),
+      ...partyBillingFields(b, existing),
+      isActive: b.isActive !== undefined ? b.isActive !== false : existing?.isActive !== false,
+    };
+  },
 });
 
-registerMasterCrud({
-  path: 'transporters',
-  Model: LogisticsTransporter,
-  entityType: 'LogisticsTransporter',
-  searchFields: ['name', 'code', 'email', 'phone', 'contactName'],
-  checkIdentity: true,
-  codePrefix: 'TRN',
-  normalize: (b, existing) => ({
-    code: trimStr(b.code ?? existing?.code).toUpperCase(),
-    name: trimStr(b.name ?? existing?.name),
-    contactName: trimStr(b.contactName ?? existing?.contactName ?? ''),
-    email: trimStr(b.email ?? existing?.email ?? '').toLowerCase(),
-    phone: trimStr(b.phone ?? existing?.phone ?? ''),
-    ratePerKg:
-      b.ratePerKg !== undefined && b.ratePerKg !== ''
-        ? Number(b.ratePerKg) || 0
-        : Number(existing?.ratePerKg) || 0,
-    minCharge:
-      b.minCharge !== undefined && b.minCharge !== ''
-        ? Number(b.minCharge) || 0
-        : Number(existing?.minCharge) || 0,
-    isActive: b.isActive !== undefined ? b.isActive !== false : existing?.isActive !== false,
-  }),
-});
+router.post(
+  '/vendors/:id/document',
+  canMaster,
+  vendorPdfUpload.single('file'),
+  ensureUploadCommit(),
+  requireSafeUploads({ allowedExt: ['.pdf'] }),
+  asyncHandler(async (req, res) => {
+    const row = await LogisticsSupplier.findOne({
+      _id: req.params.id,
+      isDeleted: false,
+      partyType: 'Vendor',
+    });
+    if (!row) throw new AppError('Vendor not found', 404);
+    const file = req.file;
+    if (!file) throw new AppError('PDF file is required', 400, 'VALIDATION_ERROR');
+    if (!isPdfUpload(file)) {
+      throw new AppError('Upload a PDF file', 400, 'VALIDATION_ERROR');
+    }
+    row.document = vendorPdfFileRef(file);
+    row.updatedBy = req.user._id;
+    await row.save();
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'LogisticsVendor.FILE_UPLOAD',
+      entityType: 'LogisticsVendor',
+      entityId: row._id,
+      after: row.toObject ? row.toObject() : row,
+      requestId: req.requestId,
+    });
+    res.json({ data: withSignedLogisticsFiles(row) });
+  })
+);
 
 registerMasterCrud({
   path: 'categories',

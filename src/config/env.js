@@ -94,6 +94,9 @@ export const env = {
   /** Dev-only: seed Camp One demo client, camps, and operator account */
   seedCampOneDemo:
     !isProd && String(process.env.SEED_CAMP_ONE_DEMO || 'true').toLowerCase() === 'true',
+  /** Dev-only: seed inbox samples for local demo accounts */
+  seedDemoNotifications:
+    !isProd && String(process.env.SEED_DEMO_NOTIFICATIONS || 'true').toLowerCase() === 'true',
   /** Public client key for Google Maps / Places (referrer-restricted in Google Cloud). */
   googleMapsApiKey: String(
     process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || ''
