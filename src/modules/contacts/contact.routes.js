@@ -541,6 +541,10 @@ router.patch(
         district: req.body.district !== undefined ? req.body.district : contact.district,
         pinCode: req.body.pinCode !== undefined ? req.body.pinCode : contact.pinCode,
         address: req.body.address !== undefined ? req.body.address : contact.address,
+        latitude: req.body.latitude !== undefined ? req.body.latitude : contact.latitude,
+        longitude: req.body.longitude !== undefined ? req.body.longitude : contact.longitude,
+        googlePlaceId:
+          req.body.googlePlaceId !== undefined ? req.body.googlePlaceId : contact.googlePlaceId,
         organization: req.body.organization !== undefined ? req.body.organization : contact.organization,
         supplyCategory:
           req.body.supplyCategory !== undefined ? req.body.supplyCategory : contact.supplyCategory,

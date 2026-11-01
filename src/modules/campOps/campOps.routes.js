@@ -1941,7 +1941,9 @@ router.put(
       allowExplicitExecutionStatus: admin,
     });
     const executionOnlyKeys = [
-      'executionStatus', 'chargeableStatus', 'inTime', 'outTime', 'kmRoundTrip', 'punctuality',
+      'executionStatus', 'chargeableStatus', 'inTime', 'outTime', 'kmRoundTrip',
+      'kmRoundTripSource', 'kmRoundTripManualReason', 'kmRoundTripEstimateStatus', 'kmRoundTripEstimateKey',
+      'punctuality',
       'attire', 'labCoat', 'patientsCount', 'rxCount', 'cancellationReason', 'actualPatients',
     ];
     if (stage === 'request' || stage === 'assignment') {

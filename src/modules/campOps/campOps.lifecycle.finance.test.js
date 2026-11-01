@@ -157,6 +157,23 @@ test('Admin can persist an explicit Execution Status instead of auto Planned→E
   assert.equal(cancelled.executionStatus, 'Cancelled by Tylo');
 });
 
+test('lifecyclePayloadFromBody persists travel estimate source and manual reason', () => {
+  const next = lifecyclePayloadFromBody(
+    {
+      kmRoundTrip: 24.6,
+      kmRoundTripSource: 'manual',
+      kmRoundTripManualReason: 'HCW stayed overnight',
+      kmRoundTripEstimateStatus: 'Estimated from HCW PIN 400058 to camp venue (round trip).',
+      kmRoundTripEstimateKey: '400058|19.1197|72.8468',
+    },
+    { kmRoundTrip: 0 },
+  );
+  assert.equal(next.kmRoundTrip, 24.6);
+  assert.equal(next.kmRoundTripSource, 'manual');
+  assert.equal(next.kmRoundTripManualReason, 'HCW stayed overnight');
+  assert.equal(next.kmRoundTripEstimateKey, '400058|19.1197|72.8468');
+});
+
 test('Camp PUT cannot set or reverse Payment Done (Finance One only)', () => {
   const unpaid = lifecyclePayloadFromBody(
     { financePaymentStatus: 'paid' },

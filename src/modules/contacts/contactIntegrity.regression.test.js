@@ -298,6 +298,43 @@ test('HCW PATCH must forward campAmount or normalize defaults to 0 and wipes', (
   assert.equal(updated.campAmount, 3200);
 });
 
+test('HCW address autocomplete stores selected coordinates and PIN without wiping clients', () => {
+  const hcw = normalizeContactPayload({
+    name: 'Nurse A',
+    contactCategory: 'Healthcare Worker',
+    resourceType: 'Individual',
+    contact: '9876500001',
+    state: 'Maharashtra',
+    address: 'Andheri West, Mumbai, Maharashtra 400058',
+    pinCode: '400058',
+    latitude: '19.1197',
+    longitude: '72.8468',
+    googlePlaceId: 'ola-platform:home',
+  });
+  assert.equal(hcw.address.includes('Andheri'), true);
+  assert.equal(hcw.pinCode, '400058');
+  assert.equal(hcw.latitude, '19.1197');
+  assert.equal(hcw.longitude, '72.8468');
+  assert.equal(hcw.googlePlaceId, 'ola-platform:home');
+
+  const client = normalizeContactPayload({
+    name: 'Acme',
+    contactCategory: 'Client',
+    organization: 'Acme Ltd',
+    email: 'ops@acme.test',
+    address: 'Should not persist',
+    pinCode: '400001',
+    latitude: '18.9',
+    longitude: '72.8',
+    googlePlaceId: 'ola-x',
+  });
+  assert.equal(client.address, '');
+  assert.equal(client.pinCode, '');
+  assert.equal(client.latitude, '');
+  assert.equal(client.longitude, '');
+  assert.equal(client.googlePlaceId, '');
+});
+
 test('Service Provider campAmount lives on employees, not the agency', () => {
   const payload = normalizeContactPayload({
     name: 'Care Agency',

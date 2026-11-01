@@ -36,6 +36,9 @@ export const Contact = defineCollection('contacts', {
   state: '',
   pinCode: '',
   address: '',
+  latitude: '',
+  longitude: '',
+  googlePlaceId: '',
   organization: '',
   supplyCategory: '',
   panNumber: '',
@@ -141,6 +144,11 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
           body.pinCode || body.pincode || body['Pin Code'] || body.Pincode || body.PIN || ''
         ).trim(),
     address: isClient ? '' : formatTextValue(String(body.address || body.Address || ''), 'address'),
+    latitude: isClient ? '' : String(body.latitude || body.lat || '').trim(),
+    longitude: isClient ? '' : String(body.longitude || body.lng || '').trim(),
+    googlePlaceId: isClient
+      ? ''
+      : String(body.googlePlaceId || body.placeId || body['Place ID'] || '').trim(),
     organization,
     supplyCategory,
     panNumber: isClient

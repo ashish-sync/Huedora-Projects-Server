@@ -651,6 +651,12 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
         ? pickStr('outTimeSelfieUrl')
         : existing?.outTimeSelfieUrl || resolveOutTimeSelfieUrl(existing || {}),
     kmRoundTrip: pickNum('kmRoundTrip'),
+    kmRoundTripSource: ['auto', 'manual'].includes(pickStr('kmRoundTripSource'))
+      ? pickStr('kmRoundTripSource')
+      : existing?.kmRoundTripSource || '',
+    kmRoundTripManualReason: pickStr('kmRoundTripManualReason'),
+    kmRoundTripEstimateStatus: pickStr('kmRoundTripEstimateStatus'),
+    kmRoundTripEstimateKey: pickStr('kmRoundTripEstimateKey'),
     attire,
     labCoat,
     rxCount: Math.max(0, Math.floor(pickNum('rxCount'))),

@@ -36,6 +36,11 @@ import {
   upsertNormalizedPin,
 } from './pinCode.service.js';
 import { autocompletePlaces, getPlaceDetails } from './places.service.js';
+import {
+  autocompleteOlaMaps,
+  estimateOlaRoundTripKm,
+  geocodeOlaPin,
+} from './olaMaps.service.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 
 const router = Router();
@@ -51,7 +56,7 @@ const canReadGeo = requirePermission(
 );
 router.use((req, res, next) => {
   if (req.method !== 'GET') return next();
-  if (req.path.startsWith('/places/')) return next();
+  if (req.path.startsWith('/places/') || req.path.startsWith('/ola/')) return next();
   return canReadGeo(req, res, next);
 });
 
@@ -60,6 +65,7 @@ const canUsePlaces = requirePermission(
   PERMISSIONS.CAMPS_REQUEST,
   PERMISSIONS.CAMPS_APPROVE,
   PERMISSIONS.LOGISTICS_WRITE,
+  PERMISSIONS.AGREEMENTS_READ,
   PERMISSIONS.AGREEMENTS_WRITE
 );
 
@@ -434,6 +440,42 @@ router.get(
     ]);
     const data = (await Promise.all(rows.map((row) => enrichPinRow(row, zones)))).filter(Boolean);
     res.json({ data, resolved: data[0] || null });
+  })
+);
+
+/** GET /geo/ola/autocomplete?input=... — Ola Maps via server key */
+router.get(
+  '/ola/autocomplete',
+  canUsePlaces,
+  asyncHandler(async (req, res) => {
+    const data = await autocompleteOlaMaps(req.query.input);
+    res.json({ data });
+  })
+);
+
+/** GET /geo/ola/geocode?pin=... — PIN to approximate coordinates */
+router.get(
+  '/ola/geocode',
+  canUsePlaces,
+  asyncHandler(async (req, res) => {
+    const data = await geocodeOlaPin(req.query.pin);
+    res.json({ data });
+  })
+);
+
+/** GET /geo/ola/travel-estimate?pin=&destLat=&destLng= — one-way × 2 */
+router.get(
+  '/ola/travel-estimate',
+  canUsePlaces,
+  asyncHandler(async (req, res) => {
+    const data = await estimateOlaRoundTripKm({
+      pin: req.query.pin,
+      destLat: req.query.destLat,
+      destLng: req.query.destLng,
+      originLat: req.query.originLat,
+      originLng: req.query.originLng,
+    });
+    res.json({ data });
   })
 );
 
