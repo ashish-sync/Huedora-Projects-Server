@@ -53,6 +53,47 @@ function get(obj, key) {
   return key.split('.').reduce((a, k) => (a == null ? a : a[k]), obj);
 }
 
+function resolveAggregateExpression(expression, document) {
+  if (typeof expression === 'string') {
+    return expression.startsWith('$') ? get(document, expression.slice(1)) : expression;
+  }
+  if (Array.isArray(expression)) {
+    return expression.map((item) => resolveAggregateExpression(item, document));
+  }
+  if (!expression || typeof expression !== 'object') return expression;
+
+  if (Object.hasOwn(expression, '$ifNull')) {
+    const candidates = expression.$ifNull;
+    for (const candidate of candidates) {
+      const value = resolveAggregateExpression(candidate, document);
+      if (value != null) return value;
+    }
+    return null;
+  }
+  if (Object.hasOwn(expression, '$in')) {
+    const [needleExpr, haystackExpr] = expression.$in;
+    const needle = resolveAggregateExpression(needleExpr, document);
+    const haystack = resolveAggregateExpression(haystackExpr, document);
+    return Array.isArray(haystack) && haystack.some((value) => value === needle);
+  }
+  if (Object.hasOwn(expression, '$cond')) {
+    const condition = expression.$cond;
+    const [ifExpr, thenExpr, elseExpr] = Array.isArray(condition)
+      ? condition
+      : [condition.if, condition.then, condition.else];
+    return resolveAggregateExpression(
+      resolveAggregateExpression(ifExpr, document) ? thenExpr : elseExpr,
+      document,
+    );
+  }
+  return Object.fromEntries(
+    Object.entries(expression).map(([key, value]) => [
+      key,
+      resolveAggregateExpression(value, document),
+    ]),
+  );
+}
+
 /**
  * Collect leaf values for a dotted path, expanding arrays (Mongo-like:
  * { 'providerEmployees.name': /x/ } matches any element).
@@ -748,13 +789,28 @@ export function defineCollection(name, defaults = {}) {
         if (stage.$group) {
           const map = new Map();
           const idExpr = stage.$group._id;
-          const field =
-            typeof idExpr === 'string' && idExpr.startsWith('$') ? idExpr.slice(1) : idExpr;
+          const accumulators = Object.entries(stage.$group)
+            .filter(([field]) => field !== '_id')
+            .map(([field, accumulator]) => {
+              if (!accumulator || typeof accumulator !== 'object' || !Object.hasOwn(accumulator, '$sum')) {
+                throw new Error(`File aggregation does not support the $group accumulator for "${field}"`);
+              }
+              return [field, accumulator.$sum];
+            });
           for (const r of rows) {
-            const keyVal = get(r, field);
-            const k = String(keyVal);
-            if (!map.has(k)) map.set(k, { _id: keyVal, count: 0 });
-            if (stage.$group.count?.$sum != null) map.get(k).count += Number(stage.$group.count.$sum);
+            const keyVal = resolveAggregateExpression(idExpr, r);
+            const k = JSON.stringify(keyVal);
+            if (!map.has(k)) {
+              map.set(k, {
+                _id: keyVal,
+                ...Object.fromEntries(accumulators.map(([field]) => [field, 0])),
+              });
+            }
+            const grouped = map.get(k);
+            for (const [field, expression] of accumulators) {
+              const value = resolveAggregateExpression(expression, r);
+              if (typeof value === 'number' && Number.isFinite(value)) grouped[field] += value;
+            }
           }
           rows = [...map.values()];
         }

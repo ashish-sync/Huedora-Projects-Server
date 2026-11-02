@@ -100,15 +100,15 @@ export function assertSafeUpload(file, rules = {}) {
     if (ext === '.pdf' && magic !== 'application/pdf') {
       return { ok: false, message: 'PDF signature mismatch' };
     }
-    if (['.png', '.jpg', '.jpeg', '.gif'].includes(ext)) {
-      if (ext === '.png' && magic !== 'image/png') return { ok: false, message: 'PNG signature mismatch' };
-      if ((ext === '.jpg' || ext === '.jpeg') && magic !== 'image/jpeg') {
-        return { ok: false, message: 'JPEG signature mismatch' };
-      }
-      if (ext === '.gif' && magic !== 'image/gif') return { ok: false, message: 'GIF signature mismatch' };
-    }
-    if (ext === '.webp' && magic !== 'image/webp') {
-      return { ok: false, message: 'WebP signature mismatch' };
+    if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) {
+      const IMAGE_MAGIC = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+      // GPS selfie capture can emit PNG/WebP bytes with a .jpg name. Accept any
+      // recognized image payload when the extension is already an image type.
+      if (IMAGE_MAGIC.has(magic)) return { ok: true };
+      if (ext === '.png') return { ok: false, message: 'PNG signature mismatch' };
+      if (ext === '.jpg' || ext === '.jpeg') return { ok: false, message: 'JPEG signature mismatch' };
+      if (ext === '.gif') return { ok: false, message: 'GIF signature mismatch' };
+      if (ext === '.webp') return { ok: false, message: 'WebP signature mismatch' };
     }
   }
 

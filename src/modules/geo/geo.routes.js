@@ -472,6 +472,7 @@ router.get(
       pin: req.query.pin,
       destLat: req.query.destLat,
       destLng: req.query.destLng,
+      destPin: req.query.destPin,
       originLat: req.query.originLat,
       originLng: req.query.originLng,
     });

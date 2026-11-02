@@ -95,6 +95,10 @@ test('travel estimate cache key is pin + rounded camp coordinates', () => {
     '400058|19.1197|72.8468',
   );
   assert.equal(travelEstimateCacheKey({ pin: '', destLat: 19.1, destLng: 72.8 }), '');
+  assert.equal(
+    travelEstimateCacheKey({ pin: '400058', destLat: '', destLng: '', destPin: '560001' }),
+    '400058|pin:560001',
+  );
 });
 
 test('estimateOlaRoundTripKm fails closed without writing a zero distance', async () => {

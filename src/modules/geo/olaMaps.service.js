@@ -3,6 +3,7 @@ import { AppError } from '../../utils/helpers.js';
 
 const OLA_AUTOCOMPLETE_URL = 'https://api.olamaps.io/places/v1/autocomplete';
 const OLA_GEOCODE_URL = 'https://api.olamaps.io/places/v1/geocode';
+const OLA_DIRECTIONS_URL = 'https://api.olamaps.io/routing/v1/directions';
 const OLA_DIRECTIONS_BASIC_URL = 'https://api.olamaps.io/routing/v1/directions/basic';
 const MIN_QUERY_LEN = 3;
 const REQUEST_TIMEOUT_MS = 8000;
@@ -71,11 +72,13 @@ export function parseMapCoordPair(lat, lng) {
   return { latitude, longitude };
 }
 
-export function travelEstimateCacheKey({ pin, destLat, destLng }) {
+export function travelEstimateCacheKey({ pin, destLat, destLng, destPin } = {}) {
   const pinKey = extractIndiaPin(pin);
+  if (!pinKey) return '';
   const coords = parseMapCoordPair(destLat, destLng);
-  if (!pinKey || !coords) return '';
-  return `${pinKey}|${coords.latitude.toFixed(4)}|${coords.longitude.toFixed(4)}`;
+  if (coords) return `${pinKey}|${coords.latitude.toFixed(4)}|${coords.longitude.toFixed(4)}`;
+  const dest = extractIndiaPin(destPin);
+  return dest ? `${pinKey}|pin:${dest}` : '';
 }
 
 export function isOlaMapsConfigured() {
@@ -215,30 +218,41 @@ export async function directionsOlaOneWayKm(origin, destination) {
   const destLat = to.latitude;
   const destLng = to.longitude;
 
-  const url = new URL(OLA_DIRECTIONS_BASIC_URL);
-  url.searchParams.set('origin', `${originLat},${originLng}`);
-  url.searchParams.set('destination', `${destLat},${destLng}`);
-  url.searchParams.set('mode', 'driving');
-  url.searchParams.set('steps', 'false');
-  url.searchParams.set('overview', 'false');
-  url.searchParams.set('api_key', env.olaMapsApiKey);
-  const km = parseOlaDirectionsKm(await olaGet(url));
-  if (!km) {
-    throw new AppError(
-      'Could not estimate travel distance',
-      502,
-      'OLA_MAPS_DIRECTIONS_FAILED',
-    );
+  const bases = [OLA_DIRECTIONS_URL, OLA_DIRECTIONS_BASIC_URL];
+  let lastError = null;
+  for (const base of bases) {
+    try {
+      const url = new URL(base);
+      url.searchParams.set('origin', `${originLat},${originLng}`);
+      url.searchParams.set('destination', `${destLat},${destLng}`);
+      url.searchParams.set('mode', 'driving');
+      url.searchParams.set('steps', 'false');
+      url.searchParams.set('overview', 'false');
+      url.searchParams.set('api_key', env.olaMapsApiKey);
+      const km = parseOlaDirectionsKm(await olaGet(url));
+      if (km) return km;
+    } catch (err) {
+      lastError = err;
+    }
   }
-  return km;
+  throw lastError || new AppError(
+    'Could not estimate travel distance',
+    502,
+    'OLA_MAPS_DIRECTIONS_FAILED',
+  );
 }
 
-export async function estimateOlaRoundTripKm({ pin, destLat, destLng, originLat, originLng } = {}) {
-  const key = travelEstimateCacheKey({ pin, destLat, destLng });
+export async function estimateOlaRoundTripKm({ pin, destLat, destLng, destPin, originLat, originLng } = {}) {
+  const key = travelEstimateCacheKey({ pin, destLat, destLng, destPin });
   if (!extractIndiaPin(pin)) {
     throw new AppError('HCW PIN code is missing', 400, 'TRAVEL_PIN_MISSING');
   }
-  if (!parseMapCoordPair(destLat, destLng)) {
+  let destination = parseMapCoordPair(destLat, destLng);
+  if (!destination && extractIndiaPin(destPin)) {
+    const geo = await geocodeOlaPin(destPin);
+    destination = parseMapCoordPair(geo?.latitude, geo?.longitude);
+  }
+  if (!destination) {
     throw new AppError('Camp coordinates are missing', 400, 'TRAVEL_CAMP_COORDS_MISSING');
   }
   if (key && travelCache.has(key)) return travelCache.get(key);
@@ -255,8 +269,8 @@ export async function estimateOlaRoundTripKm({ pin, destLat, destLng, originLat,
     }
   }
   const oneWayKm = await directionsOlaOneWayKm(origin, {
-    latitude: destLat,
-    longitude: destLng,
+    latitude: destination.latitude,
+    longitude: destination.longitude,
   });
   const kmRoundTrip = roundTripKmFromOneWay(oneWayKm);
   if (!kmRoundTrip) {
@@ -269,7 +283,7 @@ export async function estimateOlaRoundTripKm({ pin, destLat, destLng, originLat,
   const result = {
     pin: extractIndiaPin(pin),
     origin,
-    destination: { latitude: String(destLat), longitude: String(destLng) },
+    destination: { latitude: String(destination.latitude), longitude: String(destination.longitude) },
     kmOneWay: Math.round(oneWayKm * 10) / 10,
     kmRoundTrip,
     cached: false,

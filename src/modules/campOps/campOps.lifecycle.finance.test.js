@@ -157,6 +157,32 @@ test('Admin can persist an explicit Execution Status instead of auto Planned→E
   assert.equal(cancelled.executionStatus, 'Cancelled by Tylo');
 });
 
+test('cancelled camps keep Other Payouts and lock Camp/Travel/OT payouts', () => {
+  const next = lifecyclePayloadFromBody(
+    {
+      otherExpenses: 250,
+      campAmount: 1800,
+      travelling: 200,
+      overtimeExpense: 100,
+      totalPayout: 2350,
+      executionStatus: 'Cancelled by Client',
+    },
+    {
+      status: 'cancelled',
+      executionStatus: 'Cancelled by Client',
+      campAmount: 0,
+      travelling: 0,
+      overtimeExpense: 0,
+      otherExpenses: 0,
+    },
+  );
+  assert.equal(next.otherExpenses, 250);
+  assert.equal(next.campAmount, undefined);
+  assert.equal(next.travelling, undefined);
+  assert.equal(next.overtimeExpense, undefined);
+  assert.equal(next.totalPayout, 250);
+});
+
 test('lifecyclePayloadFromBody persists travel estimate source and manual reason', () => {
   const next = lifecyclePayloadFromBody(
     {

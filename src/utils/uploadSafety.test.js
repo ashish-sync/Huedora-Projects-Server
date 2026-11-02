@@ -58,6 +58,28 @@ test('rejects spoofed .webp without WEBP chunk', () => {
   assert.equal(result.ok, false);
 });
 
+test('accepts a valid PNG payload even when the filename says .jpg', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const result = assertSafeUpload({
+    originalname: 'gps-selfie.jpg',
+    mimetype: 'image/jpeg',
+    buffer: png,
+    size: png.length,
+  }, { allowedExt: ['.jpg', '.jpeg', '.png', '.webp'] });
+  assert.equal(result.ok, true);
+});
+
+test('still rejects non-image bytes named as JPEG', () => {
+  const result = assertSafeUpload({
+    originalname: 'gps-selfie.jpg',
+    mimetype: 'image/jpeg',
+    buffer: Buffer.from([0x00, 0x01, 0x02, 0x03, 0x04]),
+    size: 5,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /JPEG signature mismatch|not recognized/i);
+});
+
 test('fileExtension normalizes', () => {
   assert.equal(fileExtension('a/B.PNG'), '.png');
 });

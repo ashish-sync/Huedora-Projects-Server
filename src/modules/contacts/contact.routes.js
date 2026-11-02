@@ -279,7 +279,7 @@ router.get(
       const escaped = state.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       filter.state = new RegExp(`^\\s*${escaped}\\s*$`, 'i');
       const cities = await distinctContactGeoLabels(filter, 'city');
-      res.set('Cache-Control', 'private, max-age=60');
+      res.set('Cache-Control', 'private, no-store');
       return res.json({ data: { states: [], cities } });
     }
 
@@ -295,7 +295,7 @@ router.get(
       }
       states = await distinctContactGeoLabels(loose, 'state');
     }
-    res.set('Cache-Control', 'private, max-age=60');
+    res.set('Cache-Control', 'private, no-store');
     res.json({ data: { states, cities: [] } });
   })
 );
@@ -366,7 +366,9 @@ router.get(
       // embedded providerEmployees / linked staff. Applying the role filter here would
       // drop agencies and hide their employee roster in Camp Assignment.
       if (rt !== 'Service Provider') {
-        applyAssignProfessionFilter(filter, req.query.profession, { includeBlank: false });
+        // Match Client Master / facets: blank, Other, and close labels stay assignable
+        // so a newly saved Contact Directory HCW is not dropped from the picker.
+        applyAssignProfessionFilter(filter, req.query.profession, { includeBlank: true });
       }
     }
     if (req.query.stateId) {
@@ -400,7 +402,7 @@ router.get(
       const data = await enrichContactsWithProviders(rawData, { signKyc: false });
       const hasMore = data.length >= limit;
       const total = skip + data.length + (hasMore ? 1 : 0);
-      res.set('Cache-Control', 'private, max-age=30');
+      res.set('Cache-Control', 'private, no-store');
       return res.json(paginated(data, total, page, limit));
     }
     const [rawData, total] = await Promise.all([
