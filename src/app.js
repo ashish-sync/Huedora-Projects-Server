@@ -28,6 +28,8 @@ import documentRoutes from './modules/documents/document.routes.js';
 import notificationRoutes from './modules/notifications/notification.routes.js';
 import entityWatchRoutes from './modules/notifications/entityWatch.routes.js';
 import dashboardRoutes from './modules/dashboards/dashboard.routes.js';
+import chatRoutes from './modules/chat/chat.routes.js';
+import calendarRoutes from './modules/calendar/calendar.routes.js';
 import auditRoutes from './modules/audit/audit.routes.js';
 import importRoutes from './modules/imports/import.routes.js';
 import campRoutes from './modules/camps/camp.routes.js';
@@ -212,6 +214,8 @@ export function createApp(options = {}) {
   app.use('/api/v1/notifications', notificationRoutes);
   app.use('/api/v1/entity-watches', entityWatchRoutes);
   app.use('/api/v1/dashboards', dashboardRoutes);
+  app.use('/api/v1/chat', chatRoutes);
+  app.use('/api/v1/calendar', calendarRoutes);
   app.use('/api/v1/audit-logs', auditRoutes);
   app.use('/api/v1/imports', importRoutes);
   app.use('/api/v1/camps', campRoutes);

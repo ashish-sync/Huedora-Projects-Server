@@ -12,11 +12,13 @@ export async function* streamExcelFile(filePath, { maxRows = MAX_IMPORT_ROWS } =
     throw importAppError('TEMP_MISSING');
   }
 
-  // sheetRows = header + maxRows + 1 sentinel to detect overflow
+  // sheetRows = header + maxRows + 1 sentinel to detect overflow.
+  // dateNF forces Indian DD-MM-YYYY so SheetJS does not emit US m/d/yy (format 14).
   const wb = XLSX.readFile(filePath, {
     type: 'file',
     cellDates: true,
     raw: false,
+    dateNF: 'dd-mm-yyyy',
     sheetRows: maxRows + 2,
   });
 
@@ -24,7 +26,12 @@ export async function* streamExcelFile(filePath, { maxRows = MAX_IMPORT_ROWS } =
     const sheetName = wb.SheetNames[0];
     if (!sheetName) throw importAppError('EMPTY_FILE');
     const sheet = wb.Sheets[sheetName];
-    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+    const matrix = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      defval: '',
+      raw: false,
+      dateNF: 'dd-mm-yyyy',
+    });
 
     if (!matrix.length) throw importAppError('EMPTY_FILE');
 

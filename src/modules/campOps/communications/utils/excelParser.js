@@ -9,6 +9,7 @@ export function parseExcelBuffer(buffer, { maxRows = MAX_IMPORT_ROWS } = {}) {
       type: 'buffer',
       cellDates: true,
       raw: false,
+      dateNF: 'dd-mm-yyyy',
       sheetRows: maxRows + 1,
     });
   } catch {
@@ -25,6 +26,7 @@ export function parseExcelBuffer(buffer, { maxRows = MAX_IMPORT_ROWS } = {}) {
     header: 1,
     defval: '',
     raw: false,
+    dateNF: 'dd-mm-yyyy',
   });
 
   workbook.Sheets = {};

@@ -138,41 +138,87 @@ export function resolveCampSchedule({
   };
 }
 
-export function parseLocalDateInput(value) {
-  const text = trimStr(value);
-  if (!text) return null;
+function padIsoDate(year, month, day) {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
 
-  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
-  const dmy = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(text);
-
-  let year;
-  let month;
-  let day;
-
-  if (iso) {
-    year = Number(iso[1]);
-    month = Number(iso[2]);
-    day = Number(iso[3]);
-  } else if (dmy) {
-    day = Number(dmy[1]);
-    month = Number(dmy[2]);
-    year = Number(dmy[3]);
-    if (year < 100) year += 2000;
-  } else {
-    const parsed = new Date(text);
-    if (Number.isNaN(parsed.getTime())) return null;
-    return parsed.toISOString().slice(0, 10);
-  }
-
+function calendarIsoDate(year, month, day) {
+  if (![year, month, day].every((n) => Number.isFinite(n))) return null;
   const date = new Date(year, month - 1, day);
   if (
-    date.getFullYear() !== year ||
-    date.getMonth() !== month - 1 ||
-    date.getDate() !== day
+    date.getFullYear() !== year
+    || date.getMonth() !== month - 1
+    || date.getDate() !== day
   ) {
     return null;
   }
-  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  return padIsoDate(year, month, day);
+}
+
+function expandTwoDigitYear(year) {
+  if (year < 100) return year >= 70 ? 1900 + year : 2000 + year;
+  return year;
+}
+
+/** Excel 1900-date serial → local ISO (SheetJS / Excel desktop). */
+function excelSerialToIso(serial) {
+  const n = Number(serial);
+  // Modern camp dates land ~36526 (2000) … ~60000s. Reject small ints (years, days).
+  if (!Number.isFinite(n) || n < 20000 || n > 100000) return null;
+  const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+  const parsed = new Date(excelEpoch.getTime() + Math.floor(n) * 86400000);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return padIsoDate(parsed.getUTCFullYear(), parsed.getUTCMonth() + 1, parsed.getUTCDate());
+}
+
+function dateInstanceToIso(value) {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) return null;
+  return padIsoDate(value.getFullYear(), value.getMonth() + 1, value.getDate());
+}
+
+/**
+ * Canonical camp / request date → YYYY-MM-DD.
+ * Prefers Indian DD-MM-YY(YY). Recovers leftover US M/D/YY from Excel when
+ * DD-MM is calendar-invalid (e.g. "11/16/26"). Accepts ISO, Date, Excel serial.
+ */
+export function parseLocalDateInput(value) {
+  if (value instanceof Date) return dateInstanceToIso(value);
+  if (typeof value === 'number') return excelSerialToIso(value);
+
+  const text = trimStr(value);
+  if (!text) return null;
+
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    const asSerial = excelSerialToIso(text);
+    if (asSerial) return asSerial;
+    // Bare numbers that are not Excel serials (e.g. "2026") are not camp dates.
+    return null;
+  }
+
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
+  if (iso) {
+    return calendarIsoDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+  }
+
+  const delimited = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(text);
+  if (delimited) {
+    const a = Number(delimited[1]);
+    const b = Number(delimited[2]);
+    const year = expandTwoDigitYear(Number(delimited[3]));
+    // Indian DD-MM-YY first (Public Request Form / Camp One standard).
+    const dmy = calendarIsoDate(year, b, a);
+    if (dmy) return dmy;
+    // Residual Excel US short-date "11/16/26" after SheetJS m/d/yy formatting.
+    if (a <= 12 && b > 12) {
+      const mdy = calendarIsoDate(year, a, b);
+      if (mdy) return mdy;
+    }
+    return null;
+  }
+
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return dateInstanceToIso(parsed);
 }
 
 export function getCampStartDateTime(camp) {
@@ -279,8 +325,7 @@ export function buildCampFilter(query = {}) {
     filter.financePaymentStatus = { $ne: 'paid' };
   } else if (financialFilter === 'cancelled_by_tylo' || financialFilter === 'cancelled_by_tcpl'
     || financialFilter === 'cancelled_by_client') {
-    // Cancellation is an Execution status — do not treat as Financial selectable status.
-    // Keep legacy query keys mapping to cancel rows for API compatibility only.
+    // Financial Stage can filter cancelled closures that settled into Finance.
     filter.status = 'cancelled';
     filter.$and = [
       ...(filter.$and || []),
@@ -301,8 +346,22 @@ export function buildCampFilter(query = {}) {
           ],
         },
     ];
+  } else if (financialFilter === 'executed') {
+    // Executed financial records: non-cancelled camps that completed execution into Finance.
+    filter.status = { $nin: ['cancelled', 'rejected'] };
+    filter.$and = [
+      ...(filter.$and || []),
+      {
+        $or: [
+          { executionStatus: 'Marked Executed' },
+          { executionStatus: 'Camp Completed' },
+          { executionStatus: 'Executed' },
+          { executionStatus: 'Completed' },
+        ],
+      },
+    ];
   } else if (financialFilter) {
-    // Only allow canonical financial status codes.
+    // Only allow canonical financial payment status codes (operations board deep-links).
     if (['payment_not_checked', 'payment_confirmed', 'payment_hold'].includes(financialFilter)) {
       filter.paymentSubmitStatus = financialFilter;
       filter.financePaymentStatus = { $ne: 'paid' };

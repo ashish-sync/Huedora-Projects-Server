@@ -75,6 +75,12 @@ const EVENT_META = {
   VENDOR_BILL_APPROVED: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'finance' },
   VENDOR_BILL_REJECTED: { priority: NOTIFICATION_PRIORITIES.CRITICAL, module: 'finance' },
   ENTITY_WATCH_UPDATE: { priority: NOTIFICATION_PRIORITIES.INFORMATIONAL, module: 'system' },
+  CALENDAR_REMINDER: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'calendar' },
+  CALENDAR_BLOCK: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'calendar' },
+  CALENDAR_AVAILABILITY_REQUEST: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'calendar' },
+  CALENDAR_ACCEPTED: { priority: NOTIFICATION_PRIORITIES.INFORMATIONAL, module: 'calendar' },
+  CALENDAR_DECLINED: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'calendar' },
+  CALENDAR_SUGGESTED: { priority: NOTIFICATION_PRIORITIES.IMPORTANT, module: 'calendar' },
 };
 
 export function resolveEventMeta(type, overrides = {}) {
@@ -122,6 +128,7 @@ export const APPROVAL_REQUEST_TYPES = Object.freeze([
   'ASSET_CREATE_APPROVAL',
   'COMMERCIAL_SUBMIT',
   'VENDOR_BILL_VERIFIED',
+  'CALENDAR_AVAILABILITY_REQUEST',
 ]);
 
 /**

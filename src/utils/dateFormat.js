@@ -8,6 +8,19 @@ function expandYear(yearPart) {
   return NaN;
 }
 
+function calendarDate(year, month, day) {
+  if ([year, month, day].some((n) => Number.isNaN(n) || !Number.isFinite(n))) return null;
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year
+    || date.getMonth() !== month - 1
+    || date.getDate() !== day
+  ) {
+    return null;
+  }
+  return date;
+}
+
 function parseToDate(value) {
   if (value == null || value === '') return null;
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
@@ -22,23 +35,22 @@ function parseToDate(value) {
 
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
   if (iso) {
-    return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+    return calendarDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
   }
 
   const compact = text.replace(/\s+/g, '');
-  const dmyDash = /^(\d{2})-(\d{2})-(\d{2}|\d{4})$/.exec(compact);
-  if (dmyDash) {
-    const year = expandYear(dmyDash[3]);
+  const delimited = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2}|\d{4})$/.exec(compact);
+  if (delimited) {
+    const a = Number(delimited[1]);
+    const b = Number(delimited[2]);
+    const year = expandYear(delimited[3]);
     if (!Number.isNaN(year)) {
-      return new Date(year, Number(dmyDash[2]) - 1, Number(dmyDash[1]));
-    }
-  }
-
-  const dmySlash = /^(\d{2})\/(\d{2})\/(\d{2}|\d{4})$/.exec(compact);
-  if (dmySlash) {
-    const year = expandYear(dmySlash[3]);
-    if (!Number.isNaN(year)) {
-      return new Date(year, Number(dmySlash[2]) - 1, Number(dmySlash[1]));
+      const dmy = calendarDate(year, b, a);
+      if (dmy) return dmy;
+      if (a <= 12 && b > 12) {
+        const mdy = calendarDate(year, a, b);
+        if (mdy) return mdy;
+      }
     }
   }
 

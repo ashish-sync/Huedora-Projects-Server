@@ -88,6 +88,28 @@ test('buildCampFilter maps financial cancel filters without payment status', () 
   assert.equal(tylo.status, 'cancelled');
   assert.equal(tylo.lifecycleStage, 'financial');
   assert.equal(tylo.paymentSubmitStatus, undefined);
+
+  const client = buildCampFilter({
+    lifecycleStage: 'financial',
+    financialFilter: 'cancelled_by_client',
+  });
+  assert.equal(client.status, 'cancelled');
+  assert.equal(client.lifecycleStage, 'financial');
+});
+
+test('buildCampFilter maps financial executed filter to non-cancelled completed camps', () => {
+  const executed = buildCampFilter({
+    lifecycleStage: 'financial',
+    financialFilter: 'executed',
+  });
+  assert.deepEqual(executed.status, { $nin: ['cancelled', 'rejected'] });
+  assert.equal(executed.lifecycleStage, 'financial');
+  assert.equal(executed.paymentSubmitStatus, undefined);
+  assert.ok(Array.isArray(executed.$and));
+  assert.ok(
+    executed.$and.some((clause) => Array.isArray(clause?.$or)
+      && clause.$or.some((row) => row.executionStatus === 'Camp Completed')),
+  );
 });
 
 test('buildCampFilter maps financial stage filters to payment fields', () => {

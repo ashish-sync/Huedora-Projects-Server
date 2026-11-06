@@ -75,10 +75,11 @@ export function parseSheetRows(buffer, { maxRows = MAX_IMPORT_ROWS } = {}) {
     type: 'buffer',
     raw: false,
     cellDates: true,
+    dateNF: 'dd-mm-yyyy',
     sheetRows: maxRows + 2,
   });
   const sheet = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '', dateNF: 'dd-mm-yyyy' });
   wb.Sheets = {};
   wb.SheetNames = [];
   if (rows.length > maxRows) {

@@ -13,6 +13,13 @@ describe('dateFormat standards', () => {
     assert.equal(formatDate('15/08/2026'), '15-08-2026');
   });
 
+  it('does not roll US leftover Excel dates into the wrong month', () => {
+    assert.equal(formatDate('11/16/26'), '16-11-2026');
+    assert.equal(formatDate('16-11-26'), '16-11-2026');
+    assert.equal(formatDate('01-12-26'), '01-12-2026');
+    assert.equal(formatDate('31-01-27'), '31-01-2027');
+  });
+
   it('normalizes mixed clock strings to 24-hour HH:mm', () => {
     assert.equal(normalizeTimeOfDay('20:30'), '20:30');
     assert.equal(normalizeTimeOfDay('11:00 AM'), '11:00');
