@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { User } from '../users/user.model.js';
 import { ChatConversation, ChatMessage } from './chat.model.js';
 import {
+  assertConversationAccess,
+  authorizeChatSocketAccess,
   dmParticipantKey,
   findOrCreateDm,
   listConversationsForUser,
@@ -82,6 +84,63 @@ test('internal chat DM flow: directory, start, send, read, unread', async () => 
       bob.isDeleted = true;
       await alice.save();
       await bob.save();
+    } catch {
+      /* ignore */
+    }
+  }
+});
+
+test('DM access rejects non-participants and forged conversation ids', async () => {
+  const stamp = Date.now();
+  const alice = await seedUser(`priv_a_${stamp}`);
+  const bob = await seedUser(`priv_b_${stamp}`);
+  const eve = await seedUser(`priv_e_${stamp}`);
+  const aliceId = String(alice._id);
+  const bobId = String(bob._id);
+  const eveId = String(eve._id);
+
+  try {
+    const conversation = await findOrCreateDm(aliceId, bobId);
+    await sendMessage(conversation.id, aliceId, 'Private note');
+
+    await assert.rejects(
+      () => listMessages(conversation.id, eveId),
+      (err) => err?.status === 404 || err?.code === 'NOT_FOUND',
+    );
+    await assert.rejects(
+      () => sendMessage(conversation.id, eveId, 'Intrusion'),
+      (err) => err?.status === 404 || err?.code === 'NOT_FOUND',
+    );
+    await assert.rejects(
+      () => markConversationRead(conversation.id, eveId),
+      (err) => err?.status === 404 || err?.code === 'NOT_FOUND',
+    );
+    await assert.rejects(
+      () => assertConversationAccess(conversation.id, eveId),
+      (err) => err?.status === 404 || err?.code === 'NOT_FOUND',
+    );
+    await assert.rejects(
+      () => authorizeChatSocketAccess(eveId, conversation.id),
+      (err) => err?.status === 404 || err?.code === 'NOT_FOUND',
+    );
+    await assert.rejects(
+      () => listMessages('forged-conversation-id', aliceId),
+      (err) => err?.status === 404 || err?.code === 'NOT_FOUND',
+    );
+
+    const eveList = await listConversationsForUser(eveId);
+    assert.ok(!eveList.some((row) => row.id === conversation.id));
+
+    const allowed = await assertConversationAccess(conversation.id, bobId);
+    assert.equal(String(allowed._id), conversation.id);
+  } finally {
+    try {
+      alice.isDeleted = true;
+      bob.isDeleted = true;
+      eve.isDeleted = true;
+      await alice.save();
+      await bob.save();
+      await eve.save();
     } catch {
       /* ignore */
     }

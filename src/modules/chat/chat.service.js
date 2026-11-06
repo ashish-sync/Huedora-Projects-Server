@@ -90,6 +90,7 @@ export async function listDirectory(currentUserId, { q = '' } = {}) {
 export async function listConversationsForUser(userId) {
   const selfId = asId(userId);
   const rows = await ChatConversation.find({
+    type: 'dm',
     participantIds: { $in: [selfId] },
   })
     .sort({ lastMessageAt: -1, updatedAt: -1 })
@@ -118,15 +119,45 @@ export async function listConversationsForUser(userId) {
   return serialized;
 }
 
-export async function assertParticipant(conversationId, userId) {
-  const conversation = await ChatConversation.findById(asId(conversationId));
-  if (!conversation) throw new AppError('Conversation not found', 404, 'NOT_FOUND');
+/**
+ * Authorize 1:1 DM access for HTTP (and any future WebSocket) callers.
+ * Membership is enforced in the DB query so manipulated conversation IDs cannot
+ * load another pair's thread. Non-members get 404 (no existence leak).
+ */
+export async function assertConversationAccess(conversationId, userId) {
   const selfId = asId(userId);
-  const participants = (conversation.participantIds || []).map(asId);
-  if (!participants.includes(selfId)) {
-    throw new AppError('You are not a participant in this conversation', 403, 'FORBIDDEN');
+  const id = asId(conversationId);
+  if (!id || !selfId) {
+    throw new AppError('Conversation not found', 404, 'NOT_FOUND');
   }
+
+  const conversation = await ChatConversation.findOne({
+    _id: id,
+    type: 'dm',
+    participantIds: { $in: [selfId] },
+  });
+  if (!conversation) {
+    throw new AppError('Conversation not found', 404, 'NOT_FOUND');
+  }
+
+  const participants = [
+    ...new Set((conversation.participantIds || []).map(asId).filter(Boolean)),
+  ];
+  if (participants.length !== 2 || !participants.includes(selfId)) {
+    throw new AppError('Conversation not found', 404, 'NOT_FOUND');
+  }
+
   return conversation;
+}
+
+/** @deprecated Prefer assertConversationAccess — kept for callers/tests. */
+export async function assertParticipant(conversationId, userId) {
+  return assertConversationAccess(conversationId, userId);
+}
+
+/** Same gate used by REST; call from WebSocket join/subscribe handlers. */
+export async function authorizeChatSocketAccess(userId, conversationId) {
+  return assertConversationAccess(conversationId, userId);
 }
 
 export async function findOrCreateDm(currentUserId, peerUserId) {
@@ -161,10 +192,10 @@ export async function findOrCreateDm(currentUserId, peerUserId) {
 }
 
 export async function listMessages(conversationId, userId, { page = 1, limit = MESSAGE_PAGE_DEFAULT } = {}) {
-  await assertParticipant(conversationId, userId);
+  const conversation = await assertConversationAccess(conversationId, userId);
   const safeLimit = Math.min(100, Math.max(1, Number(limit) || MESSAGE_PAGE_DEFAULT));
   const safePage = Math.max(1, Number(page) || 1);
-  const filter = { conversationId: asId(conversationId) };
+  const filter = { conversationId: asId(conversation._id) };
   const [rows, total] = await Promise.all([
     ChatMessage.find(filter)
       .sort({ createdAt: -1 })
@@ -181,7 +212,7 @@ export async function listMessages(conversationId, userId, { page = 1, limit = M
 }
 
 export async function sendMessage(conversationId, userId, body) {
-  const conversation = await assertParticipant(conversationId, userId);
+  const conversation = await assertConversationAccess(conversationId, userId);
   const text = String(body || '').trim();
   if (!text) throw new AppError('Message body is required', 400, 'VALIDATION_ERROR');
   if (text.length > MAX_BODY) {
@@ -189,6 +220,11 @@ export async function sendMessage(conversationId, userId, body) {
   }
 
   const selfId = asId(userId);
+  const participants = (conversation.participantIds || []).map(asId);
+  if (!participants.includes(selfId)) {
+    throw new AppError('Conversation not found', 404, 'NOT_FOUND');
+  }
+
   const message = await ChatMessage.create({
     conversationId: asId(conversation._id),
     senderId: selfId,
@@ -205,7 +241,7 @@ export async function sendMessage(conversationId, userId, body) {
 }
 
 export async function markConversationRead(conversationId, userId) {
-  const conversation = await assertParticipant(conversationId, userId);
+  const conversation = await assertConversationAccess(conversationId, userId);
   const selfId = asId(userId);
   const unread = await ChatMessage.find({
     conversationId: asId(conversation._id),
@@ -226,7 +262,10 @@ export async function markConversationRead(conversationId, userId) {
 
 export async function unreadTotalForUser(userId) {
   const selfId = asId(userId);
-  const conversations = await ChatConversation.find({ participantIds: { $in: [selfId] } }).select('_id');
+  const conversations = await ChatConversation.find({
+    type: 'dm',
+    participantIds: { $in: [selfId] },
+  }).select('_id');
   if (!conversations.length) return 0;
   const ids = conversations.map((row) => asId(row._id));
   return ChatMessage.countDocuments({

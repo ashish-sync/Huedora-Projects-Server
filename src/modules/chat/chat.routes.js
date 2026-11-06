@@ -3,6 +3,7 @@ import { authenticate, requirePermission } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { asyncHandler, paginated } from '../../utils/helpers.js';
 import {
+  authorizeChatSocketAccess,
   findOrCreateDm,
   listConversationsForUser,
   listDirectory,
@@ -15,6 +16,13 @@ import {
 const router = Router();
 router.use(authenticate);
 router.use(requirePermission(PERMISSIONS.DASHBOARDS_READ, PERMISSIONS.NOTIFICATIONS_READ));
+
+/**
+ * Chat is HTTP-polled today. Any future WebSocket subscribe/join must call
+ * authorizeChatSocketAccess(userId, conversationId) with the same membership gate.
+ * Exported on the router for discoverability / static security scans.
+ */
+router.authorizeChatSocketAccess = authorizeChatSocketAccess;
 
 /** Active colleagues available to message (any authenticated employee). */
 router.get(
