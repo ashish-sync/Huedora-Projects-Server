@@ -129,6 +129,7 @@ import {
   applyCampBusinessLogic,
   withCampLifecycle,
   canEditLifecycleStage,
+  canSaveCancelledOtherPayouts,
   applyAssignmentStageOutcome,
   assertExecutionStageSave,
   assertCanMarkCampExecuted,
@@ -187,6 +188,7 @@ import {
   parseExportFormat,
   serializeExportTemplate,
 } from './campOps.export.js';
+import { enrichCampsAssignedHcwForExport } from './campAssignedHcwExport.js';
 import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.requestValidation.js';
 import { assertHistoricalCampDatesAllowed, assertRequestDateNotFuture, localTodayIso } from './campDatePolicy.js';
 import { assertHcwAssignmentGap } from './hcwAssignmentGap.js';
@@ -488,10 +490,11 @@ async function scopeEntityIdFilter(req, filter, field = '_id') {
   return applyClientScopeToIdField(filter, scoped, field);
 }
 
-function sendCampExportResponse(res, camps, columnKeys, format) {
+async function sendCampExportResponse(res, camps, columnKeys, format) {
   const columns = resolveExportColumns(columnKeys);
   const headers = campFullExportHeaders(columns);
-  const rows = campFullExportRows(camps, columns);
+  const enriched = await enrichCampsAssignedHcwForExport(camps);
+  const rows = campFullExportRows(enriched, columns);
   const filename = format === 'csv' ? 'Camps_Export.csv' : 'Camps_Export.xlsx';
   if (format === 'csv') {
     sendCsv(res, filename, headers, rows);
@@ -1227,7 +1230,7 @@ router.post(
     }
     const format = parseExportFormat(body.format);
     const camps = await fetchCampsForExport(req, query, { scopeCampFilter });
-    sendCampExportResponse(res, camps, columns, format);
+    await sendCampExportResponse(res, camps, columns, format);
   }),
 );
 
@@ -1242,7 +1245,7 @@ router.get(
     const camps = await fetchCampsForExport(req, query, { scopeCampFilter });
     const columns = parseExportColumnKeys(req.query.columns);
     const format = parseExportFormat(req.query.format);
-    sendCampExportResponse(res, camps, columns, format);
+    await sendCampExportResponse(res, camps, columns, format);
   }),
 );
 
@@ -1912,33 +1915,45 @@ router.put(
         || camp.lifecycleStage,
       'request',
     );
-    const lifecycleOnly = req.body.lifecycleOnly === true;
     const admin = isCampAdmin(req);
-
-    if (!canEditLifecycleStage(camp, stage, { isAdmin: admin })) {
+    const fullStageEdit = canEditLifecycleStage(camp, stage, { isAdmin: admin });
+    const cancelledOtherPayoutsOnly = !fullStageEdit && canSaveCancelledOtherPayouts(camp, stage);
+    if (!fullStageEdit && !cancelledOtherPayoutsOnly) {
       throw new AppError(`Cannot edit ${stage} stage for this camp`, 400, 'VALIDATION_ERROR');
     }
 
+    // Other Payouts-only path: every user may update otherExpenses on Cancelled by Tylo/Client.
+    // Narrow the body so assignment/execution/revenue fields cannot ride along.
+    const requestBody = cancelledOtherPayoutsOnly
+      ? {
+        otherExpenses: req.body?.otherExpenses,
+        editingStage: 'financial',
+        lifecycleOnly: true,
+        expectedUpdatedAt: req.body?.expectedUpdatedAt,
+      }
+      : req.body;
+    const lifecycleOnly = requestBody.lifecycleOnly === true;
+
     const before = camp.toObject();
     let client = null;
-    if (!lifecycleOnly && (req.body.clientId !== undefined || req.body.client !== undefined || req.body.clientName)) {
-      client = await resolveClientFromBody(req.body, { allowCreate: false });
+    if (!lifecycleOnly && (requestBody.clientId !== undefined || requestBody.client !== undefined || requestBody.clientName)) {
+      client = await resolveClientFromBody(requestBody, { allowCreate: false });
       if (!client) throw new AppError('Client not found', 404, 'NOT_FOUND');
       await assertClientIdAccess(req.user, client._id);
     }
 
     if (!lifecycleOnly && stage === 'request') {
-      assertRawDoctorName(req.body);
+      assertRawDoctorName(requestBody);
     }
     const pricingClientId = client?._id || camp.clientId;
     const pricing = await resolveClientMasterPricingForCamp(pricingClientId, {
-      campaignType: req.body.campaignType ?? camp.campaignType,
-      campaignName: req.body.campaignName ?? camp.campaignName,
+      campaignType: requestBody.campaignType ?? camp.campaignType,
+      campaignName: requestBody.campaignName ?? camp.campaignName,
       clientName: client?.name || camp.clientName,
     });
-    const payload = campPayloadFromBody(req.body, camp, client, {
+    const payload = campPayloadFromBody(requestBody, camp, client, {
       pricing,
-      allowExplicitExecutionStatus: admin,
+      allowExplicitExecutionStatus: admin && fullStageEdit,
     });
     const executionOnlyKeys = [
       'executionStatus', 'chargeableStatus', 'inTime', 'outTime', 'kmRoundTrip',
@@ -1980,7 +1995,7 @@ router.put(
       ].forEach((key) => { delete payload[key]; });
     }
 
-    const clearKeys = resolveClearKeys(req.body, {
+    const clearKeys = resolveClearKeys(requestBody, {
       clearExecutionDocuments: 'executionDocuments',
       clearConsumablesUsed: 'consumablesUsed',
     });
@@ -2015,8 +2030,8 @@ router.put(
 
     // Client may still send markComplete; Financial advance is decided after field checks.
     const markCompleteIntent = stage === 'execution' && (
-      req.body?.markComplete === true
-      || req.body?.markComplete === 'true'
+      requestBody?.markComplete === true
+      || requestBody?.markComplete === 'true'
     );
     if (stage === 'execution') {
       // Do not trust client lifecycle/status to jump to Financial — server auto-advances when ready.
@@ -2054,10 +2069,15 @@ router.put(
 
     if (
       stage === 'assignment'
-      && (camp.status === 'approved' || (admin && ['executed', 'cancelled'].includes(camp.status)))
+      && (
+        camp.status === 'approved'
+        || camp.status === 'executed'
+        || (admin && camp.status === 'cancelled')
+      )
     ) {
       try {
-        applyAssignmentStageOutcome(camp, req.body);
+        // Prefer requestBody so Change HCW denormalized fields always sync for exports.
+        applyAssignmentStageOutcome(camp, requestBody);
       } catch (err) {
         throw new AppError(err.message || 'Invalid assignment', 400, 'VALIDATION_ERROR');
       }
@@ -2280,11 +2300,12 @@ router.get(
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
     assertCampSubmittedToFinance(camp);
+    const [enriched] = await enrichCampsAssignedHcwForExport([camp]);
     sendExcel(
       res,
-      campFinanceExportFilename(camp),
+      campFinanceExportFilename(enriched || camp),
       campFinanceExportHeaders(),
-      [buildCampFinanceExportRow(camp)],
+      [buildCampFinanceExportRow(enriched || camp)],
       { sheetName: 'Camp Payout' },
     );
   })

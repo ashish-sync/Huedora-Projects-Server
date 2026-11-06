@@ -66,22 +66,30 @@ function assignedCamp(campDate) {
 }
 
 {
-  // Reassignment must not demote a camp already in Execution.
+  // Reassignment must not demote a camp already in Execution,
+  // and must sync denormalized HCW fields used by exports/reports.
   const camp = {
     ...assignedCamp(isoOffset(1, now)),
     lifecycleStage: 'execution',
     hcwContactId: 'hcw-1',
+    hcwName: 'Ravi',
+    hcwContact: '9999999999',
+    hcwCategory: 'Technician',
   };
   applyAssignmentStageOutcome(camp, {
     editingStage: 'assignment',
     assignmentDecision: 'assign',
-    hcwCategory: 'Technician',
+    hcwCategory: 'Phlebotomist',
     hcwName: 'Anita',
     hcwContact: '8888888888',
     hcwContactId: 'hcw-2',
   }, now);
   assert.equal(camp.lifecycleStage, 'execution');
-  assert.equal(camp.assignmentStatus, 'Assigned');
+  assert.equal(camp.assignmentStatus, 'Reassigned');
+  assert.equal(camp.hcwContactId, 'hcw-2');
+  assert.equal(camp.hcwName, 'Anita');
+  assert.equal(camp.hcwContact, '8888888888');
+  assert.equal(camp.hcwCategory, 'Phlebotomist');
 }
 
 {

@@ -38,6 +38,7 @@ import {
   CAMP_FINANCE_EXPENSE_SUB_CATEGORY,
 } from '../campOps/campFinanceExpense.js';
 import { enrichCampPayoutsWithPayee } from '../contacts/campPayoutPayee.js';
+import { enrichCampsAssignedHcwForExport } from '../campOps/campAssignedHcwExport.js';
 import {
   applyReturnCampFromPayoutQueue,
   assertCanReturnCampFromPayoutQueue,
@@ -587,14 +588,15 @@ const listCampPayouts = asyncHandler(async (req, res) => {
 
 const exportCampPayouts = asyncHandler(async (req, res) => {
   const filter = buildCampPayoutFilter(req.query);
-    const camps = await CampOpsCamp.find(filter).sort('-submittedToFinanceAt');
-    sendExcel(
-      res,
-      campFinanceBulkExportFilename(),
-      campFinanceExportHeaders(),
-      campFinanceExportRows(camps),
-      { sheetName: 'Camp Payouts' },
-    );
+  const camps = await CampOpsCamp.find(filter).sort('-submittedToFinanceAt');
+  const enriched = await enrichCampsAssignedHcwForExport(camps);
+  sendExcel(
+    res,
+    campFinanceBulkExportFilename(),
+    campFinanceExportHeaders(),
+    campFinanceExportRows(enriched),
+    { sheetName: 'Camp Payouts' },
+  );
 });
 
 const bulkUpdateCampPayouts = asyncHandler(async (req, res) => {
@@ -713,20 +715,21 @@ const bulkUpdateCampPayouts = asyncHandler(async (req, res) => {
 });
 
 const exportCampPayoutById = asyncHandler(async (req, res) => {
-    const camp = await CampOpsCamp.findOne({
-      _id: req.params.campId,
-      isDeleted: false,
-      submittedToFinanceAt: { $ne: null },
-    });
-    if (!camp) throw new AppError('Camp payout not found', 404);
-    assertCampSubmittedToFinance(camp);
-    sendExcel(
-      res,
-      campFinanceExportFilename(camp),
-      campFinanceExportHeaders(),
-      [buildCampFinanceExportRow(camp)],
-      { sheetName: 'Camp Payout' },
-    );
+  const camp = await CampOpsCamp.findOne({
+    _id: req.params.campId,
+    isDeleted: false,
+    submittedToFinanceAt: { $ne: null },
+  });
+  if (!camp) throw new AppError('Camp payout not found', 404);
+  assertCampSubmittedToFinance(camp);
+  const [enriched] = await enrichCampsAssignedHcwForExport([camp]);
+  sendExcel(
+    res,
+    campFinanceExportFilename(enriched || camp),
+    campFinanceExportHeaders(),
+    [buildCampFinanceExportRow(enriched || camp)],
+    { sheetName: 'Camp Payout' },
+  );
 });
 
 const updateCampPayoutById = asyncHandler(async (req, res) => {

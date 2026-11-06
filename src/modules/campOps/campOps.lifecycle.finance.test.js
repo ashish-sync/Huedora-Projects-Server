@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   canEditLifecycleStage,
+  canSaveCancelledOtherPayouts,
   getExecutionFinanceBlockers,
   isCampExecutedForPayout,
   isExecutionCancellationForFinance,
@@ -157,6 +158,27 @@ test('Admin can persist an explicit Execution Status instead of auto Planned→E
   assert.equal(cancelled.executionStatus, 'Cancelled by Tylo');
 });
 
+test('canSaveCancelledOtherPayouts stays open for every user after Payment Done', () => {
+  const camp = {
+    status: 'cancelled',
+    lifecycleStage: 'financial',
+    executionStatus: 'Cancelled by Client',
+    financePaymentStatus: 'paid',
+  };
+  assert.equal(canEditLifecycleStage(camp, 'financial', { isAdmin: false }), false);
+  assert.equal(canSaveCancelledOtherPayouts(camp, 'financial'), true);
+  assert.equal(canSaveCancelledOtherPayouts({
+    ...camp,
+    executionStatus: 'Cancelled by Tylo',
+    financePaymentStatus: '',
+  }, 'financial'), true);
+  assert.equal(canSaveCancelledOtherPayouts({
+    status: 'cancelled',
+    lifecycleStage: 'financial',
+    executionStatus: 'Camp Ongoing',
+  }, 'financial'), false);
+});
+
 test('cancelled camps keep Other Payouts and lock Camp/Travel/OT payouts', () => {
   const next = lifecyclePayloadFromBody(
     {
@@ -183,6 +205,27 @@ test('cancelled camps keep Other Payouts and lock Camp/Travel/OT payouts', () =>
   assert.equal(next.totalPayout, 250);
 });
 
+test('legacy cancelledBy camps accept Other Payouts-only body without wiping existing payout parts', () => {
+  const next = lifecyclePayloadFromBody(
+    { otherExpenses: 175 },
+    {
+      status: 'cancelled',
+      cancelledBy: 'brand',
+      executionStatus: 'Camp Ongoing',
+      campAmount: 1800,
+      travelling: 200,
+      overtimeExpense: 50,
+      otherExpenses: 0,
+      totalPayout: 2050,
+    },
+  );
+  assert.equal(next.otherExpenses, 175);
+  assert.equal(next.campAmount, undefined);
+  assert.equal(next.travelling, undefined);
+  assert.equal(next.overtimeExpense, undefined);
+  assert.equal(next.totalPayout, 2225);
+});
+
 test('lifecyclePayloadFromBody persists travel estimate source and manual reason', () => {
   const next = lifecyclePayloadFromBody(
     {
@@ -198,6 +241,15 @@ test('lifecyclePayloadFromBody persists travel estimate source and manual reason
   assert.equal(next.kmRoundTripSource, 'manual');
   assert.equal(next.kmRoundTripManualReason, 'HCW stayed overnight');
   assert.equal(next.kmRoundTripEstimateKey, '400058|19.1197|72.8468');
+});
+
+test('legacy camps keep empty kmRoundTripSource when body omits travel source', () => {
+  const next = lifecyclePayloadFromBody(
+    { kmRoundTrip: 36 },
+    { kmRoundTrip: 36, kmRoundTripSource: '' },
+  );
+  assert.equal(next.kmRoundTrip, 36);
+  assert.equal(next.kmRoundTripSource, '');
 });
 
 test('Camp PUT cannot set or reverse Payment Done (Finance One only)', () => {

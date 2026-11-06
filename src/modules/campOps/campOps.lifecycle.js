@@ -920,9 +920,19 @@ export function applyAssignmentStageOutcome(camp, body = {}, now = new Date()) {
     if (!hcwCategory || !hcwName || !hcwContact) {
       throw new Error('HCW Category, Name, and Contact are required when assigning');
     }
+    const previousHcwId = localTrim(camp.hcwContactId);
+    const nextHcwId = localTrim(body.hcwContactId ?? camp.hcwContactId);
     const previousStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
+    // Persist denormalized HCW identity here — exports/reports read these live fields.
+    // Relying only on assignPreservingExisting left stale names after Change HCW.
+    camp.hcwCategory = HCW_CATEGORIES.includes(hcwCategory) ? hcwCategory : (camp.hcwCategory || hcwCategory);
+    camp.hcwName = hcwName;
+    camp.hcwContact = hcwContact;
+    if (nextHcwId) camp.hcwContactId = nextHcwId;
     camp.assignmentDecision = 'assign';
-    camp.assignmentStatus = 'Assigned';
+    camp.assignmentStatus = previousHcwId && nextHcwId && previousHcwId !== nextHcwId
+      ? 'Reassigned'
+      : 'Assigned';
     camp.assignmentRefusalReason = '';
     // Reassignment must not demote camps already in Execution / Finance.
     if (previousStage === 'execution' || previousStage === 'financial') {
@@ -1023,6 +1033,20 @@ export async function promoteDueAssignedCampsToExecution(CampModel = null, now =
     promoted += 1;
   }
   return promoted;
+}
+
+/**
+ * Any authenticated Camp One user may save Other Payouts on Cancelled by Tylo / Client.
+ * Not blocked by Payment Done. Full financial edit still uses canEditLifecycleStage.
+ */
+export function canSaveCancelledOtherPayouts(camp, stage = 'financial') {
+  const status = localTrim(camp?.status);
+  const target = normalizeLifecycleStage(stage, '');
+  if (status !== 'cancelled') return false;
+  if (target !== 'financial') return false;
+  if (!isExecutionCancellationForFinance(camp)) return false;
+  const reached = normalizeLifecycleStage(camp?.lifecycleStage, 'request');
+  return reached === 'financial' || hasReachedLifecycleStage(reached, 'execution');
 }
 
 export function canEditLifecycleStage(camp, stage, { isAdmin = false } = {}) {

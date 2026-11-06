@@ -169,20 +169,42 @@ export async function enrichCampPayoutsWithPayee(summaries = []) {
 
   return summaries.map((row) => {
     const assignmentId = String(row?.hcwContactId || '').trim();
+    const embeddedProviderId = embeddedServiceProviderId(assignmentId);
+    const assignedContact = embeddedProviderId
+      ? null
+      : (contactsById.get(assignmentId) || null);
     const resolved = resolveCampPayoutPayee({
       assignmentId,
-      assignedContact: contactsById.get(assignmentId) || null,
+      assignedContact,
       contactsById,
     });
     const payee = resolved.payeeContact;
     const fallbackName = String(row.hcwName || '').trim();
+    const embeddedEmployee = embeddedProviderId
+      ? findEmbeddedProviderEmployee(contactsById.get(embeddedProviderId), assignmentId)
+      : null;
+    const liveAssignedName = String(
+      embeddedEmployee?.name
+      || resolved.assignedContact?.name
+      || '',
+    ).trim() || fallbackName;
+    const liveAssignedContact = String(
+      embeddedEmployee?.mobile
+      || embeddedEmployee?.contact
+      || resolved.assignedContact?.contact
+      || resolved.assignedContact?.mobile
+      || row.hcwContact
+      || '',
+    ).trim();
 
     return {
       ...row,
+      hcwName: liveAssignedName,
+      hcwContact: liveAssignedContact || row.hcwContact || '',
       payeeContactId: resolved.payeeContactId || '',
-      payeeName: resolved.payeeName || fallbackName,
+      payeeName: resolved.payeeName || liveAssignedName,
       payeeIsServiceProvider: Boolean(resolved.payeeIsServiceProvider),
-      assignedHcwName: fallbackName,
+      assignedHcwName: liveAssignedName,
       ...payeeBankFieldsFromContact(payee, { signUrls: true }),
     };
   });
