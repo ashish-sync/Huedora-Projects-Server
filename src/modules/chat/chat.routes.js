@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticate } from '../../middleware/auth.js';
+import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { PERMISSIONS } from '../../config/constants.js';
 import { asyncHandler, paginated } from '../../utils/helpers.js';
 import {
   findOrCreateDm,
@@ -13,6 +14,7 @@ import {
 
 const router = Router();
 router.use(authenticate);
+router.use(requirePermission(PERMISSIONS.DASHBOARDS_READ, PERMISSIONS.NOTIFICATIONS_READ));
 
 /** Active colleagues available to message (any authenticated employee). */
 router.get(

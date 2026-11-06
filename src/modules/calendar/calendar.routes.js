@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticate } from '../../middleware/auth.js';
+import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { PERMISSIONS } from '../../config/constants.js';
 import { asyncHandler } from '../../utils/helpers.js';
 import {
   acceptRequest,
@@ -15,6 +16,7 @@ import {
 
 const router = Router();
 router.use(authenticate);
+router.use(requirePermission(PERMISSIONS.DASHBOARDS_READ, PERMISSIONS.NOTIFICATIONS_READ));
 
 router.get(
   '/directory',
