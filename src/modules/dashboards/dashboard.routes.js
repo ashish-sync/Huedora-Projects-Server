@@ -35,6 +35,11 @@ import {
 } from './dashboard.aggregations.js';
 import { VerificationCampaign, VerificationRecord } from '../verifications/verification.model.js';
 import { listReviewModulesForUser, runModuleReview } from './moduleReview.js';
+import {
+  loadCampQualityMetrics,
+  parseCampQualityRange,
+  resolveCampQualityMetric,
+} from './campQuality.metrics.js';
 
 function countMap(rows) {
   return Object.fromEntries((rows || []).map((x) => [x._id || 'Unknown', x.count]));
@@ -143,6 +148,20 @@ router.get(
 async function findCampaignReadOnly(periodKey) {
   return VerificationCampaign.findOne({ periodKey, isDeleted: false });
 }
+
+/**
+ * Welcome card camp-quality buckets for a date range.
+ * Query: from, to (YYYY-MM-DD), metric (punctuality|attire|chargeability|campCycle|avgPayout)
+ */
+router.get(
+  '/camp-quality',
+  asyncHandler(async (req, res) => {
+    const { from, to } = parseCampQualityRange(req.query);
+    const metric = resolveCampQualityMetric(req.query);
+    const data = await loadCampQualityMetrics({ from, to, metric });
+    res.json({ data });
+  })
+);
 
 /**
  * Executive one-page overview: KPIs, pending actions, risks, financials, module health.
