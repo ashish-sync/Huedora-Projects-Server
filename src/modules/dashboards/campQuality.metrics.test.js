@@ -13,14 +13,14 @@ import {
 test('attire maps Issues/No Issues to Welcome bucket labels', () => {
   assert.equal(classifyAttireBucket('Issues'), 'Issue');
   assert.equal(classifyAttireBucket('No Issues'), 'No Issue');
-  assert.equal(classifyAttireBucket(''), 'Yet to Update');
+  assert.equal(classifyAttireBucket(''), 'Pending');
 });
 
-test('chargeability maps Partial to Chargeable and blanks to Yet to Update', () => {
+test('chargeability maps Partial to Chargeable and blanks to Pending', () => {
   assert.equal(classifyChargeabilityBucket('Chargeable'), 'Chargeable');
   assert.equal(classifyChargeabilityBucket('Non-Chargeable'), 'Non-Chargeable');
   assert.equal(classifyChargeabilityBucket('Partial'), 'Chargeable');
-  assert.equal(classifyChargeabilityBucket(''), 'Yet to Update');
+  assert.equal(classifyChargeabilityBucket(''), 'Pending');
 });
 
 test('punctuality uses cancellation and stored/derived ratings', () => {
@@ -33,7 +33,7 @@ test('punctuality uses cancellation and stored/derived ratings', () => {
     classifyPunctualityBucket({ startTime: '09:00', inTime: '09:20' }),
     'Poor',
   );
-  assert.equal(classifyPunctualityBucket({}), 'Yet to Update');
+  assert.equal(classifyPunctualityBucket({}), 'Pending');
 });
 
 test('camp cycle rates overtime against planned duration', () => {
@@ -41,7 +41,7 @@ test('camp cycle rates overtime against planned duration', () => {
     classifyCampCycleBucket({ executionStatus: 'Cancelled by Client' }),
     'Cancelled',
   );
-  assert.equal(classifyCampCycleBucket({}), 'Yet to Update');
+  assert.equal(classifyCampCycleBucket({}), 'Pending');
   assert.equal(
     classifyCampCycleBucket({
       inTime: '09:00',
@@ -76,7 +76,7 @@ test('avg payout buckets cancelled, empty, and amount camps', () => {
     classifyAvgPayoutBucket({ executionStatus: 'Cancelled by Tylo' }),
     'Cancelled',
   );
-  assert.equal(classifyAvgPayoutBucket({}), 'Yet to Update');
+  assert.equal(classifyAvgPayoutBucket({}), 'Pending');
   assert.equal(
     classifyAvgPayoutBucket({ campAmount: 3500 }),
     'Amount',
@@ -95,7 +95,7 @@ test('summarizeCampQualityCamps returns ordered bucket counts and average payout
   assert.deepEqual(
     punctuality.buckets.map((b) => [b.key, b.count]),
     [
-      ['Yet to Update', 1],
+      ['Pending', 1],
       ['Cancelled', 1],
       ['Good', 1],
       ['Average', 1],
@@ -109,7 +109,7 @@ test('summarizeCampQualityCamps returns ordered bucket counts and average payout
   assert.deepEqual(
     payout.buckets.map((b) => [b.key, b.count]),
     [
-      ['Yet to Update', 1],
+      ['Pending', 1],
       ['Cancelled', 1],
       ['Amount', 2],
     ],

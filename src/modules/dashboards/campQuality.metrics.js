@@ -12,27 +12,27 @@ export const CAMP_QUALITY_METRICS = {
   punctuality: {
     id: 'punctuality',
     label: 'Punctuality',
-    buckets: ['Yet to Update', 'Cancelled', 'Good', 'Average', 'Poor'],
+    buckets: ['Pending', 'Cancelled', 'Good', 'Average', 'Poor'],
   },
   attire: {
     id: 'attire',
     label: 'Attire Compliance',
-    buckets: ['Yet to Update', 'Cancelled', 'Issue', 'No Issue'],
+    buckets: ['Pending', 'Cancelled', 'Issue', 'No Issue'],
   },
   chargeability: {
     id: 'chargeability',
     label: 'Chargeability',
-    buckets: ['Yet to Update', 'Chargeable', 'Non-Chargeable'],
+    buckets: ['Pending', 'Chargeable', 'Non-Chargeable'],
   },
   campCycle: {
     id: 'campCycle',
     label: 'Avg. Camp Cycle',
-    buckets: ['Yet to Update', 'Cancelled', 'Good', 'Average', 'Poor'],
+    buckets: ['Pending', 'Cancelled', 'Good', 'Average', 'Poor'],
   },
   avgPayout: {
     id: 'avgPayout',
     label: 'Avg. Payout',
-    buckets: ['Yet to Update', 'Cancelled', 'Amount'],
+    buckets: ['Pending', 'Cancelled', 'Amount'],
   },
 };
 
@@ -87,18 +87,18 @@ function emptyBucketMap(bucketKeys) {
 
 export function classifyAttireBucket(attire) {
   const value = String(attire || '').trim().toLowerCase();
-  if (!value) return 'Yet to Update';
+  if (!value) return 'Pending';
   if (value === 'issues' || value === 'issue') return 'Issue';
   if (value === 'no issues' || value === 'no issue') return 'No Issue';
-  return 'Yet to Update';
+  return 'Pending';
 }
 
 export function classifyChargeabilityBucket(chargeableStatus) {
   const value = String(chargeableStatus || '').trim().toLowerCase();
-  if (!value) return 'Yet to Update';
+  if (!value) return 'Pending';
   if (value === 'non-chargeable' || value === 'non chargeable') return 'Non-Chargeable';
   if (value === 'chargeable' || value === 'partial') return 'Chargeable';
-  return 'Yet to Update';
+  return 'Pending';
 }
 
 export function classifyPunctualityBucket(camp = {}) {
@@ -107,7 +107,7 @@ export function classifyPunctualityBucket(camp = {}) {
   if (stored === 'Good' || stored === 'Average' || stored === 'Poor') return stored;
   const derived = resolvePunctuality(camp.startTime, camp.inTime);
   if (derived === 'Good' || derived === 'Average' || derived === 'Poor') return derived;
-  return 'Yet to Update';
+  return 'Pending';
 }
 
 export function classifyAttireComplianceBucket(camp = {}) {
@@ -119,7 +119,7 @@ export function classifyCampCycleBucket(camp = {}, derived = null) {
   if (isExecutionCancellationForFinance(camp)) return 'Cancelled';
   const lifecycle = derived || computeLifecycleDerived(camp, { pricing: campSnapshotPricing(camp) });
   if (lifecycle.totalHours == null || !Number.isFinite(Number(lifecycle.totalHours))) {
-    return 'Yet to Update';
+    return 'Pending';
   }
   const extraHours = Number(lifecycle.extraHours) || 0;
   if (extraHours <= 0) return 'Good';
@@ -132,7 +132,7 @@ export function classifyAvgPayoutBucket(camp = {}, derived = null) {
   const lifecycle = derived || computeLifecycleDerived(camp, { pricing: campSnapshotPricing(camp) });
   const totalPayout = Number(lifecycle.totalPayout) || 0;
   if (totalPayout > 0) return 'Amount';
-  return 'Yet to Update';
+  return 'Pending';
 }
 
 export function classifyCampQualityBucket(metricId, camp = {}) {
@@ -149,7 +149,7 @@ export function classifyCampQualityBucket(metricId, camp = {}) {
     case 'avgPayout':
       return { bucket: classifyAvgPayoutBucket(camp, derived), derived };
     default:
-      return { bucket: 'Yet to Update', derived };
+      return { bucket: 'Pending', derived };
   }
 }
 
@@ -163,7 +163,7 @@ export function summarizeCampQualityCamps(metric, camps = []) {
     if (Object.prototype.hasOwnProperty.call(counts, bucket)) {
       counts[bucket] += 1;
     } else {
-      counts['Yet to Update'] = (counts['Yet to Update'] || 0) + 1;
+      counts['Pending'] = (counts['Pending'] || 0) + 1;
     }
 
     if (metric.id === 'avgPayout' && bucket === 'Amount') {
