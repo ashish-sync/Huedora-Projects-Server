@@ -40,6 +40,7 @@ import {
   parseCampQualityRange,
   resolveCampQualityMetric,
 } from './campQuality.metrics.js';
+import { loadCampPipelineBoard } from './campPipeline.js';
 
 function countMap(rows) {
   return Object.fromEntries((rows || []).map((x) => [x._id || 'Unknown', x.count]));
@@ -159,6 +160,18 @@ router.get(
     const { from, to } = parseCampQualityRange(req.query);
     const metric = resolveCampQualityMetric(req.query);
     const data = await loadCampQualityMetrics({ from, to, metric });
+    res.json({ data });
+  })
+);
+
+/**
+ * Home Camp Pipeline stage counts.
+ * Query: dateFrom/dateTo (or from/to). Method (campaign) + assignedUser only for Admin / Super Admin systemRole.
+ */
+router.get(
+  '/camp-pipeline',
+  asyncHandler(async (req, res) => {
+    const data = await loadCampPipelineBoard(req.query, req.user);
     res.json({ data });
   })
 );
