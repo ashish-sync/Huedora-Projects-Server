@@ -56,6 +56,7 @@ export function publicUser(user) {
     fullName: user.fullName,
     phone: user.phone,
     designation: String(user.designation || '').trim(),
+    systemRole: String(user.systemRole || '').trim(),
     reportingManagerId: managerObj?.id || manager?._id || manager || null,
     reportingManager: managerObj,
     isActive: user.isActive !== false,

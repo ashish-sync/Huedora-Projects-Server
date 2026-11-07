@@ -19,6 +19,11 @@ import {
 } from './user.hierarchy.js';
 import { DESIGNATION_ACCESS_TEMPLATES } from './designationAccess.js';
 import {
+  SYSTEM_ROLES,
+  assertValidSystemRole,
+  resolveSystemRole,
+} from './systemRole.js';
+import {
   assertAccessPayload,
   assertActorMayAssignAccess,
   assertActorMaySetRolePermissions,
@@ -47,6 +52,30 @@ async function assertUserIdentityAvailable({ email, phone, excludeId } = {}) {
 
 function normalizeDesignation(value) {
   return String(value || '').trim().slice(0, 120);
+}
+
+function usernameFromEmail(email) {
+  const local = String(email || '')
+    .split('@')[0]
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '');
+  return local || 'user';
+}
+
+async function allocateUniqueUsername(preferred, { excludeId } = {}) {
+  const base = String(preferred || '').trim() || 'user';
+  let candidate = base.slice(0, 64);
+  let n = 0;
+  while (n < 500) {
+    const clash = await User.findOne({ username: candidate, isDeleted: false });
+    if (!clash || (excludeId && String(clash._id) === String(excludeId))) {
+      return candidate;
+    }
+    n += 1;
+    candidate = `${base.slice(0, 50)}${n}`;
+  }
+  throw new AppError('Unable to allocate a unique sign-in name', 409, 'DUPLICATE_USERNAME');
 }
 
 function asRoleIdList(roleIds) {
@@ -316,6 +345,7 @@ router.get(
   asyncHandler(async (_req, res) => {
     res.json({
       data: USER_DESIGNATIONS,
+      systemRoles: SYSTEM_ROLES,
       accessTemplates: DESIGNATION_ACCESS_TEMPLATES,
     });
   })
@@ -384,11 +414,11 @@ router.get(
     sendExcel(
       res,
       'Users_Master.xlsx',
-      ['Full Name', 'Email', 'Username', 'Phone', 'Designation', 'Reporting Manager', 'Active', 'Roles'],
+      ['Full Name', 'Email', 'System Role', 'Phone', 'Designation', 'Reporting Manager', 'Active', 'Roles'],
       users.map((u) => [
         u.fullName,
         u.email,
-        u.username,
+        u.systemRole || '',
         u.phone,
         u.designation || '',
         u.reportingManagerId?.fullName || u.reportingManagerId?.email || '',
@@ -572,7 +602,7 @@ router.post(
   '/',
   requirePermission(PERMISSIONS.USERS_WRITE),
   asyncHandler(async (req, res) => {
-    const { email, username, fullName, password, phone, roleIds, grantedPermissions, designation, reportingManagerId } =
+    const { email, username, fullName, password, phone, roleIds, grantedPermissions, designation, systemRole, reportingManagerId } =
       req.body;
     const access = assertAccessPayload({ roleIds, grantedPermissions });
     if (!access.ok) {
@@ -587,23 +617,31 @@ router.post(
     if (!grantOk.ok) {
       throw new AppError(grantOk.message, 403, grantOk.code || 'PRIVILEGE_ESCALATION');
     }
-    if (!email || !username || !fullName || !password) {
+    if (!email || !fullName || !password) {
       throw new AppError('Missing required fields', 400, 'VALIDATION_ERROR');
     }
     if (password.length < 12) throw new AppError('Password must be at least 12 characters', 400, 'VALIDATION_ERROR');
+    const systemRoleCheck = assertValidSystemRole(systemRole, { required: true });
+    if (!systemRoleCheck.ok) {
+      throw new AppError(systemRoleCheck.message, 400, 'VALIDATION_ERROR');
+    }
     const { emailKey, phoneKey } = await assertUserIdentityAvailable({ email, phone });
-    const usernameKey = String(username).trim();
-    const usernameClash = await User.findOne({ username: usernameKey, isDeleted: false });
-    if (usernameClash) throw new AppError('A user with this username already exists', 409, 'DUPLICATE_USERNAME');
+    const usernamePreferred = String(username || '').trim() || usernameFromEmail(emailKey);
+    const usernameKey = await allocateUniqueUsername(usernamePreferred);
     const managerId = await assertReportingManager({ reportingManagerId });
     const passwordHash = await bcrypt.hash(password, 12);
     const designationValue = normalizeDesignation(designation);
+    const systemRoleValue = resolveSystemRole({
+      systemRole: systemRoleCheck.value,
+      designation: designationValue,
+    });
     const user = await User.create({
       email: emailKey,
       username: usernameKey,
       fullName,
       phone: phoneKey || String(phone || '').trim(),
       designation: designationValue,
+      systemRole: systemRoleValue,
       reportingManagerId: managerId,
       roleIds: access.roleIds,
       grantedPermissions: access.grantedPermissions,
@@ -665,6 +703,13 @@ router.patch(
     }
     if (req.body.designation !== undefined) {
       user.designation = normalizeDesignation(req.body.designation);
+    }
+    if (req.body.systemRole !== undefined) {
+      const systemRoleCheck = assertValidSystemRole(req.body.systemRole, { required: true });
+      if (!systemRoleCheck.ok) {
+        throw new AppError(systemRoleCheck.message, 400, 'VALIDATION_ERROR');
+      }
+      user.systemRole = systemRoleCheck.value;
     }
     if (req.body.roleIds !== undefined || req.body.grantedPermissions !== undefined) {
       const nextIds =

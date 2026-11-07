@@ -3,6 +3,7 @@ export const USER_DESIGNATIONS = [
   'Healthcare Camp Coordinator',
   'Individual Contributor',
   'Team Lead',
+  'Team Leader',
   'Senior Team Lead',
   'Manager',
   'Senior Manager',
@@ -13,6 +14,10 @@ export const USER_DESIGNATIONS = [
   'Training Manager',
   'Director',
   'Business Head',
+  'Lead – Process & Tech',
+  'System Analyst',
+  'Data Analyst',
+  'Logistics Associate',
   'Head of Department',
   'Vice President',
 ];

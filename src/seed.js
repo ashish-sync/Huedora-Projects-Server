@@ -6,6 +6,7 @@ import { Role } from './modules/users/role.model.js';
 import { User } from './modules/users/user.model.js';
 import { consolidateLegacyRoles, dedupeActiveUsersByEmail, roleDescription } from './modules/users/role.consolidation.js';
 import { applyDesignationAccessRoles } from './modules/users/designationAccess.js';
+import { applySystemRolesFromDesignation } from './modules/users/systemRole.js';
 import { DocumentTemplate } from './modules/templates/template.model.js';
 import { Contact } from './modules/contacts/contact.model.js';
 import { ensureLogisticsSeed } from './modules/logistics/logistics.seed.js';
@@ -133,6 +134,7 @@ export async function ensureSeed() {
 
   await consolidateLegacyRoles();
   await applyDesignationAccessRoles(User, Role);
+  await applySystemRolesFromDesignation(User);
   await dedupeActiveUsersByEmail();
 
   // Repair users that previously saved populated role documents into roleIds
@@ -167,6 +169,7 @@ export async function ensureSeed() {
         fullName: env.bootstrapAdminName || 'Administrator',
         passwordHash,
         roleIds: [adminRole._id],
+        systemRole: 'Super Admin',
         isActive: true,
         failedLoginAttempts: 0,
         lockUntil: null,
@@ -192,6 +195,10 @@ export async function ensureSeed() {
       existing.email = bootstrapEmail;
       await existing.save();
       console.log(`[seed] Migrated bootstrap admin email ${legacyEmail} → ${bootstrapEmail}`);
+    }
+    if (existing && !String(existing.systemRole || '').trim()) {
+      existing.systemRole = 'Super Admin';
+      await existing.save();
     }
   } else {
     const anyUser = await User.countDocuments({ isDeleted: false });

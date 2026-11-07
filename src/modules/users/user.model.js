@@ -10,5 +10,6 @@ export const User = defineCollection('users', {
   roleIds: [],
   grantedPermissions: [],
   designation: '',
+  systemRole: '',
   reportingManagerId: null,
 });
