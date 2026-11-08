@@ -13,6 +13,7 @@ import { cleanSpaces, formatTextValue } from '../../utils/textFormat.js';
 import { resolveZoneNameForState } from '../geo/geo.zones.js';
 import { normalizeImportSource } from './import/importRowEnrichment.js';
 import { applyArchiveListFilter } from '../retention/archivePolicy.js';
+import { istDateTimeParts } from './istTime.js';
 
 export function trimStr(v) {
   return v == null ? '' : cleanSpaces(v);
@@ -115,8 +116,9 @@ export function resolveCampSchedule({
   startTime = '09:00',
   endTime = '',
   durationHours = null,
+  defaultStartTime = '09:00',
 } = {}) {
-  const start = trimStr(startTime) || '09:00';
+  const start = trimStr(startTime) || trimStr(defaultStartTime);
   const end = trimStr(endTime);
 
   if (end) {
@@ -132,7 +134,7 @@ export function resolveCampSchedule({
   const duration = Number(durationHours) || 4;
   return {
     startTime: start,
-    endTime: computeEndTime(start, duration),
+    endTime: start ? computeEndTime(start, duration) : '',
     durationHours: duration,
     campSlot: resolveCampSlot(start),
   };
@@ -578,12 +580,11 @@ export async function generateCampId(campDate = new Date()) {
 }
 
 export function captureSubmissionTracking(now = new Date()) {
-  const hour = now.getHours();
-  const day = now.getDay();
+  const { hour, weekday } = istDateTimeParts(now);
   return {
     submittedAt: now.toISOString(),
     submittedOffHours: hour < 8 || hour >= 20,
-    submittedWeekendAttention: day === 0 || day === 6,
+    submittedWeekendAttention: weekday === 'Sat' || weekday === 'Sun',
   };
 }
 

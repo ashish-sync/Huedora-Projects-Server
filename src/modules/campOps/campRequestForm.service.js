@@ -296,9 +296,10 @@ function assertRawDoctorName(body = {}) {
 function buildCampFromProgramForm(safeBody, client, pricing) {
   const clientMasterDurationHours = parseCampDurationToHours(pricing?.campDuration);
   const schedule = resolveCampSchedule({
-    startTime: safeBody.startTime || '09:00',
+    startTime: safeBody.startTime,
     endTime: safeBody.endTime || '',
     durationHours: safeBody.durationHours ?? (clientMasterDurationHours || 4),
+    defaultStartTime: '',
   });
   const campDate = parseLocalDateInput(safeBody.campDate) || trimStr(safeBody.campDate);
   if (!campDate) throw new AppError('Camp date is required', 400, 'VALIDATION_ERROR');
@@ -396,6 +397,10 @@ async function createProgramCampFromBody(master, client, body = {}) {
   }
 
   const payload = buildCampFromProgramForm(safeBody, client, pricing);
+  // The public endpoint owns the request date. Client-provided values cannot
+  // backdate or forward-date manual or bulk submissions.
+  const requestDate = localTodayIso();
+  payload.requestDate = requestDate;
   try {
     assertRequestStageComplete({
       ...payload,
@@ -408,9 +413,9 @@ async function createProgramCampFromBody(master, client, body = {}) {
 
   assertHistoricalCampDatesAllowed(null, [], {
     campDate: payload.campDate,
-    requestDate: payload.requestDate,
+    requestDate,
   });
-  assertRequestDateNotFuture(payload.requestDate);
+  assertRequestDateNotFuture(requestDate);
 
   const tracking = captureSubmissionTracking();
   let camp;
@@ -420,7 +425,7 @@ async function createProgramCampFromBody(master, client, body = {}) {
       campId: await generateCampId(payload.campDate),
       status: 'pending_review',
       lifecycleStage: 'request',
-      requestDate: payload.requestDate || localTodayIso(),
+      requestDate,
       createdById: null,
       createdByEmail: 'program-form',
       requestReviewStatus: 'review_pending',

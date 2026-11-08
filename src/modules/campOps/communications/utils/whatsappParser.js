@@ -19,7 +19,7 @@ Expected Patients: 50
 Field Person Name: Rahul Mehta
 
 Required: Date and doctor/camp details
-Date format: dd/mm/yyyy`;
+Date format: dd-mm-yyyy`;
 
 export const WHATSAPP_FORMAT_EXAMPLE = `Client: Sun Pharma
 Camp Type: BMD

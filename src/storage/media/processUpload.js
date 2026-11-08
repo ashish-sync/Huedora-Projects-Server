@@ -77,6 +77,8 @@ export async function processUploadedMedia(absPath, opts = {}) {
   let reductionRatio = null;
   /** @type {string|null} */
   let obsoleteKey = null;
+  /** @type {{ latitude: number, longitude: number, altitude?: number, timestamp?: string }|null} */
+  let extractedGps = null;
 
   if (!skipOptimize && kind === 'image') {
     const before = fs.statSync(absPath).size;
@@ -88,6 +90,9 @@ export async function processUploadedMedia(absPath, opts = {}) {
         `[media] standard image optimize failed (${err?.message || err}); trying resize-only WebP`,
       );
       result = await optimizeWebpResizeOnly(absPath);
+    }
+    if (result?.gps) {
+      extractedGps = result.gps;
     }
     const nextKey = masterKeyWithExt(sourceKey, '.webp');
     const nextAbs = absoluteUploadPath(nextKey);
@@ -148,6 +153,9 @@ export async function processUploadedMedia(absPath, opts = {}) {
   if (existing && existing.objectKey && existing.objectKey !== objectKey) {
     existing.refCount = Math.max(1, Number(existing.refCount) || 1) + 1;
     existing.lastAccessedAt = new Date().toISOString();
+    if (extractedGps && !existing.gps) {
+      existing.gps = extractedGps;
+    }
     await existing.save();
 
     try {
@@ -174,6 +182,7 @@ export async function processUploadedMedia(absPath, opts = {}) {
       contentHash,
       deduped: true,
       reductionRatio: existing.reductionRatio ?? reductionRatio,
+      gps: existing.gps || extractedGps,
       row: existing,
     };
   }
@@ -196,6 +205,7 @@ export async function processUploadedMedia(absPath, opts = {}) {
         lastError: '',
         reductionRatio,
         lastAccessedAt: new Date().toISOString(),
+        gps: extractedGps,
       });
     } else if (opts.deferR2) {
       // Register pending first so a crash before/during R2 cannot look like success.
@@ -214,6 +224,7 @@ export async function processUploadedMedia(absPath, opts = {}) {
         lastError: '',
         reductionRatio,
         lastAccessedAt: new Date().toISOString(),
+        gps: extractedGps,
       });
       const { enqueueR2Put } = await import('./mediaQueue.js');
       await enqueueR2Put({
@@ -242,6 +253,7 @@ export async function processUploadedMedia(absPath, opts = {}) {
         lastError: '',
         reductionRatio,
         lastAccessedAt: new Date().toISOString(),
+        gps: extractedGps,
       });
     }
   } else {
@@ -260,6 +272,7 @@ export async function processUploadedMedia(absPath, opts = {}) {
       lastError: '',
       reductionRatio,
       lastAccessedAt: new Date().toISOString(),
+      gps: extractedGps,
     });
   }
 
@@ -289,6 +302,7 @@ export async function processUploadedMedia(absPath, opts = {}) {
     contentHash,
     deduped: false,
     reductionRatio,
+    gps: extractedGps,
     row,
   };
 }
@@ -305,6 +319,9 @@ export function applyProcessResultToMulterInfo(info, result) {
   info.objectKey = result.objectKey;
   info.deduped = result.deduped;
   info.mediaKind = result.kind;
+  if (result.gps) {
+    info.gps = result.gps;
+  }
   return info;
 }
 

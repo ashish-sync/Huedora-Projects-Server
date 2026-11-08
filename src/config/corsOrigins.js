@@ -40,3 +40,13 @@ export function isAllowedClientOrigin(origin, clientOrigin = env.clientOrigin) {
   if (!normalized) return false;
   return allowedClientOrigins(clientOrigin).includes(normalized);
 }
+
+/**
+ * Express CORS origin callback. Requests without an Origin header (health
+ * probes, server-to-server calls, and same-origin tooling) are not browsers
+ * and therefore do not need an ACAO header. Browser origins are restricted to
+ * the configured list, including the documented apex/www aliases.
+ */
+export function corsOriginCallback(origin, callback, clientOrigin = env.clientOrigin) {
+  callback(null, !origin || isAllowedClientOrigin(origin, clientOrigin));
+}

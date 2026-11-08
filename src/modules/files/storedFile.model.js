@@ -21,4 +21,5 @@ export const StoredFile = defineCollection('stored_files', {
   processAttempts: 0,
   lastError: '',
   reductionRatio: null,
+  gps: null,
 });

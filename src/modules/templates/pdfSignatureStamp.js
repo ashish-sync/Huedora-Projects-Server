@@ -2,6 +2,7 @@
  * Stamp TYLO dual signature footer onto an existing PDF (LibreOffice output).
  */
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { formatDate } from '../../utils/dateFormat.js';
 
 function dataUrlToUint8(dataUrl) {
   if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image')) return null;
@@ -22,12 +23,7 @@ function isSignerDone(signer) {
   );
 }
 
-function formatDate(value) {
-  if (!value) return '-';
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) return '-';
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-}
+
 
 async function embedSignerImage(pdfDoc, signer) {
   if (!isSignerDone(signer)) return null;

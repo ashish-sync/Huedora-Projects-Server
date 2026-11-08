@@ -104,6 +104,7 @@ function formatCampDateLabel(isoDate) {
   const d = new Date(`${raw}T12:00:00`);
   if (Number.isNaN(d.getTime())) return raw;
   return d.toLocaleDateString('en-IN', {
+    timeZone: 'Asia/Kolkata',
     day: '2-digit',
     month: 'short',
     year: 'numeric',

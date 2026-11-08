@@ -72,7 +72,7 @@ router.get('/format', (_req, res) => {
       format: 'key-value lines',
       example: WHATSAPP_FORMAT_EXAMPLE,
       requiredFields: ['Client', 'Date'],
-      dateFormat: 'dd/mm/yyyy',
+      dateFormat: 'dd-mm-yyyy',
       helpKeyword: 'HELP',
       webhookPath: '/api/v1/ingest/whatsapp/webhook',
     },

@@ -28,37 +28,13 @@ export async function runAtomic(prepare) {
   const mode = getPersistenceMode();
 
   if (mode === 'mongo') {
-    const db = getMongoDb();
-    if (!db?.client) {
-      // Fallback: still serialize writes in-process
-      return withGlobalAtomicLock(async () => {
-        const plan = await prepare({ mode: 'mongo', session: null });
-        await applyUpserts(plan?.upserts || [], null);
-        return plan?.result;
-      });
-    }
-    const session = db.client.startSession();
-    try {
-      let result;
-      await session.withTransaction(async () => {
-        const plan = await prepare({ mode: 'mongo', session });
-        await applyUpserts(plan?.upserts || [], session);
-        result = plan?.result;
-      });
-      return result;
-    } catch (err) {
-      // Standalone / memory Mongo without replica-set transactions
-      if (/Transaction numbers|replica set|transactions are not supported/i.test(String(err?.message || ''))) {
-        return withGlobalAtomicLock(async () => {
-          const plan = await prepare({ mode: 'mongo', session: null });
-          await applyUpserts(plan?.upserts || [], null);
-          return plan?.result;
-        });
-      }
-      throw err;
-    } finally {
-      await session.endSession().catch(() => undefined);
-    }
+    // `prepare` commonly reads the current document before returning its write
+    // plan. That read is intentionally part of the atomic unit: concurrent
+    // read/modify/write plans otherwise overwrite one another before Mongo can
+    // detect a write conflict (and many legacy callers do not accept a session
+    // for their read). Serialize this process's complete prepare+commit cycle.
+    // Mongo transactions still protect the multi-collection commit itself.
+    return withGlobalAtomicLock(() => runMongoAtomic(prepare));
   }
 
   return withGlobalAtomicLock(async () => {
@@ -90,6 +66,36 @@ export async function runAtomic(prepare) {
       throw err;
     }
   });
+}
+
+async function runMongoAtomic(prepare) {
+  const db = getMongoDb();
+  if (!db?.client) {
+    const plan = await prepare({ mode: 'mongo', session: null });
+    await applyUpserts(plan?.upserts || [], null);
+    return plan?.result;
+  }
+  const session = db.client.startSession();
+  try {
+    let result;
+    await session.withTransaction(async () => {
+      const plan = await prepare({ mode: 'mongo', session });
+      await applyUpserts(plan?.upserts || [], session);
+      result = plan?.result;
+    });
+    return result;
+  } catch (err) {
+    // Standalone / memory Mongo without replica-set transactions. The caller
+    // is already protected by the outer in-process lock.
+    if (/Transaction numbers|replica set|transactions are not supported/i.test(String(err?.message || ''))) {
+      const plan = await prepare({ mode: 'mongo', session: null });
+      await applyUpserts(plan?.upserts || [], null);
+      return plan?.result;
+    }
+    throw err;
+  } finally {
+    await session.endSession().catch(() => undefined);
+  }
 }
 
 async function loadDocSnapshot(collection, id) {

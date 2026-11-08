@@ -1,3 +1,30 @@
+/**
+ * TYLO One standard date/time utilities (Server).
+ * Mandatory standards:
+ * - Date: DD-MM-YYYY (e.g. 08-11-2026)
+ * - Time: hh:mm AM/PM (e.g. 09:30 AM)
+ * - Timezone: Asia/Kolkata (IST, UTC+05:30)
+ *
+ * Internal APIs / DOM input types:
+ * - normalizeTimeOfDay returns 24-hour HH:mm for internal data / comparisons
+ */
+
+export const TIME_ZONE = 'Asia/Kolkata';
+
+const DATE_FORMATTER = new Intl.DateTimeFormat('en-GB', {
+  timeZone: TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+const TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: TIME_ZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: true,
+});
+
 function expandYear(yearPart) {
   const y = String(yearPart || '').trim();
   if (y.length === 4) return Number(y);
@@ -21,15 +48,18 @@ function calendarDate(year, month, day) {
   return date;
 }
 
-function parseToDate(value) {
+export function parseToDate(value) {
   if (value == null || value === '') return null;
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+
   const text = String(value).trim();
   if (!text) return null;
 
-  const isoDateTime = /^(\d{4})-(\d{2})-(\d{2})[T\s]/.exec(text);
+  const isoDateTime = /^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?/.exec(text);
   if (isoDateTime) {
-    const parsed = new Date(text);
+    const hasTz = /[Zz]|[+-]\d{2}(?::?\d{2})?$/.test(text);
+    const normalizedIso = hasTz ? text : `${text.replace(' ', 'T')}+05:30`;
+    const parsed = new Date(normalizedIso);
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
@@ -39,7 +69,7 @@ function parseToDate(value) {
   }
 
   const compact = text.replace(/\s+/g, '');
-  const delimited = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2}|\d{4})$/.exec(compact);
+  const delimited = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})$/.exec(compact);
   if (delimited) {
     const a = Number(delimited[1]);
     const b = Number(delimited[2]);
@@ -58,13 +88,51 @@ function parseToDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-export function formatDate(value) {
-  const date = parseToDate(value);
-  if (!date) return '-';
-  const day = String(date.getDate()).padStart(2, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const year = String(date.getFullYear());
+function formatInstantDate(date) {
+  const parts = DATE_FORMATTER.formatToParts(date);
+  let day = '';
+  let month = '';
+  let year = '';
+  for (const p of parts) {
+    if (p.type === 'day') day = p.value;
+    else if (p.type === 'month') month = p.value;
+    else if (p.type === 'year') year = p.value;
+  }
   return `${day}-${month}-${year}`;
+}
+
+export function formatDate(value) {
+  if (!value) return '-';
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? '-' : formatInstantDate(value);
+  }
+
+  const text = String(value).trim();
+  if (!text) return '-';
+
+  // Pure date YYYY-MM-DD
+  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (isoMatch) {
+    return `${isoMatch[3]}-${isoMatch[2]}-${isoMatch[1]}`;
+  }
+
+  // Delimited DD-MM-YYYY or DD/MM/YYYY or MM/DD/YYYY
+  const delimitedMatch = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})$/.exec(text);
+  if (delimitedMatch) {
+    const a = Number(delimitedMatch[1]);
+    const b = Number(delimitedMatch[2]);
+    const year = expandYear(delimitedMatch[3]);
+    if (!Number.isNaN(year)) {
+      if (a <= 12 && b > 12) {
+        return `${String(b).padStart(2, '0')}-${String(a).padStart(2, '0')}-${year}`;
+      }
+      return `${String(a).padStart(2, '0')}-${String(b).padStart(2, '0')}-${year}`;
+    }
+  }
+
+  const date = parseToDate(text);
+  if (!date) return '-';
+  return formatInstantDate(date);
 }
 
 /**
@@ -99,21 +167,59 @@ export function normalizeTimeOfDay(value) {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
-/** Display / export time as HH:mm (24-hour). Accepts Date, ISO datetime, or clock strings. */
+function format24HourTo12Hour(hhmm) {
+  if (!hhmm || typeof hhmm !== 'string') return '';
+  const [hStr, mStr] = hhmm.split(':');
+  const h = Number(hStr);
+  const m = Number(mStr);
+  if (Number.isNaN(h) || Number.isNaN(m)) return '';
+  const meridiem = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${meridiem}`;
+}
+
+function formatInstantTime(date) {
+  const parts = TIME_FORMATTER.formatToParts(date);
+  let hour = '';
+  let minute = '';
+  let dayPeriod = '';
+  for (const p of parts) {
+    if (p.type === 'hour') hour = p.value;
+    else if (p.type === 'minute') minute = p.value;
+    else if (p.type === 'dayPeriod') dayPeriod = p.value;
+  }
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${dayPeriod.toUpperCase()}`;
+}
+
+/** Display / export time as hh:mm AM/PM (12-hour) in Asia/Kolkata timezone. Accepts Date, ISO datetime, or clock strings. */
 export function formatTime(value) {
   if (value == null || value === '') return '';
-  const clock = normalizeTimeOfDay(value);
-  if (clock) return clock;
-  const date = parseToDate(value);
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? '' : formatInstantTime(value);
+  }
+
+  const text = String(value).trim();
+  if (!text) return '';
+
+  const clock = normalizeTimeOfDay(text);
+  if (clock && !/^\d{4}-\d{2}-\d{2}/.test(text)) {
+    return format24HourTo12Hour(clock);
+  }
+
+  const date = parseToDate(text);
   if (!date) return '';
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  return formatInstantTime(date);
 }
 
 /** Alias — prefer this name when formatting camp start/end columns. */
 export const formatTimeOfDay = formatTime;
 
 export function formatDateTime(value) {
+  if (!value) return '-';
   const date = parseToDate(value);
   if (!date) return '-';
-  return `${formatDate(date)} ${formatTime(date)}`;
+  const dateStr = formatDate(date);
+  const timeStr = formatTime(date);
+  if (!dateStr || dateStr === '-' || !timeStr) return '-';
+  return `${dateStr} ${timeStr}`;
 }

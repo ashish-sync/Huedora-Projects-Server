@@ -7,15 +7,15 @@ export const EXEC_DOC_MAX_BYTES = 10 * 1024 * 1024;
 
 /**
  * Hard pixel budget before Sharp decode (width * height).
- * 8MP keeps native decode + encode peaks manageable on a ~350MB baseline RSS.
+ * Supports modern smartphone camera resolutions (up to ~26MP e.g. 5000x5000) for downscaling to 2500px.
  */
-export const MAX_INPUT_PIXELS = 8_000_000;
+export const MAX_INPUT_PIXELS = 26_000_000;
 
 /** Sharp limitInputPixels — reject larger sources early. */
 export const SHARP_LIMIT_INPUT_PIXELS = MAX_INPUT_PIXELS;
 
-/** Long-edge cap for standard / GPS selfie images. */
-export const STANDARD_IMAGE_LONG_EDGE = 1280;
+/** Long-edge cap for standard image compression policy (max 2,500 px). */
+export const STANDARD_IMAGE_LONG_EDGE = 2500;
 
 /**
  * WebP at-or-under long edge is never decoded for palette re-encode.

@@ -58,12 +58,7 @@ describe('standard image optimize (GPS Selfie rule)', () => {
     const result = await materializeOptimizeResult(await optimizeImageToWebp(src));
     assert.equal(result.contentType, 'image/webp');
     assert.equal(result.ext, '.webp');
-    assert.equal(result.indexed, true);
-    assert.equal(result.encodeMode, 'indexed-webp');
-    assert.ok(
-      result.paletteColors >= STANDARD_IMAGE_PALETTE_COLORS_MIN
-        && result.paletteColors <= STANDARD_IMAGE_PALETTE_COLORS,
-    );
+    assert.ok(result.quality >= 70 && result.quality <= 90);
     assert.ok(Math.max(result.width, result.height) <= IMAGE_MAX_LONG_EDGE);
     assert.ok(result.buffer.length > 0);
     assert.ok(result.buffer.length < before);

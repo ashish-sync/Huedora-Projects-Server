@@ -40,12 +40,12 @@ export const PORTRAIT_DOC_PRESETS = {
     metaRows: (doc) => [
       [
         ['Bill of Supply No.', doc.documentNumber || ''],
-        ['Bill of Supply Date', formatDisplayDateErp(doc.documentDate) || 'DD/MM/YYYY'],
-        ['Due Date', formatDisplayDateErp(doc.dueDate) || 'DD/MM/YYYY'],
+        ['Bill of Supply Date', formatDisplayDateErp(doc.documentDate) || 'DD-MM-YYYY'],
+        ['Due Date', formatDisplayDateErp(doc.dueDate) || 'DD-MM-YYYY'],
       ],
       [
         ['PO / WO No.', doc.reference || ''],
-        ['PO / WO Date', formatDisplayDateErp(doc.referenceDate) || 'DD/MM/YYYY'],
+        ['PO / WO Date', formatDisplayDateErp(doc.referenceDate) || 'DD-MM-YYYY'],
         ['Project / Service Period', doc.servicePeriod || doc.projectName || ''],
       ],
     ],
@@ -62,17 +62,17 @@ export const PORTRAIT_DOC_PRESETS = {
     metaRows: (doc) => [
       [
         ['Credit Note No.', doc.documentNumber || ''],
-        ['Credit Note Date', formatDisplayDateErp(doc.documentDate) || 'DD/MM/YYYY'],
-        ['Due Date', formatDisplayDateErp(doc.dueDate) || 'DD/MM/YYYY'],
+        ['Credit Note Date', formatDisplayDateErp(doc.documentDate) || 'DD-MM-YYYY'],
+        ['Due Date', formatDisplayDateErp(doc.dueDate) || 'DD-MM-YYYY'],
       ],
       [
         ['PO / WO No.', doc.reference || ''],
-        ['PO / WO Date', formatDisplayDateErp(doc.referenceDate) || 'DD/MM/YYYY'],
+        ['PO / WO Date', formatDisplayDateErp(doc.referenceDate) || 'DD-MM-YYYY'],
         ['Project / Service Period', doc.servicePeriod || doc.projectName || ''],
       ],
       [
         ['Original Invoice No.', doc.cnReference || ''],
-        ['Original Invoice Date', formatDisplayDateErp(doc.originalInvoiceDate) || 'DD/MM/YYYY'],
+        ['Original Invoice Date', formatDisplayDateErp(doc.originalInvoiceDate) || 'DD-MM-YYYY'],
         ['Reason for Credit Note', doc.creditReason || 'Rate Revision / Cancellation / Service Adjustment'],
       ],
     ],
@@ -89,17 +89,17 @@ export const PORTRAIT_DOC_PRESETS = {
     metaRows: (doc) => [
       [
         ['Debit Note No.', doc.documentNumber || ''],
-        ['Debit Note Date', formatDisplayDateErp(doc.documentDate) || 'DD/MM/YYYY'],
-        ['Due Date', formatDisplayDateErp(doc.dueDate) || 'DD/MM/YYYY'],
+        ['Debit Note Date', formatDisplayDateErp(doc.documentDate) || 'DD-MM-YYYY'],
+        ['Due Date', formatDisplayDateErp(doc.dueDate) || 'DD-MM-YYYY'],
       ],
       [
         ['PO / WO No.', doc.reference || ''],
-        ['PO / WO Date', formatDisplayDateErp(doc.referenceDate) || 'DD/MM/YYYY'],
+        ['PO / WO Date', formatDisplayDateErp(doc.referenceDate) || 'DD-MM-YYYY'],
         ['Project / Service Period', doc.servicePeriod || doc.projectName || ''],
       ],
       [
         ['Original Invoice No.', doc.dnReference || ''],
-        ['Original Invoice Date', formatDisplayDateErp(doc.originalInvoiceDate) || 'DD/MM/YYYY'],
+        ['Original Invoice Date', formatDisplayDateErp(doc.originalInvoiceDate) || 'DD-MM-YYYY'],
         ['', ''],
       ],
       {
@@ -124,12 +124,12 @@ export const PORTRAIT_DOC_PRESETS = {
     metaRows: (doc) => [
       [
         ['Proforma Invoice No.', doc.documentNumber || ''],
-        ['Proforma Date', formatDisplayDateErp(doc.documentDate) || 'DD/MM/YYYY'],
-        ['Valid Until', formatDisplayDateErp(doc.dueDate) || 'DD/MM/YYYY'],
+        ['Proforma Date', formatDisplayDateErp(doc.documentDate) || 'DD-MM-YYYY'],
+        ['Valid Until', formatDisplayDateErp(doc.dueDate) || 'DD-MM-YYYY'],
       ],
       [
         ['PO / WO No.', doc.reference || ''],
-        ['PO / WO Date', formatDisplayDateErp(doc.referenceDate) || 'DD/MM/YYYY'],
+        ['PO / WO Date', formatDisplayDateErp(doc.referenceDate) || 'DD-MM-YYYY'],
         ['Project / Service Period', doc.servicePeriod || doc.projectName || ''],
       ],
     ],
@@ -149,12 +149,12 @@ export const PORTRAIT_DOC_PRESETS = {
     metaRows: (doc) => [
       [
         ['Quotation No.', doc.documentNumber || ''],
-        ['Quotation Date', formatDisplayDateErp(doc.documentDate) || 'DD/MM/YYYY'],
-        ['Quotation Valid Until', formatDisplayDateErp(doc.dueDate) || 'DD/MM/YYYY'],
+        ['Quotation Date', formatDisplayDateErp(doc.documentDate) || 'DD-MM-YYYY'],
+        ['Quotation Valid Until', formatDisplayDateErp(doc.dueDate) || 'DD-MM-YYYY'],
       ],
       [
         ['PO / WO No.', doc.reference || ''],
-        ['PO / WO Date', formatDisplayDateErp(doc.referenceDate) || 'DD/MM/YYYY'],
+        ['PO / WO Date', formatDisplayDateErp(doc.referenceDate) || 'DD-MM-YYYY'],
         ['Project / Service Period', doc.servicePeriod || doc.projectName || ''],
       ],
     ],
@@ -178,12 +178,12 @@ export const PORTRAIT_DOC_PRESETS = {
     metaRows: (doc) => [
       [
         ['Invoice No.', doc.documentNumber || ''],
-        ['Invoice Date', formatDisplayDateErp(doc.documentDate) || 'DD/MM/YYYY'],
-        ['Due Date', formatDisplayDateErp(doc.dueDate) || 'DD/MM/YYYY'],
+        ['Invoice Date', formatDisplayDateErp(doc.documentDate) || 'DD-MM-YYYY'],
+        ['Due Date', formatDisplayDateErp(doc.dueDate) || 'DD-MM-YYYY'],
       ],
       [
         ['PO / WO No.', doc.reference || ''],
-        ['PO / WO Date', formatDisplayDateErp(doc.referenceDate) || 'DD/MM/YYYY'],
+        ['PO / WO Date', formatDisplayDateErp(doc.referenceDate) || 'DD-MM-YYYY'],
         ['Project / Service Period', doc.servicePeriod || doc.projectName || ''],
       ],
     ],

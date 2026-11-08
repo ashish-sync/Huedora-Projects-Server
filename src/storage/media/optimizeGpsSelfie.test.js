@@ -127,8 +127,8 @@ describe('GPS selfie indexed WebP', () => {
   it('resize-only for oversized WebP — never palette path', async () => {
     const webpBuf = await sharp({
       create: {
-        width: 2000,
-        height: 1500,
+        width: 3000,
+        height: 2000,
         channels: 3,
         background: { r: 10, g: 20, b: 30 },
       },

@@ -19,7 +19,13 @@ import {
 const router = Router();
 router.use(authenticate);
 
-const canReadForms = requirePermission(PERMISSIONS.AGREEMENTS_READ, PERMISSIONS.AGREEMENTS_WRITE);
+const canReadForms = requirePermission(
+  PERMISSIONS.AGREEMENTS_READ,
+  PERMISSIONS.AGREEMENTS_WRITE,
+  PERMISSIONS.MASTERS_READ,
+  PERMISSIONS.CAMPS_READ,
+  PERMISSIONS.CAMPS_REQUEST,
+);
 router.use((req, res, next) => {
   if (req.method !== 'GET') return next();
   return canReadForms(req, res, next);

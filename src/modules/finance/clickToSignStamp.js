@@ -3,9 +3,17 @@
  * Matches UI: UPPERCASE NAME + "Digitally signed on DD-MM-YYYY HH:MM:SS"
  */
 
-import { formatDate } from '../../utils/dateFormat.js';
+import { formatDate, TIME_ZONE } from '../../utils/dateFormat.js';
 
 export const CLICK_TO_SIGN_MODE = 'click_to_sign';
+
+const TIME_WITH_SECONDS_FMT = new Intl.DateTimeFormat('en-GB', {
+  timeZone: TIME_ZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
 
 function parseToDate(value) {
   if (value == null || value === '') return null;
@@ -19,10 +27,16 @@ function parseToDate(value) {
 export function formatTimeWithSeconds(value) {
   const date = parseToDate(value);
   if (!date) return '';
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
-  return `${hours}:${minutes}:${seconds}`;
+  const parts = TIME_WITH_SECONDS_FMT.formatToParts(date);
+  let h = '';
+  let m = '';
+  let s = '';
+  for (const p of parts) {
+    if (p.type === 'hour') h = p.value;
+    else if (p.type === 'minute') m = p.value;
+    else if (p.type === 'second') s = p.value;
+  }
+  return `${h}:${m}:${s}`;
 }
 
 export function formatDigitallySignedOn(signedAt) {
