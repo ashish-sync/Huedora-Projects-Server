@@ -260,6 +260,8 @@ export const CampOpsClientMaster = defineCollection('camp_ops_client_masters', {
   requestFormToken: '',
   requestFormTokenHash: '',
   requestFormTokenCreatedAt: '',
+  /** Bumped only on deliberate Replace link — Copy never changes the versioned token. */
+  requestFormLinkVersion: 1,
   createdById: null,
   updatedById: null,
 });

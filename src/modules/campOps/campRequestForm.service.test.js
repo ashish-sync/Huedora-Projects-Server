@@ -8,7 +8,17 @@ import {
   PROGRAM_REQUEST_FORM_SOURCE,
   publicProgramRequestContext,
   sanitizeProgramRequestBody,
+  stableProgramRequestToken,
 } from './campRequestForm.service.js';
+
+test('stableProgramRequestToken is deterministic per program version', () => {
+  const a = stableProgramRequestToken('master-123', 1);
+  const b = stableProgramRequestToken('master-123', 1);
+  const c = stableProgramRequestToken('master-123', 2);
+  assert.equal(a, b);
+  assert.notEqual(a, c);
+  assert.equal(a.length, 10);
+});
 
 test('sanitizeProgramRequestBody locks client and program fields from the master', () => {
   const safe = sanitizeProgramRequestBody({

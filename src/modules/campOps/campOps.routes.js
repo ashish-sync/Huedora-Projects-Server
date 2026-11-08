@@ -3531,6 +3531,11 @@ function buildMasterPayload(body, client, existingRow = null) {
     const formId = trimStr(body.formMasterId);
     payload.formMasterId = formId || null;
   }
+  // Never accept public form link fields from client payloads — Copy/Replace own those.
+  delete payload.requestFormToken;
+  delete payload.requestFormTokenHash;
+  delete payload.requestFormTokenCreatedAt;
+  delete payload.requestFormLinkVersion;
   for (const field of MASTER_NUMERIC_FIELDS) {
     if (body[field] !== undefined) {
       const n = Number(body[field]);
@@ -4098,6 +4103,12 @@ router.put(
       throw err;
     }
     const before = row.toObject();
+    const lockedRequestLink = {
+      requestFormToken: before.requestFormToken || '',
+      requestFormTokenHash: before.requestFormTokenHash || '',
+      requestFormTokenCreatedAt: before.requestFormTokenCreatedAt || '',
+      requestFormLinkVersion: before.requestFormLinkVersion || 1,
+    };
     let client = null;
     if (req.body.clientId || req.body.clientName) {
       client = await resolveClientFromBody(req.body, { allowCreate: false, syncBilling: false });
@@ -4113,6 +4124,11 @@ router.put(
     // Those must use clearKeys so blank-preserve merge does not resurrect deleted POs.
     const clearKeys = clientMasterPoClearKeys(req.body, payload);
     assignPreservingExisting(row, payload, clearKeys.length ? { clearKeys } : undefined);
+    // Preserve the final public form link across Program Configuration saves.
+    row.requestFormToken = lockedRequestLink.requestFormToken || row.requestFormToken || '';
+    row.requestFormTokenHash = lockedRequestLink.requestFormTokenHash || row.requestFormTokenHash || '';
+    row.requestFormTokenCreatedAt = lockedRequestLink.requestFormTokenCreatedAt || row.requestFormTokenCreatedAt || '';
+    row.requestFormLinkVersion = lockedRequestLink.requestFormLinkVersion || row.requestFormLinkVersion || 1;
     if (hasExplicitMasterBilling(req.body)) {
       // Section save: user's Billing & Tax values always win (including extra address lines).
       applyMasterBillingFields(row, req.body);

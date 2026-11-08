@@ -1,3 +1,4 @@
+import { createHmac } from 'crypto';
 import { AppError } from '../../utils/helpers.js';
 import { env } from '../../config/env.js';
 import { getDoctorNameFormatError } from '../../utils/textFormat.js';
@@ -31,7 +32,32 @@ import {
   CampDuplicateError,
 } from './campDuplicate.js';
 import { notifyCampCreates } from './campOps.notifications.js';
-import { hashExecutionToken, mintExecutionToken } from './campExecute.service.js';
+import {
+  EXECUTION_INVITE_TOKEN_LENGTH,
+  hashExecutionToken,
+} from './campExecute.service.js';
+
+/** Same alphabet as execution invite tokens — URL-safe, unambiguous. */
+const PROGRAM_LINK_TOKEN_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+
+/**
+ * Stable public form token for a program + link version.
+ * Copy always derives the same value for the same version (no random remint).
+ */
+export function stableProgramRequestToken(masterId, version = 1) {
+  const id = trimStr(masterId);
+  const ver = Math.max(1, Number(version) || 1);
+  const secret = String(env.jwtAccessSecret || env.jwtRefreshSecret || 'tylo-program-link');
+  const digest = createHmac('sha256', secret)
+    .update(`camp-request-form:${id}:v${ver}`)
+    .digest();
+  const size = EXECUTION_INVITE_TOKEN_LENGTH;
+  let token = '';
+  for (let i = 0; i < size; i += 1) {
+    token += PROGRAM_LINK_TOKEN_ALPHABET[digest[i] % PROGRAM_LINK_TOKEN_ALPHABET.length];
+  }
+  return token;
+}
 
 export const PROGRAM_REQUEST_FORM_SOURCE = 'program_form';
 export const PROGRAM_REQUEST_NOT_FOUND_MESSAGE = 'This camp request form is not available';
@@ -200,52 +226,64 @@ export async function createOrRefreshProgramRequestLink(master, actor = {}, opti
     );
   }
 
-  const existingToken = trimStr(master.requestFormToken);
-  const existingHash = trimStr(master.requestFormTokenHash);
-  if (!replace && existingToken && existingHash) {
+  const masterId = trimStr(master?._id || master?.id);
+  if (!masterId) {
+    throw new AppError('Could not create camp request form link', 500, 'LINK_MINT_FAILED');
+  }
+
+  // Always reload so Copy never remints from a stale in-memory row.
+  const row = (await CampOpsClientMaster.findOne({ _id: masterId, isDeleted: false })) || master;
+  const existingToken = trimStr(row.requestFormToken);
+  const existingHash = trimStr(row.requestFormTokenHash);
+  const currentVersion = Math.max(1, Number(row.requestFormLinkVersion) || 1);
+
+  // Copy: keep the already-issued token forever (do not mint a new random URL).
+  if (!replace && existingToken) {
+    const hash = hashExecutionToken(existingToken) || existingHash;
+    if (hash && hash !== existingHash) {
+      row.requestFormTokenHash = hash;
+      if (actor?.id || actor?._id) row.updatedById = actor.id || actor._id;
+      await row.save();
+    }
     const links = programRequestFormUrl(existingToken);
     return {
       token: existingToken,
       ...links,
-      createdAt: master.requestFormTokenCreatedAt || '',
+      createdAt: row.requestFormTokenCreatedAt || '',
       reused: true,
       replaced: false,
     };
   }
 
-  let token = '';
-  let hash = '';
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    token = mintExecutionToken();
-    hash = hashExecutionToken(token);
-    const clash = await CampOpsClientMaster.findOne({
-      requestFormTokenHash: hash,
-      isDeleted: false,
-      _id: { $ne: master._id },
-    });
-    if (!clash) break;
-    token = '';
-    hash = '';
-  }
+  const nextVersion = replace ? currentVersion + 1 : currentVersion;
+  // Stable versioned token — same program + version always yields the same public URL.
+  const token = stableProgramRequestToken(masterId, nextVersion);
+  const hash = hashExecutionToken(token);
   if (!token || !hash) {
     throw new AppError('Could not create camp request form link', 500, 'LINK_MINT_FAILED');
   }
 
-  master.requestFormToken = token;
-  master.requestFormTokenHash = hash;
-  master.requestFormTokenCreatedAt = new Date().toISOString();
-  if (actor?.id || actor?._id) {
-    master.updatedById = actor.id || actor._id;
+  const hadExistingLink = Boolean(existingToken || existingHash);
+
+  row.requestFormToken = token;
+  row.requestFormTokenHash = hash;
+  row.requestFormLinkVersion = nextVersion;
+  if (!row.requestFormTokenCreatedAt || replace) {
+    row.requestFormTokenCreatedAt = new Date().toISOString();
   }
-  await master.save();
+  if (actor?.id || actor?._id) {
+    row.updatedById = actor.id || actor._id;
+  }
+  await row.save();
 
   const links = programRequestFormUrl(token);
   return {
     token,
     ...links,
-    createdAt: master.requestFormTokenCreatedAt,
+    createdAt: row.requestFormTokenCreatedAt,
+    // First bind of a stable version is not a "reuse"; later Copy hits the early return.
     reused: false,
-    replaced: Boolean(replace && existingHash),
+    replaced: Boolean(replace && hadExistingLink),
   };
 }
 
