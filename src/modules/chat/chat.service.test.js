@@ -11,6 +11,7 @@ import {
   listDirectory,
   listMessages,
   markConversationRead,
+  nextMessageCreatedAt,
   sendMessage,
   unreadTotalForUser,
 } from './chat.service.js';
@@ -29,6 +30,13 @@ async function seedUser(suffix) {
 
 test('dmParticipantKey is order-independent', () => {
   assert.equal(dmParticipantKey('b', 'a'), dmParticipantKey('a', 'b'));
+});
+
+test('nextMessageCreatedAt stays strictly increasing under clock ties', () => {
+  const stamp = '2026-11-08T01:00:00.000Z';
+  const next = nextMessageCreatedAt(stamp, Date.parse(stamp));
+  assert.ok(next > stamp);
+  assert.equal(nextMessageCreatedAt(null, Date.parse(stamp)), stamp);
 });
 
 test('internal chat DM flow: directory, start, send, read, unread', async () => {
@@ -68,6 +76,31 @@ test('internal chat DM flow: directory, start, send, read, unread', async () => 
     assert.equal(page.data.length, 2);
     assert.equal(page.data[0].body, 'Hello Bob');
     assert.equal(page.data[1].body, 'Hi Alice');
+    assert.ok(Number(page.data[0].seq) < Number(page.data[1].seq));
+    assert.ok(String(page.data[0].createdAt) <= String(page.data[1].createdAt));
+
+    // Same createdAt must still return chronological order via seq (prod flake root cause).
+    const tiedAt = String(page.data[1].createdAt);
+    await ChatMessage.create({
+      conversationId: conversation.id,
+      senderId: aliceId,
+      body: 'Follow up',
+      seq: 3,
+      readBy: [aliceId],
+      createdAt: tiedAt,
+    });
+    const conversationRow = await ChatConversation.findById(conversation.id);
+    conversationRow.messageSeq = 3;
+    conversationRow.lastMessageAt = tiedAt;
+    conversationRow.lastMessagePreview = 'Follow up';
+    conversationRow.lastSenderId = aliceId;
+    await conversationRow.save();
+
+    const pageTied = await listMessages(conversation.id, aliceId, { page: 1, limit: 20 });
+    assert.deepEqual(
+      pageTied.data.map((row) => row.body),
+      ['Hello Bob', 'Hi Alice', 'Follow up'],
+    );
 
     await markConversationRead(conversation.id, aliceId);
     const unreadAfter = await unreadTotalForUser(aliceId);
@@ -76,7 +109,7 @@ test('internal chat DM flow: directory, start, send, read, unread', async () => 
     const conversations = await ChatConversation.find({ _id: conversation.id });
     assert.equal(conversations.length, 1);
     const messages = await ChatMessage.find({ conversationId: conversation.id });
-    assert.equal(messages.length, 2);
+    assert.equal(messages.length, 3);
   } finally {
     // best-effort cleanup for shared filedb test runs
     try {

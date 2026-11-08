@@ -32,10 +32,18 @@ export function serializeMessage(message) {
     conversationId: asId(message.conversationId),
     senderId: asId(message.senderId),
     body: String(message.body || ''),
+    seq: Number(message.seq) || 0,
     readBy: Array.isArray(message.readBy) ? message.readBy.map(asId) : [],
     createdAt: message.createdAt || null,
     updatedAt: message.updatedAt || null,
   };
+}
+
+/** Keep message timestamps strictly increasing so sort+reverse stays chronological. */
+export function nextMessageCreatedAt(lastMessageAt, nowMs = Date.now()) {
+  const prevMs = Date.parse(String(lastMessageAt || ''));
+  const ms = Number.isFinite(prevMs) && prevMs >= nowMs ? prevMs + 1 : nowMs;
+  return new Date(ms).toISOString();
 }
 
 export function serializeConversation(conversation, { peer = null, unreadCount = 0 } = {}) {
@@ -196,9 +204,11 @@ export async function listMessages(conversationId, userId, { page = 1, limit = M
   const safeLimit = Math.min(100, Math.max(1, Number(limit) || MESSAGE_PAGE_DEFAULT));
   const safePage = Math.max(1, Number(page) || 1);
   const filter = { conversationId: asId(conversation._id) };
+  // Newest page first (chat UX), then reverse to chronological oldest→newest.
+  // Secondary `seq` keeps order stable when createdAt collides under load.
   const [rows, total] = await Promise.all([
     ChatMessage.find(filter)
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, seq: -1 })
       .skip((safePage - 1) * safeLimit)
       .limit(safeLimit),
     ChatMessage.countDocuments(filter),
@@ -225,14 +235,19 @@ export async function sendMessage(conversationId, userId, body) {
     throw new AppError('Conversation not found', 404, 'NOT_FOUND');
   }
 
+  const nextSeq = Math.max(0, Number(conversation.messageSeq) || 0) + 1;
+  const createdAt = nextMessageCreatedAt(conversation.lastMessageAt);
   const message = await ChatMessage.create({
     conversationId: asId(conversation._id),
     senderId: selfId,
     body: text,
+    seq: nextSeq,
     readBy: [selfId],
+    createdAt,
   });
 
-  conversation.lastMessageAt = message.createdAt || new Date().toISOString();
+  conversation.messageSeq = nextSeq;
+  conversation.lastMessageAt = createdAt;
   conversation.lastMessagePreview = text.slice(0, 160);
   conversation.lastSenderId = selfId;
   await conversation.save();

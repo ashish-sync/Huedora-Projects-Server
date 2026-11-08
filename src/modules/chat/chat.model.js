@@ -9,6 +9,8 @@ export const ChatConversation = defineCollection('chat_conversations', {
   lastMessageAt: null,
   lastMessagePreview: '',
   lastSenderId: null,
+  /** Monotonic per-conversation counter used for stable message ordering. */
+  messageSeq: 0,
   createdBy: null,
 });
 
@@ -17,6 +19,8 @@ export const ChatMessage = defineCollection('chat_messages', {
   conversationId: null,
   senderId: null,
   body: '',
+  /** Per-conversation sequence (1..n) for stable chronological ordering. */
+  seq: 0,
   /** Array of user ids who have read this message. */
   readBy: [],
 });
