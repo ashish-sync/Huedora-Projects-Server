@@ -12,6 +12,7 @@ import {
   FORM_FIELD_TYPES,
   FORM_FIELD_WIDTHS,
   FORM_SHOW_OPERATORS,
+  HCW_ACTIVITY_TEMPLATE,
   PUBLIC_CAMP_REQUEST_TEMPLATE,
 } from './form.constants.js';
 
@@ -34,7 +35,7 @@ router.get(
         fieldWidths: FORM_FIELD_WIDTHS,
         fieldFormats: FORM_FIELD_FORMATS,
         showOperators: FORM_SHOW_OPERATORS,
-        templates: [PUBLIC_CAMP_REQUEST_TEMPLATE],
+        templates: [PUBLIC_CAMP_REQUEST_TEMPLATE, HCW_ACTIVITY_TEMPLATE],
       },
     });
   }),

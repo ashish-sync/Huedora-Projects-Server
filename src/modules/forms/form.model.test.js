@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { normalizeFormField, normalizeFormPayload } from './form.model.js';
-import { PUBLIC_CAMP_REQUEST_TEMPLATE } from './form.constants.js';
+import { HCW_ACTIVITY_TEMPLATE, PUBLIC_CAMP_REQUEST_TEMPLATE } from './form.constants.js';
 
 describe('Form Master payload normalization', () => {
   it('normalizes fields and deduplicates keys', () => {
@@ -73,5 +73,13 @@ describe('Form Master payload normalization', () => {
       ['pdf', 'xlsx', 'csv'],
     );
     assert.ok(payload.fields.some((field) => field.section === 'Doctor'));
+  });
+
+  it('accepts the built-in HCW Activity Form template', () => {
+    const payload = normalizeFormPayload(HCW_ACTIVITY_TEMPLATE);
+    assert.equal(payload.name, 'HCW Activity Form');
+    assert.equal(payload.category, 'HCW_ACTIVITY');
+    assert.ok(payload.fields.some((field) => field.type === 'gps_photo'));
+    assert.ok(payload.fields.some((field) => field.key === 'patientsCovered'));
   });
 });

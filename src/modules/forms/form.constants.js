@@ -1,6 +1,7 @@
-/** Form Master categories for Public Camp Request and other reusable formats. */
+/** Form Master categories for Public Camp Request, HCW Activity, and other reusable formats. */
 export const FORM_CATEGORIES = [
   { id: 'PUBLIC_CAMP_REQUEST', label: 'Public Camp Request' },
+  { id: 'HCW_ACTIVITY', label: 'HCW Activity Form' },
   { id: 'INTERNAL', label: 'Internal' },
   { id: 'OTHER', label: 'Other' },
 ];
@@ -194,10 +195,67 @@ export const PUBLIC_CAMP_REQUEST_TEMPLATE = {
   ],
 };
 
+/** Built-in starter format for HCW Activity Form (executor / Activity Form). */
+export const HCW_ACTIVITY_TEMPLATE = {
+  name: 'HCW Activity Form',
+  code: 'HCW_ACTIVITY',
+  category: 'HCW_ACTIVITY',
+  description: 'Default Healthcare Worker activity fields used for program Activity Form links.',
+  fields: [
+    {
+      key: 'inGpsSelfie',
+      label: 'In GPS Selfie',
+      type: 'gps_photo',
+      required: true,
+      section: 'Attendance',
+      width: 'half',
+      options: [],
+    },
+    {
+      key: 'inTime',
+      label: 'In Time',
+      type: 'time',
+      required: true,
+      section: 'Attendance',
+      width: 'half',
+      options: [],
+    },
+    {
+      key: 'patientsCovered',
+      label: 'Patients Covered',
+      type: 'number',
+      required: true,
+      section: 'Activity',
+      width: 'half',
+      min: 0,
+      options: [],
+    },
+    {
+      key: 'consumablesUsed',
+      label: 'Consumables Used',
+      type: 'textarea',
+      required: false,
+      section: 'Activity',
+      width: 'full',
+      options: [],
+    },
+    {
+      key: 'remarks',
+      label: 'Remarks',
+      type: 'textarea',
+      required: false,
+      section: 'Activity',
+      width: 'full',
+      options: [],
+    },
+  ],
+};
+
 export function matchFormCategory(raw) {
   const value = String(raw || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
   if (FORM_CATEGORY_IDS.includes(value)) return value;
   if (/camp.?request|public/i.test(String(raw || ''))) return 'PUBLIC_CAMP_REQUEST';
+  if (/hcw|activity.?form|execution/i.test(String(raw || ''))) return 'HCW_ACTIVITY';
   if (/internal/i.test(String(raw || ''))) return 'INTERNAL';
   return 'OTHER';
 }

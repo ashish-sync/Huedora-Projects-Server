@@ -3531,6 +3531,10 @@ function buildMasterPayload(body, client, existingRow = null) {
     const formId = trimStr(body.formMasterId);
     payload.formMasterId = formId || null;
   }
+  if (body.activityFormMasterId !== undefined) {
+    const activityFormId = trimStr(body.activityFormMasterId);
+    payload.activityFormMasterId = activityFormId || null;
+  }
   // Never accept public form link fields from client payloads — Copy/Replace own those.
   delete payload.requestFormToken;
   delete payload.requestFormTokenHash;
@@ -4060,6 +4064,7 @@ router.post(
     if (payload.billingGstin === undefined) payload.billingGstin = '';
     assertClientMasterPayload(payload);
     await assertFormMasterLink(payload.formMasterId);
+    await assertFormMasterLink(payload.activityFormMasterId);
     if (!payload.campName) payload.campName = 'BMD';
     await assertClientMasterBusinessKeyUnique({
       clientId: client._id,
@@ -4138,6 +4143,7 @@ router.put(
     row.billingGstin = normalizeMasterBillingGstin(row.billingGstin);
     assertClientMasterPayload(row);
     await assertFormMasterLink(row.formMasterId);
+    await assertFormMasterLink(row.activityFormMasterId);
     await assertClientMasterBusinessKeyUnique({
       clientId: row.clientId,
       billingGstin: row.billingGstin,

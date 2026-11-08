@@ -20,7 +20,9 @@ import { Role } from '../src/modules/users/role.model.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../..');
-const clientRoot = path.resolve(repoRoot, 'client');
+const clientRoot = fs.existsSync(path.resolve(repoRoot, 'client'))
+  ? path.resolve(repoRoot, 'client')
+  : path.resolve(repoRoot, 'Tylo One - Client');
 const serverRoot = path.resolve(__dirname, '..');
 const skipLiveApi = String(process.env.SKIP_LIVE_API || '').toLowerCase() === '1';
 

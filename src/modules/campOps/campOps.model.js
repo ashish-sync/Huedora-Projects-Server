@@ -250,8 +250,10 @@ export const CampOpsClientMaster = defineCollection('camp_ops_client_masters', {
   kmsUnit: 0,
   mappedConsumables: [],
   isActive: true,
-  /** Optional Form Master format used for this program's public/request form. */
+  /** Optional Form Master format used for this program's Client request form. */
   formMasterId: null,
+  /** Optional Form Master format used for this program's HCW Activity Form. */
+  activityFormMasterId: null,
   /**
    * Public New Camp Request form token.
    * Stored so Copy can reuse the same final program link until it is deliberately replaced.
