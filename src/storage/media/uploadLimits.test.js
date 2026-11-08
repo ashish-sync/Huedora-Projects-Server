@@ -13,9 +13,10 @@ import { withImageProcessGate, imageProcessGateStats } from './imageProcessGate.
 describe('uploadLimits', () => {
   it('rejects oversized files and megapixel images', () => {
     assert.throws(() => assertUploadByteLimit(EXEC_DOC_MAX_BYTES + 1), /too large/i);
-    assert.throws(() => assertPixelBudget(4000, 3000), /resolution is too high/i);
+    assert.throws(() => assertPixelBudget(6000, 5000), /resolution is too high/i);
+    assert.doesNotThrow(() => assertPixelBudget(4000, 3000));
     assert.doesNotThrow(() => assertPixelBudget(1280, 960));
-    assert.ok(MAX_INPUT_PIXELS <= 8_000_000);
+    assert.ok(MAX_INPUT_PIXELS <= 26_000_000);
     assert.equal(EXEC_DOC_MAX_FILES_PER_REQUEST, 1);
   });
 
@@ -26,6 +27,10 @@ describe('uploadLimits', () => {
     );
     assert.equal(
       isPassthroughWebpMeta({ format: 'webp', width: 2000, height: 1500 }, 100_000),
+      true,
+    );
+    assert.equal(
+      isPassthroughWebpMeta({ format: 'webp', width: 3000, height: 2000 }, 100_000),
       false,
     );
     assert.equal(
