@@ -1,4 +1,5 @@
 import { AppError } from '../../utils/helpers.js';
+import { idsEqual } from '../../utils/entityIds.js';
 import { User } from '../users/user.model.js';
 import { notifyUser, notifyEvent } from '../notifications/notifyEvent.js';
 import { CalendarEvent } from './calendar.model.js';
@@ -8,6 +9,9 @@ const MAX_BODY = 2000;
 const KINDS = new Set(['task', 'block', 'availability_request']);
 
 export function asId(value) {
+  if (value && typeof value === 'object') {
+    return String(value._id || value.id || '').trim();
+  }
   return String(value || '').trim();
 }
 
@@ -144,15 +148,21 @@ export async function summaryCounts(userId) {
   return { openTasks, pendingRequests, badge: openTasks + pendingRequests };
 }
 
-async function assertActiveUsers(ids) {
+export async function assertActiveUsers(ids) {
   const unique = [...new Set(ids.map(asId).filter(Boolean))];
   if (!unique.length) return [];
   const rows = await User.find({
-    _id: { $in: unique },
+    $or: [{ _id: { $in: unique } }, { id: { $in: unique } }],
     isDeleted: { $ne: true },
     isActive: { $ne: false },
-  }).select('_id');
-  if (rows.length !== unique.length) {
+  }).select('_id id');
+  const foundIds = new Set(
+    rows.flatMap((r) => [r._id && String(r._id), r.id && String(r.id)]).filter(Boolean),
+  );
+  const allFound = unique.every(
+    (id) => foundIds.has(id) || [...foundIds].some((fid) => idsEqual(fid, id)),
+  );
+  if (!allFound || rows.length < unique.length) {
     throw new AppError('One or more colleagues were not found or are inactive', 404, 'NOT_FOUND');
   }
   return unique;
