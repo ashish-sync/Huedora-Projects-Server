@@ -1,6 +1,5 @@
 import { AppError } from '../../utils/helpers.js';
 import { parseLocalDateInput } from './campOps.helpers.js';
-import { istTodayIso } from './istTime.js';
 
 /** Dates more than this many days before today need Reporting Manager approval. */
 export const CAMP_HISTORICAL_DATE_THRESHOLD_DAYS = 2;
@@ -61,10 +60,11 @@ function localDateFromIso(value) {
 }
 
 export function daysFromToday(dateValue, now = new Date()) {
-  const target = parseLocalDateInput(dateValue);
-  const today = istTodayIso(now);
-  if (!target || !today) return 0;
-  return Math.round((Date.parse(`${target}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000);
+  const target = localDateFromIso(dateValue);
+  if (!target) return 0;
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  return Math.round((target.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
 }
 
 /** Camp / request date is more than 2 days before today. */
@@ -132,11 +132,20 @@ export function assertHistoricalCampDatesAllowed() {
 }
 
 export function localTodayIso(now = new Date()) {
-  return istTodayIso(now);
+  const date = new Date(now);
+  date.setHours(0, 0, 0, 0);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 export function minAllowedCampDateIso() {
-  const date = new Date(`${localTodayIso()}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() - CAMP_HISTORICAL_DATE_THRESHOLD_DAYS);
-  return date.toISOString().slice(0, 10);
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() - CAMP_HISTORICAL_DATE_THRESHOLD_DAYS);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
