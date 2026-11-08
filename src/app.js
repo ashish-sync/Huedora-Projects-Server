@@ -19,6 +19,7 @@ import agreementRoutes from './modules/agreements/agreement.routes.js';
 import contactRoutes from './modules/contacts/contact.routes.js';
 import templateRoutes from './modules/templates/template.routes.js';
 import signatureRoutes from './modules/signatures/signature.routes.js';
+import formRoutes from './modules/forms/form.routes.js';
 import recipientRoutes from './modules/agreements/recipient.routes.js';
 import verificationRoutes from './modules/verifications/verification.routes.js';
 import selfVerifyRoutes from './modules/verifications/selfVerify.routes.js';
@@ -207,6 +208,7 @@ export function createApp(options = {}) {
   app.use('/api/v1/contacts', contactRoutes);
   app.use('/api/v1/templates', templateRoutes);
   app.use('/api/v1/signatures', signatureRoutes);
+  app.use('/api/v1/forms', formRoutes);
   app.use('/api/v1/verifications', verificationRoutes);
   app.use('/api/v1/self-verify', selfVerifyRoutes);
   app.use('/api/v1/movements', movementRoutes);
