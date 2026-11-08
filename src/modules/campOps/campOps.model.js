@@ -250,7 +250,14 @@ export const CampOpsClientMaster = defineCollection('camp_ops_client_masters', {
   kmsUnit: 0,
   mappedConsumables: [],
   isActive: true,
-  /** SHA-256 of the public New Camp Request form token. Raw token is never stored. */
+  /** Optional Form Master format used for this program's public/request form. */
+  formMasterId: null,
+  /**
+   * Public New Camp Request form token.
+   * Stored so Copy can reuse the same final program link until it is deliberately replaced.
+   * Hash is still used for lookup; raw token is a shareable public link by design.
+   */
+  requestFormToken: '',
   requestFormTokenHash: '',
   requestFormTokenCreatedAt: '',
   createdById: null,

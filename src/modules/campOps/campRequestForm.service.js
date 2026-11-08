@@ -127,7 +127,8 @@ export function sanitizeProgramRequestBody(body, { client, master } = {}) {
   };
 }
 
-export function publicProgramRequestContext(master, client) {
+export function publicProgramRequestContext(master, client, form = null) {
+  const formMasterId = trimStr(master?.formMasterId);
   return {
     clientId: client?._id || master?.clientId || '',
     clientName: client?.name || master?.clientName || '',
@@ -136,6 +137,17 @@ export function publicProgramRequestContext(master, client) {
     campName: normalizeCampName(master?.campName || 'BMD'),
     campDuration: trimStr(master?.campDuration),
     campType: trimStr(master?.campType),
+    formMasterId: formMasterId || '',
+    form: form
+      ? {
+          _id: form._id,
+          name: form.name,
+          code: form.code,
+          category: form.category,
+          description: form.description,
+          fields: Array.isArray(form.fields) ? form.fields : [],
+        }
+      : null,
   };
 }
 
@@ -169,9 +181,10 @@ export async function resolveProgramByRequestToken(rawToken) {
   return { master, client };
 }
 
-export async function createOrRefreshProgramRequestLink(master, actor = {}) {
+export async function createOrRefreshProgramRequestLink(master, actor = {}, options = {}) {
   const programName = trimStr(master?.programName);
   const campName = trimStr(master?.campName);
+  const replace = options.replace === true;
   if (!programName || !campName) {
     throw new AppError(
       'Save Division / Therapy and Method before copying the request form link',
@@ -185,6 +198,19 @@ export async function createOrRefreshProgramRequestLink(master, actor = {}) {
       400,
       'VALIDATION_ERROR',
     );
+  }
+
+  const existingToken = trimStr(master.requestFormToken);
+  const existingHash = trimStr(master.requestFormTokenHash);
+  if (!replace && existingToken && existingHash) {
+    const links = programRequestFormUrl(existingToken);
+    return {
+      token: existingToken,
+      ...links,
+      createdAt: master.requestFormTokenCreatedAt || '',
+      reused: true,
+      replaced: false,
+    };
   }
 
   let token = '';
@@ -205,6 +231,7 @@ export async function createOrRefreshProgramRequestLink(master, actor = {}) {
     throw new AppError('Could not create camp request form link', 500, 'LINK_MINT_FAILED');
   }
 
+  master.requestFormToken = token;
   master.requestFormTokenHash = hash;
   master.requestFormTokenCreatedAt = new Date().toISOString();
   if (actor?.id || actor?._id) {
@@ -217,6 +244,8 @@ export async function createOrRefreshProgramRequestLink(master, actor = {}) {
     token,
     ...links,
     createdAt: master.requestFormTokenCreatedAt,
+    reused: false,
+    replaced: Boolean(replace && existingHash),
   };
 }
 

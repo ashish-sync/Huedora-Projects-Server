@@ -25,11 +25,53 @@ describe('Form Master payload normalization', () => {
     assert.deepEqual(payload.fields[3].options, ['GP', 'Cardiology']);
   });
 
+  it('normalizes validation, layout, format and conditional logic', () => {
+    const field = normalizeFormField({
+      label: 'Expected Patients',
+      type: 'number',
+      required: true,
+      section: 'Demand',
+      width: 'full',
+      min: 1,
+      max: '500',
+      minLength: '',
+      maxLength: 10,
+      pattern: '^[0-9]+$',
+      format: 'digits',
+      placeholder: 'e.g. 40',
+      helpText: 'Patients expected at camp',
+      defaultValue: '40',
+      showWhen: { field: 'campType', operator: 'eq', value: 'HCW Only' },
+    });
+
+    assert.equal(field.type, 'number');
+    assert.equal(field.section, 'Demand');
+    assert.equal(field.width, 'full');
+    assert.equal(field.min, 1);
+    assert.equal(field.max, 500);
+    assert.equal(field.maxLength, 10);
+    assert.equal(field.pattern, '^[0-9]+$');
+    assert.equal(field.format, 'digits');
+    assert.deepEqual(field.showWhen, {
+      field: 'campType',
+      operator: 'eq',
+      value: 'HCW Only',
+    });
+  });
+
   it('accepts the built-in Public Camp Request template', () => {
     const payload = normalizeFormPayload(PUBLIC_CAMP_REQUEST_TEMPLATE);
     assert.equal(payload.name, 'Public Camp Request');
     assert.equal(payload.category, 'PUBLIC_CAMP_REQUEST');
     assert.ok(payload.fields.length >= 10);
     assert.equal(normalizeFormField({ label: 'Phone', type: 'phone' }).type, 'phone');
+    assert.equal(normalizeFormField({ label: 'Amount', type: 'currency' }).type, 'currency');
+    assert.equal(normalizeFormField({ label: 'Site photo', type: 'image' }).type, 'image');
+    assert.equal(normalizeFormField({ label: 'GPS capture', type: 'gps photo' }).type, 'gps_photo');
+    assert.deepEqual(
+      normalizeFormField({ label: 'Attachment', type: 'file', options: 'PDF, .XLSX, csv' }).options,
+      ['pdf', 'xlsx', 'csv'],
+    );
+    assert.ok(payload.fields.some((field) => field.section === 'Doctor'));
   });
 });

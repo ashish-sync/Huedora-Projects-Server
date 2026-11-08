@@ -79,6 +79,8 @@ test('publicProgramRequestContext only exposes program identity', () => {
   assert.equal(ctx.programName, 'Ortreso');
   assert.equal(ctx.campName, 'BMD');
   assert.equal(ctx.campDuration, '4:00');
+  assert.equal(ctx.formMasterId, '');
+  assert.equal(ctx.form, null);
   assert.equal(ctx.requestFormTokenHash, undefined);
   assert.equal(ctx.billingGstin, undefined);
 });

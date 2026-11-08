@@ -56,6 +56,7 @@ import {
   CampOpsExecutionInvite,
 } from './campOps.model.js';
 import { LogisticsProduct, LogisticsUom, LogisticsExpenseSubCategory } from '../logistics/logistics.model.js';
+import { FormMaster } from '../forms/form.model.js';
 import { Contact } from '../contacts/contact.model.js';
 import { getHcwFinanceBlockers } from '../contacts/hcwFinanceReadiness.js';
 import { campAmountForAssignedHcw, resolveCampPayoutPayeeContact } from '../contacts/campPayoutPayee.js';
@@ -3526,6 +3527,10 @@ function buildMasterPayload(body, client, existingRow = null) {
   if (body.healthcareWorker !== undefined) {
     payload.healthcareWorker = normalizeHealthcareWorkers(body.healthcareWorker);
   }
+  if (body.formMasterId !== undefined) {
+    const formId = trimStr(body.formMasterId);
+    payload.formMasterId = formId || null;
+  }
   for (const field of MASTER_NUMERIC_FIELDS) {
     if (body[field] !== undefined) {
       const n = Number(body[field]);
@@ -3543,6 +3548,15 @@ function buildMasterPayload(body, client, existingRow = null) {
     // keep existing via assignPreservingExisting
   }
   return payload;
+}
+
+async function assertFormMasterLink(formMasterId) {
+  const id = trimStr(formMasterId);
+  if (!id) return;
+  const form = await FormMaster.findOne({ _id: id, isDeleted: false });
+  if (!form || form.isActive === false) {
+    throw new AppError('Selected form format was not found or is inactive', 400, 'VALIDATION_ERROR');
+  }
 }
 
 function assertClientMasterPayload(payload) {
@@ -3992,7 +4006,10 @@ router.get(
   })
 );
 
-/** Mint a program-specific public New Camp Request form link. */
+/**
+ * Get or mint the program-specific public New Camp Request form link.
+ * Default: reuse the existing final link. Pass replace:true to deliberately mint a new one.
+ */
 router.post(
   '/client-masters/:id/request-form-link',
   canRequest,
@@ -4002,16 +4019,26 @@ router.post(
     await assertClientIdAccess(req.user, row.clientId);
     await assertClientMasterAccess(req.user, row);
     const a = actor(req);
-    const { url, path, token, createdAt } = await createOrRefreshProgramRequestLink(row, a);
-    await audit(req, 'camp_ops.program_request_link_mint', 'camp_ops_client_master', row._id, null, {
-      createdAt,
-    });
+    const replace = req.body?.replace === true || req.query?.replace === 'true';
+    const { url, path, token, createdAt, reused, replaced } = await createOrRefreshProgramRequestLink(
+      row,
+      a,
+      { replace },
+    );
+    if (!reused) {
+      await audit(req, 'camp_ops.program_request_link_mint', 'camp_ops_client_master', row._id, null, {
+        createdAt,
+        replaced: Boolean(replaced),
+      });
+    }
     res.json({
       data: {
         url,
         path,
         token,
         createdAt,
+        reused: Boolean(reused),
+        replaced: Boolean(replaced),
       },
     });
   }),
@@ -4027,6 +4054,7 @@ router.post(
     const payload = buildMasterPayload(req.body, client);
     if (payload.billingGstin === undefined) payload.billingGstin = '';
     assertClientMasterPayload(payload);
+    await assertFormMasterLink(payload.formMasterId);
     if (!payload.campName) payload.campName = 'BMD';
     await assertClientMasterBusinessKeyUnique({
       clientId: client._id,
@@ -4093,6 +4121,7 @@ router.put(
     }
     row.billingGstin = normalizeMasterBillingGstin(row.billingGstin);
     assertClientMasterPayload(row);
+    await assertFormMasterLink(row.formMasterId);
     await assertClientMasterBusinessKeyUnique({
       clientId: row.clientId,
       billingGstin: row.billingGstin,

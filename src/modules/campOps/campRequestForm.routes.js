@@ -18,6 +18,7 @@ import {
   resolveProgramByRequestToken,
   submitProgramCampRequest,
 } from './campRequestForm.service.js';
+import { FormMaster } from '../forms/form.model.js';
 import { autocompleteOlaMaps } from '../geo/olaMaps.service.js';
 
 const router = Router();
@@ -46,7 +47,16 @@ router.get(
   '/:token',
   asyncHandler(async (req, res) => {
     const { master, client } = await resolveProgramByRequestToken(req.params.token);
-    res.json({ data: publicProgramRequestContext(master, client) });
+    let form = null;
+    const formMasterId = String(master?.formMasterId || '').trim();
+    if (formMasterId) {
+      form = await FormMaster.findOne({
+        _id: formMasterId,
+        isDeleted: false,
+        isActive: true,
+      });
+    }
+    res.json({ data: publicProgramRequestContext(master, client, form) });
   }),
 );
 

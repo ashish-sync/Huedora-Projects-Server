@@ -8,7 +8,10 @@ import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import { FormMaster, normalizeFormPayload } from './form.model.js';
 import {
   FORM_CATEGORIES,
+  FORM_FIELD_FORMATS,
   FORM_FIELD_TYPES,
+  FORM_FIELD_WIDTHS,
+  FORM_SHOW_OPERATORS,
   PUBLIC_CAMP_REQUEST_TEMPLATE,
 } from './form.constants.js';
 
@@ -28,6 +31,9 @@ router.get(
       data: {
         categories: FORM_CATEGORIES,
         fieldTypes: FORM_FIELD_TYPES,
+        fieldWidths: FORM_FIELD_WIDTHS,
+        fieldFormats: FORM_FIELD_FORMATS,
+        showOperators: FORM_SHOW_OPERATORS,
         templates: [PUBLIC_CAMP_REQUEST_TEMPLATE],
       },
     });
