@@ -18,6 +18,7 @@ import { CONTACT_LEVEL_IMPORT_FIELDS, resolveContactPersonFields } from './campC
 import { parsePasteImportFile } from './pasteImport.service.js';
 import { mapRows } from './communications/utils/importMapper.js';
 import { normalizePasteStartTime } from './pasteTimeNormalize.js';
+import { enrichPasteLocationFromPin } from './manualPaste.enrich.js';
 import { importAppError } from '../../utils/importErrors.js';
 import { MAX_IMPORT_ROWS } from '../../utils/spreadsheetLimits.js';
 import { lifecyclePayloadFromBody } from './campOps.lifecycle.js';
@@ -71,6 +72,7 @@ export const PROGRAM_FORM_SAMPLE_FIELDS = [
   { key: 'startTime', label: 'Camp Start Time', required: true },
   { key: 'endTime', label: 'Camp End Time', required: true },
   { key: 'campAddress', label: 'Camp / Clinic Address', required: true },
+  { key: 'pincode', label: 'PIN Code', required: true },
   { key: 'contactPersonLevel', label: 'Contact Person Level', required: true },
   { key: 'fieldPersonName', label: 'Contact Person Name', required: true },
   { key: 'fieldPersonPhone', label: 'Contact Person Number', required: true },
@@ -79,25 +81,97 @@ export const PROGRAM_FORM_SAMPLE_FIELDS = [
   { key: 'remarks', label: 'Remarks', required: false },
 ];
 
-export const PROGRAM_FORM_SAMPLE_ROW = [
-  'Anita Sharma',
-  'D001',
-  'General Practitioner',
-  '15-11-2026',
-  '09:00',
-  '13:00',
-  '12 Main Street',
-  'Territory Manager',
-  'Rep One',
-  '9999999999',
-  'Mumbai',
-  '40',
-  '',
+export const PROGRAM_FORM_SAMPLE_ROWS = [
+  [
+    'Anita Sharma',
+    'D001',
+    'General Practitioner',
+    '15-11-2026',
+    '09:00',
+    '13:00',
+    '12 Main Street',
+    '400001',
+    'Territory Manager',
+    'Rep One',
+    '9999999999',
+    'Mumbai',
+    '40',
+    'Morning screening camp',
+  ],
+  [
+    'Rajesh Patel',
+    'D002',
+    'Orthopedics',
+    '16-11-2026',
+    '10:00',
+    '14:00',
+    '45 Park Avenue',
+    '411001',
+    'Area Manager',
+    'Lead Two',
+    '9888888888',
+    'Pune',
+    '30',
+    '',
+  ],
+  [
+    'Suresh Kumar',
+    'D003',
+    'Cardiology',
+    '17-11-2026',
+    '09:30',
+    '13:30',
+    '88 MG Road',
+    '560001',
+    'Regional Manager',
+    'Manager Three',
+    '9777777777',
+    'Bengaluru',
+    '50',
+    'BMD camp',
+  ],
+  [
+    'Pooja Verma',
+    'D004',
+    'Diabetology',
+    '18-11-2026',
+    '10:00',
+    '14:00',
+    '23 Connaught Place',
+    '110001',
+    'Territory Manager',
+    'Rep Four',
+    '9666666666',
+    'New Delhi',
+    '35',
+    '',
+  ],
+  [
+    'Venkatesh Iyer',
+    'D005',
+    'Endocrinology',
+    '19-11-2026',
+    '09:00',
+    '13:00',
+    '56 Anna Salai',
+    '600001',
+    'Zonal Manager',
+    'Lead Five',
+    '9555555555',
+    'Chennai',
+    '45',
+    '',
+  ],
 ];
+
+export const PROGRAM_FORM_SAMPLE_ROW = PROGRAM_FORM_SAMPLE_ROWS[0];
 
 export const PROGRAM_FORM_IMPORT_KEYS = [
   ...new Set([
     ...PROGRAM_FORM_SAMPLE_FIELDS.map((field) => field.key),
+    'city',
+    'state',
+    'district',
     ...CONTACT_LEVEL_IMPORT_FIELDS.flatMap((field) => [field.nameKey, field.phoneKey]),
   ]),
 ];
@@ -372,8 +446,11 @@ export function missingProgramFormImportColumns(mapping = {}) {
 }
 
 export function normalizeProgramFormImportRow(row = {}) {
+  const rawPin = String(row.pincode ?? '').trim();
+  const cleanPin = rawPin.replace(/\D/g, '').slice(0, 6);
   return {
     ...row,
+    pincode: cleanPin || rawPin,
     campDate: parseLocalDateInput(row.campDate) || trimStr(row.campDate),
     startTime: normalizePasteStartTime(row.startTime) || trimStr(row.startTime),
     endTime: normalizePasteStartTime(row.endTime) || trimStr(row.endTime),
@@ -384,6 +461,34 @@ export function normalizeProgramFormImportRow(row = {}) {
 async function createProgramCampFromBody(master, client, body = {}) {
   const safeBody = sanitizeProgramRequestBody(body, { client, master });
   assertRawDoctorName(safeBody);
+
+  const cleanPin = String(safeBody.pincode || '').replace(/\D/g, '').slice(0, 6);
+  if (!/^\d{6}$/.test(cleanPin)) {
+    throw new AppError('Valid 6-digit PIN code is required', 400, 'VALIDATION_ERROR');
+  }
+  safeBody.pincode = cleanPin;
+
+  if (!safeBody.city || !safeBody.state || !safeBody.district) {
+    try {
+      const enriched = await enrichPasteLocationFromPin(safeBody);
+      if (enriched?.row) {
+        if (!safeBody.city && enriched.row.city && enriched.row.city !== 'Not Provided') {
+          safeBody.city = enriched.row.city;
+        }
+        if (!safeBody.state && enriched.row.state && enriched.row.state !== 'Not Provided') {
+          safeBody.state = enriched.row.state;
+        }
+        if (!safeBody.district && enriched.row.district && enriched.row.district !== 'Not Provided') {
+          safeBody.district = enriched.row.district;
+        }
+        if (!safeBody.zone && enriched.row.zone && enriched.row.zone !== 'Not Provided') {
+          safeBody.zone = enriched.row.zone;
+        }
+      }
+    } catch {
+      /* ignore location enrichment errors */
+    }
+  }
 
   let pricing = null;
   try {

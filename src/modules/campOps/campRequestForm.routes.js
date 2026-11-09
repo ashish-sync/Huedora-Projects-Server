@@ -2,7 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { asyncHandler } from '../../utils/helpers.js';
 import { writeAudit } from '../../utils/audit.js';
-import { sendCsv } from '../../utils/excelExport.js';
+import { sendCsv, sendExcel } from '../../utils/excelExport.js';
 import { excelUpload, assertSpreadsheetUpload, discardUploadBuffer, sampleCsvFilename } from '../../utils/masterExcel.js';
 import { importRateLimiter } from '../../middleware/importRateLimit.js';
 import { notifyCampBulkSummary } from './campOps.notifications.js';
@@ -14,6 +14,7 @@ import {
   lookupProgramFormPin,
   PROGRAM_FORM_SAMPLE_FIELDS,
   PROGRAM_FORM_SAMPLE_ROW,
+  PROGRAM_FORM_SAMPLE_ROWS,
   publicProgramRequestContext,
   resolveProgramByRequestToken,
   submitProgramCampRequest,
@@ -93,11 +94,17 @@ router.get(
   '/:token/import/sample',
   asyncHandler(async (req, res) => {
     await resolveProgramByRequestToken(req.params.token);
+    const headers = PROGRAM_FORM_SAMPLE_FIELDS.map((field) => field.label);
+    const rows = PROGRAM_FORM_SAMPLE_ROWS || [PROGRAM_FORM_SAMPLE_ROW];
+    if (String(req.query.format || '').toLowerCase() === 'xlsx') {
+      sendExcel(res, 'camp-request-form_Sample.xlsx', headers, rows);
+      return;
+    }
     sendCsv(
       res,
       sampleCsvFilename('camp-request-form'),
-      PROGRAM_FORM_SAMPLE_FIELDS.map((field) => field.label),
-      [PROGRAM_FORM_SAMPLE_ROW],
+      headers,
+      rows,
     );
   }),
 );
