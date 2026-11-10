@@ -9,22 +9,50 @@ export const ACTIVITY_MODULES = [
   { id: 'camp-one', label: 'Camp One' },
   { id: 'finance-one', label: 'Finance One' },
   { id: 'asset-one', label: 'Asset One' },
-  { id: 'document-one', label: 'Document One' },
+  { id: 'document-one', label: 'Document Centre' },
   { id: 'verification-one', label: 'Verification One' },
   { id: 'request-one', label: 'Request One' },
   { id: 'movement-one', label: 'Movement One' },
   { id: 'master-one', label: 'Master One' },
-  { id: 'access', label: 'Access Control' },
+  { id: 'access', label: 'User & Permissions' },
+  { id: 'automations', label: 'Automations' },
   { id: 'sign-in', label: 'Sign-in' },
   { id: 'imports', label: 'Imports' },
   { id: 'other', label: 'Other' },
+];
+
+export const ACTIVITY_SOURCES = [
+  { id: 'UI', label: 'UI' },
+  { id: 'API', label: 'API' },
+  { id: 'Import', label: 'Import' },
+  { id: 'Automation', label: 'Automation' },
+];
+
+export const ACTIVITY_SEVERITIES = [
+  { id: 'critical', label: 'Critical' },
+  { id: 'important', label: 'Important' },
+  { id: 'informational', label: 'Informational' },
+];
+
+export const ACTIVITY_TYPES = [
+  { id: 'create', label: 'Creation' },
+  { id: 'update', label: 'Modification' },
+  { id: 'status', label: 'Status change' },
+  { id: 'assignment', label: 'Assignment' },
+  { id: 'approval', label: 'Approval' },
+  { id: 'cancellation', label: 'Cancellation' },
+  { id: 'finance', label: 'Financial' },
+  { id: 'stock', label: 'Stock movement' },
+  { id: 'document', label: 'Document' },
+  { id: 'import_export', label: 'Import / export' },
+  { id: 'system', label: 'System' },
 ];
 
 const MODULE_MATCHERS = {
   'camp-one': { action: /^(camp_ops\.|CampRequest\.|CAMP\.)/i, entity: /camp/i },
   'finance-one': { action: /^(FINANCE\.|finance)/i, entity: /finance|invoice|expense|payout|vendor/i },
   'asset-one': { action: /^(ASSET\.|ASSET_MASTER\.)/i, entity: /asset(?!_request)|device/i },
-  'document-one': { action: /^(AGREEMENT\.|DOCUMENT\.|DOCUMENT_TEMPLATE\.)/i, entity: /agreement|document_template/i },
+  'document-one': { action: /^(AGREEMENT\.|DOCUMENT\.|DOCUMENT_TEMPLATE\.|SIGNATURE\.)/i, entity: /agreement|document_template|signature/i },
   'verification-one': { action: /^VERIFICATION\./i, entity: /verification/i },
   'request-one': { action: /^(ASSET_REQUEST\.|REPAIR\.|CampRequest\.)/i, entity: /asset_request|repair/i },
   'movement-one': { action: /^Logistics/i, entity: /logistics/i },
@@ -32,10 +60,42 @@ const MODULE_MATCHERS = {
     action: /^(CONTACT\.|GEO|SIGNATURE_MASTER\.|DOCUMENT_TEMPLATE\.|PICKLIST\.|HCW\.)/i,
     entity: /contact|geo|signature|template|picklist|hcw/i,
   },
-  'access': { action: /^(USER\.(CREATE|UPDATE|DELETE)|ROLE\.|SYSTEM\.)/i, entity: /user|role/i },
+  'access': { action: /^(USER\.(CREATE|UPDATE|DELETE|DEACTIV)|ROLE\.|SYSTEM\.)/i, entity: /user|role/i },
+  'automations': { action: /^(JOB\.|SWEEP\.|RETENTION\.|RM\.|NOTIFY\.|purge)/i, entity: /job|sweep|retention/i },
   'sign-in': { action: /^USER\.(LOGIN|LOGOUT|TOKEN|PASSWORD|REFRESH)/i, entity: /session|auth/i },
   'imports': { action: /import/i, entity: /import/i },
 };
+
+/** Actions that must carry a business reason when written going forward. */
+export const SENSITIVE_ACTIONS = new Set([
+  'ROLE.CREATE',
+  'ROLE.UPDATE',
+  'ROLE.DELETE',
+  'USER.DELETE',
+  'USER.DEACTIVATE',
+  'camp_ops.reject',
+  'camp_ops.close',
+  'camp_ops.camp_delete',
+  'camp_ops.confirm_payment',
+  'camp_ops.payment_hold',
+  'camp_ops.release_hold',
+  'FINANCE.CLIENT_INVOICE.ISSUE',
+  'FINANCE.CLIENT_INVOICE.VOID',
+  'FINANCE.VENDOR_BILL.PAY',
+  'FINANCE.VENDOR_BILL.VOID',
+  'FINANCE.EXPENSE.DELETE',
+  'AGREEMENT.VOID',
+  'AGREEMENT.CANCEL',
+  'LogisticsInOutEntry.REVERSE',
+  'LogisticsInOutEntry.DISPATCH',
+  'IMPORT.COMMIT',
+  'camp_ops.import_confirm',
+]);
+
+const CRITICAL_ACTION_RE = /(?:DELETE|VOID|REVERSE|DISPATCH|confirm_payment|payment_hold|ROLE\.|USER\.DELETE|USER\.DEACTIV|IMPORT\.COMMIT|import_confirm|camp_delete)/i;
+const IMPORTANT_ACTION_RE = /(?:APPROVE|REJECT|CANCEL|CLOSE|ISSUE|PAY|SEND|ACTIVATE|TRANSITION|HOLD|FULFILL|COMPLETE|execute|submit_to_finance)/i;
+
+const ROUTINE_ACTION_RE = /^USER\.(LOGIN|LOGOUT|TOKEN|REFRESH)/i;
 
 const ACTION_TITLES = {
   'camp_ops.create': 'Created a camp',
@@ -69,12 +129,14 @@ const ACTION_TITLES = {
   'USER.DELETE': 'Removed a user',
   'ROLE.CREATE': 'Created a role',
   'ROLE.UPDATE': 'Updated a role',
-  'ROLE.DELETE': 'Removed a role',
+  'ROLE.DELETE': 'Deleted a role',
   'ASSET.CREATE': 'Registered an asset',
   'ASSET.TRANSITION': 'Changed an asset status',
   'AGREEMENT.CREATE': 'Created an agreement',
   'AGREEMENT.SEND': 'Sent an agreement',
   'AGREEMENT.ACTIVATE': 'Activated an agreement',
+  'AGREEMENT.VOID': 'Voided an agreement',
+  'AGREEMENT.CANCEL': 'Cancelled an agreement',
   'ASSET_REQUEST.CREATE': 'Created a request',
   'ASSET_REQUEST.APPROVE': 'Approved a request',
   'ASSET_REQUEST.REJECT': 'Refused a request',
@@ -83,6 +145,11 @@ const ACTION_TITLES = {
   'FINANCE.EXPENSE.UPDATE': 'Updated an expense',
   'FINANCE.CLIENT_INVOICE.ISSUE': 'Issued a client invoice',
   'FINANCE.VENDOR_BILL.CREATE': 'Recorded a vendor bill',
+  'IMPORT.COMMIT': 'Committed an import',
+  'LogisticsInOutEntry.CREATE': 'Recorded a stock movement',
+  'LogisticsInOutEntry.UPDATE': 'Updated a stock movement',
+  'LogisticsInOutEntry.DISPATCH': 'Dispatched inventory',
+  'LogisticsInOutEntry.REVERSE': 'Reversed a stock movement',
 };
 
 const VERB_PAST = {
@@ -106,11 +173,24 @@ const VERB_PAST = {
   pay: 'Paid',
   hold: 'Put on hold',
   transition: 'Updated the status of',
+  void: 'Voided',
+  reverse: 'Reversed',
+  dispatch: 'Dispatched',
 };
 
-export function resolveActivityModule(action = '', entityType = '') {
+export function resolveActivityModule(action = '', entityType = '', actorType = '') {
   const a = String(action || '');
   const e = String(entityType || '');
+  const type = String(actorType || '').toUpperCase();
+  if ((type === 'SYSTEM' || type === 'JOB') && !MODULE_MATCHERS['sign-in'].action.test(a)) {
+    const auto = MODULE_MATCHERS.automations;
+    if (auto.action.test(a) || auto.entity.test(e) || type === 'JOB') {
+      const exact = ACTIVITY_MODULES.find((m) => m.id === 'automations');
+      if (exact && (auto.action.test(a) || auto.entity.test(e) || /sweep|retention|notify|purge|job/i.test(a))) {
+        return exact;
+      }
+    }
+  }
   for (const mod of ACTIVITY_MODULES) {
     if (mod.id === 'other') continue;
     const match = MODULE_MATCHERS[mod.id];
@@ -118,6 +198,57 @@ export function resolveActivityModule(action = '', entityType = '') {
     if ((a && match.action.test(a)) || (e && match.entity.test(e))) return mod;
   }
   return ACTIVITY_MODULES.find((m) => m.id === 'other');
+}
+
+export function resolveActivitySeverity(action = '', explicit = null) {
+  const raw = String(explicit || '').trim().toLowerCase();
+  if (raw === 'critical' || raw === 'important' || raw === 'informational') return raw;
+  const a = String(action || '');
+  if (SENSITIVE_ACTIONS.has(a) || CRITICAL_ACTION_RE.test(a)) return 'critical';
+  if (IMPORTANT_ACTION_RE.test(a)) return 'important';
+  return 'informational';
+}
+
+export function resolveActivityType(action = '', explicit = null) {
+  const raw = String(explicit || '').trim().toLowerCase();
+  if (ACTIVITY_TYPES.some((t) => t.id === raw)) return raw;
+  const a = String(action || '');
+  if (/import|export|IMPORT/i.test(a)) return 'import_export';
+  if (/Logistics|stock|DISPATCH|REVERSE|InOut/i.test(a)) return 'stock';
+  if (/FINANCE|invoice|expense|payout|payment|VENDOR_BILL|confirm_payment/i.test(a)) return 'finance';
+  if (/AGREEMENT|DOCUMENT|SIGNATURE|execution_docs/i.test(a)) return 'document';
+  if (/APPROVE|approve/i.test(a)) return 'approval';
+  if (/REJECT|CANCEL|cancel|void|close|refuse/i.test(a)) return 'cancellation';
+  if (/assign|ASSIGN|hcw|executor/i.test(a)) return 'assignment';
+  if (/TRANSITION|status|execute|ACTIVATE|SEND/i.test(a)) return 'status';
+  if (/CREATE|create|REGISTER/i.test(a)) return 'create';
+  if (/UPDATE|update/i.test(a)) return 'update';
+  if (/JOB|SWEEP|RETENTION|SYSTEM|LOGIN|TOKEN/i.test(a)) return 'system';
+  return 'update';
+}
+
+export function resolveActivitySource({
+  source = null,
+  action = '',
+  actorType = '',
+} = {}) {
+  const raw = String(source || '').trim();
+  if (['UI', 'API', 'Import', 'Automation'].includes(raw)) return raw;
+  const a = String(action || '');
+  const type = String(actorType || '').toUpperCase();
+  if (/import/i.test(a) || a === 'IMPORT.COMMIT') return 'Import';
+  if (type === 'SYSTEM' || type === 'JOB' || /^(JOB\.|SWEEP\.|RETENTION\.|RM\.|NOTIFY\.)/i.test(a)) {
+    return 'Automation';
+  }
+  return 'API';
+}
+
+export function isRoutineActivityAction(action = '') {
+  return ROUTINE_ACTION_RE.test(String(action || ''));
+}
+
+export function isSensitiveActivityAction(action = '') {
+  return SENSITIVE_ACTIONS.has(String(action || '').trim());
 }
 
 export function normalizeActivityResult(value) {
@@ -189,12 +320,21 @@ function pickSubject(row = {}) {
 }
 
 export function describeActivity(row = {}) {
-  const module = resolveActivityModule(row.action, row.entityType);
+  const module = row.module
+    ? (ACTIVITY_MODULES.find((m) => m.id === row.module) || resolveActivityModule(row.action, row.entityType, row.actorType))
+    : resolveActivityModule(row.action, row.entityType, row.actorType);
   const title = titleFromAction(row.action);
   const employee = activityEmployee(row);
   const subject = pickSubject(row);
   const status = activityResultLabel(row.result);
   const failed = normalizeActivityResult(row.result) === 'FAILURE';
+  const severity = resolveActivitySeverity(row.action, row.severity);
+  const activityType = resolveActivityType(row.action, row.activityType);
+  const source = resolveActivitySource({
+    source: row.source,
+    action: row.action,
+    actorType: row.actorType,
+  });
   const summary = failed
     ? `${employee} tried to ${title.charAt(0).toLowerCase()}${title.slice(1)}${subject ? ` (${subject})` : ''}, but it did not complete.`
     : `${employee} ${title.charAt(0).toLowerCase()}${title.slice(1)}${subject ? ` (${subject})` : ''}.`;
@@ -207,6 +347,9 @@ export function describeActivity(row = {}) {
     subject,
     status,
     result: normalizeActivityResult(row.result) || 'SUCCESS',
+    severity,
+    activityType,
+    source,
   };
 }
 
@@ -232,6 +375,8 @@ export function slimActivityListRow(row) {
   for (const key of SUBJECT_KEYS) {
     if (afterSrc[key] != null && afterSrc[key] !== '') after[key] = afterSrc[key];
   }
+  const module = row.module
+    || resolveActivityModule(row.action, row.entityType, row.actorType).id;
   return {
     _id: row._id,
     at: row.at,
@@ -242,7 +387,20 @@ export function slimActivityListRow(row) {
     entityId: row.entityId,
     result: row.result,
     message: row.message,
+    reason: row.reason || null,
     ip: row.ip,
+    module,
+    source: resolveActivitySource({
+      source: row.source,
+      action: row.action,
+      actorType: row.actorType,
+    }),
+    severity: resolveActivitySeverity(row.action, row.severity),
+    activityType: resolveActivityType(row.action, row.activityType),
+    programmeId: row.programmeId || null,
+    relatedEventId: row.relatedEventId || null,
+    reversalOfEventId: row.reversalOfEventId || null,
+    reversedByEventId: row.reversedByEventId || null,
     after: Object.keys(after).length ? after : null,
   };
 }
@@ -258,6 +416,15 @@ export function applyDefaultActivityWindow(filter, query = {}, now = new Date())
   return filter;
 }
 
+/** Hide login/token noise from the business Activity Log unless includeRoutine=1. */
+export function applyRoutineExclusion(filter, query = {}) {
+  const include = String(query.includeRoutine || '').trim();
+  if (include === '1' || include.toLowerCase() === 'true') return filter;
+  const clause = { action: { $not: ROUTINE_ACTION_RE } };
+  filter.$and = [...(filter.$and || []), clause];
+  return filter;
+}
+
 export function applyActivityLogFilters(filter, query = {}) {
   const result = normalizeActivityResult(query.result || query.status);
   if (result) filter.result = result;
@@ -270,11 +437,50 @@ export function applyActivityLogFilters(filter, query = {}) {
   if (match) {
     const clause = {
       $or: [
+        { module: moduleId },
         { action: match.action },
         { entityType: match.entity },
       ],
     };
     filter.$and = [...(filter.$and || []), clause];
   }
+
+  const severity = String(query.severity || '').trim().toLowerCase();
+  if (severity === 'critical' || severity === 'important' || severity === 'informational') {
+    filter.severity = severity;
+  }
+
+  const source = String(query.source || '').trim();
+  if (['UI', 'API', 'Import', 'Automation'].includes(source)) {
+    filter.source = source;
+  }
+
+  const activityType = String(query.activityType || '').trim().toLowerCase();
+  if (ACTIVITY_TYPES.some((t) => t.id === activityType)) {
+    filter.activityType = activityType;
+  }
+
+  const programmeId = String(query.programmeId || '').trim();
+  if (programmeId) filter.programmeId = programmeId;
+
+  if (query.hasReason === '1' || query.hasReason === 'true') {
+    filter.reason = { $exists: true, $nin: [null, ''] };
+  }
+
+  return filter;
+}
+
+/**
+ * Programme-scoped readers see only their programmes (plus unscoped legacy rows
+ * are hidden). Unrestricted readers get no extra clause.
+ */
+export function applyProgrammeScopeFilter(filter, programmeIds) {
+  if (!Array.isArray(programmeIds)) return filter;
+  if (!programmeIds.length) {
+    filter.programmeId = { $in: [] };
+    return filter;
+  }
+  const clause = { programmeId: { $in: programmeIds } };
+  filter.$and = [...(filter.$and || []), clause];
   return filter;
 }

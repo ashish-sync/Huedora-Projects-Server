@@ -6,6 +6,14 @@ import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/
 import { importAppError } from '../../utils/importErrors.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
+import {
+  findActiveAccessForMaster,
+  mintClientOnePreviewSession,
+  mintOrRotateClientOneAccess,
+  publicAccessSummary,
+  revokeClientOneAccess,
+  updateClientOneAccessFeatures,
+} from '../clientOne/clientOne.service.js';
 import { assertValidEmail, assertValidPhone } from '../../utils/identityNormalize.js';
 import { sendExcel, sendCsv } from '../../utils/excelExport.js';
 import { formatDate } from '../../utils/dateFormat.js';
@@ -545,8 +553,14 @@ function isCampAdmin(req) {
   return Boolean(req.permissions?.has?.(PERMISSIONS.ALL));
 }
 
-async function audit(req, action, entityType, entityId, before = null, after = null) {
+async function audit(req, action, entityType, entityId, before = null, after = null, extras = {}) {
   const a = actor(req);
+  const programmeId = extras.programmeId
+    ?? after?.programName
+    ?? before?.programName
+    ?? after?.drugTherapyName
+    ?? before?.drugTherapyName
+    ?? null;
   await writeAudit({
     actorId: a.id,
     actorEmail: a.email,
@@ -556,7 +570,11 @@ async function audit(req, action, entityType, entityId, before = null, after = n
     before,
     after,
     ip: req.ip,
-    requestId: req.correlationId,
+    requestId: req.requestId || req.correlationId || null,
+    source: extras.source || 'UI',
+    reason: extras.reason || null,
+    programmeId,
+    relatedEventId: extras.relatedEventId || null,
   });
 }
 
@@ -4053,6 +4071,112 @@ router.post(
         replaced: Boolean(replaced),
       },
     });
+  }),
+);
+
+/** Client One portal access for this Client Master programme. */
+router.get(
+  '/client-masters/:id/client-one-access',
+  canReadClientMaster,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, row.clientId);
+    await assertClientMasterAccess(req.user, row);
+    const access = await findActiveAccessForMaster(row._id);
+    res.json({ data: access ? publicAccessSummary(access) : null });
+  }),
+);
+
+router.post(
+  '/client-masters/:id/client-one-access',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, row.clientId);
+    await assertClientMasterAccess(req.user, row);
+    const rotate = req.body?.rotate === true || req.query?.rotate === 'true';
+    const result = await mintOrRotateClientOneAccess(row, actor(req), { rotate });
+    if (result.created || result.rotated) {
+      await audit(
+        req,
+        result.rotated ? 'CLIENT_ONE.ACCESS_ROTATE' : 'CLIENT_ONE.ACCESS_MINT',
+        'client_one_access',
+        result.access._id,
+        null,
+        {
+          accessId: result.access.accessId,
+          clientMasterId: row._id,
+          programName: result.access.programName,
+          campName: result.access.campName,
+        },
+      );
+    }
+    res.status(result.created ? 201 : 200).json({
+      data: {
+        ...result.summary,
+        pin: result.pin,
+        created: result.created,
+        rotated: result.rotated,
+      },
+    });
+  }),
+);
+
+router.delete(
+  '/client-masters/:id/client-one-access',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, row.clientId);
+    await assertClientMasterAccess(req.user, row);
+    const revoked = await revokeClientOneAccess(row._id);
+    if (revoked) {
+      await audit(req, 'CLIENT_ONE.ACCESS_REVOKE', 'client_one_access', revoked._id, null, {
+        accessId: revoked.accessId,
+        clientMasterId: row._id,
+      });
+    }
+    res.json({ data: { ok: true, revoked: Boolean(revoked) } });
+  }),
+);
+
+router.patch(
+  '/client-masters/:id/client-one-access',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, row.clientId);
+    await assertClientMasterAccess(req.user, row);
+    const updated = await updateClientOneAccessFeatures(row._id, req.body?.features || {});
+    await audit(req, 'CLIENT_ONE.ACCESS_CONFIG', 'client_one_access', updated._id, null, {
+      accessId: updated.accessId,
+      features: updated.features,
+    });
+    res.json({ data: publicAccessSummary(updated) });
+  }),
+);
+
+/** Staff-only: open Client One portal preview for a programme (no PIN). */
+router.post(
+  '/client-masters/:id/client-one-preview',
+  canReadClientMaster,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, row.clientId);
+    await assertClientMasterAccess(req.user, row);
+    const session = await mintClientOnePreviewSession(row, actor(req));
+    await audit(req, 'CLIENT_ONE.PREVIEW_OPEN', 'camp_ops_client_master', row._id, null, {
+      clientName: row.clientName,
+      programName: row.programName,
+      campName: row.campName,
+      mode: 'preview',
+    });
+    res.json({ data: session });
   }),
 );
 

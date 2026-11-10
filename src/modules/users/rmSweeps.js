@@ -85,6 +85,8 @@ export async function sweepCampInfoUnanswered({ now = new Date() } = {}) {
       action: 'RM.CAMP_INFO_UNANSWERED',
       entityType: 'camp_ops_camp',
       entityId: camp._id,
+      source: 'Automation',
+      programmeId: camp.programName || camp.drugTherapyName || null,
     });
     camp.informationOverdueNotifiedAt = now.toISOString();
     await camp.save();

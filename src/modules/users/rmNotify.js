@@ -44,6 +44,7 @@ export async function notifyRmAssetCreated({ asset, actor } = {}) {
     entityType: 'Asset',
     entityId: asset._id,
     after: { recipientCount: rows.length },
+    source: 'Automation',
   });
   return rows;
 }
@@ -86,6 +87,7 @@ export async function notifyRmAssetChanged({
     entityType: 'Asset',
     entityId: asset._id,
     after: { statusChanged, custodyChanged, recipientCount: rows.length },
+    source: 'Automation',
   });
   return rows;
 }
@@ -115,6 +117,7 @@ export async function notifyRmAgreementTerminated({ agreement, actor } = {}) {
     entityType: 'Agreement',
     entityId: agreement._id,
     after: { recipientCount: rows.length },
+    source: 'Automation',
   });
   return rows;
 }
@@ -148,6 +151,7 @@ export async function notifyRmAgreementUnsigned({ agreement, actor = null, days 
     entityType: 'Agreement',
     entityId: agreement._id,
     after: { days, recipientCount: rows.length },
+    source: 'Automation',
   });
   return rows;
 }
@@ -178,6 +182,7 @@ export async function notifyRmVerificationLinkExpired({ invite, actor = null } =
     entityType: 'VerificationInvite',
     entityId: invite._id,
     after: { recipientCount: rows.length },
+    source: 'Automation',
   });
   return rows;
 }
@@ -217,6 +222,7 @@ export async function notifyRmVerificationMonthlyReport({
     entityType: 'VerificationCampaign',
     entityId: periodKey,
     after: { recipientUserId: recipientId, manual, selfVerify, recipientCount: rows.length },
+    source: 'Automation',
   });
   return rows;
 }

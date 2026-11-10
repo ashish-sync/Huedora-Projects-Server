@@ -400,6 +400,8 @@ router.delete(
       before,
       after: row.toObject ? row.toObject() : row,
       requestId: req.requestId,
+      source: 'UI',
+      reason: String(req.body?.reason || req.query?.reason || '').trim() || 'Deleted finance expense',
     });
 
     res.json({ data: { ok: true } });

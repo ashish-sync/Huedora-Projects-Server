@@ -364,6 +364,10 @@ async function runImport(type, mode, req) {
       entityId: job._id,
       after: { type, summary: result.summary, errors: result.errors.length },
       requestId: req.requestId,
+      source: 'Import',
+      reason: mode === 'COMMIT'
+        ? (String(req.body?.reason || '').trim() || `Import commit for ${type}`)
+        : null,
     });
 
     if (result.errors.length) {

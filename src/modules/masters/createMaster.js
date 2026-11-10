@@ -202,6 +202,7 @@ async function createLogisticsRow({
     entityId: row._id,
     after: row.toObject ? row.toObject() : row,
     requestId,
+    source: 'UI',
   });
   return row;
 }
@@ -324,6 +325,7 @@ async function createContact(payload, actor, requestId) {
     entityId: contact._id,
     after: contact.toObject ? contact.toObject() : contact,
     requestId,
+    source: 'UI',
   });
   return contact;
 }

@@ -482,6 +482,8 @@ router.post(
       entityId: role._id,
       after: { name: role.name, permissions: role.permissions },
       requestId: req.requestId,
+      source: 'UI',
+      reason: String(req.body?.reason || '').trim() || `Created role ${role.name}`,
     });
 
     res.status(201).json({ data: role });
@@ -540,6 +542,8 @@ router.patch(
       before,
       after: { name: role.name, description: role.description, permissions: role.permissions },
       requestId: req.requestId,
+      source: 'UI',
+      reason: String(req.body?.reason || '').trim() || `Updated role ${role.name}`,
     });
 
     res.json({ data: role });
@@ -565,7 +569,10 @@ router.delete(
       action: 'ROLE.DELETE',
       entityType: 'Role',
       entityId: role._id,
+      before: { name: role.name, permissions: role.permissions },
       requestId: req.requestId,
+      source: 'UI',
+      reason: String(req.body?.reason || req.query?.reason || '').trim() || `Deleted role ${role.name}`,
     });
     res.json({ data: { ok: true } });
   })
@@ -658,6 +665,7 @@ router.post(
       entityId: user._id,
       after: publicUser(user),
       requestId: req.requestId,
+      source: 'UI',
     });
     res.status(201).json({ data: publicUser(user) });
   })
@@ -777,6 +785,7 @@ router.patch(
       before,
       after: publicUser(user),
       requestId: req.requestId,
+      source: 'UI',
     });
     res.json({ data: publicUser(user) });
   })
@@ -804,7 +813,10 @@ router.delete(
       action: 'USER.DELETE',
       entityType: 'User',
       entityId: user._id,
+      before: publicUser(user),
       requestId: req.requestId,
+      source: 'UI',
+      reason: String(req.body?.reason || req.query?.reason || '').trim() || `Removed user ${user.email || user._id}`,
     });
     res.json({ data: { ok: true } });
   })

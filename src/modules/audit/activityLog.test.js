@@ -3,9 +3,15 @@ import assert from 'node:assert/strict';
 import {
   applyActivityLogFilters,
   applyDefaultActivityWindow,
+  applyProgrammeScopeFilter,
+  applyRoutineExclusion,
   describeActivity,
+  isRoutineActivityAction,
   normalizeActivityResult,
   resolveActivityModule,
+  resolveActivitySeverity,
+  resolveActivitySource,
+  resolveActivityType,
   slimActivityListRow,
 } from './activityLog.js';
 
@@ -81,4 +87,64 @@ test('slimActivityListRow drops fat snapshots and keeps a subject', () => {
   assert.equal(slim.after.campId, '26-10-0042');
   assert.equal(slim.after.builderForm, undefined);
   assert.equal(slim.before, undefined);
+  assert.equal(slim.module, 'camp-one');
+  assert.equal(slim.severity, 'important');
+  assert.equal(slim.source, 'API');
+  assert.equal(slim.activityType, 'approval');
+});
+
+test('resolveActivitySeverity and source classify sensitive and automation events', () => {
+  assert.equal(resolveActivitySeverity('ROLE.DELETE'), 'critical');
+  assert.equal(resolveActivitySeverity('camp_ops.approve'), 'important');
+  assert.equal(resolveActivitySeverity('CONTACT.CREATE'), 'informational');
+  assert.equal(resolveActivitySource({ action: 'IMPORT.COMMIT' }), 'Import');
+  assert.equal(resolveActivitySource({ actorType: 'SYSTEM', action: 'RM.ASSET_CHANGE' }), 'Automation');
+  assert.equal(resolveActivityType('LogisticsInOutEntry.CREATE'), 'stock');
+  assert.equal(isRoutineActivityAction('USER.LOGIN_SUCCESS'), true);
+  assert.equal(isRoutineActivityAction('camp_ops.approve'), false);
+});
+
+test('applyRoutineExclusion hides sign-in noise unless includeRoutine is set', () => {
+  const filtered = applyRoutineExclusion({}, {});
+  assert.equal(Array.isArray(filtered.$and), true);
+  const kept = applyRoutineExclusion({}, { includeRoutine: '1' });
+  assert.equal(kept.$and, undefined);
+});
+
+test('applyActivityLogFilters accepts severity source activityType and programmeId', () => {
+  const filter = {};
+  applyActivityLogFilters(filter, {
+    severity: 'critical',
+    source: 'UI',
+    activityType: 'finance',
+    programmeId: 'Oncology',
+  });
+  assert.equal(filter.severity, 'critical');
+  assert.equal(filter.source, 'UI');
+  assert.equal(filter.activityType, 'finance');
+  assert.equal(filter.programmeId, 'Oncology');
+});
+
+test('applyProgrammeScopeFilter constrains programme-scoped readers', () => {
+  const empty = applyProgrammeScopeFilter({}, []);
+  assert.deepEqual(empty.programmeId, { $in: [] });
+  const scoped = applyProgrammeScopeFilter({}, ['Oncology', 'Cardiology']);
+  assert.equal(Array.isArray(scoped.$and), true);
+});
+
+test('describeActivity surfaces severity source and type', () => {
+  const described = describeActivity({
+    action: 'FINANCE.CLIENT_INVOICE.ISSUE',
+    entityType: 'FinanceCommercialDocument',
+    actorEmail: 'finance@tylo.test',
+    result: 'SUCCESS',
+    severity: 'critical',
+    source: 'UI',
+    activityType: 'finance',
+    reason: 'Month-end billing',
+  });
+  assert.equal(described.severity, 'critical');
+  assert.equal(described.source, 'UI');
+  assert.equal(described.activityType, 'finance');
+  assert.equal(described.moduleLabel, 'Finance One');
 });

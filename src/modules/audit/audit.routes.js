@@ -7,9 +7,12 @@ import { escapeRegex } from '../../utils/escapeRegex.js';
 import {
   applyActivityLogFilters,
   applyDefaultActivityWindow,
+  applyProgrammeScopeFilter,
+  applyRoutineExclusion,
   slimActivityListRow,
 } from './activityLog.js';
 import { queryCollection } from '../../store/persistence.js';
+import { resolveCampClientScope } from '../campOps/campOps.clientAccess.js';
 
 const router = Router();
 router.use(authenticate);
@@ -22,7 +25,7 @@ router.get(
     const filter = {};
     if (req.query.action) filter.action = new RegExp(escapeRegex(String(req.query.action)), 'i');
     if (req.query.entityType) filter.entityType = req.query.entityType;
-    if (req.query.entityId) filter.entityId = req.query.entityId;
+    if (req.query.entityId) filter.entityId = String(req.query.entityId).trim();
     if (req.query.actorId) filter.actorId = req.query.actorId;
     if (req.query.from || req.query.to) {
       filter.at = {};
@@ -31,6 +34,16 @@ router.get(
     }
     applyDefaultActivityWindow(filter, req.query);
     applyActivityLogFilters(filter, req.query);
+    applyRoutineExclusion(filter, req.query);
+
+    const scope = await resolveCampClientScope(req.user || {});
+    if (scope !== null) {
+      const programmeIds = [...new Set(
+        scope.map((row) => String(row.programName || '').trim()).filter(Boolean),
+      )];
+      applyProgrammeScopeFilter(filter, programmeIds);
+    }
+
     const { data, total } = await queryCollection('audit_logs', {
       filter,
       sort: { at: -1 },
@@ -47,6 +60,18 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await AuditLog.findById(req.params.id);
     if (!row) throw new AppError('Activity not found', 404, 'NOT_FOUND');
+
+    const scope = await resolveCampClientScope(req.user || {});
+    if (scope !== null) {
+      const allowed = new Set(
+        scope.map((item) => String(item.programName || '').trim()).filter(Boolean),
+      );
+      const programmeId = String(row.programmeId || '').trim();
+      if (!programmeId || !allowed.has(programmeId)) {
+        throw new AppError('Activity not found', 404, 'NOT_FOUND');
+      }
+    }
+
     res.json({ data: row });
   })
 );

@@ -10,6 +10,8 @@ test('dashboard KPIs reconcile with inward/outward/usage source rows', () => {
       perUnitCost: 10,
       productType: 'Consumable',
       transactionDate: '2026-01-15',
+      city: 'Mumbai',
+      state: 'Maharashtra',
     },
     {
       entryType: 'Outward',
@@ -19,6 +21,10 @@ test('dashboard KPIs reconcile with inward/outward/usage source rows', () => {
       transactionDate: '2026-01-16',
       empId: 'H1',
       employeeName: 'HCW',
+      fromCity: 'Mumbai',
+      fromState: 'Maharashtra',
+      city: 'Pune',
+      state: 'Maharashtra',
     },
     {
       entryType: 'Return',
@@ -27,6 +33,8 @@ test('dashboard KPIs reconcile with inward/outward/usage source rows', () => {
       productType: 'Consumable',
       transactionDate: '2026-01-17',
       empId: 'H1',
+      city: 'Mumbai',
+      state: 'Maharashtra',
     },
   ];
   const usage = [
@@ -48,4 +56,9 @@ test('dashboard KPIs reconcile with inward/outward/usage source rows', () => {
   assert.equal(dash.kpis.usedQty, 20);
   assert.equal(dash.kpis.wastageQty, 3);
   assert.equal(dash.kpis.fieldBalanceQty, 12);
+  assert.ok(dash.byCity.some((row) => row.city === 'Pune' && row.qty === 40));
+  assert.equal(dash.routes.length, 1);
+  assert.equal(dash.routes[0].fromCity, 'Mumbai');
+  assert.equal(dash.routes[0].toCity, 'Pune');
+  assert.equal(dash.routes[0].qty, 40);
 });

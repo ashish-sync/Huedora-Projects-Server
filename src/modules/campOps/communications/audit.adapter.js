@@ -13,5 +13,7 @@ export async function logAudit({ user, ip, entityType, entityId, action, afterVa
     entityId: entityId || '',
     after: afterValue || null,
     ip: ip || '',
+    source: 'UI',
+    programmeId: afterValue?.programName || afterValue?.drugTherapyName || null,
   });
 }

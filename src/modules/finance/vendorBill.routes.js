@@ -579,6 +579,8 @@ async function payVendorBill(req, res) {
     before,
     after: row.toObject ? row.toObject() : row,
     requestId: req.requestId,
+    source: 'UI',
+    reason: String(req.body?.reason || '').trim() || 'Vendor bill payment recorded',
   });
   const [enriched] = await enrichVendorBills([row]);
   res.json({ data: enriched });

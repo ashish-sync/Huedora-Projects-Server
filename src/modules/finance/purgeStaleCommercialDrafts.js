@@ -126,6 +126,7 @@ export async function purgeStaleCommercialDrafts({ now = new Date(), dryRun = fa
           entityId: row._id,
           after: { draftStaleWarnedAt: nowIso, idleDays: days },
           message: `Warned stale draft (${days}d idle)`,
+          source: 'Automation',
         });
       }
       warned += 1;

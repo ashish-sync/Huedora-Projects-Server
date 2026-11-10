@@ -345,6 +345,10 @@ function auditCommercial(req, action, row, before = null) {
     before,
     after: row.toObject ? row.toObject() : row,
     requestId: req.requestId,
+    source: 'UI',
+    reason: /ISSUE|VOID|DELETE/i.test(String(action || ''))
+      ? (String(req.body?.reason || '').trim() || `Finance action ${action}`)
+      : null,
   });
 }
 
@@ -1473,6 +1477,8 @@ router.post(
       entityId: row._id,
       after: row.toObject ? row.toObject() : row,
       requestId: req.requestId,
+      source: 'UI',
+      reason: String(req.body?.reason || '').trim() || 'Issued client invoice',
     });
 
     res.json({ data: row });

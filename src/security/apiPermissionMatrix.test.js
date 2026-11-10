@@ -19,6 +19,7 @@ const PUBLIC_ROUTE_FILES = new Set([
   'requestUpload.routes.js', // custodian upload token
   'campExecute.routes.js', // hashed execution invite token
   'campRequestForm.routes.js', // hashed program request form token
+  'clientOne.routes.js', // Client One PIN session (public)
   'campOps.whatsapp.routes.js', // webhook
   'file.routes.js', // signed JWT file links + authenticate on path catch-all
 ]);

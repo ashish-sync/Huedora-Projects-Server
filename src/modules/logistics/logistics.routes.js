@@ -473,6 +473,7 @@ function registerMasterCrud({
         entityId: row._id,
         after: row.toObject ? row.toObject() : row,
         requestId: req.requestId,
+        source: 'UI',
       });
       res.status(201).json({ data: present(row) });
     })
@@ -510,6 +511,7 @@ function registerMasterCrud({
         entityId: row._id,
         after: row.toObject ? row.toObject() : row,
         requestId: req.requestId,
+        source: 'UI',
       });
       res.json({ data: present(row) });
     })
@@ -534,6 +536,8 @@ function registerMasterCrud({
         entityType,
         entityId: row._id,
         requestId: req.requestId,
+        source: 'UI',
+        reason: String(req.body?.reason || req.query?.reason || '').trim() || `Deleted ${entityType}`,
       });
       res.json({ data: { ok: true } });
     })
@@ -3119,6 +3123,7 @@ router.post(
         entityId: row._id,
         after: row.toObject ? row.toObject() : row,
         requestId: req.requestId,
+        source: 'UI',
       });
 
       res.status(201).json({ data: withSignedLogisticsFiles(row), fulfillment });
@@ -3424,6 +3429,7 @@ router.patch(
       entityId: row._id,
       after: row.toObject ? row.toObject() : row,
       requestId: req.requestId,
+      source: 'UI',
     });
 
     res.json({ data: withSignedLogisticsFiles(row) });
@@ -3545,6 +3551,7 @@ router.patch(
       entityId: row._id,
       after: row.toObject ? row.toObject() : row,
       requestId: req.requestId,
+      source: 'UI',
     });
 
     res.json({ data: row });
@@ -3710,7 +3717,7 @@ router.get(
   canRead,
   asyncHandler(async (req, res) => {
     const { queryCollection } = await import('../../store/persistence.js');
-    const [{ data: rows }, usageRows] = await Promise.all([
+    const [{ data: rows }, usageRows, warehouses] = await Promise.all([
       queryCollection('logistics_in_out_entries', {
         filter: { isDeleted: false },
         // Cap dashboard scan — UI aggregates; full history belongs in movement lists
@@ -3718,8 +3725,23 @@ router.get(
         sort: { createdAt: -1 },
       }),
       listUsageMerged(),
+      LogisticsWarehouse.find({ isDeleted: false }).select('_id name city state').lean(),
     ]);
-    const data = buildDashboard(rows, usageRows, {
+    const warehouseById = new Map(
+      (warehouses || []).map((wh) => [String(wh._id), wh]),
+    );
+    const enrichedRows = (rows || []).map((row) => {
+      if (String(row.fromCity || '').trim()) return row;
+      const whId = String(row.sourceWarehouseId || row.warehouseId || '').trim();
+      const wh = whId ? warehouseById.get(whId) : null;
+      if (!wh || !String(wh.city || '').trim()) return row;
+      return {
+        ...row,
+        fromCity: String(wh.city || '').trim(),
+        fromState: String(wh.state || row.fromState || '').trim(),
+      };
+    });
+    const data = buildDashboard(enrichedRows, usageRows, {
       month: req.query.month,
       dateFrom: req.query.dateFrom,
       dateTo: req.query.dateTo,

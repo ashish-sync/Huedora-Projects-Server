@@ -42,6 +42,7 @@ import {
 } from './campQuality.metrics.js';
 import { loadCampPipelineBoard } from './campPipeline.js';
 import { loadCampScheduleMatrix } from './campSchedule.js';
+import { loadOpsOverviewKpis } from './opsOverviewKpis.js';
 import { resolveCampClientScope } from '../campOps/campOps.clientAccess.js';
 import { applyAssignedUserAssignmentsToFilter } from '../campOps/clientMaster.programScope.js';
 
@@ -163,6 +164,24 @@ router.get(
     const { from, to } = parseCampQualityRange(req.query);
     const metric = resolveCampQualityMetric(req.query);
     const data = await loadCampQualityMetrics({ from, to, metric, user: req.user });
+    res.json({ data });
+  })
+);
+
+/**
+ * Operations Dashboard → Overview KPI architecture across six modules.
+ * Query: from, to (YYYY-MM-DD). Asset status is a current-state snapshot;
+ * period filters apply to camps, movement, finance, verification, and HCW cohorts.
+ */
+router.get(
+  '/ops-overview-kpis',
+  asyncHandler(async (req, res) => {
+    const data = await loadOpsOverviewKpis({
+      query: req.query,
+      user: req.user,
+      showAssetValue: hasPermission(req, PERMISSIONS.ASSETS_VIEW_VALUE),
+    });
+    res.set('Cache-Control', 'private, max-age=30');
     res.json({ data });
   })
 );
