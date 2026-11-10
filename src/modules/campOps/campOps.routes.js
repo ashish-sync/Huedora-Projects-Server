@@ -206,7 +206,6 @@ import {
 } from './campDuplicate.js';
 import {
   resolveCampClientScope,
-  applyClientScopeToFilter,
   applyClientScopeToIdField,
   assertCampClientAccess,
   assertClientIdAccess,
@@ -220,6 +219,7 @@ import {
   campMatchesProgramAssignment,
   syncAssignedUserEmailsForProgramScope,
   applyAssignedUserCampFilter,
+  applyAssignedUserAssignmentsToFilter,
   buildOpsBoardFilterCatalog,
 } from './clientMaster.programScope.js';
 import {
@@ -468,7 +468,8 @@ async function loadCampForUser(req, campId) {
 async function scopeCampFilter(req, filter) {
   let next = filter;
   const scoped = await resolveCampClientScope(req.user);
-  if (scoped) next = applyClientScopeToFilter(next, scoped);
+  // Programme-level $or (client + division + method), not clientId alone.
+  if (scoped) next = applyAssignedUserAssignmentsToFilter(next, scoped);
   return applyAssignedUserCampFilter(next, req.query);
 }
 

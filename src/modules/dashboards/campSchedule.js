@@ -1,6 +1,12 @@
 import { CampOpsCamp } from '../campOps/campOps.model.js';
 import { CAMP_SLOTS } from '../campOps/campOps.lifecycle.js';
 import {
+  resolveCampClientScope,
+} from '../campOps/campOps.clientAccess.js';
+import {
+  applyAssignedUserAssignmentsToFilter,
+} from '../campOps/clientMaster.programScope.js';
+import {
   resolveOperationsBoardStage,
   resolveOperationsBoardStatus,
 } from '../campOps/campOps.operationsBoard.js';
@@ -209,17 +215,23 @@ const CAMP_SCHEDULE_SELECT = [
   'submittedAt',
 ].join(' ');
 
-export async function loadCampScheduleMatrix(now = new Date()) {
+export async function loadCampScheduleMatrix(now = new Date(), user = null) {
   const today = toLocalDateIso(now);
   const dayAfter = addLocalDaysIso(today, 2);
   const restOfMonthTo = endOfMonthIso(today);
   // Include Day 2 even when it spills past month-end; EOM stays within the month.
   const rangeEnd = dayAfter > restOfMonthTo ? dayAfter : restOfMonthTo;
 
-  const camps = await CampOpsCamp.find({
+  let filter = {
     isDeleted: { $ne: true },
     campDate: { $gte: today, $lte: rangeEnd },
-  })
+  };
+  const programScope = await resolveCampClientScope(user || {});
+  if (programScope) {
+    filter = applyAssignedUserAssignmentsToFilter(filter, programScope);
+  }
+
+  const camps = await CampOpsCamp.find(filter)
     .select(CAMP_SCHEDULE_SELECT)
     .lean();
 

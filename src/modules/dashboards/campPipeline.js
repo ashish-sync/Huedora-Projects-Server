@@ -1,6 +1,12 @@
 import { CampOpsCamp } from '../campOps/campOps.model.js';
 import { buildCampFilter } from '../campOps/campOps.helpers.js';
-import { applyAssignedUserCampFilter } from '../campOps/clientMaster.programScope.js';
+import {
+  resolveCampClientScope,
+} from '../campOps/campOps.clientAccess.js';
+import {
+  applyAssignedUserCampFilter,
+  applyAssignedUserAssignmentsToFilter,
+} from '../campOps/clientMaster.programScope.js';
 import {
   campOperationsBoardPipeline,
   formatOperationsBoardFromGroups,
@@ -34,6 +40,10 @@ export async function buildCampPipelineFilter(query = {}, user = null) {
     dateTo: dateTo || undefined,
     campaign: campaign || undefined,
   });
+  const programScope = await resolveCampClientScope(user || {});
+  if (programScope) {
+    filter = applyAssignedUserAssignmentsToFilter(filter, programScope);
+  }
   filter = await applyAssignedUserCampFilter(filter, {
     assignedUser: assignedUser || undefined,
     campaign: campaign || undefined,
@@ -46,6 +56,7 @@ export async function buildCampPipelineFilter(query = {}, user = null) {
       campaign: campaign || null,
       assignedUser: assignedUser || null,
       adminFilters: allowAdminFilters,
+      programScoped: Boolean(programScope),
     },
   };
 }

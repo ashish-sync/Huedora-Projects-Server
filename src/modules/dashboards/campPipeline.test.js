@@ -22,6 +22,7 @@ assert.equal(canUsePipelineAdminFilters({}), false);
   assert.equal(applied.adminFilters, false);
   assert.equal(applied.campaign, null);
   assert.equal(applied.assignedUser, null);
+  assert.equal(applied.programScoped, false);
   assert.equal(filter.campaignName, undefined);
   assert.ok(filter.campDate?.$gte);
   assert.ok(filter.campDate?.$lte);

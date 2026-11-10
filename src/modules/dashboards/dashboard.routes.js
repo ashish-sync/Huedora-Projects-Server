@@ -42,6 +42,8 @@ import {
 } from './campQuality.metrics.js';
 import { loadCampPipelineBoard } from './campPipeline.js';
 import { loadCampScheduleMatrix } from './campSchedule.js';
+import { resolveCampClientScope } from '../campOps/campOps.clientAccess.js';
+import { applyAssignedUserAssignmentsToFilter } from '../campOps/clientMaster.programScope.js';
 
 function countMap(rows) {
   return Object.fromEntries((rows || []).map((x) => [x._id || 'Unknown', x.count]));
@@ -160,7 +162,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const { from, to } = parseCampQualityRange(req.query);
     const metric = resolveCampQualityMetric(req.query);
-    const data = await loadCampQualityMetrics({ from, to, metric });
+    const data = await loadCampQualityMetrics({ from, to, metric, user: req.user });
     res.json({ data });
   })
 );
@@ -184,8 +186,8 @@ router.get(
  */
 router.get(
   '/camp-schedule',
-  asyncHandler(async (_req, res) => {
-    const data = await loadCampScheduleMatrix();
+  asyncHandler(async (req, res) => {
+    const data = await loadCampScheduleMatrix(new Date(), req.user);
     res.json({ data });
   })
 );
@@ -198,6 +200,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const now = new Date();
     const in30 = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const campScope = await resolveCampClientScope(req.user || {});
+    let campMatch = { isDeleted: false };
+    if (campScope) campMatch = applyAssignedUserAssignmentsToFilter(campMatch, campScope);
 
     const [
       assetCount,
@@ -263,10 +268,10 @@ router.get(
       ]),
       AssetRequest.countDocuments({ isDeleted: false, status: 'REQUESTED' }),
       CampOpsCamp.aggregate([
-        { $match: { isDeleted: false } },
+        { $match: campMatch },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
-      CampOpsCamp.countDocuments({ isDeleted: false }),
+      CampOpsCamp.countDocuments(campMatch),
       FinanceExpense.aggregate(expenseOverviewPipeline()),
       FinanceInvoice.aggregate(invoiceOverviewPipeline()),
       FinanceCommercialDocument.aggregate(

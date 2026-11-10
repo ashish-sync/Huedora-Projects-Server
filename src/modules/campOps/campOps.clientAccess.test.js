@@ -8,6 +8,7 @@ import {
   isClientIdInScope,
   isClientMasterInScope,
   isHealthcareCampCoordinator,
+  requiresCampProgramScope,
   resolveCampClientScope,
   assertCampClientAccess,
 } from './campOps.clientAccess.js';
@@ -29,6 +30,14 @@ test('isHealthcareCampCoordinator matches designation or Camp Coordinator role',
     designation: 'Manager',
     roleIds: [{ name: 'Approver', permissions: [PERMISSIONS.CAMPS_APPROVE] }],
   }), false);
+});
+
+test('requiresCampProgramScope covers System role User and coordinators', () => {
+  assert.equal(requiresCampProgramScope({ systemRole: 'User' }), true);
+  assert.equal(requiresCampProgramScope({ designation: 'Data Analyst' }), true);
+  assert.equal(requiresCampProgramScope({ designation: 'Healthcare Camp Coordinator' }), true);
+  assert.equal(requiresCampProgramScope({ systemRole: 'Admin' }), false);
+  assert.equal(requiresCampProgramScope({ systemRole: 'Super Admin' }), false);
 });
 
 test('parseAssignedUserEmails normalizes and dedupes', () => {
@@ -183,7 +192,7 @@ test('resolveCampClientScope scopes listed Healthcare Camp Coordinators to clien
   );
 });
 
-test('resolveCampClientScope leaves non-coordinators unrestricted even when not assigned', async (t) => {
+test('resolveCampClientScope leaves Admin/Super Admin unrestricted even when not assigned', async (t) => {
   const suffix = Date.now();
   const master = await CampOpsClientMaster.create({
     clientId: `ccccccccccccccc${String(suffix).slice(-8)}`.slice(0, 24),
@@ -198,26 +207,60 @@ test('resolveCampClientScope leaves non-coordinators unrestricted even when not 
     await master.save();
   });
 
-  const approverScope = await resolveCampClientScope({
-    email: `ops-${suffix}@tylo.test`,
-    designation: 'Manager',
-    roleIds: [{ name: 'Approver', permissions: [PERMISSIONS.CAMPS_APPROVE] }],
-  });
-  assert.equal(approverScope, null);
-
   const adminScope = await resolveCampClientScope({
     email: `admin-${suffix}@tylo.test`,
-    designation: 'Director',
+    systemRole: 'Admin',
+    designation: 'Operations Leader',
     roleIds: [{ name: 'Admin', permissions: [PERMISSIONS.ALL] }],
   });
   assert.equal(adminScope, null);
 
-  const viewerScope = await resolveCampClientScope({
-    email: `viewer-${suffix}@client.test`,
+  const superAdminScope = await resolveCampClientScope({
+    email: `super-${suffix}@tylo.test`,
+    systemRole: 'Super Admin',
+    designation: 'Business Head',
+    roleIds: [{ name: 'Admin', permissions: [PERMISSIONS.ALL] }],
+  });
+  assert.equal(superAdminScope, null);
+});
+
+test('resolveCampClientScope scopes System role User to assigned programmes', async (t) => {
+  const suffix = Date.now();
+  const assignedEmail = `user-${suffix}@client.test`;
+  const clientId = `bbbbbbbbbbbbbbbbbbbb${String(suffix).slice(-4)}`.slice(0, 24);
+  const master = await CampOpsClientMaster.create({
+    clientId,
+    clientName: `User Scoped Client ${suffix}`,
+    programName: 'Oncology',
+    campName: 'BMD',
+    assignedUserEmails: [assignedEmail],
+  });
+  t.after(async () => {
+    master.isDeleted = true;
+    master.deletedAt = new Date().toISOString();
+    await master.save();
+  });
+
+  const scoped = await resolveCampClientScope({
+    email: assignedEmail,
+    systemRole: 'User',
+    designation: 'Data Analyst',
+    roleIds: [{ name: 'Viewer', permissions: [PERMISSIONS.CAMPS_READ] }],
+  });
+  assert.ok(Array.isArray(scoped));
+  assert.equal(scoped.length, 1);
+  assert.equal(scoped[0].programName, 'Oncology');
+  assert.equal(scoped[0].campName, 'BMD');
+  assert.equal(isClientIdInScope(scoped, clientId), true);
+
+  const unassigned = await resolveCampClientScope({
+    email: `other-${suffix}@client.test`,
+    systemRole: 'User',
     designation: 'Individual Contributor',
     roleIds: [{ name: 'Viewer', permissions: [PERMISSIONS.CAMPS_READ] }],
   });
-  assert.equal(viewerScope, null);
+  assert.ok(Array.isArray(unassigned));
+  assert.equal(unassigned.length, 0);
 });
 
 test('resolveCampClientScope hides camps from unassigned Healthcare Camp Coordinators', async (t) => {

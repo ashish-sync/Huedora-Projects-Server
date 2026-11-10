@@ -1,6 +1,7 @@
 import { AppError } from '../../utils/helpers.js';
 import { normalizeEntityId } from '../../utils/entityIds.js';
 import { normalizeDesignationKey } from '../users/designationAccess.js';
+import { resolveSystemRole } from '../users/systemRole.js';
 import { CampOpsClientMaster } from './campOps.model.js';
 import {
   campMatchesProgramAssignment,
@@ -22,8 +23,9 @@ const CAMP_COORDINATOR_DESIGNATION_KEY = 'healthcare camp coordinator';
 const CAMP_COORDINATOR_ROLE_NAME = 'camp coordinator';
 
 /**
- * Assigned-Users camp/program scoping applies only to Healthcare Camp Coordinators.
- * All other designations/roles can view every camp.
+ * Assigned-Users camp/program scoping applies to Healthcare Camp Coordinators
+ * (legacy designation/role path) and to System role "User".
+ * Admin / Super Admin remain organisation-wide.
  */
 export function isHealthcareCampCoordinator(user = {}) {
   if (normalizeDesignationKey(user.designation) === CAMP_COORDINATOR_DESIGNATION_KEY) {
@@ -36,6 +38,16 @@ export function isHealthcareCampCoordinator(user = {}) {
       .toLowerCase();
     return name === CAMP_COORDINATOR_ROLE_NAME;
   });
+}
+
+/** True when camp visibility must be limited to Client Master assigned programmes. */
+export function requiresCampProgramScope(user = {}) {
+  if (isHealthcareCampCoordinator(user)) return true;
+  const systemRole = resolveSystemRole({
+    systemRole: user.systemRole,
+    designation: user.designation,
+  });
+  return systemRole === 'User';
 }
 
 export function parseAssignedUserEmails(raw) {
@@ -54,16 +66,16 @@ export function parseAssignedUserEmails(raw) {
  * Returns assignment rows `{ clientId, programName, campName }` when listed on masters.
  *
  * Policy when any master has assignments configured:
- * - Healthcare Camp Coordinators listed on masters → only those client + division + method combos.
- * - Healthcare Camp Coordinators not listed → empty scope (see nothing).
- * - Everyone else (Admin, Approver, Requester, etc.) → unrestricted (view all camps).
+ * - System role User (and Healthcare Camp Coordinators) listed on masters
+ *   → only those client + division + method combos.
+ * - System role User / coordinators not listed → empty scope (see nothing).
+ * - Admin / Super Admin (and other unrestricted roles) → view all camps.
  */
 export async function resolveCampClientScope(user = {}) {
   const email = normalizeEmail(user.email);
   if (!email) return null;
 
-  // Only Healthcare Camp Coordinators are limited by Assigned Users.
-  if (!isHealthcareCampCoordinator(user)) return null;
+  if (!requiresCampProgramScope(user)) return null;
 
   const masters = await CampOpsClientMaster.find({ isDeleted: false });
   let anyAssignmentsConfigured = false;

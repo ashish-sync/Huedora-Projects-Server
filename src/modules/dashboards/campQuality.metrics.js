@@ -6,6 +6,8 @@ import {
   campSnapshotPricing,
 } from '../campOps/campOps.lifecycle.js';
 import { parseLocalDateInput } from '../campOps/campOps.helpers.js';
+import { resolveCampClientScope } from '../campOps/campOps.clientAccess.js';
+import { applyAssignedUserAssignmentsToFilter } from '../campOps/clientMaster.programScope.js';
 import { AppError } from '../../utils/helpers.js';
 
 export const CAMP_QUALITY_METRICS = {
@@ -198,12 +200,16 @@ export function summarizeCampQualityCamps(metric, camps = []) {
   };
 }
 
-export async function loadCampQualityMetrics({ from, to, metric }) {
-  const filter = { isDeleted: false };
+export async function loadCampQualityMetrics({ from, to, metric, user = null }) {
+  let filter = { isDeleted: false };
   if (from || to) {
     filter.campDate = {};
     if (from) filter.campDate.$gte = from;
     if (to) filter.campDate.$lte = to;
+  }
+  const programScope = await resolveCampClientScope(user || {});
+  if (programScope) {
+    filter = applyAssignedUserAssignmentsToFilter(filter, programScope);
   }
 
   const camps = await CampOpsCamp.find(filter).select(CAMP_QUALITY_SELECT).lean();
