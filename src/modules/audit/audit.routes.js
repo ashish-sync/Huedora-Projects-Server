@@ -27,11 +27,8 @@ router.get(
     if (req.query.entityType) filter.entityType = req.query.entityType;
     if (req.query.entityId) filter.entityId = String(req.query.entityId).trim();
     if (req.query.actorId) filter.actorId = req.query.actorId;
-    if (req.query.from || req.query.to) {
-      filter.at = {};
-      if (req.query.from) filter.at.$gte = new Date(req.query.from);
-      if (req.query.to) filter.at.$lte = new Date(req.query.to);
-    }
+    // Date + ISO-string dual match is applied in applyDefaultActivityWindow —
+    // audit `at` is persisted as an ISO string via JSON clone on write.
     applyDefaultActivityWindow(filter, req.query);
     applyActivityLogFilters(filter, req.query);
     applyRoutineExclusion(filter, req.query);

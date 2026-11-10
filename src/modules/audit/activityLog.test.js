@@ -60,18 +60,30 @@ test('applyActivityLogFilters keeps existing API fields and adds optional busine
   assert.equal(normalizeActivityResult('failed'), 'FAILURE');
 });
 
-test('applyDefaultActivityWindow bounds unfiltered reads to 30 days', () => {
+test('applyDefaultActivityWindow bounds unfiltered reads to 30 days for Date and ISO string at', () => {
   const now = new Date('2026-11-01T12:00:00.000Z');
   const filter = applyDefaultActivityWindow({}, {}, now);
-  assert.equal(filter.at.$lte.toISOString(), '2026-11-01T12:00:00.000Z');
-  assert.equal(filter.at.$gte.toISOString(), '2026-10-03T00:00:00.000Z');
+  assert.equal(Array.isArray(filter.$and), true);
+  const clause = filter.$and[0];
+  assert.equal(clause.$or[0].at.$lte.toISOString(), '2026-11-01T12:00:00.000Z');
+  assert.equal(clause.$or[0].at.$gte.toISOString(), '2026-10-03T00:00:00.000Z');
+  assert.equal(clause.$or[1].at.$lte, '2026-11-01T12:00:00.000Z');
+  assert.equal(clause.$or[1].at.$gte, '2026-10-03T00:00:00.000Z');
 });
 
-test('applyDefaultActivityWindow keeps an explicit date range', () => {
-  const filter = { at: { $gte: new Date('2026-01-01') } };
-  applyDefaultActivityWindow(filter, { from: '2026-01-01' });
-  assert.equal(filter.at.$gte.toISOString().startsWith('2026-01-01'), true);
-  assert.equal(filter.at.$lte, undefined);
+test('applyDefaultActivityWindow keeps an explicit date range for both storage shapes', () => {
+  const filter = applyDefaultActivityWindow({}, { from: '2026-01-01', to: '2026-01-31T23:59:59.999Z' });
+  const clause = filter.$and[0];
+  assert.equal(clause.$or[0].at.$gte.toISOString().startsWith('2026-01-01'), true);
+  assert.equal(clause.$or[1].at.$gte.startsWith('2026-01-01'), true);
+  assert.equal(clause.$or[1].at.$lte.startsWith('2026-01-31'), true);
+});
+
+test('applyProgrammeScopeFilter keeps org-level rows without programmeId', () => {
+  const scoped = applyProgrammeScopeFilter({}, ['Oncology']);
+  const clause = scoped.$and[0];
+  assert.deepEqual(clause.$or[0], { programmeId: { $in: ['Oncology'] } });
+  assert.equal(clause.$or.some((part) => part.programmeId === null), true);
 });
 
 test('slimActivityListRow drops fat snapshots and keeps a subject', () => {

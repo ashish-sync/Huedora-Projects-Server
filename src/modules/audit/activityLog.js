@@ -405,14 +405,56 @@ export function slimActivityListRow(row) {
   };
 }
 
-/** Bound unfiltered reads so Mongo does not scan the whole audit collection. */
+/**
+ * Audit `at` is often an ISO string (JSON clone on write) and sometimes a BSON Date.
+ * Comparing only with Date objects matches neither string-stored rows in Mongo.
+ */
+export function buildActivityAtRangeClause(fromInput, toInput, now = new Date()) {
+  let from = fromInput ? new Date(fromInput) : null;
+  let to = toInput ? new Date(toInput) : null;
+  if (from && Number.isNaN(from.getTime())) from = null;
+  if (to && Number.isNaN(to.getTime())) to = null;
+
+  if (!from && !to) {
+    to = new Date(now);
+    from = new Date(now);
+    from.setUTCDate(from.getUTCDate() - (ACTIVITY_DEFAULT_WINDOW_DAYS - 1));
+    from.setUTCHours(0, 0, 0, 0);
+  }
+
+  const dateRange = {};
+  const stringRange = {};
+  if (from) {
+    dateRange.$gte = from;
+    stringRange.$gte = from.toISOString();
+  }
+  if (to) {
+    dateRange.$lte = to;
+    stringRange.$lte = to.toISOString();
+  }
+
+  return {
+    $or: [
+      { at: dateRange },
+      { at: stringRange },
+    ],
+  };
+}
+
+/** Bound reads to an explicit/default window that works for Date or ISO-string `at`. */
 export function applyDefaultActivityWindow(filter, query = {}, now = new Date()) {
-  if (query.from || query.to || filter.at) return filter;
-  const end = new Date(now);
-  const start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - (ACTIVITY_DEFAULT_WINDOW_DAYS - 1));
-  start.setUTCHours(0, 0, 0, 0);
-  filter.at = { $gte: start, $lte: end };
+  if (filter.at) {
+    const from = filter.at.$gte;
+    const to = filter.at.$lte;
+    delete filter.at;
+    filter.$and = [...(filter.$and || []), buildActivityAtRangeClause(from, to, now)];
+    return filter;
+  }
+  if (query.from || query.to) {
+    filter.$and = [...(filter.$and || []), buildActivityAtRangeClause(query.from, query.to, now)];
+    return filter;
+  }
+  filter.$and = [...(filter.$and || []), buildActivityAtRangeClause(null, null, now)];
   return filter;
 }
 
@@ -471,8 +513,8 @@ export function applyActivityLogFilters(filter, query = {}) {
 }
 
 /**
- * Programme-scoped readers see only their programmes (plus unscoped legacy rows
- * are hidden). Unrestricted readers get no extra clause.
+ * Programme-scoped readers see their programmes plus org-level / legacy rows
+ * that never carried a programmeId. Unrestricted readers get no extra clause.
  */
 export function applyProgrammeScopeFilter(filter, programmeIds) {
   if (!Array.isArray(programmeIds)) return filter;
@@ -480,7 +522,14 @@ export function applyProgrammeScopeFilter(filter, programmeIds) {
     filter.programmeId = { $in: [] };
     return filter;
   }
-  const clause = { programmeId: { $in: programmeIds } };
+  const clause = {
+    $or: [
+      { programmeId: { $in: programmeIds } },
+      { programmeId: null },
+      { programmeId: { $exists: false } },
+      { programmeId: '' },
+    ],
+  };
   filter.$and = [...(filter.$and || []), clause];
   return filter;
 }
