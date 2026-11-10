@@ -134,9 +134,24 @@ export async function listEvents(userId, { from, to, kind } = {}) {
   return rows.map((row) => serializeEvent(row, { people, currentUserId: selfId }));
 }
 
+function startOfTodayMs() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+}
+
+function isUpcomingFromCurrentMonth(row) {
+  const start = new Date(row?.startAt || 0).getTime();
+  if (Number.isNaN(start)) return false;
+  const now = new Date();
+  const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  /* Current month onward, but never count past days/events. */
+  const cutoff = Math.max(startOfCurrentMonth, startOfTodayMs());
+  return start >= cutoff;
+}
+
 export async function summaryCounts(userId) {
   const selfId = asId(userId);
-  const rows = await loadVisibleEvents(selfId);
+  const rows = (await loadVisibleEvents(selfId)).filter(isUpcomingFromCurrentMonth);
   const openTasks = rows.filter((row) => row.kind === 'task' && row.status === 'open').length;
   const pendingRequests = rows.filter(
     (row) =>
@@ -215,7 +230,9 @@ export async function createEvent(userId, payload = {}, actor = null) {
   const body = String(payload.body || payload.note || '').trim().slice(0, MAX_BODY);
   const { start, end } = validateTimes(payload.startAt, payload.endAt);
   const allDay = Boolean(payload.allDay);
-  const reminderAt = payload.reminderAt ? toIso(payload.reminderAt) : start;
+  /* Default task reminder: 5 minutes before start (Teams-style lead time). */
+  const defaultReminder = new Date(new Date(start).getTime() - 5 * 60 * 1000).toISOString();
+  const reminderAt = payload.reminderAt ? toIso(payload.reminderAt) : defaultReminder;
 
   let participantIds = [];
   if (Array.isArray(payload.participantIds)) {
