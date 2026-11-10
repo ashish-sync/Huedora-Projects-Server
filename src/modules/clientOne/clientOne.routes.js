@@ -12,6 +12,8 @@ import {
   buildCampScopeFilter,
   computeClientOneKpis,
   defaultDashboardWindow,
+  changeClientOnePin,
+  computeClientOneDashboardAnalytics,
   loadScopedCamps,
   resolveClientOneSessionAccess,
   signClientOneSession,
@@ -185,6 +187,38 @@ router.get(
   }),
 );
 
+router.post(
+  '/account/pin',
+  requireClientOneSession,
+  asyncHandler(async (req, res) => {
+    if (req.clientOne.isPreview) {
+      throw new AppError('PIN cannot be changed in staff preview', 403, 'FORBIDDEN');
+    }
+    const result = await changeClientOnePin(req.clientOne.access, {
+      currentPin: req.body?.currentPin,
+      newPin: req.body?.pin || req.body?.newPin,
+    });
+    await writeAudit({
+      action: 'CLIENT_ONE.PIN_SELF_UPDATE',
+      entityType: 'client_one_access',
+      entityId: req.clientOne.access._id,
+      after: { accessId: result.accessId },
+      source: 'UI',
+      actorType: 'USER',
+      actorEmail: `client-one:${req.clientOne.access.accessId}`,
+      ip: req.ip,
+      requestId: req.requestId,
+    });
+    res.json({
+      data: {
+        ok: true,
+        accessId: result.accessId,
+        pin: result.pin,
+      },
+    });
+  }),
+);
+
 router.get(
   '/dashboard',
   requireClientOneSession,
@@ -193,6 +227,7 @@ router.get(
     const { from, to } = rangeFromQuery(req);
     const camps = await loadScopedCamps(req.clientOne.access, { from, to });
     const kpis = computeClientOneKpis(camps, { from, to });
+    const analytics = computeClientOneDashboardAnalytics(camps);
     const session = signClientOneSession(req.clientOne.access, {
       preview: req.clientOne.isPreview,
     });
@@ -202,6 +237,8 @@ router.get(
         features: session.features,
         mode: req.clientOne.isPreview ? 'preview' : 'external',
         kpis,
+        charts: analytics.charts,
+        leaderboards: analytics.leaderboards,
       },
     });
   }),

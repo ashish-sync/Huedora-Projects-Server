@@ -4097,7 +4097,8 @@ router.post(
     await assertClientIdAccess(req.user, row.clientId);
     await assertClientMasterAccess(req.user, row);
     const rotate = req.body?.rotate === true || req.query?.rotate === 'true';
-    const result = await mintOrRotateClientOneAccess(row, actor(req), { rotate });
+    const pin = req.body?.pin;
+    const result = await mintOrRotateClientOneAccess(row, actor(req), { rotate, pin });
     if (result.created || result.rotated) {
       await audit(
         req,

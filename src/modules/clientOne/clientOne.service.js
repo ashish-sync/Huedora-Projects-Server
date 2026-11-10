@@ -4,29 +4,63 @@ import { env } from '../../config/env.js';
 import { AppError } from '../../utils/helpers.js';
 import { CampOpsCamp, CampOpsClientMaster } from '../campOps/campOps.model.js';
 import { normalizeCampName } from '../campOps/campOps.constants.js';
+import {
+  CAMP_CLOSURE_TAXONOMY,
+  findClosureSubReason,
+  normalizeClosureSubReason,
+} from '../campOps/campOps.closure.js';
+import {
+  computeLifecycleDerived,
+  campSnapshotPricing,
+  isCampExecutedForPayout,
+  resolveCancelledClosureExecutionStatus,
+} from '../campOps/campOps.lifecycle.js';
+import {
+  classifyChargeabilityBucket,
+  classifyPunctualityBucket,
+} from '../dashboards/campQuality.metrics.js';
 import { ClientOneAccess } from './clientOne.model.js';
 import { normalizeClientOneFeatures } from './clientOne.features.js';
 
-const PIN_LENGTH = 8;
+const PIN_LENGTH = 6;
 const SESSION_TTL = '12h';
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_FAILED = 8;
 const LOCK_MS = 15 * 60 * 1000;
 const ACCESS_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const PIN_PATTERN = /^\d{6}$/;
+
+export function normalizeClientOnePin(raw) {
+  const pin = String(raw || '').replace(/\D+/g, '');
+  return PIN_PATTERN.test(pin) ? pin : '';
+}
 
 export function hashClientOnePin(raw) {
-  const pin = String(raw || '').trim();
-  if (!pin || pin.length > 64) return null;
+  const pin = normalizeClientOnePin(raw) || String(raw || '').trim();
+  // Login still hashes only valid 6-digit pins; reject empty / non-PIN shapes.
+  if (!PIN_PATTERN.test(String(pin || '').trim())) return null;
   return createHash('sha256').update(`client-one:${pin}`).digest('hex');
 }
 
 export function mintClientOnePin(length = PIN_LENGTH) {
-  const size = Math.max(6, Math.min(12, Number(length) || PIN_LENGTH));
+  const size = PIN_LENGTH;
+  void length;
   let pin = '';
   for (let i = 0; i < size; i += 1) {
     pin += String(randomInt(0, 10));
   }
   return pin;
+}
+
+export function resolveClientOnePinInput(requestedPin) {
+  const custom = normalizeClientOnePin(requestedPin);
+  if (requestedPin != null && String(requestedPin).trim() !== '') {
+    if (!custom) {
+      throw new AppError('PIN must be exactly 6 digits', 400, 'VALIDATION_ERROR');
+    }
+    return custom;
+  }
+  return mintClientOnePin();
 }
 
 export function mintClientOneAccessId(length = 10) {
@@ -105,7 +139,7 @@ export async function getAccessByAccessId(accessId) {
   return ClientOneAccess.findOne({ accessId: id, isActive: true, revokedAt: null });
 }
 
-export async function mintOrRotateClientOneAccess(master, actor = {}, { rotate = false } = {}) {
+export async function mintOrRotateClientOneAccess(master, actor = {}, { rotate = false, pin: requestedPin } = {}) {
   if (!master?._id) throw new AppError('Client master is required', 400, 'VALIDATION_ERROR');
   const keys = programmeKeysFromMaster(master);
   if (!keys.clientId || !keys.programName || !keys.campName) {
@@ -131,11 +165,15 @@ export async function mintOrRotateClientOneAccess(master, actor = {}, { rotate =
     };
   }
 
-  let pin = mintClientOnePin();
+  const customRequested = requestedPin != null && String(requestedPin).trim() !== '';
+  let pin = resolveClientOnePinInput(requestedPin);
   let pinHash = hashClientOnePin(pin);
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const clash = await ClientOneAccess.findOne({ pinHash, isActive: true, revokedAt: null });
     if (!clash || (existing && String(clash._id) === String(existing._id))) break;
+    if (customRequested) {
+      throw new AppError('That PIN is already in use. Choose a different 6-digit PIN.', 409, 'PIN_IN_USE');
+    }
     pin = mintClientOnePin();
     pinHash = hashClientOnePin(pin);
   }
@@ -209,6 +247,34 @@ export async function revokeClientOneAccess(masterId) {
   row.revokedAt = new Date().toISOString();
   await row.save();
   return row;
+}
+
+/** External client session: change own PIN (not available for staff preview). */
+export async function changeClientOnePin(access, { currentPin, newPin } = {}) {
+  if (!access?._id || access.isPreview) {
+    throw new AppError('PIN can only be changed from an active client session', 403, 'FORBIDDEN');
+  }
+  const currentHash = hashClientOnePin(currentPin);
+  if (!currentHash || access.pinHash !== currentHash) {
+    throw new AppError('Current PIN is incorrect', 401, 'INVALID_PIN');
+  }
+  const pin = resolveClientOnePinInput(newPin);
+  if (pin === normalizeClientOnePin(currentPin)) {
+    throw new AppError('New PIN must be different from the current PIN', 400, 'VALIDATION_ERROR');
+  }
+  const pinHash = hashClientOnePin(pin);
+  const clash = await ClientOneAccess.findOne({ pinHash, isActive: true, revokedAt: null });
+  if (clash && String(clash._id) !== String(access._id)) {
+    throw new AppError('That PIN is already in use. Choose a different 6-digit PIN.', 409, 'PIN_IN_USE');
+  }
+  const row = await ClientOneAccess.findOne({ _id: access._id, isActive: true, revokedAt: null });
+  if (!row) throw new AppError('Session no longer valid', 401, 'UNAUTHORIZED');
+  row.pinHash = pinHash;
+  row.rotatedAt = new Date().toISOString();
+  row.failedAttempts = 0;
+  row.lockedUntil = null;
+  await row.save();
+  return { accessId: row.accessId, pin };
 }
 
 function isLocked(access) {
@@ -447,6 +513,146 @@ export async function loadScopedCamps(access, { from, to } = {}) {
   return Array.isArray(rows) ? rows : [];
 }
 
+function campPlain(raw) {
+  return typeof raw?.toObject === 'function' ? raw.toObject() : raw;
+}
+
+function parseIsoDay(value) {
+  const raw = String(value || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const ms = Date.parse(`${raw}T12:00:00.000Z`);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function daysBetweenIso(fromValue, toValue) {
+  const fromMs = parseIsoDay(fromValue);
+  const toMs = parseIsoDay(toValue);
+  if (fromMs == null || toMs == null) return null;
+  return Math.round((toMs - fromMs) / 86400000);
+}
+
+function bumpCount(map, key, by = 1) {
+  const label = String(key || '').trim() || 'Unspecified';
+  map.set(label, (map.get(label) || 0) + by);
+}
+
+function slicesFromCountMap(map, order = []) {
+  const total = [...map.values()].reduce((sum, n) => sum + n, 0);
+  const keys = order.length
+    ? order.filter((k) => map.has(k) || order.includes(k))
+    : [...map.keys()].sort((a, b) => (map.get(b) || 0) - (map.get(a) || 0));
+  const seen = new Set();
+  const rows = [];
+  for (const label of keys) {
+    if (seen.has(label)) continue;
+    seen.add(label);
+    const value = map.get(label) || 0;
+    if (!order.length && value <= 0) continue;
+    rows.push({
+      label,
+      value,
+      pct: total > 0 ? Math.round((value / total) * 1000) / 10 : 0,
+    });
+  }
+  if (order.length) {
+    for (const [label, value] of map.entries()) {
+      if (seen.has(label) || value <= 0) continue;
+      rows.push({
+        label,
+        value,
+        pct: total > 0 ? Math.round((value / total) * 1000) / 10 : 0,
+      });
+    }
+  }
+  return { total, slices: rows };
+}
+
+/** Final Billing: Camp One chargeability buckets with Pending shown as Planned. */
+function classifyFinalBillingBucket(camp = {}) {
+  const bucket = classifyChargeabilityBucket(camp.chargeableStatus);
+  return bucket === 'Pending' ? 'Planned' : bucket;
+}
+
+/** Request lead days: requestDate (fallback submittedAt) → campDate. */
+function classifyRequestTimelineBucket(camp = {}) {
+  const requestAnchor = camp.requestDate
+    || String(camp.submittedAt || '').slice(0, 10)
+    || '';
+  const leadDays = daysBetweenIso(requestAnchor, camp.campDate);
+  if (leadDays == null) return null;
+  return leadDays < 5 ? 'Less than 5 Days' : '5 or more Days';
+}
+
+/** Extra Hours: Camp One overtime hours, within 4 vs beyond 4. */
+function classifyExtraHoursBucket(camp = {}) {
+  if (!isCampExecutedForPayout(camp)) return null;
+  const derived = computeLifecycleDerived(camp, { pricing: campSnapshotPricing(camp) });
+  const extraHours = Number.isFinite(Number(derived.extraHours))
+    ? Number(derived.extraHours)
+    : Number(camp.extraHours);
+  if (!Number.isFinite(extraHours)) return null;
+  return extraHours <= 4 ? 'Within 4 Hours' : 'Beyond 4 Hours';
+}
+
+function classifyExecutedClinicBucket(camp = {}) {
+  const closure = resolveCancelledClosureExecutionStatus(camp);
+  if (closure === 'Cancelled by Client') return 'Cancelled by Client';
+  if (closure === 'Cancelled by Tylo') return 'Cancelled by Tylo';
+  if (isCampExecutedForPayout(camp) || String(camp.status || '').toLowerCase() === 'executed') {
+    return 'Executed';
+  }
+  return null;
+}
+
+function resolveTyloCancellationReasonLabel(camp = {}) {
+  const code = normalizeClosureSubReason(
+    camp.closureSubReason || camp.closureReasonCode || camp.cancellationReason || '',
+  );
+  const category = String(camp.closureReasonCategory || '').trim();
+  if (code && category) {
+    const meta = findClosureSubReason('Cancelled by Tylo', category, code);
+    if (meta?.label) return meta.label;
+  }
+  if (code) {
+    const tree = CAMP_CLOSURE_TAXONOMY['Cancelled by Tylo'] || {};
+    for (const reasons of Object.values(tree)) {
+      const match = (reasons || []).find((item) => item.value === code);
+      if (match?.label) return match.label;
+    }
+  }
+  const label = String(camp.closureSubReasonLabel || '').trim();
+  if (label) return label;
+  return 'Unspecified';
+}
+
+function resolveMrName(camp = {}) {
+  const contacts = Array.isArray(camp.contactPersons) ? camp.contactPersons : [];
+  const tm = contacts.find((person) => {
+    const level = String(person?.level || person?.role || person?.code || '').toLowerCase();
+    return level.includes('territory')
+      || level.includes('manager')
+      || level === 'tm'
+      || level === 'mr'
+      || level.includes('tbm');
+  });
+  return String(tm?.name || camp.fieldPersonName || '').trim();
+}
+
+function leaderboardFromMap(map, limit = 3) {
+  return [...map.values()]
+    .map((row) => ({
+      name: row.name,
+      state: row.state || '—',
+      camps: row.camps,
+      patients: row.patients,
+      avgPatients: row.camps > 0
+        ? Math.round((row.patients / row.camps) * 10) / 10
+        : 0,
+    }))
+    .sort((a, b) => b.patients - a.patients || b.camps - a.camps || a.name.localeCompare(b.name))
+    .slice(0, limit);
+}
+
 export function computeClientOneKpis(camps = [], { from, to, now = new Date() } = {}) {
   const today = ymd(now);
   const in7 = new Date(now);
@@ -464,20 +670,31 @@ export function computeClientOneKpis(camps = [], { from, to, now = new Date() } 
   let chargeable = 0;
   let nonChargeable = 0;
   let eligibleExecuted = 0;
+  let patientsScreened = 0;
+  const doctorNames = new Set();
 
   for (const raw of camps) {
-    const camp = typeof raw.toObject === 'function' ? raw.toObject() : raw;
+    const camp = campPlain(raw);
     total += 1;
     const status = String(camp.status || '').toLowerCase();
     const date = String(camp.campDate || '').slice(0, 10);
-    if (status === 'executed') {
+    const patients = Number(camp.actualPatients ?? camp.patientsCount);
+    if (Number.isFinite(patients) && patients > 0) patientsScreened += patients;
+    const doctor = String(camp.doctorName || '').trim();
+    if (doctor) doctorNames.add(doctor.toLowerCase());
+
+    const clinicBucket = classifyExecutedClinicBucket(camp);
+    if (clinicBucket === 'Executed' || status === 'executed') {
       executed += 1;
       eligibleExecuted += 1;
+    } else if (clinicBucket === 'Cancelled by Client') {
+      cancelled += 1;
+      cancelledByClient += 1;
+    } else if (clinicBucket === 'Cancelled by Tylo') {
+      cancelled += 1;
+      cancelledByTylo += 1;
     } else if (status === 'cancelled' || status === 'rejected') {
       cancelled += 1;
-      const by = String(camp.cancellationBy || camp.cancelledBy || '').toLowerCase();
-      if (by.includes('client')) cancelledByClient += 1;
-      else if (by.includes('tylo') || by.includes('internal')) cancelledByTylo += 1;
     } else if (status === 'approved') {
       approved += 1;
       if (date && date >= today) eligibleExecuted += 1;
@@ -491,11 +708,9 @@ export function computeClientOneKpis(camps = [], { from, to, now = new Date() } 
       upcoming += 1;
     }
 
-    const charge = String(camp.chargeableStatus || '').toLowerCase();
-    if (charge === 'chargeable' || charge === 'yes') chargeable += 1;
-    else if (charge === 'non_chargeable' || charge === 'non-chargeable' || charge === 'no') {
-      nonChargeable += 1;
-    }
+    const billing = classifyFinalBillingBucket(camp);
+    if (billing === 'Chargeable') chargeable += 1;
+    else if (billing === 'Non-Chargeable') nonChargeable += 1;
   }
 
   const completionRate = eligibleExecuted > 0
@@ -506,6 +721,9 @@ export function computeClientOneKpis(camps = [], { from, to, now = new Date() } 
     from: from || null,
     to: to || null,
     total,
+    campCount: total,
+    patientsScreened,
+    uniqueDoctors: doctorNames.size,
     approved,
     executed,
     cancelled,
@@ -516,6 +734,90 @@ export function computeClientOneKpis(camps = [], { from, to, now = new Date() } 
     executionCompletionPct: completionRate,
     chargeable,
     nonChargeable,
+  };
+}
+
+/**
+ * Client One dashboard charts + leaderboards.
+ * Buckets reuse Camp One classifiers / closure taxonomy — no parallel status model.
+ */
+export function computeClientOneDashboardAnalytics(camps = []) {
+  const requestMap = new Map();
+  const billingMap = new Map();
+  const punctualityMap = new Map();
+  const extraHoursMap = new Map();
+  const executedMap = new Map();
+  const tyloCancelReasonMap = new Map();
+  const doctorMap = new Map();
+  const mrMap = new Map();
+
+  for (const raw of camps) {
+    const camp = campPlain(raw) || {};
+    const patients = Number(camp.actualPatients ?? camp.patientsCount);
+    const patientCount = Number.isFinite(patients) && patients > 0 ? patients : 0;
+    const state = String(camp.state || '').trim();
+
+    const requestBucket = classifyRequestTimelineBucket(camp);
+    if (requestBucket) bumpCount(requestMap, requestBucket);
+
+    bumpCount(billingMap, classifyFinalBillingBucket(camp));
+    bumpCount(punctualityMap, classifyPunctualityBucket(camp));
+
+    const extraBucket = classifyExtraHoursBucket(camp);
+    if (extraBucket) bumpCount(extraHoursMap, extraBucket);
+
+    const clinicBucket = classifyExecutedClinicBucket(camp);
+    if (clinicBucket) {
+      bumpCount(executedMap, clinicBucket);
+      if (clinicBucket === 'Cancelled by Tylo') {
+        bumpCount(tyloCancelReasonMap, resolveTyloCancellationReasonLabel(camp));
+      }
+    }
+
+    const doctor = String(camp.doctorName || '').trim();
+    if (doctor) {
+      const key = doctor.toLowerCase();
+      const row = doctorMap.get(key) || { name: doctor, state: '', camps: 0, patients: 0 };
+      row.camps += 1;
+      row.patients += patientCount;
+      if (!row.state && state) row.state = state;
+      doctorMap.set(key, row);
+    }
+
+    const mr = resolveMrName(camp);
+    if (mr) {
+      const key = mr.toLowerCase();
+      const row = mrMap.get(key) || { name: mr, state: '', camps: 0, patients: 0 };
+      row.camps += 1;
+      row.patients += patientCount;
+      if (!row.state && state) row.state = state;
+      mrMap.set(key, row);
+    }
+  }
+
+  return {
+    charts: {
+      requestTimeline: slicesFromCountMap(requestMap, ['Less than 5 Days', '5 or more Days']),
+      finalBilling: slicesFromCountMap(billingMap, ['Chargeable', 'Non-Chargeable', 'Planned']),
+      punctuality: slicesFromCountMap(punctualityMap, [
+        'Pending',
+        'Cancelled',
+        'Good',
+        'Average',
+        'Poor',
+      ]),
+      extraHours: slicesFromCountMap(extraHoursMap, ['Within 4 Hours', 'Beyond 4 Hours']),
+      executedClinics: slicesFromCountMap(executedMap, [
+        'Executed',
+        'Cancelled by Client',
+        'Cancelled by Tylo',
+      ]),
+      tyloCancellation: slicesFromCountMap(tyloCancelReasonMap),
+    },
+    leaderboards: {
+      doctors: leaderboardFromMap(doctorMap, 3),
+      mrs: leaderboardFromMap(mrMap, 3),
+    },
   };
 }
 

@@ -6,7 +6,9 @@ import {
   hashClientOnePin,
   isClientOnePreviewToken,
   mintClientOnePin,
+  normalizeClientOnePin,
   programmeKeysFromMaster,
+  resolveClientOnePinInput,
   signClientOneSession,
   toClientOneCampDto,
   verifyClientOneSessionToken,
@@ -14,15 +16,24 @@ import {
 import { assertClientOneFeature, normalizeClientOneFeatures } from './clientOne.features.js';
 import { misToCsv } from './clientOne.portal.js';
 
-test('hashClientOnePin is stable and rejects empty', () => {
-  assert.equal(hashClientOnePin('12345678'), hashClientOnePin('12345678'));
-  assert.notEqual(hashClientOnePin('12345678'), hashClientOnePin('87654321'));
+test('hashClientOnePin is stable and rejects empty or non-6-digit values', () => {
+  assert.equal(hashClientOnePin('123456'), hashClientOnePin('123456'));
+  assert.notEqual(hashClientOnePin('123456'), hashClientOnePin('654321'));
   assert.equal(hashClientOnePin(''), null);
+  assert.equal(hashClientOnePin('12345'), null);
+  assert.equal(hashClientOnePin('1234567'), null);
 });
 
 test('mintClientOnePin returns numeric PIN of expected length', () => {
-  const pin = mintClientOnePin(8);
-  assert.match(pin, /^\d{8}$/);
+  const pin = mintClientOnePin();
+  assert.match(pin, /^\d{6}$/);
+});
+
+test('resolveClientOnePinInput accepts custom 6-digit PIN or auto-generates', () => {
+  assert.equal(normalizeClientOnePin('12-34-56'), '123456');
+  assert.equal(resolveClientOnePinInput('654321'), '654321');
+  assert.match(resolveClientOnePinInput(''), /^\d{6}$/);
+  assert.throws(() => resolveClientOnePinInput('12345'), /6 digits/i);
 });
 
 test('programmeKeysFromMaster maps Client Master programme dimensions', () => {
@@ -72,14 +83,29 @@ test('computeClientOneKpis counts statuses and upcoming', () => {
   const now = new Date('2026-11-10T12:00:00.000Z');
   const kpis = computeClientOneKpis(
     [
-      { status: 'executed', campDate: '2026-11-01', chargeableStatus: 'chargeable' },
-      { status: 'approved', campDate: '2026-11-12' },
-      { status: 'cancelled', campDate: '2026-11-05', cancellationBy: 'client' },
-      { status: 'pending_review', campDate: '2026-11-08' },
+      {
+        status: 'executed',
+        executionStatus: 'Camp Completed',
+        campDate: '2026-11-01',
+        chargeableStatus: 'Chargeable',
+        actualPatients: 12,
+        doctorName: 'Dr A',
+      },
+      { status: 'approved', executionStatus: 'Camp Scheduled', campDate: '2026-11-12', doctorName: 'Dr B' },
+      {
+        status: 'cancelled',
+        executionStatus: 'Cancelled by Client',
+        campDate: '2026-11-05',
+        cancelledBy: 'brand',
+      },
+      { status: 'pending_review', campDate: '2026-11-08', doctorName: 'Dr A' },
     ],
     { from: '2026-11-01', to: '2026-11-30', now },
   );
   assert.equal(kpis.total, 4);
+  assert.equal(kpis.campCount, 4);
+  assert.equal(kpis.patientsScreened, 12);
+  assert.equal(kpis.uniqueDoctors, 2);
   assert.equal(kpis.executed, 1);
   assert.equal(kpis.approved, 1);
   assert.equal(kpis.cancelled, 1);
@@ -87,6 +113,84 @@ test('computeClientOneKpis counts statuses and upcoming', () => {
   assert.equal(kpis.pending, 1);
   assert.equal(kpis.upcoming7Days, 1);
   assert.equal(kpis.chargeable, 1);
+});
+
+test('computeClientOneDashboardAnalytics uses Camp One business buckets', async () => {
+  const { computeClientOneDashboardAnalytics } = await import('./clientOne.service.js');
+  const analytics = computeClientOneDashboardAnalytics([
+    {
+      status: 'executed',
+      executionStatus: 'Camp Completed',
+      campDate: '2026-11-10',
+      requestDate: '2026-11-01',
+      chargeableStatus: 'Chargeable',
+      startTime: '09:00',
+      inTime: '09:02',
+      outTime: '12:00',
+      clientMasterCampDuration: '4:00',
+      extraHours: 1,
+      actualPatients: 20,
+      doctorName: 'Dr Rao',
+      state: 'Bihar',
+      fieldPersonName: 'Vivek Sharma',
+    },
+    {
+      status: 'executed',
+      executionStatus: 'Marked Executed',
+      campDate: '2026-11-12',
+      requestDate: '2026-11-10',
+      chargeableStatus: 'Non-Chargeable',
+      startTime: '09:00',
+      inTime: '09:40',
+      outTime: '19:00',
+      clientMasterCampDuration: '4:00',
+      extraHours: 5,
+      punctuality: 'Poor',
+      actualPatients: 8,
+      doctorName: 'Dr Rao',
+      state: 'Bihar',
+      fieldPersonName: 'Vivek Sharma',
+    },
+    {
+      status: 'approved',
+      executionStatus: 'Camp Scheduled',
+      campDate: '2026-11-15',
+      requestDate: '2026-11-14',
+      chargeableStatus: '',
+      doctorName: 'Dr Planned',
+      fieldPersonName: 'Ravi Gupta',
+      state: 'Maharashtra',
+    },
+    {
+      status: 'cancelled',
+      executionStatus: 'Cancelled by Tylo',
+      campDate: '2026-11-08',
+      cancelledBy: 'khw',
+      closureReasonCategory: 'Resource Issue',
+      closureSubReason: 'hcw_unavailability',
+      closureSubReasonLabel: 'HCW Unavailability',
+      doctorName: 'Dr Mehta',
+      fieldPersonName: 'Ravi Gupta',
+      state: 'Maharashtra',
+      actualPatients: 0,
+    },
+  ]);
+  assert.equal(analytics.charts.requestTimeline.slices.find((s) => s.label === '5 or more Days')?.value, 1);
+  assert.equal(analytics.charts.requestTimeline.slices.find((s) => s.label === 'Less than 5 Days')?.value, 2);
+  assert.equal(analytics.charts.finalBilling.slices.find((s) => s.label === 'Chargeable')?.value, 1);
+  assert.equal(analytics.charts.finalBilling.slices.find((s) => s.label === 'Non-Chargeable')?.value, 1);
+  assert.equal(analytics.charts.finalBilling.slices.find((s) => s.label === 'Planned')?.value, 2);
+  assert.equal(analytics.charts.punctuality.slices.find((s) => s.label === 'Good')?.value, 1);
+  assert.equal(analytics.charts.punctuality.slices.find((s) => s.label === 'Poor')?.value, 1);
+  assert.equal(analytics.charts.punctuality.slices.find((s) => s.label === 'Cancelled')?.value, 1);
+  assert.equal(analytics.charts.extraHours.slices.find((s) => s.label === 'Within 4 Hours')?.value, 1);
+  assert.equal(analytics.charts.extraHours.slices.find((s) => s.label === 'Beyond 4 Hours')?.value, 1);
+  assert.equal(analytics.charts.executedClinics.slices.find((s) => s.label === 'Executed')?.value, 2);
+  assert.equal(analytics.charts.executedClinics.slices.find((s) => s.label === 'Cancelled by Tylo')?.value, 1);
+  assert.equal(analytics.charts.tyloCancellation.slices[0]?.label, 'HCW Unavailability');
+  assert.equal(analytics.leaderboards.doctors[0]?.name, 'Dr Rao');
+  assert.equal(analytics.leaderboards.doctors[0]?.patients, 28);
+  assert.equal(analytics.leaderboards.mrs[0]?.name, 'Vivek Sharma');
 });
 
 test('normalizeClientOneFeatures defaults all capabilities on', () => {

@@ -13,9 +13,17 @@ export const CLIENT_ONE_FEATURE_KEYS = [
   'poUpload',
 ];
 
-export const DEFAULT_CLIENT_ONE_FEATURES = Object.freeze(
-  Object.fromEntries(CLIENT_ONE_FEATURE_KEYS.map((key) => [key, true])),
-);
+export const DEFAULT_CLIENT_ONE_FEATURES = Object.freeze({
+  dashboard: true,
+  campTracker: true,
+  hcw: false,
+  calendar: false,
+  invoices: true,
+  annexures: false,
+  mis: true,
+  campRequestLink: true,
+  poUpload: true,
+});
 
 export function normalizeClientOneFeatures(raw) {
   const out = { ...DEFAULT_CLIENT_ONE_FEATURES };

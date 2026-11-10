@@ -132,8 +132,10 @@ function pathMatchesRegex(doc, key, regex) {
 function match(doc, filter = {}) {
   if (!filter || !Object.keys(filter).length) return true;
   return Object.entries(filter).every(([key, val]) => {
-    if (key === '$or') return val.some((f) => match(doc, f));
-    if (key === '$and') return val.every((f) => match(doc, f));
+    if (key === '$or') return Array.isArray(val) && val.some((f) => match(doc, f));
+    if (key === '$and') return Array.isArray(val) && val.every((f) => match(doc, f));
+    if (key === '$nor') return Array.isArray(val) && !val.some((f) => match(doc, f));
+    if (key === '$not') return !match(doc, val);
     if (val && typeof val === 'object' && !(val instanceof Date) && !Array.isArray(val)) {
       if (val.$in) {
         const current = get(doc, key);
@@ -156,6 +158,17 @@ function match(doc, filter = {}) {
         if (expected == null) return current != null && current !== '';
         if (current == null) return expected != null;
         return !idsEqual(current, expected);
+      }
+      if (Object.prototype.hasOwnProperty.call(val, '$not')) {
+        const notExpr = val.$not;
+        // Mongo: { action: { $not: /USER\.(LOGIN|…)/i } } — used by Activity Log routine exclusion
+        if (notExpr instanceof RegExp) {
+          return !pathMatchesRegex(doc, key, notExpr);
+        }
+        if (notExpr && typeof notExpr === 'object' && !Array.isArray(notExpr)) {
+          return !match(doc, { [key]: notExpr });
+        }
+        return !idsEqual(get(doc, key), notExpr);
       }
       if (val.$exists !== undefined) {
         const parts = key.split('.');

@@ -67,6 +67,24 @@ test('regex matches nested array fields (providerEmployees.name/mobile)', () => 
   );
 });
 
+test('$not with RegExp excludes routine Activity Log actions (file-store parity)', () => {
+  const routine = /^USER\.(LOGIN|LOGOUT|TOKEN|REFRESH)/i;
+  const filter = {
+    $and: [{ action: { $not: routine } }],
+  };
+  assert.equal(matchDocument({ action: 'camp_ops.approve' }, filter), true);
+  assert.equal(matchDocument({ action: 'USER.LOGIN' }, filter), false);
+  assert.equal(matchDocument({ action: 'USER.TOKEN.REFRESH' }, filter), false);
+  assert.equal(
+    matchDocument({ action: 'camp_ops.approve' }, { $nor: [{ action: routine }] }),
+    true,
+  );
+  assert.equal(
+    matchDocument({ action: 'USER.LOGIN' }, { $nor: [{ action: routine }] }),
+    false,
+  );
+});
+
 test('consumables resolve with loose division/method matching', () => {
   const mapped = resolveMappedConsumablesFromRecords([
     {
