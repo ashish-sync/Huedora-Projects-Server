@@ -1014,6 +1014,8 @@ router.get(
       await scanCollection('camp_ops_camps', {
         filter,
         projection: {
+          _id: 1,
+          campId: 1,
           status: 1,
           lifecycleStage: 1,
           assignmentStatus: 1,

@@ -135,6 +135,16 @@ test('buildCampFilter scopes execution stage lifecycle', () => {
   assert.equal(filter.lifecycleStage, 'execution');
 });
 
+test('buildCampFilter excludeBoardCancelled drops cancelled/rejected for Financial stage totals', () => {
+  const filter = buildCampFilter({
+    lifecycleStage: 'financial',
+    excludeBoardCancelled: '1',
+  });
+  assert.equal(filter.lifecycleStage, 'financial');
+  assert.ok(Array.isArray(filter.$and));
+  assert.deepEqual(filter.$and.at(-1), { status: { $nin: ['cancelled', 'rejected'] } });
+});
+
 test('matchesExecutionFilter maps execution filter values to effective status', () => {
   const scheduled = {
     status: 'approved',

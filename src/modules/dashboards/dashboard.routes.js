@@ -41,6 +41,7 @@ import {
   resolveCampQualityMetric,
 } from './campQuality.metrics.js';
 import { loadCampPipelineBoard } from './campPipeline.js';
+import { loadCampScheduleMatrix } from './campSchedule.js';
 
 function countMap(rows) {
   return Object.fromEntries((rows || []).map((x) => [x._id || 'Unknown', x.count]));
@@ -172,6 +173,19 @@ router.get(
   '/camp-pipeline',
   asyncHandler(async (req, res) => {
     const data = await loadCampPipelineBoard(req.query, req.user);
+    res.json({ data });
+  })
+);
+
+/**
+ * Home Camp Schedule matrix: Camp Slot × Day 0 / Day 1 / Day 2 / EOM.
+ * Counts unique Camp IDs by campDate and stored campSlot (Morning / Noon / Evening).
+ * Day 0=Today, Day 1=Tomorrow, Day 2=Day after tomorrow; EOM = Day 3 through month-end.
+ */
+router.get(
+  '/camp-schedule',
+  asyncHandler(async (_req, res) => {
+    const data = await loadCampScheduleMatrix();
     res.json({ data });
   })
 );

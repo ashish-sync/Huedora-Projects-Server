@@ -80,6 +80,52 @@ test('buildOperationsBoard totals match reference shape', () => {
   assert.equal(byId.execution.byStatus.cancelled_by_tylo, 1);
 });
 
+test('Camp Completed is board-counted under Financial, Executed matches Manage filter', () => {
+  const completed = {
+    status: 'executed',
+    lifecycleStage: 'execution',
+    executionStatus: 'Camp Completed',
+  };
+  assert.equal(resolveOperationsBoardStage(completed), 'financial');
+  assert.equal(resolveOperationsBoardStatus(completed), 'payment_not_checked');
+  assert.equal(
+    resolveOperationsBoardStatus({
+      status: 'approved',
+      lifecycleStage: 'execution',
+      executionStatus: 'Marked Executed',
+    }, 'execution'),
+    'executed',
+  );
+});
+
+test('operations board counts each Camp ID once across stages', () => {
+  const board = buildOperationsBoard([
+    {
+      campId: 'CAMP-1',
+      status: 'approved',
+      lifecycleStage: 'assignment',
+      assignmentStatus: 'Unassigned',
+    },
+    {
+      campId: 'CAMP-1',
+      status: 'approved',
+      lifecycleStage: 'assignment',
+      assignmentStatus: 'Unassigned',
+    },
+    {
+      campId: 'CAMP-2',
+      status: 'approved',
+      lifecycleStage: 'assignment',
+      assignmentStatus: 'Hiring Requested',
+    },
+  ]);
+  assert.equal(board.total, 2);
+  const assignment = board.stages.find((stage) => stage.id === 'assignment');
+  assert.equal(assignment.total, 2);
+  assert.equal(assignment.byStatus.unassigned, 1);
+  assert.equal(assignment.byStatus.hiring_requested, 1);
+});
+
 test('operations board counts stored review_pending as overdue after the SLA', () => {
   const now = new Date(2026, 7, 10, 16, 0, 0, 0); // Mon 16:00
   const board = buildOperationsBoard([

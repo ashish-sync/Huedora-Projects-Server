@@ -294,9 +294,20 @@ export function campOperationsBoardPipeline(filter = {}, { now = new Date() } = 
             'execution',
             {
               $cond: [
-                { $in: ['$_lifecycle', ['request', 'assignment', 'execution', 'financial']] },
-                '$_lifecycle',
-                'request',
+                {
+                  $in: [
+                    { $ifNull: ['$effectiveExecutionStatus', '$executionStatus'] },
+                    ['Camp Completed', 'camp_completed', 'Completed'],
+                  ],
+                },
+                'financial',
+                {
+                  $cond: [
+                    { $in: ['$_lifecycle', ['request', 'assignment', 'execution', 'financial']] },
+                    '$_lifecycle',
+                    'request',
+                  ],
+                },
               ],
             },
           ],
@@ -335,9 +346,10 @@ export function campOperationsBoardPipeline(filter = {}, { now = new Date() } = 
                         {
                           $cond: [
                             {
+                              // Match matchesExecutionFilter('executed') — Marked Executed only.
                               $in: [
                                 { $ifNull: ['$effectiveExecutionStatus', '$executionStatus'] },
-                                ['Marked Executed', 'Camp Completed', 'executed', 'camp_completed'],
+                                ['Marked Executed', 'executed'],
                               ],
                             },
                             'executed',
@@ -379,9 +391,30 @@ export function campOperationsBoardPipeline(filter = {}, { now = new Date() } = 
         },
       },
     },
+    // Distinct Camp ID (fallback _id) per stage/status — one camp never double-counts.
     {
       $group: {
-        _id: { stage: '$_boardStage', status: '$_boardStatus' },
+        _id: {
+          stage: '$_boardStage',
+          status: '$_boardStatus',
+          campKey: {
+            $cond: [
+              {
+                $and: [
+                  { $ne: [{ $ifNull: ['$campId', null] }, null] },
+                  { $ne: [{ $ifNull: ['$campId', ''] }, ''] },
+                ],
+              },
+              '$campId',
+              { $toString: '$_id' },
+            ],
+          },
+        },
+      },
+    },
+    {
+      $group: {
+        _id: { stage: '$_id.stage', status: '$_id.status' },
         count: { $sum: 1 },
       },
     },

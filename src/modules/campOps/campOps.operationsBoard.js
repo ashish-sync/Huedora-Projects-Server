@@ -3,7 +3,11 @@
  * Uses the same Stage/Status vocabulary as Manage filters.
  */
 
-import { normalizeLifecycleStage, resolveEffectiveExecutionStatus, EXECUTION_STATUS } from './campOps.lifecycle.js';
+import {
+  normalizeLifecycleStage,
+  normalizeExecutionStatus,
+  EXECUTION_STATUS,
+} from './campOps.lifecycle.js';
 import { resolveRequestReviewBoardStatus } from './campOps.requestReview.js';
 import { matchesExecutionFilter } from './campStageFilters.js';
 
@@ -51,9 +55,18 @@ function isCancelledByClient(camp = {}) {
 /** Board stage partition — cancelled closures stay under Execution for ops visibility. */
 export function resolveOperationsBoardStage(camp = {}) {
   if (isCancelledByTylo(camp) || isCancelledByClient(camp)) return 'execution';
+  // Mark Complete is a Financial outcome — keep board stage aligned with Manage filters.
+  const executionStatus = normalizeExecutionStatus(
+    camp.effectiveExecutionStatus || camp.executionStatus,
+  );
+  if (executionStatus === EXECUTION_STATUS.CAMP_COMPLETED) return 'financial';
   return normalizeLifecycleStage(camp.lifecycleStage, 'request');
 }
 
+/**
+ * Status keys must match Manage list filters (requestReviewStatus / assignmentFilter /
+ * executionFilter / financialFilter) so board counts === filtered records.
+ */
 export function resolveOperationsBoardStatus(camp = {}, stage = resolveOperationsBoardStage(camp), now = new Date()) {
   if (stage === 'request') {
     const resolved = resolveRequestReviewBoardStatus(camp, now);
@@ -70,12 +83,11 @@ export function resolveOperationsBoardStatus(camp = {}, stage = resolveOperation
   }
 
   if (stage === 'execution') {
-    if (isCancelledByTylo(camp)) return 'cancelled_by_tylo';
-    if (isCancelledByClient(camp)) return 'cancelled_by_client';
-    const effective = camp.effectiveExecutionStatus || resolveEffectiveExecutionStatus(camp);
-    if (effective === EXECUTION_STATUS.MARKED_EXECUTED || effective === EXECUTION_STATUS.CAMP_COMPLETED) {
-      return 'executed';
-    }
+    // Reuse Manage executionFilter predicates — never diverge board vs list.
+    if (matchesExecutionFilter(camp, 'cancelled_by_tylo')) return 'cancelled_by_tylo';
+    if (matchesExecutionFilter(camp, 'cancelled_by_client')) return 'cancelled_by_client';
+    if (matchesExecutionFilter(camp, 'executed')) return 'executed';
+    if (matchesExecutionFilter(camp, 'planned')) return 'planned';
     return 'planned';
   }
 
@@ -108,10 +120,25 @@ export function createOperationsBoardState(now = new Date()) {
     total: 0,
     stages,
     stageMap: Object.fromEntries(stages.map((stage) => [stage.id, stage])),
+    /** Distinct Camp ID / _id — one camp counts once across the board. */
+    seenCampIds: new Set(),
   };
 }
 
+export function resolveOperationsBoardCampIdentity(camp = {}) {
+  const campId = String(camp.campId || '').trim();
+  if (campId) return campId;
+  if (camp._id != null) return String(camp._id);
+  if (camp.id != null) return String(camp.id);
+  return '';
+}
+
 export function addCampToOperationsBoard(state, camp) {
+  const identity = resolveOperationsBoardCampIdentity(camp);
+  if (identity) {
+    if (state.seenCampIds.has(identity)) return;
+    state.seenCampIds.add(identity);
+  }
   state.total += 1;
   const stageId = resolveOperationsBoardStage(camp);
   const stage = state.stageMap[stageId];

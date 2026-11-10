@@ -68,6 +68,8 @@ export async function loadCampPipelineBoard(query = {}, user = null) {
     await scanCollection('camp_ops_camps', {
       filter,
       projection: {
+        _id: 1,
+        campId: 1,
         status: 1,
         lifecycleStage: 1,
         assignmentStatus: 1,

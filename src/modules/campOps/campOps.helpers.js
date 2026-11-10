@@ -511,6 +511,15 @@ export function buildCampFilter(query = {}) {
     }
   }
 
+  // Ops Board Financial stage totals exclude cancelled closures (those sit under Execution).
+  const excludeBoardCancelled = query.excludeBoardCancelled === '1'
+    || query.excludeBoardCancelled === true
+    || String(query.excludeBoardCancelled || '').trim().toLowerCase() === 'true';
+  if (excludeBoardCancelled) {
+    const statusClause = { status: { $nin: ['cancelled', 'rejected'] } };
+    filter.$and = [...(filter.$and || []), statusClause];
+  }
+
   const dateFrom = parseLocalDateInput(query.dateFrom);
   const dateTo = parseLocalDateInput(query.dateTo);
   if (dateFrom || dateTo) {
