@@ -124,7 +124,8 @@ export function findClosureSubReason(closureType, reasonCategory, subReasonValue
 }
 
 export function closureSubReasonRequiresRemarks(subReasonValue) {
-  return subReasonValue === 'other_mandatory_remarks';
+  return subReasonValue === 'other_mandatory_remarks'
+    || subReasonValue === 'other_request_issues';
 }
 
 export function normalizeClosureSubReason(value = '') {

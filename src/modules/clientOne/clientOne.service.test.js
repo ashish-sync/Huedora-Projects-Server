@@ -183,8 +183,8 @@ test('computeClientOneDashboardAnalytics uses Camp One business buckets', async 
   assert.equal(analytics.charts.punctuality.slices.find((s) => s.label === 'Good')?.value, 1);
   assert.equal(analytics.charts.punctuality.slices.find((s) => s.label === 'Poor')?.value, 1);
   assert.equal(analytics.charts.punctuality.slices.find((s) => s.label === 'Cancelled')?.value, 1);
-  assert.equal(analytics.charts.extraHours.slices.find((s) => s.label === 'Within 4 Hours')?.value, 1);
-  assert.equal(analytics.charts.extraHours.slices.find((s) => s.label === 'Beyond 4 Hours')?.value, 1);
+  assert.equal(analytics.charts.extraHours.slices.find((s) => s.label === 'Within 4 hours')?.value, 1);
+  assert.equal(analytics.charts.extraHours.slices.find((s) => s.label === 'More than 4 hours')?.value, 1);
   assert.equal(analytics.charts.executedClinics.slices.find((s) => s.label === 'Executed')?.value, 2);
   assert.equal(analytics.charts.executedClinics.slices.find((s) => s.label === 'Cancelled by Tylo')?.value, 1);
   assert.equal(analytics.charts.tyloCancellation.slices[0]?.label, 'HCW Unavailability');

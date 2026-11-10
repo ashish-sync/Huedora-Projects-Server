@@ -583,7 +583,7 @@ function classifyRequestTimelineBucket(camp = {}) {
   return leadDays < 5 ? 'Less than 5 Days' : '5 or more Days';
 }
 
-/** Extra Hours: Camp One overtime hours, within 4 vs beyond 4. */
+/** Extra Hours: Camp One overtime hours — within 4 vs more than 4. */
 function classifyExtraHoursBucket(camp = {}) {
   if (!isCampExecutedForPayout(camp)) return null;
   const derived = computeLifecycleDerived(camp, { pricing: campSnapshotPricing(camp) });
@@ -591,7 +591,7 @@ function classifyExtraHoursBucket(camp = {}) {
     ? Number(derived.extraHours)
     : Number(camp.extraHours);
   if (!Number.isFinite(extraHours)) return null;
-  return extraHours <= 4 ? 'Within 4 Hours' : 'Beyond 4 Hours';
+  return extraHours <= 4 ? 'Within 4 hours' : 'More than 4 hours';
 }
 
 function classifyExecutedClinicBucket(camp = {}) {
@@ -806,7 +806,7 @@ export function computeClientOneDashboardAnalytics(camps = []) {
         'Average',
         'Poor',
       ]),
-      extraHours: slicesFromCountMap(extraHoursMap, ['Within 4 Hours', 'Beyond 4 Hours']),
+      extraHours: slicesFromCountMap(extraHoursMap, ['Within 4 hours', 'More than 4 hours']),
       executedClinics: slicesFromCountMap(executedMap, [
         'Executed',
         'Cancelled by Client',
