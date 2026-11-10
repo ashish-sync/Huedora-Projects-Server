@@ -32,6 +32,7 @@ function signRefresh(user) {
 }
 
 import { collectUserPermissions } from '../users/userAccess.js';
+import { toSignedUploadUrl } from '../files/file.routes.js';
 
 export function collectPermissions(user) {
   return [...collectUserPermissions(user)];
@@ -48,6 +49,7 @@ export function publicUser(user) {
           designation: manager.designation || '',
         }
       : null;
+  const storedAvatar = String(user.avatarUrl || '').trim();
 
   return {
     id: user._id,
@@ -68,6 +70,7 @@ export function publicUser(user) {
     permissions: collectPermissions(user),
     lastLoginAt: user.lastLoginAt,
     passwordChangedAt: user.passwordChangedAt || null,
+    avatarUrl: storedAvatar ? toSignedUploadUrl(storedAvatar) : '',
   };
 }
 

@@ -12,4 +12,6 @@ export const User = defineCollection('users', {
   designation: '',
   systemRole: '',
   reportingManagerId: null,
+  /** Relative upload path, e.g. `/uploads/avatars/….jpg` — signed in publicUser. */
+  avatarUrl: '',
 });

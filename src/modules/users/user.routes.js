@@ -1,8 +1,12 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import fs from 'fs';
+import multer from 'multer';
 import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
+import { env } from '../../config/env.js';
+import { uploadDir } from '../../config/paths.js';
 import { User } from './user.model.js';
 import { Role } from './role.model.js';
 import { PERMISSION_CATALOG, MODULE_ACCESS_CATALOG, ALL_PERMISSION_KEYS, ACCESS_ACTIONS } from './permission.catalog.js';
@@ -29,6 +33,31 @@ import {
   assertActorMaySetRolePermissions,
   normalizeGrantedPermissions,
 } from './userAccess.js';
+import { createUploadStorage } from '../../storage/createUploadStorage.js';
+import { finalizeRequestUploads } from '../../storage/uploadLifecycle.js';
+
+const avatarUploadRoot = uploadDir('avatars');
+fs.mkdirSync(avatarUploadRoot, { recursive: true });
+
+const AVATAR_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const avatarMaxBytes = Math.min(Number(env.uploadMaxBytes) || 5_000_000, 2_000_000);
+
+const avatarUpload = multer({
+  storage: createUploadStorage({
+    destination: (_req, _file, cb) => cb(null, avatarUploadRoot),
+  }),
+  limits: { fileSize: avatarMaxBytes },
+  fileFilter: (_req, file, cb) => {
+    if (AVATAR_MIME.has(String(file.mimetype || '').toLowerCase())) {
+      cb(null, true);
+      return;
+    }
+    const err = new Error('Avatar must be a JPEG, PNG, WebP, or GIF image');
+    err.status = 400;
+    err.code = 'VALIDATION_ERROR';
+    cb(err);
+  },
+});
 
 const router = Router();
 
@@ -669,6 +698,82 @@ router.post(
     });
     res.status(201).json({ data: publicUser(user) });
   })
+);
+
+router.post(
+  '/:id/avatar',
+  requirePermission(PERMISSIONS.USERS_WRITE),
+  (req, res, next) => {
+    avatarUpload.single('avatar')(req, res, (err) => {
+      if (!err) return next();
+      if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+        return next(new AppError('Avatar must be 2 MB or smaller', 400, 'VALIDATION_ERROR'));
+      }
+      return next(err);
+    });
+  },
+  asyncHandler(async (req, res) => {
+    const user = await User.findOne({ _id: req.params.id, isDeleted: false });
+    if (!user) throw new AppError('User not found', 404);
+    if (!req.file?.filename) {
+      throw new AppError('Choose an image to upload', 400, 'VALIDATION_ERROR');
+    }
+
+    await finalizeRequestUploads(req);
+    const before = { avatarUrl: String(user.avatarUrl || '').trim() };
+    user.avatarUrl = `/uploads/avatars/${req.file.filename}`;
+    await user.save();
+    const { invalidateAuthCache } = await import('../../middleware/auth.js');
+    invalidateAuthCache(user._id);
+    await user.populate('roleIds');
+    await user.populate('reportingManagerId', 'fullName email designation');
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'USER.AVATAR_UPDATE',
+      entityType: 'User',
+      entityId: user._id,
+      before,
+      after: { avatarUrl: user.avatarUrl },
+      requestId: req.requestId,
+      source: 'UI',
+    });
+    res.json({ data: publicUser(user) });
+  }),
+);
+
+router.delete(
+  '/:id/avatar',
+  requirePermission(PERMISSIONS.USERS_WRITE),
+  asyncHandler(async (req, res) => {
+    const user = await User.findOne({ _id: req.params.id, isDeleted: false });
+    if (!user) throw new AppError('User not found', 404);
+    const before = { avatarUrl: String(user.avatarUrl || '').trim() };
+    if (!before.avatarUrl) {
+      await user.populate('roleIds');
+      await user.populate('reportingManagerId', 'fullName email designation');
+      res.json({ data: publicUser(user) });
+      return;
+    }
+    user.avatarUrl = '';
+    await user.save();
+    const { invalidateAuthCache } = await import('../../middleware/auth.js');
+    invalidateAuthCache(user._id);
+    await user.populate('roleIds');
+    await user.populate('reportingManagerId', 'fullName email designation');
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'USER.AVATAR_CLEAR',
+      entityType: 'User',
+      entityId: user._id,
+      before,
+      after: { avatarUrl: '' },
+      requestId: req.requestId,
+      source: 'UI',
+    });
+    res.json({ data: publicUser(user) });
+  }),
 );
 
 router.patch(
