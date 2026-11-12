@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   canEditLifecycleStage,
   canSaveCancelledOtherPayouts,
+  financePatchFromPaymentActionBody,
   getExecutionFinanceBlockers,
   isCampExecutedForPayout,
   isExecutionCancellationForFinance,
@@ -224,6 +225,46 @@ test('legacy cancelledBy camps accept Other Payouts-only body without wiping exi
   assert.equal(next.travelling, undefined);
   assert.equal(next.overtimeExpense, undefined);
   assert.equal(next.totalPayout, 2225);
+});
+
+test('financePatchFromPaymentActionBody persists Confirm Payment amounts for Excel export', () => {
+  const patch = financePatchFromPaymentActionBody(
+    {
+      campAmount: 4200,
+      travelling: 300,
+      overtimeExpense: 100,
+      otherExpenses: 50,
+      totalPayout: 0,
+      campRevenue: 8000,
+      travelRevenue: 0,
+      overtimeRevenue: 0,
+      otherRevenue: 0,
+    },
+    {
+      status: 'executed',
+      lifecycleStage: 'financial',
+      executionStatus: 'Camp Completed',
+      campAmount: 0,
+      travelling: 0,
+      overtimeExpense: 0,
+      otherExpenses: 0,
+      totalPayout: 0,
+    },
+  );
+  assert.equal(patch.campAmount, 4200);
+  assert.equal(patch.travelling, 300);
+  assert.equal(patch.overtimeExpense, 100);
+  assert.equal(patch.otherExpenses, 50);
+  assert.equal(patch.totalPayout, 4650);
+  assert.equal(patch.campRevenue, 8000);
+});
+
+test('financePatchFromPaymentActionBody returns empty patch when body has no finance keys', () => {
+  const patch = financePatchFromPaymentActionBody(
+    { paymentRemark: 'Waiting for UTR' },
+    { campAmount: 1800, totalPayout: 1800 },
+  );
+  assert.deepEqual(patch, {});
 });
 
 test('lifecyclePayloadFromBody persists travel estimate source and manual reason', () => {

@@ -825,6 +825,39 @@ export function lifecyclePayloadFromBody(body, existing = null, { pricing = null
   return next;
 }
 
+/** Finance amount keys Confirm/Hold/Unhold may persist so Excel export matches the Financial tab. */
+export const CAMP_PAYMENT_ACTION_FINANCE_KEYS = [
+  'campRevenue',
+  'travelRevenue',
+  'overtimeRevenue',
+  'otherRevenue',
+  'campAmount',
+  'travelling',
+  'overtimeExpense',
+  'otherExpenses',
+  'totalRevenue',
+  'totalPayout',
+  'netContribution',
+];
+
+/**
+ * Build a finance-only patch from a Confirm/Hold/Unhold body.
+ * Empty bodies return {} so callers can still seed Camp Payout via applyCampBusinessLogic.
+ */
+export function financePatchFromPaymentActionBody(body = {}, existing = null, { pricing = null } = {}) {
+  const raw = body && typeof body === 'object' ? body : {};
+  const touched = CAMP_PAYMENT_ACTION_FINANCE_KEYS.some(
+    (key) => raw[key] !== undefined && raw[key] !== '',
+  );
+  if (!touched) return {};
+  const full = lifecyclePayloadFromBody(raw, existing, { pricing });
+  const patch = {};
+  for (const key of CAMP_PAYMENT_ACTION_FINANCE_KEYS) {
+    if (full[key] !== undefined) patch[key] = full[key];
+  }
+  return patch;
+}
+
 /**
  * Apply current Camp One business rules to an existing or new camp document.
  * Idempotent. Does not rewrite campId. Does not overwrite non-zero manual

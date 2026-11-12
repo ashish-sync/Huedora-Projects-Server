@@ -135,6 +135,7 @@ import {
 } from './campRequestParser.service.js';
 import {
   lifecyclePayloadFromBody,
+  financePatchFromPaymentActionBody,
   applyCampBusinessLogic,
   withCampLifecycle,
   canEditLifecycleStage,
@@ -384,6 +385,23 @@ async function applyCampBusinessLogicToDocument(camp, pricing) {
     }
   }
   applyCampBusinessLogic(camp, { pricing, payeeAmount });
+}
+
+/**
+ * Persist Financial-tab amounts on Confirm/Hold/Unhold so Excel export matches the UI.
+ * Confirm Payment previously only flipped paymentSubmitStatus and left unsaved amounts in the browser.
+ */
+async function applyFinanceAmountsForPaymentAction(camp, body = {}) {
+  const pricing = await resolveClientMasterPricingForCamp(camp.clientId, {
+    campaignType: body?.campaignType ?? camp.campaignType,
+    campaignName: body?.campaignName ?? camp.campaignName,
+    clientName: camp.clientName,
+  });
+  const patch = financePatchFromPaymentActionBody(body, camp, { pricing });
+  if (Object.keys(patch).length) {
+    assignPreservingExisting(camp, patch);
+  }
+  await applyCampBusinessLogicToDocument(camp, pricing);
 }
 
 /** Projection for list queries — exclude heavy blobs.
@@ -1393,12 +1411,15 @@ router.post(
           }
         }
         if (config.action === 'confirmPayment') {
+          await applyFinanceAmountsForPaymentAction(camp, req.body || {});
           applyConfirmPaymentTransition(camp);
         }
         if (config.action === 'hold') {
+          await applyFinanceAmountsForPaymentAction(camp, req.body || {});
           applyHoldTransition(camp, paymentRemark);
         }
         if (config.action === 'unhold') {
+          await applyFinanceAmountsForPaymentAction(camp, req.body || {});
           applyReleaseHoldTransition(camp, paymentRemark);
         }
         if (config.action === 'submitToFinance') {
@@ -2638,6 +2659,7 @@ router.post(
     const camp = await loadCampForUser(req, req.params.id);
     const before = camp.toObject();
     try {
+      await applyFinanceAmountsForPaymentAction(camp, req.body || {});
       applyConfirmPaymentTransition(camp);
     } catch (err) {
       throw new AppError(err.message || 'Cannot confirm payment', 400, err.code || 'VALIDATION_ERROR');
@@ -2656,6 +2678,7 @@ router.post(
     const remark = trimStr(req.body?.paymentRemark || req.body?.holdRemark || req.body?.remarks);
     const before = camp.toObject();
     try {
+      await applyFinanceAmountsForPaymentAction(camp, req.body || {});
       applyHoldTransition(camp, remark);
     } catch (err) {
       throw new AppError(err.message || 'Cannot put payment on hold', 400, err.code || 'VALIDATION_ERROR');
@@ -2676,6 +2699,7 @@ router.post(
     );
     const before = camp.toObject();
     try {
+      await applyFinanceAmountsForPaymentAction(camp, req.body || {});
       applyReleaseHoldTransition(camp, remark);
     } catch (err) {
       throw new AppError(err.message || 'Cannot release hold', 400, err.code || 'VALIDATION_ERROR');
