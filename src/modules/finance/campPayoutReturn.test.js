@@ -19,6 +19,17 @@ test('Admin wildcard can return camps from payout queue', () => {
   assert.equal(canReturnCampFromPayoutQueue({ email: 'x@y.com' }, new Set(['*'])), true);
 });
 
+test('Admin / Super Admin systemRole can return', () => {
+  assert.equal(
+    canReturnCampFromPayoutQueue({ systemRole: 'Admin' }, new Set(['finance:write'])),
+    true,
+  );
+  assert.equal(
+    canReturnCampFromPayoutQueue({ systemRole: 'Super Admin' }, new Set(['finance:write'])),
+    true,
+  );
+});
+
 test('Accounts role or designation can return', () => {
   assert.equal(
     canReturnCampFromPayoutQueue({ roles: [{ name: 'Accounts' }] }, new Set(['finance:write'])),
@@ -34,6 +45,13 @@ test('Lead Technology designation can return (en-dash)', () => {
   assert.equal(
     canReturnCampFromPayoutQueue(
       { designation: 'Lead – Technology & Process Implementation' },
+      new Set(['finance:write']),
+    ),
+    true,
+  );
+  assert.equal(
+    canReturnCampFromPayoutQueue(
+      { designation: 'Lead – Process & Tech' },
       new Set(['finance:write']),
     ),
     true,

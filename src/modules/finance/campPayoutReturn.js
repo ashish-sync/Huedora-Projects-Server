@@ -13,6 +13,12 @@ export const CAMP_PAYOUT_RETURN_ROLE_NAMES = new Set([
   'accounts',
 ]);
 
+/** Platform systemRole values that may return (independent of RBAC roleIds). */
+export const CAMP_PAYOUT_RETURN_SYSTEM_ROLES = new Set([
+  'admin',
+  'super admin',
+]);
+
 /**
  * Designations that may return a camp from Payout Queue.
  * Normalized with lowercase + collapsed spaces + en/em dash → hyphen.
@@ -20,6 +26,7 @@ export const CAMP_PAYOUT_RETURN_ROLE_NAMES = new Set([
 export const CAMP_PAYOUT_RETURN_DESIGNATIONS = new Set([
   'accounts',
   'lead - technology & process implementation',
+  'lead - process & tech',
 ]);
 
 export function normalizePayoutReturnKey(value) {
@@ -44,12 +51,16 @@ function collectRoleNames(user = {}) {
 }
 
 /**
- * Admin (*), Accounts role/designation, Lead – Technology & Process Implementation,
- * or Zohra (by email / name) may push a camp back from Payout Queue.
+ * Admin (* / systemRole), Accounts role/designation, Lead – Technology & Process
+ * Implementation (or Lead – Process & Tech), or Zohra (by email / name) may push
+ * a camp back from Payout Queue.
  */
 export function canReturnCampFromPayoutQueue(user, permissions) {
   const perms = permissions instanceof Set ? permissions : new Set(permissions || []);
   if (perms.has(PERMISSIONS.ALL) || perms.has('*')) return true;
+
+  const systemRole = normalizePayoutReturnKey(user?.systemRole);
+  if (CAMP_PAYOUT_RETURN_SYSTEM_ROLES.has(systemRole)) return true;
 
   const email = normalizePayoutReturnKey(user?.email);
   if (CAMP_PAYOUT_RETURN_EMAILS.has(email)) return true;
