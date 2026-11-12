@@ -55,7 +55,8 @@ async function geoMasterLooksComplete() {
   return (
     states >= (expected.states || 36) &&
     districts >= Math.floor((expected.districts || 693) * 0.95) &&
-    cities >= Math.floor((expected.cities || 4198) * 0.95) &&
+    // Exact city floor so city-master additions (e.g. Diamond Harbour) reseed on boot
+    cities >= (expected.cities || 0) &&
     zones >= 6
   );
 }
