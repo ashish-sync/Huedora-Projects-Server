@@ -159,7 +159,19 @@ test('Admin can persist an explicit Execution Status instead of auto Planned→E
   assert.equal(cancelled.executionStatus, 'Cancelled by Tylo');
 });
 
-test('canSaveCancelledOtherPayouts stays open for every user after Payment Done', () => {
+test('Payment Confirmed locks all edits for non-admins; Admin may still edit', () => {
+  const camp = {
+    status: 'executed',
+    lifecycleStage: 'financial',
+    paymentSubmitStatus: 'payment_confirmed',
+  };
+  assert.equal(canEditLifecycleStage(camp, 'financial', { isAdmin: false }), false);
+  assert.equal(canEditLifecycleStage(camp, 'execution', { isAdmin: false }), false);
+  assert.equal(canEditLifecycleStage(camp, 'financial', { isAdmin: true }), true);
+  assert.equal(canEditLifecycleStage(camp, 'request', { isAdmin: true }), true);
+});
+
+test('canSaveCancelledOtherPayouts closes after Payment Confirmed; stays open before Confirm', () => {
   const camp = {
     status: 'cancelled',
     lifecycleStage: 'financial',
@@ -167,7 +179,12 @@ test('canSaveCancelledOtherPayouts stays open for every user after Payment Done'
     financePaymentStatus: 'paid',
   };
   assert.equal(canEditLifecycleStage(camp, 'financial', { isAdmin: false }), false);
+  // Payment Done alone still allows Other Payouts when not Payment Confirmed.
   assert.equal(canSaveCancelledOtherPayouts(camp, 'financial'), true);
+  assert.equal(canSaveCancelledOtherPayouts({
+    ...camp,
+    paymentSubmitStatus: 'payment_confirmed',
+  }, 'financial'), false);
   assert.equal(canSaveCancelledOtherPayouts({
     ...camp,
     executionStatus: 'Cancelled by Tylo',

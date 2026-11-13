@@ -145,6 +145,7 @@ import {
   assertCanMarkCampExecuted,
   isExecutionCancellationForFinance,
   isExecutionReadyForFinance,
+  isPaymentConfirmedCamp,
   normalizeLifecycleStage,
   normalizeExecutionStatus,
   promoteDueAssignedCampsToExecution,
@@ -160,6 +161,7 @@ import {
   normalizePaymentSubmitStatus,
   PAYMENT_SUBMIT_STATUSES,
 } from './campOps.lifecycle.js';
+import { resolveSystemRole } from '../users/systemRole.js';
 import {
   WORKFLOW_ACTIONS,
   assertWorkflowAction,
@@ -193,11 +195,17 @@ import {
 } from './campFullExport.js';
 import { CAMP_EXPORT_SECTIONS } from './campExportFieldSchema.js';
 import {
+  applyExportProgramScope,
   fetchCampsForExport,
   parseExportColumnKeys,
   parseExportFormat,
   serializeExportTemplate,
 } from './campOps.export.js';
+import {
+  financialSaveChanged,
+  financialSaveSnapshot,
+  isConfirmedFinancialCamp,
+} from './campOps.persistFinancialPayouts.js';
 import { enrichCampsAssignedHcwForExport } from './campAssignedHcwExport.js';
 import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.requestValidation.js';
 import { assertHistoricalCampDatesAllowed, assertRequestDateNotFuture, localTodayIso } from './campDatePolicy.js';
@@ -384,7 +392,22 @@ async function applyCampBusinessLogicToDocument(camp, pricing) {
       // Contact lookup is best-effort for Camp Payout defaults.
     }
   }
-  applyCampBusinessLogic(camp, { pricing, payeeAmount });
+  return applyCampBusinessLogic(camp, { pricing, payeeAmount });
+}
+
+/**
+ * Same materialization as Financial → Save Changes (without a browser form body):
+ * seed empty Camp Amount / revenue from masters, recompute totals, leave payment status alone.
+ */
+async function saveFinancialChangesLikeForm(camp) {
+  const beforeSnap = financialSaveSnapshot(camp);
+  const pricing = await resolveClientMasterPricingForCamp(camp.clientId, {
+    campaignType: camp.campaignType,
+    campaignName: camp.campaignName,
+    clientName: camp.clientName,
+  });
+  await applyCampBusinessLogicToDocument(camp, pricing);
+  return financialSaveChanged(beforeSnap, financialSaveSnapshot(camp));
 }
 
 /**
@@ -567,8 +590,24 @@ function actor(req) {
   };
 }
 
+/** Admin (*) or System Role Admin / Super Admin — required to modify Payment Confirmed camps. */
 function isCampAdmin(req) {
-  return Boolean(req.permissions?.has?.(PERMISSIONS.ALL));
+  if (req.permissions?.has?.(PERMISSIONS.ALL) || req.permissions?.has?.('*')) return true;
+  const systemRole = resolveSystemRole({
+    systemRole: req.user?.systemRole,
+    designation: req.user?.designation,
+  });
+  return systemRole === 'Admin' || systemRole === 'Super Admin';
+}
+
+function assertAdminIfPaymentConfirmed(camp, req) {
+  if (isPaymentConfirmedCamp(camp) && !isCampAdmin(req)) {
+    throw new AppError(
+      'Only Admin or Super Admin can modify a Payment Confirmed camp',
+      403,
+      'FORBIDDEN',
+    );
+  }
 }
 
 async function audit(req, action, entityType, entityId, before = null, after = null, extras = {}) {
@@ -1308,6 +1347,8 @@ router.post(
       hold: { action: 'hold', needFinanceWrite: true, needRemark: true },
       unhold: { action: 'unhold', needFinanceWrite: true, needRemark: true },
       submitToFinance: { action: 'submitToFinance', needRequest: true },
+      // Financial → Save Changes for Confirmed Payment — Admin / Super Admin only.
+      saveFinancialChanges: { action: 'saveFinancialChanges', needAdmin: true },
     };
     const config = configs[action];
     if (!config) throw new AppError('Invalid bulk action', 400, 'VALIDATION_ERROR');
@@ -1335,6 +1376,13 @@ router.post(
       !req.permissions.has(PERMISSIONS.CAMPS_APPROVE)
     ) {
       throw new AppError('Insufficient permissions to submit camps to Finance One', 403, 'FORBIDDEN');
+    }
+    if (config.action === 'saveFinancialChanges' && !isCampAdmin(req)) {
+      throw new AppError(
+        'Only Admin or Super Admin can Save Changes on Payment Confirmed camps',
+        403,
+        'FORBIDDEN',
+      );
     }
 
     const paymentRemark = trimStr(
@@ -1415,6 +1463,7 @@ router.post(
           applyConfirmPaymentTransition(camp);
         }
         if (config.action === 'hold') {
+          assertAdminIfPaymentConfirmed(camp, req);
           await applyFinanceAmountsForPaymentAction(camp, req.body || {});
           applyHoldTransition(camp, paymentRemark);
         }
@@ -1422,7 +1471,25 @@ router.post(
           await applyFinanceAmountsForPaymentAction(camp, req.body || {});
           applyReleaseHoldTransition(camp, paymentRemark);
         }
+        if (config.action === 'saveFinancialChanges') {
+          if (!isCampAdmin(req)) {
+            throw new Error('Only Admin or Super Admin can Save Changes on Payment Confirmed camps');
+          }
+          if (!isConfirmedFinancialCamp(camp)) {
+            throw new Error('Save Changes bulk only for Financial camps with Confirmed Payment');
+          }
+          const changed = await saveFinancialChangesLikeForm(camp);
+          if (!changed) {
+            results.success.push({ id: camp._id, campId: camp.campId, unchanged: true });
+            continue;
+          }
+          await camp.save();
+          await audit(req, 'camp_ops.bulk_save_financial', 'camp_ops_camp', camp._id, before, camp.toObject());
+          results.success.push({ id: camp._id, campId: camp.campId, unchanged: false });
+          continue;
+        }
         if (config.action === 'submitToFinance') {
+          assertAdminIfPaymentConfirmed(camp, req);
           if (camp.lifecycleStage !== 'financial') {
             throw new Error('Submit to Finance One is only allowed in Financial');
           }
@@ -1505,6 +1572,97 @@ router.post(
       results,
     });
   })
+);
+
+/**
+ * Bulk Financial → Save Changes for all Confirmed Payment camps in scope
+ * (optional camp-date range). Same server materialization as opening Edit and saving.
+ */
+router.post(
+  '/camps/bulk-save-confirmed-financial',
+  canBulkCampAction,
+  asyncHandler(async (req, res) => {
+    if (!isCampAdmin(req)) {
+      throw new AppError(
+        'Only Admin or Super Admin can Save Changes on Payment Confirmed camps',
+        403,
+        'FORBIDDEN',
+      );
+    }
+
+    const body = req.body || {};
+    const dateFrom = trimStr(body.dateFrom);
+    const dateTo = trimStr(body.dateTo);
+    const query = {
+      lifecycleStage: 'financial',
+      ...(dateFrom ? { dateFrom } : {}),
+      ...(dateTo ? { dateTo } : {}),
+    };
+    const filter = await scopeCampFilter(req, buildCampFilter(query));
+    filter.paymentSubmitStatus = 'payment_confirmed';
+    const scoped = await resolveCampClientScope(req.user);
+    if (Array.isArray(scoped) && scoped.length === 0) {
+      res.json({
+        message: 'No camps in scope',
+        summary: { scanned: 0, updated: 0, unchanged: 0, failed: 0 },
+        results: { success: [], failed: [] },
+      });
+      return;
+    }
+
+    const MAX_ROWS = 5000;
+    const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt').limit(MAX_ROWS);
+    const camps = applyExportProgramScope(rows, scoped);
+    const results = { success: [], failed: [] };
+    let updated = 0;
+    let unchanged = 0;
+    const a = actor(req);
+
+    for (const plain of camps) {
+      const id = String(plain?._id || plain?.id || '').trim();
+      if (!id) continue;
+      try {
+        const camp = await loadCampForUser(req, id);
+        if (!isConfirmedFinancialCamp(camp)) {
+          unchanged += 1;
+          results.success.push({ id: camp._id, campId: camp.campId, unchanged: true });
+          continue;
+        }
+        const before = camp.toObject();
+        const changed = await saveFinancialChangesLikeForm(camp);
+        if (!changed) {
+          unchanged += 1;
+          results.success.push({ id: camp._id, campId: camp.campId, unchanged: true });
+          continue;
+        }
+        await camp.save();
+        await audit(
+          req,
+          'camp_ops.bulk_save_confirmed_financial',
+          'camp_ops_camp',
+          camp._id,
+          before,
+          camp.toObject(),
+        );
+        updated += 1;
+        results.success.push({ id: camp._id, campId: camp.campId, unchanged: false });
+      } catch (err) {
+        results.failed.push({ id, reason: err.message || 'Failed to Save Changes' });
+      }
+    }
+
+    res.json({
+      message: 'Bulk Save Changes finished for Confirmed Payment camps',
+      summary: {
+        scanned: camps.length,
+        updated,
+        unchanged,
+        failed: results.failed.length,
+        actorId: a.id,
+      },
+      results,
+    });
+  }),
 );
 
 router.get(
@@ -1952,6 +2110,7 @@ router.put(
 
     // Normalize dirty title-cased stages from older saves before edit checks.
     camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
+    assertAdminIfPaymentConfirmed(camp, req);
     const stage = normalizeLifecycleStage(
       trimStr(req.body.editingStage)
       || trimStr(req.body.lifecycleStage)
@@ -2256,6 +2415,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
     camp.lifecycleStage = normalizeLifecycleStage(camp.lifecycleStage, 'request');
+    assertAdminIfPaymentConfirmed(camp, req);
     if (!canEditLifecycleStage(camp, 'financial', { isAdmin: isCampAdmin(req) })) {
       throw new AppError('Financial stage is not editable for this camp', 400, 'VALIDATION_ERROR');
     }
@@ -2563,13 +2723,18 @@ router.post(
 router.post(
   '/camps/:id/cancel',
   canApprove,
-  asyncHandler(async (req, res) => transitionCamp(req, res, 'cancelled', 'cancel'))
+  asyncHandler(async (req, res) => {
+    const camp = await loadCampForUser(req, req.params.id);
+    assertAdminIfPaymentConfirmed(camp, req);
+    return transitionCamp(req, res, 'cancelled', 'cancel');
+  })
 );
 router.post(
   '/camps/:id/close',
   canApprove,
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
+    assertAdminIfPaymentConfirmed(camp, req);
     if (!canCloseCampRecord(camp)) {
       throw new AppError(
         camp.lifecycleStage === 'financial'
@@ -2675,6 +2840,7 @@ router.post(
   canFinanceWrite,
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
+    assertAdminIfPaymentConfirmed(camp, req);
     const remark = trimStr(req.body?.paymentRemark || req.body?.holdRemark || req.body?.remarks);
     const before = camp.toObject();
     try {

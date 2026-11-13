@@ -1069,17 +1069,24 @@ export async function promoteDueAssignedCampsToExecution(CampModel = null, now =
 }
 
 /**
- * Any authenticated Camp One user may save Other Payouts on Cancelled by Tylo / Client.
- * Not blocked by Payment Done. Full financial edit still uses canEditLifecycleStage.
+ * Any authenticated Camp One user may save Other Payouts on Cancelled by Tylo / Client
+ * until Payment Confirmed. After Confirm Payment, only Admin / Super Admin may modify
+ * (via canEditLifecycleStage full financial edit).
  */
 export function canSaveCancelledOtherPayouts(camp, stage = 'financial') {
   const status = localTrim(camp?.status);
   const target = normalizeLifecycleStage(stage, '');
   if (status !== 'cancelled') return false;
   if (target !== 'financial') return false;
+  if (isPaymentConfirmedCamp(camp)) return false;
   if (!isExecutionCancellationForFinance(camp)) return false;
   const reached = normalizeLifecycleStage(camp?.lifecycleStage, 'request');
   return reached === 'financial' || hasReachedLifecycleStage(reached, 'execution');
+}
+
+/** True once Confirm Payment / Validation Completed has locked the camp for non-admins. */
+export function isPaymentConfirmedCamp(camp = {}) {
+  return normalizePaymentSubmitStatus(camp?.paymentSubmitStatus) === 'payment_confirmed';
 }
 
 export function canEditLifecycleStage(camp, stage, { isAdmin = false } = {}) {
@@ -1087,6 +1094,11 @@ export function canEditLifecycleStage(camp, stage, { isAdmin = false } = {}) {
   const reached = normalizeLifecycleStage(camp?.lifecycleStage, 'request');
   const target = normalizeLifecycleStage(stage, '');
   if (!target) return false;
+
+  // Payment Confirmed / Validation Completed: only Admin / Super Admin may modify.
+  if (isPaymentConfirmedCamp(camp) && !isAdmin) {
+    return false;
+  }
 
   const paymentDone = normalizeFinancePaymentStatus(camp?.financePaymentStatus) === 'paid';
   if (paymentDone && !isAdmin) {
