@@ -193,16 +193,11 @@ import {
 } from './campFullExport.js';
 import { CAMP_EXPORT_SECTIONS } from './campExportFieldSchema.js';
 import {
-  applyExportProgramScope,
   fetchCampsForExport,
   parseExportColumnKeys,
   parseExportFormat,
   serializeExportTemplate,
 } from './campOps.export.js';
-import {
-  applyPayoutPersistOnly,
-  isConfirmedFinancialCamp,
-} from './campOps.persistFinancialPayouts.js';
 import { enrichCampsAssignedHcwForExport } from './campAssignedHcwExport.js';
 import { getRequestStageBlockers, assertRequestStageComplete } from './campOps.requestValidation.js';
 import { assertHistoricalCampDatesAllowed, assertRequestDateNotFuture, localTodayIso } from './campDatePolicy.js';
@@ -390,32 +385,6 @@ async function applyCampBusinessLogicToDocument(camp, pricing) {
     }
   }
   applyCampBusinessLogic(camp, { pricing, payeeAmount });
-}
-
-/** Resolve HCW/SP Camp Amount for empty-payout persist only (no revenue / hours side effects). */
-async function resolvePayeeAmountForPayoutPersist(camp) {
-  if (
-    !isCampExecutedForPayout(camp)
-    || Number(camp.campAmount) > 0
-    || !trimStr(camp.hcwContactId)
-  ) {
-    return null;
-  }
-  try {
-    const payeeResolved = await resolveCampPayoutPayeeContact(camp.hcwContactId);
-    return campAmountForAssignedHcw({
-      assignmentId: camp.hcwContactId,
-      assignedContact: payeeResolved.assignedContact,
-      payeeContact: payeeResolved.payeeContact,
-    }) || Number(payeeResolved.payeeContact?.campAmount) || null;
-  } catch {
-    return null;
-  }
-}
-
-async function persistConfirmedCampPayoutAmounts(camp) {
-  const payeeAmount = await resolvePayeeAmountForPayoutPersist(camp);
-  return applyPayoutPersistOnly(camp, { payeeAmount });
 }
 
 /**
@@ -1339,9 +1308,6 @@ router.post(
       hold: { action: 'hold', needFinanceWrite: true, needRemark: true },
       unhold: { action: 'unhold', needFinanceWrite: true, needRemark: true },
       submitToFinance: { action: 'submitToFinance', needRequest: true },
-      // Seed + persist Financial amounts for Confirmed Payment / Validation Completed camps
-      // so Camp Download Excel matches the Financial tab without opening each camp.
-      persistFinancialPayouts: { action: 'persistFinancialPayouts', needFinanceWrite: true },
     };
     const config = configs[action];
     if (!config) throw new AppError('Invalid bulk action', 400, 'VALIDATION_ERROR');
@@ -1456,25 +1422,6 @@ router.post(
           await applyFinanceAmountsForPaymentAction(camp, req.body || {});
           applyReleaseHoldTransition(camp, paymentRemark);
         }
-        if (config.action === 'persistFinancialPayouts') {
-          if (!isConfirmedFinancialCamp(camp)) {
-            throw new Error('Persist payouts only for Financial camps with Confirmed Payment');
-          }
-          const { changed } = await persistConfirmedCampPayoutAmounts(camp);
-          if (!changed) {
-            results.success.push({
-              id: camp._id,
-              campId: camp.campId,
-              unchanged: true,
-            });
-            continue;
-          }
-          // Save payout fields only — skip execution-capture provenance side effects.
-          await camp.save();
-          await audit(req, `camp_ops.bulk_${action}`, 'camp_ops_camp', camp._id, before, camp.toObject());
-          results.success.push({ id: camp._id, campId: camp.campId, unchanged: false });
-          continue;
-        }
         if (config.action === 'submitToFinance') {
           if (camp.lifecycleStage !== 'financial') {
             throw new Error('Submit to Finance One is only allowed in Financial');
@@ -1558,91 +1505,6 @@ router.post(
       results,
     });
   })
-);
-
-/**
- * One-shot: seed + persist Financial payout amounts for all Confirmed Payment /
- * Validation Completed camps in scope (optional camp-date range). Avoids opening
- * each camp to Save Changes so Camp Download Excel gets Camp Amount etc.
- */
-router.post(
-  '/camps/persist-confirmed-payouts',
-  canFinanceWrite,
-  asyncHandler(async (req, res) => {
-    const body = req.body || {};
-    const dateFrom = trimStr(body.dateFrom);
-    const dateTo = trimStr(body.dateTo);
-    // Include paid Confirmed Payment camps too — amounts may still be missing from Excel.
-    const query = {
-      lifecycleStage: 'financial',
-      ...(dateFrom ? { dateFrom } : {}),
-      ...(dateTo ? { dateTo } : {}),
-    };
-    const filter = await scopeCampFilter(req, buildCampFilter(query));
-    filter.paymentSubmitStatus = 'payment_confirmed';
-    const scoped = await resolveCampClientScope(req.user);
-    if (Array.isArray(scoped) && scoped.length === 0) {
-      res.json({
-        message: 'No camps in scope',
-        summary: { scanned: 0, updated: 0, unchanged: 0, failed: 0 },
-        results: { success: [], failed: [] },
-      });
-      return;
-    }
-
-    const MAX_ROWS = 5000;
-    const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt').limit(MAX_ROWS);
-    const camps = applyExportProgramScope(rows, scoped);
-    const results = { success: [], failed: [] };
-    let updated = 0;
-    let unchanged = 0;
-    const a = actor(req);
-
-    for (const plain of camps) {
-      const id = String(plain?._id || plain?.id || '').trim();
-      if (!id) continue;
-      try {
-        const camp = await loadCampForUser(req, id);
-        if (!isConfirmedFinancialCamp(camp)) {
-          unchanged += 1;
-          results.success.push({ id: camp._id, campId: camp.campId, unchanged: true });
-          continue;
-        }
-        const before = camp.toObject();
-        const { changed } = await persistConfirmedCampPayoutAmounts(camp);
-        if (!changed) {
-          unchanged += 1;
-          results.success.push({ id: camp._id, campId: camp.campId, unchanged: true });
-          continue;
-        }
-        await camp.save();
-        await audit(
-          req,
-          'camp_ops.persist_confirmed_payouts',
-          'camp_ops_camp',
-          camp._id,
-          before,
-          camp.toObject(),
-        );
-        updated += 1;
-        results.success.push({ id: camp._id, campId: camp.campId, unchanged: false });
-      } catch (err) {
-        results.failed.push({ id, reason: err.message || 'Failed to persist payouts' });
-      }
-    }
-
-    res.json({
-      message: 'Persist confirmed payouts finished',
-      summary: {
-        scanned: camps.length,
-        updated,
-        unchanged,
-        failed: results.failed.length,
-        actorId: a.id,
-      },
-      results,
-    });
-  }),
 );
 
 router.get(
