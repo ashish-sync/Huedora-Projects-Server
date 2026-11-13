@@ -37,6 +37,14 @@
     "districtName": "Chittoor"
   },
   {
+    "name": "Dharmavaram",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Dhone",
+    "stateName": "Andhra Pradesh"
+  },
+  {
     "name": "Eluru",
     "stateName": "Andhra Pradesh",
     "districtName": "Eluru"
@@ -61,14 +69,34 @@
     "districtName": "Sri Sathya Sai"
   },
   {
+    "name": "Ichchapuram",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Jaggaiahpet",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Jammalamadugu",
+    "stateName": "Andhra Pradesh"
+  },
+  {
     "name": "Kadapa",
     "stateName": "Andhra Pradesh",
     "districtName": "YSR Kadapa"
   },
   {
+    "name": "Kadiri",
+    "stateName": "Andhra Pradesh"
+  },
+  {
     "name": "Kakinada",
     "stateName": "Andhra Pradesh",
     "districtName": "Kakinada"
+  },
+  {
+    "name": "Kandukur",
+    "stateName": "Andhra Pradesh"
   },
   {
     "name": "Kavali",
@@ -88,6 +116,10 @@
     "districtName": "Kurnool"
   },
   {
+    "name": "Macherla",
+    "stateName": "Andhra Pradesh"
+  },
+  {
     "name": "Machilipatnam",
     "stateName": "Andhra Pradesh",
     "districtName": "Krishna"
@@ -98,13 +130,25 @@
     "districtName": "Annamayya"
   },
   {
+    "name": "Mandapeta",
+    "stateName": "Andhra Pradesh"
+  },
+  {
     "name": "Mangalagiri",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Nagari",
     "stateName": "Andhra Pradesh"
   },
   {
     "name": "Nandyal",
     "stateName": "Andhra Pradesh",
     "districtName": "Nandyal"
+  },
+  {
+    "name": "Narasapur",
+    "stateName": "Andhra Pradesh"
   },
   {
     "name": "Narasaraopet",
@@ -116,6 +160,14 @@
     "districtName": "Sri Potti Sriramulu Nellore"
   },
   {
+    "name": "Nidadavole",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Nuzvid",
+    "stateName": "Andhra Pradesh"
+  },
+  {
     "name": "Ongole",
     "stateName": "Andhra Pradesh",
     "districtName": "Prakasam"
@@ -125,14 +177,78 @@
     "stateName": "Andhra Pradesh"
   },
   {
+    "name": "Palacole",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Palasa-Kasibugga",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Pedana",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Peddapuram",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Piduguralla",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Pithapuram",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Ponnur",
+    "stateName": "Andhra Pradesh"
+  },
+  {
     "name": "Proddatur",
     "stateName": "Andhra Pradesh",
     "districtName": "YSR Kadapa"
   },
   {
+    "name": "Punganur",
+    "stateName": "Andhra Pradesh"
+  },
+  {
     "name": "Rajahmundry",
     "stateName": "Andhra Pradesh",
     "districtName": "East Godavari"
+  },
+  {
+    "name": "Rajam",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Rajampet",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Ramachandrapuram",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Rayachoti",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Repalle",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Salur",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Samalkot",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Sattenapalle",
+    "stateName": "Andhra Pradesh"
   },
   {
     "name": "Srikakulam",
@@ -148,6 +264,14 @@
     "districtName": "West Godavari"
   },
   {
+    "name": "Tadipatri",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Tanuku",
+    "stateName": "Andhra Pradesh"
+  },
+  {
     "name": "Tenali",
     "stateName": "Andhra Pradesh",
     "districtName": "Guntur"
@@ -158,9 +282,21 @@
     "districtName": "Tirupati"
   },
   {
+    "name": "Tuni",
+    "stateName": "Andhra Pradesh"
+  },
+  {
+    "name": "Venkatagiri",
+    "stateName": "Andhra Pradesh"
+  },
+  {
     "name": "Vijayawada",
     "stateName": "Andhra Pradesh",
     "districtName": "NTR"
+  },
+  {
+    "name": "Vinukonda",
+    "stateName": "Andhra Pradesh"
   },
   {
     "name": "Visakhapatnam",
@@ -253,6 +389,10 @@
     "districtName": "Barpeta"
   },
   {
+    "name": "Bokakhat",
+    "stateName": "Assam"
+  },
+  {
     "name": "Bongaigaon",
     "stateName": "Assam",
     "districtName": "Bongaigaon"
@@ -296,6 +436,10 @@
     "name": "Guwahati",
     "stateName": "Assam",
     "districtName": "Kamrup Metropolitan"
+  },
+  {
+    "name": "Haflong",
+    "stateName": "Assam"
   },
   {
     "name": "Hailakandi",
@@ -357,6 +501,10 @@
     "districtName": "Kamrup"
   },
   {
+    "name": "Sibsagar",
+    "stateName": "Assam"
+  },
+  {
     "name": "Silchar",
     "stateName": "Assam",
     "districtName": "Cachar"
@@ -407,6 +555,10 @@
     "districtName": "Nalanda"
   },
   {
+    "name": "Bikramganj",
+    "stateName": "Bihar"
+  },
+  {
     "name": "Buxar",
     "stateName": "Bihar",
     "districtName": "Buxar"
@@ -432,6 +584,10 @@
     "districtName": "Rohtas"
   },
   {
+    "name": "Dumraon",
+    "stateName": "Bihar"
+  },
+  {
     "name": "Gaya",
     "stateName": "Bihar",
     "districtName": "Gaya"
@@ -445,6 +601,10 @@
     "name": "Jamalpur",
     "stateName": "Bihar",
     "districtName": "Munger"
+  },
+  {
+    "name": "Jhanjharpur",
+    "stateName": "Bihar"
   },
   {
     "name": "Katihar",
@@ -472,6 +632,10 @@
     "districtName": "Muzaffarpur"
   },
   {
+    "name": "Narkatiaganj",
+    "stateName": "Bihar"
+  },
+  {
     "name": "Nawada",
     "stateName": "Bihar",
     "districtName": "Nawada"
@@ -487,6 +651,10 @@
     "districtName": "Purnia"
   },
   {
+    "name": "Raxaul",
+    "stateName": "Bihar"
+  },
+  {
     "name": "Saharsa",
     "stateName": "Bihar",
     "districtName": "Saharsa"
@@ -497,12 +665,28 @@
     "districtName": "Rohtas"
   },
   {
+    "name": "Sherghati",
+    "stateName": "Bihar"
+  },
+  {
     "name": "Siwan",
     "stateName": "Bihar",
     "districtName": "Siwan"
   },
   {
+    "name": "Supaul",
+    "stateName": "Bihar"
+  },
+  {
+    "name": "Warisaliganj",
+    "stateName": "Bihar"
+  },
+  {
     "name": "Chandigarh",
+    "stateName": "Chandigarh"
+  },
+  {
+    "name": "Mani Majra",
     "stateName": "Chandigarh"
   },
   {
@@ -536,6 +720,10 @@
     "districtName": "Bilaspur"
   },
   {
+    "name": "Champa",
+    "stateName": "Chhattisgarh"
+  },
+  {
     "name": "Chirmiri",
     "stateName": "Chhattisgarh",
     "districtName": "Manendragarh-Chirmiri-Bharatpur"
@@ -554,6 +742,10 @@
     "name": "Durg",
     "stateName": "Chhattisgarh",
     "districtName": "Durg"
+  },
+  {
+    "name": "Gandai",
+    "stateName": "Chhattisgarh"
   },
   {
     "name": "Jagdalpur",
@@ -576,6 +768,10 @@
     "districtName": "Kabirdham"
   },
   {
+    "name": "Kirandul",
+    "stateName": "Chhattisgarh"
+  },
+  {
     "name": "Korba",
     "stateName": "Chhattisgarh",
     "districtName": "Korba"
@@ -584,6 +780,10 @@
     "name": "Mahasamund",
     "stateName": "Chhattisgarh",
     "districtName": "Mahasamund"
+  },
+  {
+    "name": "Naila-Janjgir",
+    "stateName": "Chhattisgarh"
   },
   {
     "name": "Raigarh",
@@ -606,7 +806,23 @@
     "districtName": "Raipur"
   },
   {
+    "name": "Chhatarpur",
+    "stateName": "Delhi"
+  },
+  {
     "name": "Delhi",
+    "stateName": "Delhi"
+  },
+  {
+    "name": "Mehrauli",
+    "stateName": "Delhi"
+  },
+  {
+    "name": "Najafgarh",
+    "stateName": "Delhi"
+  },
+  {
+    "name": "Narela",
     "stateName": "Delhi"
   },
   {
@@ -632,6 +848,10 @@
     "name": "Curchorem",
     "stateName": "Goa",
     "districtName": "South Goa"
+  },
+  {
+    "name": "Curchorem-Cacora",
+    "stateName": "Goa"
   },
   {
     "name": "Mapusa",
@@ -708,7 +928,15 @@
     "districtName": "Anand"
   },
   {
+    "name": "Anklav",
+    "stateName": "Gujarat"
+  },
+  {
     "name": "Ankleshwar",
+    "stateName": "Gujarat"
+  },
+  {
+    "name": "Bardoli",
     "stateName": "Gujarat"
   },
   {
@@ -735,6 +963,10 @@
     "stateName": "Gujarat"
   },
   {
+    "name": "Dabhoi",
+    "stateName": "Gujarat"
+  },
+  {
     "name": "Dahej",
     "stateName": "Gujarat"
   },
@@ -750,6 +982,10 @@
   },
   {
     "name": "Dholera",
+    "stateName": "Gujarat"
+  },
+  {
+    "name": "Dholka",
     "stateName": "Gujarat"
   },
   {
@@ -809,9 +1045,17 @@
     "districtName": "Junagadh"
   },
   {
+    "name": "Kadi",
+    "stateName": "Gujarat"
+  },
+  {
     "name": "Kalol",
     "stateName": "Gujarat",
     "districtName": "Gandhinagar"
+  },
+  {
+    "name": "Mahuva",
+    "stateName": "Gujarat"
   },
   {
     "name": "Mehsana",
@@ -847,6 +1091,10 @@
     "districtName": "Banaskantha"
   },
   {
+    "name": "Petlad",
+    "stateName": "Gujarat"
+  },
+  {
     "name": "Pipavav",
     "stateName": "Gujarat"
   },
@@ -866,6 +1114,10 @@
   },
   {
     "name": "Sanand",
+    "stateName": "Gujarat"
+  },
+  {
+    "name": "Siddhpur",
     "stateName": "Gujarat"
   },
   {
@@ -908,9 +1160,17 @@
     "districtName": "Ambala"
   },
   {
+    "name": "Assandh",
+    "stateName": "Haryana"
+  },
+  {
     "name": "Bahadurgarh",
     "stateName": "Haryana",
     "districtName": "Jhajjar"
+  },
+  {
+    "name": "Barwala",
+    "stateName": "Haryana"
   },
   {
     "name": "Bawal",
@@ -920,6 +1180,10 @@
     "name": "Bhiwani",
     "stateName": "Haryana",
     "districtName": "Bhiwani"
+  },
+  {
+    "name": "Ellenabad",
+    "stateName": "Haryana"
   },
   {
     "name": "Faridabad",
@@ -980,6 +1244,10 @@
     "stateName": "Haryana"
   },
   {
+    "name": "Naraingarh",
+    "stateName": "Haryana"
+  },
+  {
     "name": "Narnaul",
     "stateName": "Haryana",
     "districtName": "Mahendragarh"
@@ -1000,9 +1268,17 @@
     "districtName": "Panipat"
   },
   {
+    "name": "Pehowa",
+    "stateName": "Haryana"
+  },
+  {
     "name": "Pinjore",
     "stateName": "Haryana",
     "districtName": "Panchkula"
+  },
+  {
+    "name": "Ratia",
+    "stateName": "Haryana"
   },
   {
     "name": "Rewari",
@@ -1049,6 +1325,10 @@
     "districtName": "Solan"
   },
   {
+    "name": "Baijnath",
+    "stateName": "Himachal Pradesh"
+  },
+  {
     "name": "Bilaspur",
     "stateName": "Himachal Pradesh",
     "districtName": "Bilaspur"
@@ -1079,9 +1359,21 @@
     "districtName": "Kangra"
   },
   {
+    "name": "Jogindernagar",
+    "stateName": "Himachal Pradesh"
+  },
+  {
     "name": "Kangra",
     "stateName": "Himachal Pradesh",
     "districtName": "Kangra"
+  },
+  {
+    "name": "Karsog",
+    "stateName": "Himachal Pradesh"
+  },
+  {
+    "name": "Keylong",
+    "stateName": "Himachal Pradesh"
   },
   {
     "name": "Kullu",
@@ -1097,6 +1389,10 @@
     "name": "Mandi",
     "stateName": "Himachal Pradesh",
     "districtName": "Mandi"
+  },
+  {
+    "name": "Nadaun",
+    "stateName": "Himachal Pradesh"
   },
   {
     "name": "Nahan",
@@ -1122,6 +1418,10 @@
     "name": "Rampur",
     "stateName": "Himachal Pradesh",
     "districtName": "Shimla"
+  },
+  {
+    "name": "Rohru",
+    "stateName": "Himachal Pradesh"
   },
   {
     "name": "Shimla",
@@ -1160,6 +1460,42 @@
     "stateName": "Jammu & Kashmir"
   },
   {
+    "name": "Akhnoor",
+    "stateName": "Jammu and Kashmir"
+  },
+  {
+    "name": "Bandipora",
+    "stateName": "Jammu and Kashmir"
+  },
+  {
+    "name": "Bijbehara",
+    "stateName": "Jammu and Kashmir"
+  },
+  {
+    "name": "Ganderbal",
+    "stateName": "Jammu and Kashmir"
+  },
+  {
+    "name": "Handwara",
+    "stateName": "Jammu and Kashmir"
+  },
+  {
+    "name": "Kathua",
+    "stateName": "Jammu and Kashmir"
+  },
+  {
+    "name": "Pattan",
+    "stateName": "Jammu and Kashmir"
+  },
+  {
+    "name": "Sopore",
+    "stateName": "Jammu and Kashmir"
+  },
+  {
+    "name": "Udhampur",
+    "stateName": "Jammu and Kashmir"
+  },
+  {
     "name": "Adityapur",
     "stateName": "Jharkhand",
     "districtName": "Seraikela-Kharsawan"
@@ -1170,9 +1506,25 @@
     "districtName": "Bokaro"
   },
   {
+    "name": "Bundu",
+    "stateName": "Jharkhand"
+  },
+  {
     "name": "Chaibasa",
     "stateName": "Jharkhand",
     "districtName": "West Singhbhum"
+  },
+  {
+    "name": "Chakradharpur",
+    "stateName": "Jharkhand"
+  },
+  {
+    "name": "Chakulia",
+    "stateName": "Jharkhand"
+  },
+  {
+    "name": "Chandil",
+    "stateName": "Jharkhand"
   },
   {
     "name": "Chirkunda",
@@ -1225,6 +1577,14 @@
     "districtName": "Hazaribagh"
   },
   {
+    "name": "Hunterganj",
+    "stateName": "Jharkhand"
+  },
+  {
+    "name": "Hussainabad",
+    "stateName": "Jharkhand"
+  },
+  {
     "name": "Jamshedpur",
     "stateName": "Jharkhand",
     "districtName": "East Singhbhum"
@@ -1243,6 +1603,10 @@
     "name": "Lohardaga",
     "stateName": "Jharkhand",
     "districtName": "Lohardaga"
+  },
+  {
+    "name": "Madhupur",
+    "stateName": "Jharkhand"
   },
   {
     "name": "Medininagar",
@@ -1285,6 +1649,10 @@
     "districtName": "Simdega"
   },
   {
+    "name": "Athani",
+    "stateName": "Karnataka"
+  },
+  {
     "name": "Bagalkot",
     "stateName": "Karnataka",
     "districtName": "Bagalkot"
@@ -1324,6 +1692,10 @@
   },
   {
     "name": "Chamarajanagar",
+    "stateName": "Karnataka"
+  },
+  {
+    "name": "Channapatna",
     "stateName": "Karnataka"
   },
   {
@@ -1374,6 +1746,14 @@
     "districtName": "Koppal"
   },
   {
+    "name": "Gokak",
+    "stateName": "Karnataka"
+  },
+  {
+    "name": "Hangal",
+    "stateName": "Karnataka"
+  },
+  {
     "name": "Hassan",
     "stateName": "Karnataka",
     "districtName": "Hassan"
@@ -1402,6 +1782,10 @@
     "districtName": "Kalaburagi"
   },
   {
+    "name": "Karkala",
+    "stateName": "Karnataka"
+  },
+  {
     "name": "Karwar",
     "stateName": "Karnataka",
     "districtName": "Uttara Kannada"
@@ -1413,6 +1797,10 @@
   },
   {
     "name": "Koppal",
+    "stateName": "Karnataka"
+  },
+  {
+    "name": "Kundapura",
     "stateName": "Karnataka"
   },
   {
@@ -1435,7 +1823,15 @@
     "districtName": "Mysuru"
   },
   {
+    "name": "Nanjangud",
+    "stateName": "Karnataka"
+  },
+  {
     "name": "Nelamangala",
+    "stateName": "Karnataka"
+  },
+  {
+    "name": "Puttur",
     "stateName": "Karnataka"
   },
   {
@@ -1461,6 +1857,10 @@
     "name": "Shivamogga",
     "stateName": "Karnataka",
     "districtName": "Shivamogga"
+  },
+  {
+    "name": "Sira",
+    "stateName": "Karnataka"
   },
   {
     "name": "Sirsi",
@@ -1508,6 +1908,14 @@
     "stateName": "Kerala"
   },
   {
+    "name": "Ambalavayal",
+    "stateName": "Kerala"
+  },
+  {
+    "name": "Chalakudy",
+    "stateName": "Kerala"
+  },
+  {
     "name": "Changanassery",
     "stateName": "Kerala",
     "districtName": "Kottayam"
@@ -1550,6 +1958,10 @@
     "districtName": "Kasaragod"
   },
   {
+    "name": "Kattappana",
+    "stateName": "Kerala"
+  },
+  {
     "name": "Kayamkulam",
     "stateName": "Kerala",
     "districtName": "Alappuzha"
@@ -1558,6 +1970,10 @@
     "name": "Kochi",
     "stateName": "Kerala",
     "districtName": "Ernakulam"
+  },
+  {
+    "name": "Kodungallur",
+    "stateName": "Kerala"
   },
   {
     "name": "Kollam",
@@ -1595,6 +2011,10 @@
     "districtName": "Malappuram"
   },
   {
+    "name": "Mannarkkad",
+    "stateName": "Kerala"
+  },
+  {
     "name": "Muvattupuzha",
     "stateName": "Kerala",
     "districtName": "Ernakulam"
@@ -1603,6 +2023,10 @@
     "name": "Neyyattinkara",
     "stateName": "Kerala",
     "districtName": "Thiruvananthapuram"
+  },
+  {
+    "name": "Ottapalam",
+    "stateName": "Kerala"
   },
   {
     "name": "Ottappalam",
@@ -1640,6 +2064,10 @@
     "districtName": "Kannur"
   },
   {
+    "name": "Thaliparamba",
+    "stateName": "Kerala"
+  },
+  {
     "name": "Thiruvananthapuram",
     "stateName": "Kerala",
     "districtName": "Thiruvananthapuram"
@@ -1665,8 +2093,44 @@
     "districtName": "Kozhikode"
   },
   {
+    "name": "Diskit",
+    "stateName": "Ladakh"
+  },
+  {
+    "name": "Kargil",
+    "stateName": "Ladakh"
+  },
+  {
+    "name": "Khaltse",
+    "stateName": "Ladakh"
+  },
+  {
+    "name": "Nyoma",
+    "stateName": "Ladakh"
+  },
+  {
+    "name": "Sankoo",
+    "stateName": "Ladakh"
+  },
+  {
     "name": "Kavaratti",
     "stateName": "Lakshadweep"
+  },
+  {
+    "name": "Agar",
+    "stateName": "Madhya Pradesh"
+  },
+  {
+    "name": "Ashta",
+    "stateName": "Madhya Pradesh"
+  },
+  {
+    "name": "Barwani",
+    "stateName": "Madhya Pradesh"
+  },
+  {
+    "name": "Begamganj",
+    "stateName": "Madhya Pradesh"
   },
   {
     "name": "Betul",
@@ -1687,6 +2151,10 @@
     "name": "Burhanpur",
     "stateName": "Madhya Pradesh",
     "districtName": "Burhanpur"
+  },
+  {
+    "name": "Chanderi",
+    "stateName": "Madhya Pradesh"
   },
   {
     "name": "Chhindwara",
@@ -1712,6 +2180,10 @@
     "name": "Gwalior",
     "stateName": "Madhya Pradesh",
     "districtName": "Gwalior"
+  },
+  {
+    "name": "Hatta",
+    "stateName": "Madhya Pradesh"
   },
   {
     "name": "Indore",
@@ -1742,6 +2214,10 @@
     "name": "Khargone",
     "stateName": "Madhya Pradesh",
     "districtName": "Khargone"
+  },
+  {
+    "name": "Maheshwar",
+    "stateName": "Madhya Pradesh"
   },
   {
     "name": "Mandsaur",
@@ -1804,6 +2280,10 @@
     "districtName": "Singrauli"
   },
   {
+    "name": "Sironj",
+    "stateName": "Madhya Pradesh"
+  },
+  {
     "name": "Ujjain",
     "stateName": "Madhya Pradesh",
     "districtName": "Ujjain"
@@ -1812,6 +2292,10 @@
     "name": "Vidisha",
     "stateName": "Madhya Pradesh",
     "districtName": "Vidisha"
+  },
+  {
+    "name": "Achalpur",
+    "stateName": "Maharashtra"
   },
   {
     "name": "Ahmednagar",
@@ -1865,12 +2349,20 @@
     "stateName": "Maharashtra"
   },
   {
+    "name": "Chalisgaon",
+    "stateName": "Maharashtra"
+  },
+  {
     "name": "Chandrapur",
     "stateName": "Maharashtra",
     "districtName": "Chandrapur"
   },
   {
     "name": "Chiplun",
+    "stateName": "Maharashtra"
+  },
+  {
+    "name": "Dahanu",
     "stateName": "Maharashtra"
   },
   {
@@ -1889,6 +2381,10 @@
   },
   {
     "name": "Dronagiri",
+    "stateName": "Maharashtra"
+  },
+  {
+    "name": "Gadchiroli",
     "stateName": "Maharashtra"
   },
   {
@@ -1933,6 +2429,10 @@
     "stateName": "Maharashtra"
   },
   {
+    "name": "Karad",
+    "stateName": "Maharashtra"
+  },
+  {
     "name": "Karjat",
     "stateName": "Maharashtra"
   },
@@ -1955,9 +2455,17 @@
     "districtName": "Latur"
   },
   {
+    "name": "Lonavala",
+    "stateName": "Maharashtra"
+  },
+  {
     "name": "Malegaon",
     "stateName": "Maharashtra",
     "districtName": "Nashik"
+  },
+  {
+    "name": "Mangalwedha",
+    "stateName": "Maharashtra"
   },
   {
     "name": "Mira-Bhayandar",
@@ -1998,6 +2506,10 @@
     "stateName": "Maharashtra"
   },
   {
+    "name": "Pandharpur",
+    "stateName": "Maharashtra"
+  },
+  {
     "name": "Panvel",
     "stateName": "Maharashtra",
     "districtName": "Raigad"
@@ -2031,6 +2543,10 @@
     "districtName": "Chhatrapati Sambhajinagar"
   },
   {
+    "name": "Sangamner",
+    "stateName": "Maharashtra"
+  },
+  {
     "name": "Sangli",
     "stateName": "Maharashtra",
     "districtName": "Sangli"
@@ -2042,6 +2558,10 @@
   },
   {
     "name": "Shirdi",
+    "stateName": "Maharashtra"
+  },
+  {
+    "name": "Shirur",
     "stateName": "Maharashtra"
   },
   {
@@ -2401,9 +2921,17 @@
     "districtName": "Zunheboto"
   },
   {
+    "name": "Anandapur",
+    "stateName": "Odisha"
+  },
+  {
     "name": "Angul",
     "stateName": "Odisha",
     "districtName": "Angul"
+  },
+  {
+    "name": "Athagarh",
+    "stateName": "Odisha"
   },
   {
     "name": "Balangir",
@@ -2441,9 +2969,17 @@
     "districtName": "Bhadrak"
   },
   {
+    "name": "Bhanjanagar",
+    "stateName": "Odisha"
+  },
+  {
     "name": "Bhubaneswar",
     "stateName": "Odisha",
     "districtName": "Khordha"
+  },
+  {
+    "name": "Biramitrapur",
+    "stateName": "Odisha"
   },
   {
     "name": "Cuttack",
@@ -2457,6 +2993,14 @@
   },
   {
     "name": "Jajpur",
+    "stateName": "Odisha"
+  },
+  {
+    "name": "Jajpur Road",
+    "stateName": "Odisha"
+  },
+  {
+    "name": "Jaleswar",
     "stateName": "Odisha"
   },
   {
@@ -2475,6 +3019,14 @@
     "districtName": "Jharsuguda"
   },
   {
+    "name": "Kantabanji",
+    "stateName": "Odisha"
+  },
+  {
+    "name": "Karanjia",
+    "stateName": "Odisha"
+  },
+  {
     "name": "Kendrapara",
     "stateName": "Odisha",
     "districtName": "Kendrapara"
@@ -2490,14 +3042,30 @@
     "districtName": "Koraput"
   },
   {
+    "name": "Kuchinda",
+    "stateName": "Odisha"
+  },
+  {
+    "name": "Nabarangpur",
+    "stateName": "Odisha"
+  },
+  {
     "name": "Paradip",
     "stateName": "Odisha",
     "districtName": "Jagatsinghpur"
   },
   {
+    "name": "Parlakhemundi",
+    "stateName": "Odisha"
+  },
+  {
     "name": "Puri",
     "stateName": "Odisha",
     "districtName": "Puri"
+  },
+  {
+    "name": "Rairangpur",
+    "stateName": "Odisha"
   },
   {
     "name": "Rayagada",
@@ -2530,6 +3098,14 @@
     "districtName": "Angul"
   },
   {
+    "name": "Titlagarh",
+    "stateName": "Odisha"
+  },
+  {
+    "name": "Bahour",
+    "stateName": "Puducherry"
+  },
+  {
     "name": "Karaikal",
     "stateName": "Puducherry"
   },
@@ -2551,9 +3127,17 @@
     "districtName": "Fazilka"
   },
   {
+    "name": "Ahmedgarh",
+    "stateName": "Punjab"
+  },
+  {
     "name": "Amritsar",
     "stateName": "Punjab",
     "districtName": "Amritsar"
+  },
+  {
+    "name": "Banga",
+    "stateName": "Punjab"
   },
   {
     "name": "Barnala",
@@ -2569,6 +3153,10 @@
     "name": "Bathinda",
     "stateName": "Punjab",
     "districtName": "Bathinda"
+  },
+  {
+    "name": "Dharamkot",
+    "stateName": "Punjab"
   },
   {
     "name": "Faridkot",
@@ -2600,6 +3188,10 @@
     "districtName": "Hoshiarpur"
   },
   {
+    "name": "Jagraon",
+    "stateName": "Punjab"
+  },
+  {
     "name": "Jalandhar",
     "stateName": "Punjab",
     "districtName": "Jalandhar"
@@ -2629,6 +3221,10 @@
     "districtName": "Malerkotla"
   },
   {
+    "name": "Malout",
+    "stateName": "Punjab"
+  },
+  {
     "name": "Moga",
     "stateName": "Punjab",
     "districtName": "Moga"
@@ -2642,6 +3238,10 @@
     "name": "Muktsar",
     "stateName": "Punjab",
     "districtName": "Sri Muktsar Sahib"
+  },
+  {
+    "name": "Nabha",
+    "stateName": "Punjab"
   },
   {
     "name": "Nawanshahr",
@@ -2664,6 +3264,10 @@
     "districtName": "Kapurthala"
   },
   {
+    "name": "Phillaur",
+    "stateName": "Punjab"
+  },
+  {
     "name": "Rajpura",
     "stateName": "Punjab",
     "districtName": "Patiala"
@@ -2674,9 +3278,17 @@
     "districtName": "Rupnagar"
   },
   {
+    "name": "Samana",
+    "stateName": "Punjab"
+  },
+  {
     "name": "Sangrur",
     "stateName": "Punjab",
     "districtName": "Sangrur"
+  },
+  {
+    "name": "Sunam",
+    "stateName": "Punjab"
   },
   {
     "name": "Zirakpur",
@@ -2703,6 +3315,10 @@
     "districtName": "Baran"
   },
   {
+    "name": "Bari",
+    "stateName": "Rajasthan"
+  },
+  {
     "name": "Barmer",
     "stateName": "Rajasthan",
     "districtName": "Barmer"
@@ -2711,6 +3327,10 @@
     "name": "Beawar",
     "stateName": "Rajasthan",
     "districtName": "Beawar"
+  },
+  {
+    "name": "Bhadra",
+    "stateName": "Rajasthan"
   },
   {
     "name": "Bharatpur",
@@ -2738,6 +3358,10 @@
     "districtName": "Bundi"
   },
   {
+    "name": "Chhabra",
+    "stateName": "Rajasthan"
+  },
+  {
     "name": "Chittorgarh",
     "stateName": "Rajasthan",
     "districtName": "Chittorgarh"
@@ -2750,6 +3374,14 @@
     "name": "Dhaulpur",
     "stateName": "Rajasthan",
     "districtName": "Dholpur"
+  },
+  {
+    "name": "Fatehpur",
+    "stateName": "Rajasthan"
+  },
+  {
+    "name": "Gangapur City",
+    "stateName": "Rajasthan"
   },
   {
     "name": "Hanumangarh",
@@ -2782,6 +3414,10 @@
     "districtName": "Karauli"
   },
   {
+    "name": "Kekri",
+    "stateName": "Rajasthan"
+  },
+  {
     "name": "Kishangarh",
     "stateName": "Rajasthan",
     "districtName": "Ajmer"
@@ -2802,9 +3438,17 @@
     "districtName": "Nagaur"
   },
   {
+    "name": "Nawalgarh",
+    "stateName": "Rajasthan"
+  },
+  {
     "name": "Pali",
     "stateName": "Rajasthan",
     "districtName": "Pali"
+  },
+  {
+    "name": "Phalodi",
+    "stateName": "Rajasthan"
   },
   {
     "name": "Pushkar",
@@ -2921,11 +3565,27 @@
     "districtName": "Tirupattur"
   },
   {
+    "name": "Arani",
+    "stateName": "Tamil Nadu"
+  },
+  {
+    "name": "Aruppukkottai",
+    "stateName": "Tamil Nadu"
+  },
+  {
     "name": "Avadi",
     "stateName": "Tamil Nadu"
   },
   {
+    "name": "Bodinayakanur",
+    "stateName": "Tamil Nadu"
+  },
+  {
     "name": "Chengalpattu",
+    "stateName": "Tamil Nadu"
+  },
+  {
+    "name": "Chengam",
     "stateName": "Tamil Nadu"
   },
   {
@@ -2944,6 +3604,10 @@
     "districtName": "Cuddalore"
   },
   {
+    "name": "Dharapuram",
+    "stateName": "Tamil Nadu"
+  },
+  {
     "name": "Dindigul",
     "stateName": "Tamil Nadu",
     "districtName": "Dindigul"
@@ -2952,6 +3616,10 @@
     "name": "Erode",
     "stateName": "Tamil Nadu",
     "districtName": "Erode"
+  },
+  {
+    "name": "Gobichettipalayam",
+    "stateName": "Tamil Nadu"
   },
   {
     "name": "Hosur",
@@ -2964,9 +3632,17 @@
     "districtName": "Kanchipuram"
   },
   {
+    "name": "Karaikudi",
+    "stateName": "Tamil Nadu"
+  },
+  {
     "name": "Karur",
     "stateName": "Tamil Nadu",
     "districtName": "Karur"
+  },
+  {
+    "name": "Kovilpatti",
+    "stateName": "Tamil Nadu"
   },
   {
     "name": "Kumbakonam",
@@ -3039,12 +3715,24 @@
     "districtName": "Ranipet"
   },
   {
+    "name": "Rasipuram",
+    "stateName": "Tamil Nadu"
+  },
+  {
     "name": "Salem",
     "stateName": "Tamil Nadu",
     "districtName": "Salem"
   },
   {
+    "name": "Sankarankovil",
+    "stateName": "Tamil Nadu"
+  },
+  {
     "name": "Sholinganallur",
+    "stateName": "Tamil Nadu"
+  },
+  {
+    "name": "Sirkazhi",
     "stateName": "Tamil Nadu"
   },
   {
@@ -3096,6 +3784,10 @@
     "districtName": "Tiruvannamalai"
   },
   {
+    "name": "Udumalaipettai",
+    "stateName": "Tamil Nadu"
+  },
+  {
     "name": "Vellore",
     "stateName": "Tamil Nadu",
     "districtName": "Vellore"
@@ -3115,6 +3807,14 @@
     "districtName": "Adilabad"
   },
   {
+    "name": "Armoor",
+    "stateName": "Telangana"
+  },
+  {
+    "name": "Bhadrachalam",
+    "stateName": "Telangana"
+  },
+  {
     "name": "Bhongir",
     "stateName": "Telangana",
     "districtName": "Yadadri Bhuvanagiri"
@@ -3131,6 +3831,10 @@
   },
   {
     "name": "Ghatkesar",
+    "stateName": "Telangana"
+  },
+  {
+    "name": "Huzurnagar",
     "stateName": "Telangana"
   },
   {
@@ -3183,6 +3887,10 @@
     "stateName": "Telangana"
   },
   {
+    "name": "Metpally",
+    "stateName": "Telangana"
+  },
+  {
     "name": "Miryalaguda",
     "stateName": "Telangana",
     "districtName": "Nalgonda"
@@ -3226,6 +3934,10 @@
     "districtName": "Siddipet"
   },
   {
+    "name": "Sircilla",
+    "stateName": "Telangana"
+  },
+  {
     "name": "Suryapet",
     "stateName": "Telangana",
     "districtName": "Suryapet"
@@ -3234,6 +3946,10 @@
     "name": "Tandur",
     "stateName": "Telangana",
     "districtName": "Vikarabad"
+  },
+  {
+    "name": "Vikarabad",
+    "stateName": "Telangana"
   },
   {
     "name": "Wanaparthy",
@@ -3284,6 +4000,10 @@
     "name": "Kailasahar",
     "stateName": "Tripura",
     "districtName": "Unakoti"
+  },
+  {
+    "name": "Kailashahar",
+    "stateName": "Tripura"
   },
   {
     "name": "Khowai",
@@ -3341,6 +4061,10 @@
     "districtName": "Amroha"
   },
   {
+    "name": "Auraiya",
+    "stateName": "Uttar Pradesh"
+  },
+  {
     "name": "Ayodhya",
     "stateName": "Uttar Pradesh"
   },
@@ -3374,6 +4098,10 @@
     "districtName": "Basti"
   },
   {
+    "name": "Bhadohi",
+    "stateName": "Uttar Pradesh"
+  },
+  {
     "name": "Bijnor",
     "stateName": "Uttar Pradesh",
     "districtName": "Bijnor"
@@ -3390,6 +4118,10 @@
   },
   {
     "name": "Dadri",
+    "stateName": "Uttar Pradesh"
+  },
+  {
+    "name": "Deoband",
     "stateName": "Uttar Pradesh"
   },
   {
@@ -3423,6 +4155,10 @@
     "districtName": "Ghaziabad"
   },
   {
+    "name": "Gola Gokarannath",
+    "stateName": "Uttar Pradesh"
+  },
+  {
     "name": "Gonda",
     "stateName": "Uttar Pradesh",
     "districtName": "Gonda"
@@ -3445,6 +4181,10 @@
     "name": "Hardoi",
     "stateName": "Uttar Pradesh",
     "districtName": "Hardoi"
+  },
+  {
+    "name": "Jalesar",
+    "stateName": "Uttar Pradesh"
   },
   {
     "name": "Jaunpur",
@@ -3471,14 +4211,26 @@
     "districtName": "Kasganj"
   },
   {
+    "name": "Khurja",
+    "stateName": "Uttar Pradesh"
+  },
+  {
     "name": "Lakhimpur",
     "stateName": "Uttar Pradesh",
     "districtName": "Lakhimpur Kheri"
   },
   {
+    "name": "Lalitpur",
+    "stateName": "Uttar Pradesh"
+  },
+  {
     "name": "Lucknow",
     "stateName": "Uttar Pradesh",
     "districtName": "Lucknow"
+  },
+  {
+    "name": "Mainpuri",
+    "stateName": "Uttar Pradesh"
   },
   {
     "name": "Mathura",
@@ -3489,6 +4241,14 @@
     "name": "Mau",
     "stateName": "Uttar Pradesh",
     "districtName": "Mau"
+  },
+  {
+    "name": "Maudaha",
+    "stateName": "Uttar Pradesh"
+  },
+  {
+    "name": "Mawana",
+    "stateName": "Uttar Pradesh"
   },
   {
     "name": "Meerut",
@@ -3544,6 +4304,14 @@
     "districtName": "Rampur"
   },
   {
+    "name": "Rath",
+    "stateName": "Uttar Pradesh"
+  },
+  {
+    "name": "Robertsganj",
+    "stateName": "Uttar Pradesh"
+  },
+  {
     "name": "Saharanpur",
     "stateName": "Uttar Pradesh",
     "districtName": "Saharanpur"
@@ -3569,6 +4337,10 @@
     "districtName": "Sultanpur"
   },
   {
+    "name": "Tanda",
+    "stateName": "Uttar Pradesh"
+  },
+  {
     "name": "Unnao",
     "stateName": "Uttar Pradesh",
     "districtName": "Unnao"
@@ -3584,9 +4356,21 @@
     "districtName": "Udham Singh Nagar"
   },
   {
+    "name": "Barkot",
+    "stateName": "Uttarakhand"
+  },
+  {
+    "name": "Chakrata",
+    "stateName": "Uttarakhand"
+  },
+  {
     "name": "Dehradun",
     "stateName": "Uttarakhand",
     "districtName": "Dehradun"
+  },
+  {
+    "name": "Doiwala",
+    "stateName": "Uttarakhand"
   },
   {
     "name": "Haldwani",
@@ -3609,6 +4393,10 @@
     "districtName": "Udham Singh Nagar"
   },
   {
+    "name": "Khatima",
+    "stateName": "Uttarakhand"
+  },
+  {
     "name": "Kichha",
     "stateName": "Uttarakhand",
     "districtName": "Udham Singh Nagar"
@@ -3617,6 +4405,10 @@
     "name": "Kotdwar",
     "stateName": "Uttarakhand",
     "districtName": "Pauri Garhwal"
+  },
+  {
+    "name": "Lansdowne",
+    "stateName": "Uttarakhand"
   },
   {
     "name": "Manglaur",
@@ -3659,9 +4451,17 @@
     "districtName": "Haridwar"
   },
   {
+    "name": "Rudraprayag",
+    "stateName": "Uttarakhand"
+  },
+  {
     "name": "Rudrapur",
     "stateName": "Uttarakhand",
     "districtName": "Udham Singh Nagar"
+  },
+  {
+    "name": "Sitarganj",
+    "stateName": "Uttarakhand"
   },
   {
     "name": "Srinagar",
@@ -3791,6 +4591,10 @@
     "districtName": "Howrah"
   },
   {
+    "name": "Islampur",
+    "stateName": "West Bengal"
+  },
+  {
     "name": "Jalpaiguri",
     "stateName": "West Bengal",
     "districtName": "Jalpaiguri"
@@ -3799,6 +4603,10 @@
     "name": "Jangipur",
     "stateName": "West Bengal",
     "districtName": "Murshidabad"
+  },
+  {
+    "name": "Kalimpong",
+    "stateName": "West Bengal"
   },
   {
     "name": "Kalyani",
@@ -3819,6 +4627,10 @@
     "name": "Krishnanagar",
     "stateName": "West Bengal",
     "districtName": "Nadia"
+  },
+  {
+    "name": "Kurseong",
+    "stateName": "West Bengal"
   },
   {
     "name": "Malda",
@@ -3847,6 +4659,10 @@
   },
   {
     "name": "Rajarhat",
+    "stateName": "West Bengal"
+  },
+  {
+    "name": "Rampurhat",
     "stateName": "West Bengal"
   },
   {

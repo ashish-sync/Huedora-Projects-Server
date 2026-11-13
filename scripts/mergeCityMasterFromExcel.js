@@ -15,8 +15,8 @@ import xlsx from 'xlsx';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const cityMasterPath = path.resolve(__dirname, '../src/modules/geo/seed/city-master.json');
 
-const CITY_COL = 'City / Town';
-const DISTRICT_COL = 'District (current/common name)';
+const CITY_COLS = ['City / Town', 'City', 'Town', 'City Name'];
+const DISTRICT_COLS = ['District (current/common name)', 'District', 'District Name'];
 
 /** Excel name (after normalize) → existing master name. Same-state only via the key prefix. */
 const MASTER_ALIASES = {
@@ -60,9 +60,13 @@ function readExcelRows(excelPath) {
   const unique = [];
 
   for (const row of rows) {
-    const stateName = String(row.State || '').trim();
-    const name = String(row[CITY_COL] || '').trim();
-    const districtName = String(row[DISTRICT_COL] || '').trim();
+    const stateName = String(row.State || row.stateName || '').trim();
+    const name = String(
+      CITY_COLS.map((col) => row[col]).find((value) => String(value || '').trim()) || '',
+    ).trim();
+    const districtName = String(
+      DISTRICT_COLS.map((col) => row[col]).find((value) => String(value || '').trim()) || '',
+    ).trim();
     if (!stateName || !name) continue;
     const key = cityKey(stateName, name);
     if (seen.has(key)) continue;
