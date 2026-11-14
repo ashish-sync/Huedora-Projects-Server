@@ -14,6 +14,7 @@ import {
   defaultDashboardWindow,
   changeClientOnePin,
   computeClientOneDashboardAnalytics,
+  loadClientMasterOrThrow,
   loadScopedCamps,
   resolveClientOneSessionAccess,
   signClientOneSession,
@@ -22,11 +23,21 @@ import {
   verifyClientOneSessionToken,
   isClientOnePreviewToken,
 } from './clientOne.service.js';
+
+async function masterForAccess(access) {
+  if (!access?.clientMasterId) return null;
+  try {
+    return await loadClientMasterOrThrow(access.clientMasterId);
+  } catch {
+    return null;
+  }
+}
 import {
   appendClientOnePoFiles,
   buildClientOneCalendar,
   buildClientOneMis,
   campUploadRoot,
+  deleteClientOnePoFile,
   getClientOneCampRequestLink,
   listClientOneAnnexures,
   listClientOneInvoices,
@@ -39,9 +50,13 @@ import {
 
 const router = Router();
 
+// Portal SPA remounts (HMR / tab switches) hit many authenticated endpoints;
+// keep PIN auth strict but allow normal portal traffic.
+const isDev = process.env.NODE_ENV !== 'production';
+
 const linkLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 120,
+  max: isDev ? 5000 : 600,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => req.ip || 'unknown',
@@ -50,7 +65,7 @@ const linkLimiter = rateLimit({
 
 const pinLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 30,
+  max: isDev ? 200 : 30,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => req.ip || 'unknown',
@@ -140,7 +155,8 @@ router.post(
       throw err;
     }
 
-    const session = signClientOneSession(access);
+    const master = await masterForAccess(access);
+    const session = signClientOneSession(access, { master });
     await writeAudit({
       action: 'CLIENT_ONE.LOGIN_SUCCESS',
       entityType: 'client_one_access',
@@ -174,8 +190,10 @@ router.get(
   '/me',
   requireClientOneSession,
   asyncHandler(async (req, res) => {
+    const master = await masterForAccess(req.clientOne.access);
     const session = signClientOneSession(req.clientOne.access, {
       preview: req.clientOne.isPreview,
+      master,
     });
     res.json({
       data: {
@@ -228,8 +246,10 @@ router.get(
     const camps = await loadScopedCamps(req.clientOne.access, { from, to });
     const kpis = computeClientOneKpis(camps, { from, to });
     const analytics = computeClientOneDashboardAnalytics(camps);
+    const master = await masterForAccess(req.clientOne.access);
     const session = signClientOneSession(req.clientOne.access, {
       preview: req.clientOne.isPreview,
+      master,
     });
     res.json({
       data: {
@@ -459,6 +479,31 @@ router.get(
   requireFeature('poUpload'),
   asyncHandler(async (req, res) => {
     await sendClientOnePoFile(res, req.clientOne.access, req.params.poId, req.params.fileId);
+  }),
+);
+
+router.delete(
+  '/purchase-orders/:poId/files/:fileId',
+  requireClientOneSession,
+  requireFeature('poUpload'),
+  asyncHandler(async (req, res) => {
+    const data = await deleteClientOnePoFile(
+      req.clientOne.access,
+      req.params.poId,
+      req.params.fileId,
+    );
+    await writeAudit({
+      action: 'CLIENT_ONE.PO_FILE_DELETE',
+      entityType: 'camp_ops_client_master',
+      entityId: req.clientOne.access.clientMasterId,
+      after: { poId: req.params.poId, fileId: req.params.fileId },
+      source: 'UI',
+      actorType: 'USER',
+      actorEmail: `client-one:${req.clientOne.access.accessId}`,
+      ip: req.ip,
+      requestId: req.requestId,
+    });
+    res.json({ data });
   }),
 );
 

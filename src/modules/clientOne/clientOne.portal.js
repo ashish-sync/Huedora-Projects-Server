@@ -1,8 +1,10 @@
 import path from 'path';
 import { randomBytes } from 'crypto';
+import fs from 'fs';
 import { AppError } from '../../utils/helpers.js';
 import { uploadDir } from '../../config/paths.js';
 import { pipeUploadToResponse } from '../../storage/serveUpload.js';
+import { deleteLocalUpload } from '../../storage/persistUpload.js';
 import { FinanceCommercialDocument } from '../finance/finance.model.js';
 import {
   getOrCreateOrgProfile,
@@ -338,43 +340,64 @@ export async function listClientOnePurchaseOrders(access) {
   return orders.map(toClientOnePoDto).filter(Boolean);
 }
 
+function buildPoFileMeta(file) {
+  return {
+    id: newFileId(),
+    fileName: file.originalname || file.filename,
+    storedName: file.filename,
+    mimeType: file.mimetype || 'application/octet-stream',
+    fileSize: file.size || 0,
+    url: `/uploads/camp-ops/${file.filename}`,
+    uploadedAt: new Date().toISOString(),
+  };
+}
+
+function createEmptyPoEntry(id = '') {
+  return {
+    id: id || newPoId(),
+    poNumber: '',
+    poNetValue: 0,
+    poApplyGst18: false,
+    poGstAmount: 0,
+    poGrossValue: 0,
+    poIssueDate: '',
+    poExpiryDate: '',
+    files: [],
+    poFile: null,
+  };
+}
+
 export async function appendClientOnePoFiles(access, uploaded = [], poId = '') {
   if (!uploaded.length) throw new AppError('PO file is required', 400, 'VALIDATION_ERROR');
   const master = await CampOpsClientMaster.findOne({ _id: access.clientMasterId, isDeleted: false });
   if (!master) throw new AppError('Client master not found', 404, 'NOT_FOUND');
   const orders = ensurePurchaseOrders(master);
-  let entry = poId ? orders.find((po) => String(po.id) === String(poId)) : orders[0];
-  if (!entry) {
-    entry = {
-      id: poId || newPoId(),
-      poNumber: '',
-      poNetValue: 0,
-      poApplyGst18: false,
-      poGstAmount: 0,
-      poGrossValue: 0,
-      poIssueDate: '',
-      poExpiryDate: '',
-      files: [],
-      poFile: null,
-    };
-    orders.push(entry);
+
+  if (poId) {
+    // Explicit target: append all files onto that PO.
+    let entry = orders.find((po) => String(po.id) === String(poId));
+    if (!entry) {
+      entry = createEmptyPoEntry(poId);
+      orders.push(entry);
+    }
+    const files = ensurePoFiles(entry);
+    for (const file of uploaded) files.push(buildPoFileMeta(file));
+    entry.files = files;
+    entry.poFile = files[0] || null;
+  } else {
+    // Portal Uploader: one separate PO entry per file (with its own timestamp).
+    for (const file of uploaded) {
+      const meta = buildPoFileMeta(file);
+      const entry = createEmptyPoEntry();
+      entry.files = [meta];
+      entry.poFile = meta;
+      orders.push(entry);
+    }
   }
-  const files = ensurePoFiles(entry);
-  for (const file of uploaded) {
-    files.push({
-      id: newFileId(),
-      fileName: file.originalname || file.filename,
-      storedName: file.filename,
-      mimeType: file.mimetype || 'application/octet-stream',
-      fileSize: file.size || 0,
-      url: `/uploads/camp-ops/${file.filename}`,
-      uploadedAt: new Date().toISOString(),
-    });
-  }
-  entry.files = files;
-  entry.poFile = files[0] || null;
+
   master.purchaseOrders = orders;
-  master.poFile = entry.poFile;
+  const last = orders[orders.length - 1];
+  master.poFile = last?.poFile || orders.find((po) => po.poFile)?.poFile || null;
   if (!master.campTerms || master.campTerms === 'none') master.campTerms = 'po_based';
   master.updatedById = `client-one:${access.accessId}`;
   await master.save();
@@ -399,6 +422,49 @@ export async function sendClientOnePoFile(res, access, poId, fileId) {
     `inline; filename="${String(doc.fileName || doc.storedName).replace(/"/g, '')}"`,
   );
   await pipeUploadToResponse(res, full, { contentType: doc.mimeType });
+}
+
+async function unlinkClientOnePoStoredFile(storedName) {
+  if (!storedName) return;
+  const full = path.join(campUploadRoot, storedName);
+  try {
+    await deleteLocalUpload(full);
+  } catch {
+    try {
+      if (fs.existsSync(full)) fs.unlinkSync(full);
+    } catch {
+      /* ignore missing/locked files */
+    }
+  }
+}
+
+export async function deleteClientOnePoFile(access, poId, fileId) {
+  if (!poId || !fileId) throw new AppError('File reference is required', 400, 'VALIDATION_ERROR');
+  const master = await CampOpsClientMaster.findOne({ _id: access.clientMasterId, isDeleted: false });
+  if (!master) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+  const orders = ensurePurchaseOrders(master);
+  const entryIndex = orders.findIndex((po) => String(po.id) === String(poId));
+  const entry = entryIndex >= 0 ? orders[entryIndex] : null;
+  if (!entry) throw new AppError('Document not found', 404, 'NOT_FOUND');
+  const files = ensurePoFiles(entry);
+  const fileIndex = files.findIndex(
+    (f) => String(f.id) === String(fileId) || String(f.storedName) === String(fileId),
+  );
+  if (fileIndex < 0) throw new AppError('File not found', 404, 'NOT_FOUND');
+  const [removed] = files.splice(fileIndex, 1);
+  entry.files = files;
+  entry.poFile = files[0] || null;
+
+  if (!files.length && !entry.poNumber && !entry.poIssueDate && !entry.poExpiryDate) {
+    orders.splice(entryIndex, 1);
+  }
+
+  master.purchaseOrders = orders;
+  master.poFile = orders.find((po) => po.poFile)?.poFile || null;
+  master.updatedById = `client-one:${access.accessId}`;
+  await master.save();
+  await unlinkClientOnePoStoredFile(removed?.storedName);
+  return orders.map(toClientOnePoDto);
 }
 
 export { campUploadRoot };

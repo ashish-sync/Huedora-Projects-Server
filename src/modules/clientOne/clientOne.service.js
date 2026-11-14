@@ -6,6 +6,7 @@ import { CampOpsCamp, CampOpsClientMaster } from '../campOps/campOps.model.js';
 import { normalizeCampName } from '../campOps/campOps.constants.js';
 import {
   CAMP_CLOSURE_TAXONOMY,
+  CANCELLED_BY_TYLO_REASON_LABELS,
   findClosureSubReason,
   normalizeClosureSubReason,
 } from '../campOps/campOps.closure.js';
@@ -81,6 +82,8 @@ export function programmeKeysFromMaster(master = {}) {
   return {
     clientId: master.clientId || null,
     clientName: trimStr(master.clientName),
+    displayName: trimStr(master.displayName) || trimStr(master.clientName),
+    portalBrandImage: master.portalBrandImage || null,
     programName: trimStr(master.programName || master.drugTherapyName),
     campName: normalizeCampName(master.campName || 'BMD'),
   };
@@ -152,6 +155,24 @@ export async function mintOrRotateClientOneAccess(master, actor = {}, { rotate =
 
   let existing = await findActiveAccessForMaster(master._id);
   if (existing && !rotate) {
+    let dirty = false;
+    if (String(existing.clientId || '') !== String(keys.clientId || '')) {
+      existing.clientId = keys.clientId;
+      dirty = true;
+    }
+    if (trimStr(existing.clientName) !== keys.clientName) {
+      existing.clientName = keys.clientName;
+      dirty = true;
+    }
+    if (trimStr(existing.programName) !== keys.programName) {
+      existing.programName = keys.programName;
+      dirty = true;
+    }
+    if (normalizeCampName(existing.campName) !== keys.campName) {
+      existing.campName = keys.campName;
+      dirty = true;
+    }
+    if (dirty) await existing.save();
     return {
       access: existing,
       pin: null,
@@ -327,17 +348,27 @@ async function registerFailedPin(access) {
   await access.save();
 }
 
-export function signClientOneSession(access, { preview = false, actor = null } = {}) {
+export function signClientOneSession(access, { preview = false, actor = null, master = null } = {}) {
   const features = normalizeClientOneFeatures(access.features);
   const isPreview = preview === true;
+  const keys = master ? programmeKeysFromMaster(master) : null;
+  const displayName = trimStr(keys?.displayName)
+    || trimStr(access.displayName)
+    || trimStr(access.clientName);
+  const brand = keys?.portalBrandImage || access.portalBrandImage || null;
+  const portalBrandImageUrl = trimStr(brand?.url || '');
+  // Method / Division always prefer live Client Master Program Configuration when loaded.
+  const programName = trimStr(keys?.programName) || trimStr(access.programName);
+  const campName = normalizeCampName(keys?.campName || access.campName || 'BMD');
+  const clientName = trimStr(keys?.clientName) || trimStr(access.clientName);
   const payload = {
     typ: isPreview ? 'client_one_preview' : 'client_one',
     accessId: access.accessId,
     clientMasterId: String(access.clientMasterId),
-    clientId: String(access.clientId),
-    programName: access.programName,
-    campName: access.campName,
-    clientName: access.clientName,
+    clientId: String(keys?.clientId || access.clientId),
+    programName,
+    campName,
+    clientName,
     mode: isPreview ? 'preview' : 'external',
   };
   if (isPreview && (actor?.email || actor?.id)) {
@@ -349,9 +380,12 @@ export function signClientOneSession(access, { preview = false, actor = null } =
     expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
     mode: isPreview ? 'preview' : 'external',
     client: {
-      name: access.clientName,
-      programName: access.programName,
-      campName: access.campName,
+      name: clientName,
+      displayName,
+      portalBrandImageUrl,
+      programName,
+      campName,
+      method: campName,
       accessId: access.accessId,
       clientMasterId: String(access.clientMasterId),
       features,
@@ -377,13 +411,15 @@ export async function mintClientOnePreviewSession(master, actor = {}) {
     clientMasterId: master._id,
     clientId: keys.clientId,
     clientName: keys.clientName,
+    displayName: keys.displayName,
+    portalBrandImage: keys.portalBrandImage,
     programName: keys.programName,
     campName: keys.campName,
     features: normalizeClientOneFeatures(existing?.features),
     isActive: true,
     revokedAt: null,
   };
-  return signClientOneSession(accessLike, { preview: true, actor });
+  return signClientOneSession(accessLike, { preview: true, actor, master });
 }
 
 export function verifyClientOneSessionToken(raw) {
@@ -604,25 +640,29 @@ function classifyExecutedClinicBucket(camp = {}) {
   return null;
 }
 
+/** Map Cancelled by Tylo camps to Cancel camp Reason dropdown values. */
 function resolveTyloCancellationReasonLabel(camp = {}) {
+  const category = String(camp.closureReasonCategory || '').trim();
+  if (category && CANCELLED_BY_TYLO_REASON_LABELS.includes(category)) {
+    return category;
+  }
+
   const code = normalizeClosureSubReason(
     camp.closureSubReason || camp.closureReasonCode || camp.cancellationReason || '',
   );
-  const category = String(camp.closureReasonCategory || '').trim();
-  if (code && category) {
-    const meta = findClosureSubReason('Cancelled by Tylo', category, code);
-    if (meta?.label) return meta.label;
-  }
   if (code) {
     const tree = CAMP_CLOSURE_TAXONOMY['Cancelled by Tylo'] || {};
-    for (const reasons of Object.values(tree)) {
+    for (const [reasonLabel, reasons] of Object.entries(tree)) {
       const match = (reasons || []).find((item) => item.value === code);
-      if (match?.label) return match.label;
+      if (match) return reasonLabel;
     }
   }
-  const label = String(camp.closureSubReasonLabel || '').trim();
-  if (label) return label;
-  return 'Unspecified';
+
+  if (category && findClosureSubReason('Cancelled by Tylo', category, code)) {
+    return category;
+  }
+
+  return 'Other';
 }
 
 function resolveMrName(camp = {}) {
@@ -812,7 +852,10 @@ export function computeClientOneDashboardAnalytics(camps = []) {
         'Cancelled by Client',
         'Cancelled by Tylo',
       ]),
-      tyloCancellation: slicesFromCountMap(tyloCancelReasonMap),
+      tyloCancellation: slicesFromCountMap(
+        tyloCancelReasonMap,
+        CANCELLED_BY_TYLO_REASON_LABELS,
+      ),
     },
     leaderboards: {
       doctors: leaderboardFromMap(doctorMap, 3),

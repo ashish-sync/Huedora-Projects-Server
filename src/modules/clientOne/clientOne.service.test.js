@@ -40,10 +40,14 @@ test('programmeKeysFromMaster maps Client Master programme dimensions', () => {
   const keys = programmeKeysFromMaster({
     clientId: 'c1',
     clientName: 'Acme',
+    displayName: 'Acme Care',
+    portalBrandImage: { url: '/uploads/camp-ops/logo.png' },
     programName: 'Oncology',
     campName: 'bmd',
   });
   assert.equal(keys.clientId, 'c1');
+  assert.equal(keys.displayName, 'Acme Care');
+  assert.equal(keys.portalBrandImage?.url, '/uploads/camp-ops/logo.png');
   assert.equal(keys.programName, 'Oncology');
   assert.equal(keys.campName, 'BMD');
 });
@@ -187,7 +191,22 @@ test('computeClientOneDashboardAnalytics uses Camp One business buckets', async 
   assert.equal(analytics.charts.extraHours.slices.find((s) => s.label === 'More than 4 hours')?.value, 1);
   assert.equal(analytics.charts.executedClinics.slices.find((s) => s.label === 'Executed')?.value, 2);
   assert.equal(analytics.charts.executedClinics.slices.find((s) => s.label === 'Cancelled by Tylo')?.value, 1);
-  assert.equal(analytics.charts.tyloCancellation.slices[0]?.label, 'HCW Unavailability');
+  assert.equal(analytics.charts.tyloCancellation.slices.length, 5);
+  assert.equal(analytics.charts.tyloCancellation.slices[0]?.label, 'Resource Issue');
+  assert.equal(
+    analytics.charts.tyloCancellation.slices.find((s) => s.label === 'Resource Issue')?.value,
+    1,
+  );
+  assert.deepEqual(
+    analytics.charts.tyloCancellation.slices.map((s) => s.label),
+    [
+      'Resource Issue',
+      'Operational Issue',
+      'Device & Inventory',
+      'External Factors',
+      'Other',
+    ],
+  );
   assert.equal(analytics.leaderboards.doctors[0]?.name, 'Dr Rao');
   assert.equal(analytics.leaderboards.doctors[0]?.patients, 28);
   assert.equal(analytics.leaderboards.mrs[0]?.name, 'Vivek Sharma');
@@ -230,13 +249,27 @@ test('signClientOneSession marks preview tokens distinctly from external PIN ses
     campName: 'BMD',
     features: null,
   };
-  const external = signClientOneSession(access);
+  const external = signClientOneSession(access, {
+    master: {
+      displayName: 'Acme Care',
+      portalBrandImage: { url: '/uploads/camp-ops/logo.png' },
+      clientName: 'Acme',
+      programName: 'Oncology',
+      campName: 'ECG',
+      clientId: 'client-1',
+    },
+  });
   const preview = signClientOneSession(access, {
     preview: true,
     actor: { email: 'admin@tylo.local' },
   });
   assert.equal(external.mode, 'external');
+  assert.equal(external.client.displayName, 'Acme Care');
+  assert.equal(external.client.portalBrandImageUrl, '/uploads/camp-ops/logo.png');
+  assert.equal(external.client.campName, 'ECG');
+  assert.equal(external.client.method, 'ECG');
   assert.equal(preview.mode, 'preview');
+  assert.equal(preview.client.campName, 'BMD');
   const decodedExternal = verifyClientOneSessionToken(external.token);
   const decodedPreview = verifyClientOneSessionToken(preview.token);
   assert.equal(decodedExternal.typ, 'client_one');
