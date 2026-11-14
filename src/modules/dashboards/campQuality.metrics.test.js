@@ -36,7 +36,7 @@ test('punctuality uses cancellation and stored/derived ratings', () => {
   assert.equal(classifyPunctualityBucket({}), 'Pending');
 });
 
-test('camp cycle rates overtime against planned duration', () => {
+test('camp cycle uses camp end → Confirm Payment working hours', () => {
   assert.equal(
     classifyCampCycleBucket({ executionStatus: 'Cancelled by Client' }),
     'Cancelled',
@@ -44,28 +44,35 @@ test('camp cycle rates overtime against planned duration', () => {
   assert.equal(classifyCampCycleBucket({}), 'Pending');
   assert.equal(
     classifyCampCycleBucket({
-      inTime: '09:00',
+      campDate: '2026-11-10',
       outTime: '13:00',
-      clientMasterCampDuration: '4:00',
-      durationHours: 4,
+    }),
+    'Pending',
+  );
+  // Tue 13:00 → same day 18:00 = 5 working hours → Good
+  assert.equal(
+    classifyCampCycleBucket({
+      campDate: '2026-11-10',
+      outTime: '13:00',
+      paymentConfirmedAt: '2026-11-10T12:30:00.000Z', // 18:00 IST
     }),
     'Good',
   );
+  // Tue 13:00 → Thu 14:00 IST spans >16 and ≤32 working hours → Average
   assert.equal(
     classifyCampCycleBucket({
-      inTime: '09:00',
-      outTime: '14:00',
-      clientMasterCampDuration: '4:00',
-      durationHours: 4,
+      campDate: '2026-11-10',
+      outTime: '13:00',
+      paymentConfirmedAt: '2026-11-12T08:30:00.000Z', // Thu 14:00 IST
     }),
     'Average',
   );
+  // Tue 13:00 → next week → Poor
   assert.equal(
     classifyCampCycleBucket({
-      inTime: '09:00',
-      outTime: '15:00',
-      clientMasterCampDuration: '4:00',
-      durationHours: 4,
+      campDate: '2026-11-10',
+      outTime: '13:00',
+      paymentConfirmedAt: '2026-11-17T12:30:00.000Z',
     }),
     'Poor',
   );

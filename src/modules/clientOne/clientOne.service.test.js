@@ -277,3 +277,35 @@ test('signClientOneSession marks preview tokens distinctly from external PIN ses
   assert.equal(isClientOnePreviewToken(decodedPreview), true);
   assert.equal(isClientOnePreviewToken(decodedExternal), false);
 });
+
+test('signClientOneSession embeds member claims for per-member PIN login', () => {
+  const access = {
+    accessId: 'ABC123',
+    clientMasterId: 'master-1',
+    clientId: 'client-1',
+    clientName: 'Acme',
+    programName: 'Oncology',
+    campName: 'BMD',
+    features: null,
+  };
+  const session = signClientOneSession(access, {
+    member: {
+      _id: 'mem-9',
+      fullName: 'West Lead',
+      mobile: '9000000000',
+      designation: 'RM',
+      level: 'regional',
+      parentId: 'ho-1',
+      regions: ['Maharashtra'],
+      locations: [],
+      status: 'active',
+    },
+  });
+  assert.equal(session.member.id, 'mem-9');
+  assert.equal(session.member.level, 'regional');
+  assert.equal(session.client.member.id, 'mem-9');
+  const decoded = verifyClientOneSessionToken(session.token);
+  assert.equal(decoded.memberId, 'mem-9');
+  assert.equal(decoded.memberLevel, 'regional');
+  assert.equal(decoded.memberName, 'West Lead');
+});

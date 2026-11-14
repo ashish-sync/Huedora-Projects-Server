@@ -51,6 +51,14 @@ export const CAMP_CLOSURE_TAXONOMY = {
   },
 };
 
+/**
+ * Cancel camp → Cancelled by Tylo → Reason dropdown values.
+ * Client One "Tylo Cancellation Reasons" chart uses this exact list.
+ */
+export const CANCELLED_BY_TYLO_REASON_LABELS = Object.keys(
+  CAMP_CLOSURE_TAXONOMY['Cancelled by Tylo'],
+);
+
 const LEGACY_REFUSAL_ALIASES = {
   Rejected: 'Refused',
   'Cancelled by TCPL': 'Cancelled by Tylo',

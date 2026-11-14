@@ -9,6 +9,7 @@ import { parseLocalDateInput } from '../campOps/campOps.helpers.js';
 import { resolveCampClientScope } from '../campOps/campOps.clientAccess.js';
 import { applyAssignedUserAssignmentsToFilter } from '../campOps/clientMaster.programScope.js';
 import { AppError } from '../../utils/helpers.js';
+import { classifyCampCycleFromWorkingHours } from './campCycleWorkingHours.js';
 
 export const CAMP_QUALITY_METRICS = {
   punctuality: {
@@ -48,6 +49,7 @@ const CAMP_QUALITY_SELECT = [
   'attire',
   'chargeableStatus',
   'startTime',
+  'endTime',
   'inTime',
   'outTime',
   'totalHours',
@@ -57,6 +59,8 @@ const CAMP_QUALITY_SELECT = [
   'travelling',
   'overtimeExpense',
   'otherExpenses',
+  'paymentSubmitStatus',
+  'paymentConfirmedAt',
 ].join(' ');
 
 export function parseCampQualityRange(query = {}) {
@@ -117,16 +121,15 @@ export function classifyAttireComplianceBucket(camp = {}) {
   return classifyAttireBucket(camp.attire);
 }
 
+/**
+ * Avg. Camp Cycle = working hours from Camp end → Confirm Payment
+ * (10:00–19:00 IST, Mon–Sat). Extra-hours / duration are not used.
+ */
 export function classifyCampCycleBucket(camp = {}, derived = null) {
-  if (isExecutionCancellationForFinance(camp)) return 'Cancelled';
-  const lifecycle = derived || computeLifecycleDerived(camp, { pricing: campSnapshotPricing(camp) });
-  if (lifecycle.totalHours == null || !Number.isFinite(Number(lifecycle.totalHours))) {
-    return 'Pending';
-  }
-  const extraHours = Number(lifecycle.extraHours) || 0;
-  if (extraHours <= 0) return 'Good';
-  if (extraHours <= 1) return 'Average';
-  return 'Poor';
+  void derived;
+  return classifyCampCycleFromWorkingHours(camp, {
+    cancelled: isExecutionCancellationForFinance(camp),
+  });
 }
 
 export function classifyAvgPayoutBucket(camp = {}, derived = null) {

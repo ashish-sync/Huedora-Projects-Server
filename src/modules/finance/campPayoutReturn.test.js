@@ -86,6 +86,7 @@ test('applyReturnCampFromPayoutQueue restores Pending Confirmation like post-Exe
     submittedToFinanceByEmail: 'a@b.com',
     financePaymentStatus: 'under_review',
     paymentSubmitStatus: 'payment_confirmed',
+    paymentConfirmedAt: '2026-10-01T00:00:00.000Z',
     lifecycleStage: 'financial',
   };
   applyReturnCampFromPayoutQueue(camp);
@@ -93,6 +94,7 @@ test('applyReturnCampFromPayoutQueue restores Pending Confirmation like post-Exe
   assert.equal(camp.submittedToFinanceById, null);
   assert.equal(camp.submittedToFinanceByEmail, '');
   assert.equal(camp.financePaymentStatus, '');
+  assert.equal(camp.paymentConfirmedAt, null);
   assert.equal(camp.paymentSubmitStatus, 'payment_not_checked');
   assert.equal(camp.lifecycleStage, 'financial');
 });
@@ -126,6 +128,7 @@ test('return clearKeys are required — blank merge alone keeps queue membership
     submittedToFinanceByEmail: 'a@b.com',
     financePaymentStatus: 'under_review',
     paymentSubmitStatus: 'payment_confirmed',
+    paymentConfirmedAt: '2026-10-01T00:00:00.000Z',
     lifecycleStage: 'financial',
   };
   const camp = { ...existing };
@@ -134,6 +137,7 @@ test('return clearKeys are required — blank merge alone keeps queue membership
   const withoutClear = mergeDocumentFields(existing, camp);
   assert.equal(withoutClear.submittedToFinanceAt, '2026-10-01T00:00:00.000Z');
   assert.equal(withoutClear.financePaymentStatus, 'under_review');
+  assert.equal(withoutClear.paymentConfirmedAt, '2026-10-01T00:00:00.000Z');
   assert.equal(withoutClear.paymentSubmitStatus, 'payment_not_checked');
 
   const withClear = mergeDocumentFields(existing, camp, {
@@ -143,5 +147,6 @@ test('return clearKeys are required — blank merge alone keeps queue membership
   assert.equal(withClear.submittedToFinanceById, null);
   assert.equal(withClear.submittedToFinanceByEmail, '');
   assert.equal(withClear.financePaymentStatus, '');
+  assert.equal(withClear.paymentConfirmedAt, null);
   assert.equal(withClear.paymentSubmitStatus, 'payment_not_checked');
 });

@@ -136,6 +136,8 @@ export const CampOpsCamp = defineCollection('camp_ops_camps', {
   transactionId: '',
   paymentRemark: '',
   paymentSubmitStatus: '',
+  /** Set when Confirm Payment / Unhold lands on payment_confirmed (Camp Cycle clock end). */
+  paymentConfirmedAt: null,
   financePaymentStatus: '',
   expenseCategory: '',
   expenseSubCategory: '',
@@ -206,6 +208,11 @@ export const CampOpsClientMaster = defineCollection('camp_ops_client_masters', {
   clientName: '',
   programName: '',
   displayName: '',
+  /**
+   * Optional portal brand mark for Client One header (image file meta).
+   * Shape: { id, fileName, storedName, mimeType, fileSize, url, uploadedAt }
+   */
+  portalBrandImage: null,
   drugTherapyName: '',
   campName: 'BMD',
   campType: '',

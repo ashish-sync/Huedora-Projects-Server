@@ -20,7 +20,7 @@ import {
   classifyChargeabilityBucket,
   classifyPunctualityBucket,
 } from '../dashboards/campQuality.metrics.js';
-import { ClientOneAccess } from './clientOne.model.js';
+import { ClientOneAccess, ClientOneMember } from './clientOne.model.js';
 import { normalizeClientOneFeatures } from './clientOne.features.js';
 
 const PIN_LENGTH = 6;
@@ -271,9 +271,14 @@ export async function revokeClientOneAccess(masterId) {
 }
 
 /** External client session: change own PIN (not available for staff preview). */
-export async function changeClientOnePin(access, { currentPin, newPin } = {}) {
+export async function changeClientOnePin(access, { currentPin, newPin, member = null } = {}) {
   if (!access?._id || access.isPreview) {
     throw new AppError('PIN can only be changed from an active client session', 403, 'FORBIDDEN');
+  }
+  if (member?._id) {
+    const { changeMemberPin } = await import('./clientOne.members.js');
+    const result = await changeMemberPin(member, { currentPin, newPin });
+    return { accessId: access.accessId, memberId: result.memberId, pin: result.pin };
   }
   const currentHash = hashClientOnePin(currentPin);
   if (!currentHash || access.pinHash !== currentHash) {
@@ -286,6 +291,10 @@ export async function changeClientOnePin(access, { currentPin, newPin } = {}) {
   const pinHash = hashClientOnePin(pin);
   const clash = await ClientOneAccess.findOne({ pinHash, isActive: true, revokedAt: null });
   if (clash && String(clash._id) !== String(access._id)) {
+    throw new AppError('That PIN is already in use. Choose a different 6-digit PIN.', 409, 'PIN_IN_USE');
+  }
+  const memberClash = await ClientOneMember.findOne({ pinHash, status: 'active' });
+  if (memberClash) {
     throw new AppError('That PIN is already in use. Choose a different 6-digit PIN.', 409, 'PIN_IN_USE');
   }
   const row = await ClientOneAccess.findOne({ _id: access._id, isActive: true, revokedAt: null });
@@ -304,15 +313,60 @@ function isLocked(access) {
   return Number.isFinite(until) && until > Date.now();
 }
 
+function isMemberLocked(member) {
+  if (!member?.lockedUntil) return false;
+  const until = new Date(member.lockedUntil).getTime();
+  return Number.isFinite(until) && until > Date.now();
+}
+
+async function registerFailedMemberPin(member) {
+  const next = Number(member.failedAttempts || 0) + 1;
+  member.failedAttempts = next;
+  if (next >= MAX_FAILED) {
+    member.lockedUntil = new Date(Date.now() + LOCK_MS).toISOString();
+    member.failedAttempts = 0;
+  }
+  await member.save();
+}
+
+/**
+ * Verify PIN for either a programme shared grant or a User Base member.
+ * Legacy shared-PIN remains valid during migration.
+ * @returns {{ access: object, member: object|null }}
+ */
 export async function verifyClientOnePin({ pin, accessId = '' } = {}) {
   const pinHash = hashClientOnePin(pin);
   if (!pinHash) throw new AppError('Enter a valid PIN', 400, 'VALIDATION_ERROR');
+
+  // Prefer per-member PIN when it matches (scoped by accessId when provided).
+  const { findActiveMemberByPinHash } = await import('./clientOne.members.js');
+  const member = await findActiveMemberByPinHash(pinHash, { accessId });
+  if (member) {
+    if (isMemberLocked(member)) {
+      throw new AppError('Too many attempts. Try again later.', 429, 'PIN_LOCKED');
+    }
+    const access = await findActiveAccessForMaster(member.clientMasterId)
+      || (trimStr(accessId) ? await getAccessByAccessId(accessId) : null)
+      || (member.accessId ? await getAccessByAccessId(member.accessId) : null);
+    if (!access || access.isActive === false || access.revokedAt) {
+      throw new AppError('Programme access is not active', 403, 'ACCESS_INACTIVE');
+    }
+    if (access.expiresAt && new Date(access.expiresAt).getTime() < Date.now()) {
+      throw new AppError('This Client One access has expired', 403, 'ACCESS_EXPIRED');
+    }
+    member.failedAttempts = 0;
+    member.lockedUntil = null;
+    member.lastLoginAt = new Date().toISOString();
+    await member.save();
+    return { access, member };
+  }
 
   let access = null;
   if (trimStr(accessId)) {
     access = await getAccessByAccessId(accessId);
     if (!access || access.pinHash !== pinHash) {
       if (access) await registerFailedPin(access);
+      // Also bump member failures when accessId-scoped member pin was wrong
       throw new AppError('Invalid PIN', 401, 'INVALID_PIN');
     }
   } else {
@@ -335,7 +389,7 @@ export async function verifyClientOnePin({ pin, accessId = '' } = {}) {
   access.lockedUntil = null;
   access.lastLoginAt = new Date().toISOString();
   await access.save();
-  return access;
+  return { access, member: null };
 }
 
 async function registerFailedPin(access) {
@@ -348,7 +402,7 @@ async function registerFailedPin(access) {
   await access.save();
 }
 
-export function signClientOneSession(access, { preview = false, actor = null, master = null } = {}) {
+export function signClientOneSession(access, { preview = false, actor = null, master = null, member = null } = {}) {
   const features = normalizeClientOneFeatures(access.features);
   const isPreview = preview === true;
   const keys = master ? programmeKeysFromMaster(master) : null;
@@ -371,10 +425,28 @@ export function signClientOneSession(access, { preview = false, actor = null, ma
     clientName,
     mode: isPreview ? 'preview' : 'external',
   };
+  if (member?._id) {
+    payload.memberId = String(member._id);
+    payload.memberLevel = member.level;
+    payload.memberName = trimStr(member.fullName);
+  }
   if (isPreview && (actor?.email || actor?.id)) {
     payload.previewBy = actor.email || String(actor.id);
   }
   const token = jwt.sign(payload, env.jwtAccessSecret, { expiresIn: SESSION_TTL });
+  const memberDto = member?._id
+    ? {
+      id: String(member._id),
+      fullName: trimStr(member.fullName),
+      mobile: trimStr(member.mobile),
+      designation: trimStr(member.designation),
+      level: member.level,
+      parentId: member.parentId ? String(member.parentId) : null,
+      regions: Array.isArray(member.regions) ? member.regions : [],
+      locations: Array.isArray(member.locations) ? member.locations : [],
+      status: member.status === 'inactive' ? 'inactive' : 'active',
+    }
+    : null;
   return {
     token,
     expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
@@ -389,7 +461,9 @@ export function signClientOneSession(access, { preview = false, actor = null, ma
       accessId: access.accessId,
       clientMasterId: String(access.clientMasterId),
       features,
+      member: memberDto,
     },
+    member: memberDto,
     features,
   };
 }
@@ -474,6 +548,18 @@ export async function resolveClientOneSessionAccess(decoded) {
     throw new AppError('Session no longer valid', 401, 'UNAUTHORIZED');
   }
   access.isPreview = false;
+  if (decoded.memberId) {
+    const member = await ClientOneMember.findOne({
+      _id: String(decoded.memberId),
+      clientMasterId: access.clientMasterId,
+    });
+    if (!member || member.status === 'inactive') {
+      throw new AppError('Session no longer valid', 401, 'UNAUTHORIZED');
+    }
+    access.sessionMember = member;
+  } else {
+    access.sessionMember = null;
+  }
   return access;
 }
 
@@ -538,8 +624,13 @@ export function defaultDashboardWindow(now = new Date()) {
   return { from: ymd(start), to: ymd(end) };
 }
 
-export async function loadScopedCamps(access, { from, to } = {}) {
-  const filter = buildCampScopeFilter(access);
+export async function loadScopedCamps(access, { from, to, member = null } = {}) {
+  let filter = buildCampScopeFilter(access);
+  const sessionMember = member || access?.sessionMember || null;
+  if (sessionMember) {
+    const { applyMemberCampVisibility } = await import('./clientOne.members.js');
+    filter = applyMemberCampVisibility(filter, sessionMember);
+  }
   if (from || to) {
     filter.campDate = {};
     if (from) filter.campDate.$gte = String(from).slice(0, 10);

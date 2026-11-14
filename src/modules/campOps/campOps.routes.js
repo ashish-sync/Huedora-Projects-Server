@@ -4628,6 +4628,61 @@ router.delete(
   })
 );
 
+router.post(
+  '/client-masters/:id/portal-brand-image',
+  canRequest,
+  attachCampUploadLimit,
+  clientMasterPoUpload.single('file'),
+  ensureUploadCommit(),
+  requireSafeUploads(UPLOAD_RULES.images),
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, row.clientId);
+    await assertClientMasterAccess(req.user, row);
+    const file = req.file;
+    if (!file) throw new AppError('Image file is required', 400, 'VALIDATION_ERROR');
+
+    const previous = row.portalBrandImage;
+    row.portalBrandImage = {
+      id: newCampTermsFileId(),
+      fileName: file.originalname || file.filename,
+      storedName: file.filename,
+      mimeType: file.mimetype || 'application/octet-stream',
+      fileSize: file.size || 0,
+      url: `/uploads/camp-ops/${file.filename}`,
+      uploadedAt: new Date().toISOString(),
+    };
+    row.updatedById = actor(req).id;
+    await row.save();
+    if (previous?.storedName && previous.storedName !== row.portalBrandImage.storedName) {
+      unlinkPoFile(previous.storedName);
+    }
+    await audit(req, 'camp_ops.client_master_portal_brand_image', 'camp_ops_client_master', row._id, null, {
+      fileName: row.portalBrandImage.fileName,
+    });
+    res.json({ data: withSignedPoFile(row) });
+  })
+);
+
+router.delete(
+  '/client-masters/:id/portal-brand-image',
+  canRequest,
+  asyncHandler(async (req, res) => {
+    const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
+    await assertClientIdAccess(req.user, row.clientId);
+    await assertClientMasterAccess(req.user, row);
+    const previous = row.portalBrandImage;
+    row.portalBrandImage = null;
+    row.updatedById = actor(req).id;
+    await row.save();
+    unlinkPoFile(previous?.storedName);
+    await audit(req, 'camp_ops.client_master_portal_brand_image_delete', 'camp_ops_client_master', row._id, null, {});
+    res.json({ data: withSignedPoFile(row) });
+  })
+);
+
 function getPurchaseOrdersMutable(row) {
   const ensured = ensurePurchaseOrders(row);
   if (!Array.isArray(row.purchaseOrders) || !row.purchaseOrders.length) {

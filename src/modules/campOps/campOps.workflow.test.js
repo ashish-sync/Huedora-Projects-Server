@@ -87,6 +87,7 @@ test('Confirm Payment from pending', () => {
   };
   applyConfirmPaymentTransition(camp);
   assert.equal(camp.paymentSubmitStatus, 'payment_confirmed');
+  assert.ok(camp.paymentConfirmedAt);
 });
 
 test('preserveOrCaptureSubmissionTracking keeps original submittedAt', () => {

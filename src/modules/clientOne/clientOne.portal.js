@@ -54,8 +54,8 @@ function calendarBucket(status, campDate, today) {
   return 'upcoming';
 }
 
-export async function buildClientOneCalendar(access, { from, to, now = new Date() } = {}) {
-  const camps = await loadScopedCamps(access, { from, to });
+export async function buildClientOneCalendar(access, { from, to, member = null, now = new Date() } = {}) {
+  const camps = await loadScopedCamps(access, { from, to, member });
   const today = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
   const events = camps
     .map((raw) => {
@@ -209,8 +209,8 @@ export async function sendClientOneAnnexure(res, access, annexureId, { download 
   await pipeUploadToResponse(res, full, { contentType: doc.mimeType });
 }
 
-export async function buildClientOneMis(access, { from, to } = {}) {
-  const camps = await loadScopedCamps(access, { from, to });
+export async function buildClientOneMis(access, { from, to, member = null } = {}) {
+  const camps = await loadScopedCamps(access, { from, to, member });
   const kpis = computeClientOneKpis(camps, { from, to });
   const rows = camps.map(toClientOneCampDto);
   return {

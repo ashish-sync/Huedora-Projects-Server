@@ -340,6 +340,7 @@ export function applyMarkCompleteTransition(camp, mappedConsumables = []) {
 export function applyConfirmPaymentTransition(camp) {
   assertWorkflowAction(camp, WORKFLOW_ACTIONS.CONFIRM_PAYMENT);
   camp.paymentSubmitStatus = 'payment_confirmed';
+  camp.paymentConfirmedAt = new Date().toISOString();
 }
 
 export function applyHoldTransition(camp, remark) {
@@ -355,6 +356,10 @@ export function applyReleaseHoldTransition(camp, remark) {
   });
   camp.paymentSubmitStatus = 'payment_confirmed';
   camp.paymentRemark = trim(remark);
+  // Unhold is Confirm Payment for Camp Cycle when the camp was never confirmed.
+  if (!camp.paymentConfirmedAt) {
+    camp.paymentConfirmedAt = new Date().toISOString();
+  }
 }
 
 /**

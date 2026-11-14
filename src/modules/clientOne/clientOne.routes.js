@@ -102,9 +102,11 @@ async function requireClientOneSession(req, _res, next) {
       : '';
     const decoded = verifyClientOneSessionToken(bearer);
     const access = await resolveClientOneSessionAccess(decoded);
+    const member = access.sessionMember || null;
     req.clientOne = {
       decoded,
       access,
+      member,
       isPreview: isClientOnePreviewToken(decoded) || access.isPreview === true,
     };
     next();
@@ -137,9 +139,9 @@ router.post(
   asyncHandler(async (req, res) => {
     const pin = req.body?.pin;
     const accessId = req.body?.accessId || '';
-    let access;
+    let verified;
     try {
-      access = await verifyClientOnePin({ pin, accessId });
+      verified = await verifyClientOnePin({ pin, accessId });
     } catch (err) {
       await writeAudit({
         action: 'CLIENT_ONE.LOGIN_FAILURE',
@@ -155,21 +157,26 @@ router.post(
       throw err;
     }
 
+    const { access, member } = verified;
     const master = await masterForAccess(access);
-    const session = signClientOneSession(access, { master });
+    const session = signClientOneSession(access, { master, member });
     await writeAudit({
       action: 'CLIENT_ONE.LOGIN_SUCCESS',
-      entityType: 'client_one_access',
-      entityId: access._id,
+      entityType: member?._id ? 'client_one_member' : 'client_one_access',
+      entityId: member?._id || access._id,
       after: {
         accessId: access.accessId,
+        memberId: member?._id || null,
+        memberLevel: member?.level || null,
         clientName: access.clientName,
         programName: access.programName,
         campName: access.campName,
       },
       source: 'UI',
       actorType: 'USER',
-      actorEmail: `client-one:${access.accessId}`,
+      actorEmail: member?._id
+        ? `client-one-member:${member._id}`
+        : `client-one:${access.accessId}`,
       ip: req.ip,
       requestId: req.requestId,
       programmeId: access.programName,
@@ -194,10 +201,12 @@ router.get(
     const session = signClientOneSession(req.clientOne.access, {
       preview: req.clientOne.isPreview,
       master,
+      member: req.clientOne.member,
     });
     res.json({
       data: {
         client: session.client,
+        member: session.member,
         features: session.features,
         mode: req.clientOne.isPreview ? 'preview' : 'external',
       },
@@ -215,15 +224,18 @@ router.post(
     const result = await changeClientOnePin(req.clientOne.access, {
       currentPin: req.body?.currentPin,
       newPin: req.body?.pin || req.body?.newPin,
+      member: req.clientOne.member,
     });
     await writeAudit({
       action: 'CLIENT_ONE.PIN_SELF_UPDATE',
-      entityType: 'client_one_access',
-      entityId: req.clientOne.access._id,
-      after: { accessId: result.accessId },
+      entityType: result.memberId ? 'client_one_member' : 'client_one_access',
+      entityId: result.memberId || req.clientOne.access._id,
+      after: { accessId: result.accessId, memberId: result.memberId || null },
       source: 'UI',
       actorType: 'USER',
-      actorEmail: `client-one:${req.clientOne.access.accessId}`,
+      actorEmail: result.memberId
+        ? `client-one-member:${result.memberId}`
+        : `client-one:${req.clientOne.access.accessId}`,
       ip: req.ip,
       requestId: req.requestId,
     });
@@ -231,6 +243,7 @@ router.post(
       data: {
         ok: true,
         accessId: result.accessId,
+        memberId: result.memberId || null,
         pin: result.pin,
       },
     });
@@ -243,17 +256,23 @@ router.get(
   requireFeature('dashboard'),
   asyncHandler(async (req, res) => {
     const { from, to } = rangeFromQuery(req);
-    const camps = await loadScopedCamps(req.clientOne.access, { from, to });
+    const camps = await loadScopedCamps(req.clientOne.access, {
+      from,
+      to,
+      member: req.clientOne.member,
+    });
     const kpis = computeClientOneKpis(camps, { from, to });
     const analytics = computeClientOneDashboardAnalytics(camps);
     const master = await masterForAccess(req.clientOne.access);
     const session = signClientOneSession(req.clientOne.access, {
       preview: req.clientOne.isPreview,
       master,
+      member: req.clientOne.member,
     });
     res.json({
       data: {
         client: session.client,
+        member: session.member,
         features: session.features,
         mode: req.clientOne.isPreview ? 'preview' : 'external',
         kpis,
@@ -271,7 +290,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const { page, limit, skip } = parsePagination(req.query);
     const { from, to } = rangeFromQuery(req);
-    const filter = buildCampScopeFilter(req.clientOne.access);
+    const { applyMemberCampVisibility } = await import('./clientOne.members.js');
+    let filter = buildCampScopeFilter(req.clientOne.access);
+    filter = applyMemberCampVisibility(filter, req.clientOne.member);
     filter.campDate = { $gte: from, $lte: to };
     const rows = await CampOpsCamp.find(filter);
     const list = (Array.isArray(rows) ? rows : [])
@@ -288,10 +309,12 @@ router.get(
   requireClientOneSession,
   requireFeature('campTracker'),
   asyncHandler(async (req, res) => {
-    const scope = buildCampScopeFilter(req.clientOne.access);
+    const { applyMemberCampVisibility } = await import('./clientOne.members.js');
+    let filter = buildCampScopeFilter(req.clientOne.access);
+    filter = applyMemberCampVisibility(filter, req.clientOne.member);
     const camp = await CampOpsCamp.findOne({
       _id: req.params.id,
-      ...scope,
+      ...filter,
     });
     if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
     res.json({ data: toClientOneCampDto(camp) });
@@ -304,7 +327,11 @@ router.get(
   requireFeature('hcw'),
   asyncHandler(async (req, res) => {
     const { from, to } = rangeFromQuery(req);
-    const camps = await loadScopedCamps(req.clientOne.access, { from, to });
+    const camps = await loadScopedCamps(req.clientOne.access, {
+      from,
+      to,
+      member: req.clientOne.member,
+    });
     const rows = camps
       .map(toClientOneCampDto)
       .filter((row) => row.hcwName || row.assignmentStatus)
@@ -331,7 +358,11 @@ router.get(
   requireFeature('calendar'),
   asyncHandler(async (req, res) => {
     const { from, to } = rangeFromQuery(req);
-    const data = await buildClientOneCalendar(req.clientOne.access, { from, to });
+    const data = await buildClientOneCalendar(req.clientOne.access, {
+      from,
+      to,
+      member: req.clientOne.member,
+    });
     res.json({ data });
   }),
 );
@@ -381,7 +412,11 @@ router.get(
   requireFeature('mis'),
   asyncHandler(async (req, res) => {
     const { from, to } = rangeFromQuery(req);
-    const data = await buildClientOneMis(req.clientOne.access, { from, to });
+    const data = await buildClientOneMis(req.clientOne.access, {
+      from,
+      to,
+      member: req.clientOne.member,
+    });
     res.json({ data });
   }),
 );
@@ -392,7 +427,11 @@ router.get(
   requireFeature('mis'),
   asyncHandler(async (req, res) => {
     const { from, to } = rangeFromQuery(req);
-    const data = await buildClientOneMis(req.clientOne.access, { from, to });
+    const data = await buildClientOneMis(req.clientOne.access, {
+      from,
+      to,
+      member: req.clientOne.member,
+    });
     const csv = misToCsv(data);
     const name = `client-one-mis-${from || 'all'}-${to || 'all'}.csv`.replace(/[^\w.-]+/g, '_');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -513,6 +552,133 @@ router.get(
   requireFeature('poUpload'),
   asyncHandler(async (req, res) => {
     await sendClientOnePoFile(res, req.clientOne.access, req.params.poId, '');
+  }),
+);
+
+/* ── User Base members (organogram) ─────────────────────────── */
+
+router.get(
+  '/members',
+  requireClientOneSession,
+  requireFeature('campRequestLink'),
+  asyncHandler(async (req, res) => {
+    const {
+      listMembersForAccess,
+      buildMemberTree,
+      actorCapabilities,
+      publicMemberDto,
+    } = await import('./clientOne.members.js');
+    const session = {
+      access: req.clientOne.access,
+      member: req.clientOne.member,
+      isPreview: req.clientOne.isPreview,
+    };
+    const rows = await listMembersForAccess(req.clientOne.access, session);
+    const caps = actorCapabilities(session);
+    res.json({
+      data: {
+        tree: buildMemberTree(rows),
+        members: rows.map((row) => publicMemberDto(row)),
+        capabilities: {
+          canManage: caps.canManage,
+          role: caps.role,
+          maxCreateLevel: caps.maxCreateLevel,
+          actorMemberId: caps.actorMemberId,
+        },
+      },
+    });
+  }),
+);
+
+router.post(
+  '/members',
+  requireClientOneSession,
+  requireFeature('campRequestLink'),
+  asyncHandler(async (req, res) => {
+    const { createMember } = await import('./clientOne.members.js');
+    const session = {
+      access: req.clientOne.access,
+      member: req.clientOne.member,
+      isPreview: req.clientOne.isPreview,
+    };
+    const data = await createMember(req.clientOne.access, session, req.body || {});
+    await writeAudit({
+      action: 'CLIENT_ONE.MEMBER_CREATE',
+      entityType: 'client_one_member',
+      entityId: data.id,
+      after: { level: data.level, fullName: data.fullName, mobile: data.mobile },
+      source: 'UI',
+      actorType: 'USER',
+      actorEmail: req.clientOne.member?._id
+        ? `client-one-member:${req.clientOne.member._id}`
+        : `client-one:${req.clientOne.access.accessId}`,
+      ip: req.ip,
+      requestId: req.requestId,
+    });
+    res.status(201).json({ data });
+  }),
+);
+
+router.patch(
+  '/members/:id',
+  requireClientOneSession,
+  requireFeature('campRequestLink'),
+  asyncHandler(async (req, res) => {
+    const { updateMember } = await import('./clientOne.members.js');
+    const session = {
+      access: req.clientOne.access,
+      member: req.clientOne.member,
+      isPreview: req.clientOne.isPreview,
+    };
+    const data = await updateMember(
+      req.clientOne.access,
+      session,
+      req.params.id,
+      req.body || {},
+    );
+    await writeAudit({
+      action: 'CLIENT_ONE.MEMBER_UPDATE',
+      entityType: 'client_one_member',
+      entityId: data.id,
+      after: { level: data.level, status: data.status, fullName: data.fullName },
+      source: 'UI',
+      actorType: 'USER',
+      actorEmail: req.clientOne.member?._id
+        ? `client-one-member:${req.clientOne.member._id}`
+        : `client-one:${req.clientOne.access.accessId}`,
+      ip: req.ip,
+      requestId: req.requestId,
+    });
+    res.json({ data });
+  }),
+);
+
+router.post(
+  '/members/:id/pin/rotate',
+  requireClientOneSession,
+  requireFeature('campRequestLink'),
+  asyncHandler(async (req, res) => {
+    const { rotateMemberPin } = await import('./clientOne.members.js');
+    const session = {
+      access: req.clientOne.access,
+      member: req.clientOne.member,
+      isPreview: req.clientOne.isPreview,
+    };
+    const data = await rotateMemberPin(req.clientOne.access, session, req.params.id);
+    await writeAudit({
+      action: 'CLIENT_ONE.MEMBER_PIN_ROTATE',
+      entityType: 'client_one_member',
+      entityId: data.id,
+      after: { rotated: true },
+      source: 'UI',
+      actorType: 'USER',
+      actorEmail: req.clientOne.member?._id
+        ? `client-one-member:${req.clientOne.member._id}`
+        : `client-one:${req.clientOne.access.accessId}`,
+      ip: req.ip,
+      requestId: req.requestId,
+    });
+    res.json({ data });
   }),
 );
 

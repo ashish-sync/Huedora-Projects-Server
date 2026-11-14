@@ -97,6 +97,7 @@ export const CAMP_PAYOUT_RETURN_CLEAR_KEYS = [
   'submittedToFinanceById',
   'submittedToFinanceByEmail',
   'financePaymentStatus',
+  'paymentConfirmedAt',
 ];
 
 /**
@@ -127,6 +128,7 @@ export function applyReturnCampFromPayoutQueue(camp) {
   camp.submittedToFinanceById = null;
   camp.submittedToFinanceByEmail = '';
   camp.financePaymentStatus = '';
+  camp.paymentConfirmedAt = null;
   // Same state as Mark Complete → Financial (Pending Confirmation).
   camp.paymentSubmitStatus = 'payment_not_checked';
   camp.lifecycleStage = 'financial';
