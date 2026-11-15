@@ -7,6 +7,8 @@ import { createUploadStorage } from '../../storage/createUploadStorage.js';
 import { ensureUploadCommit } from '../../storage/uploadLifecycle.js';
 import { multerStoredUploadFileNameWithPurpose } from '../../storage/uploadKeys.js';
 import { CampOpsCamp } from '../campOps/campOps.model.js';
+import { GeoCity, GeoState } from '../geo/geo.model.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 import { assertClientOneFeature } from './clientOne.features.js';
 import {
   buildCampScopeFilter,
@@ -679,6 +681,61 @@ router.post(
       requestId: req.requestId,
     });
     res.json({ data });
+  }),
+);
+
+router.get(
+  '/geo/states',
+  requireClientOneSession,
+  asyncHandler(async (_req, res) => {
+    let states = await GeoState.find({ isDeleted: false, isActive: true }).sort('name');
+    if (!states.length) {
+      try {
+        const { forceReseedGeoMasters } = await import('../geo/geo.seed.js');
+        await forceReseedGeoMasters();
+        states = await GeoState.find({ isDeleted: false, isActive: true }).sort('name');
+      } catch {
+        // Fallback gracefully
+      }
+    }
+    res.json({
+      data: states.map((s) => ({
+        id: String(s._id),
+        name: s.name,
+        code: s.iso2 || '',
+      })),
+    });
+  }),
+);
+
+router.get(
+  '/geo/cities',
+  requireClientOneSession,
+  asyncHandler(async (req, res) => {
+    const statesParam = req.query.states || req.query.state || '';
+    const stateNames = (Array.isArray(statesParam) ? statesParam : String(statesParam).split(','))
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    let cities;
+    if (stateNames.length) {
+      const matchRegexes = stateNames.map((n) => new RegExp(`^${escapeRegex(n)}$`, 'i'));
+      cities = await GeoCity.find({
+        isDeleted: false,
+        isActive: true,
+        stateName: { $in: matchRegexes },
+      }).sort('name').limit(2000);
+    } else {
+      cities = await GeoCity.find({ isDeleted: false, isActive: true }).sort('name').limit(1000);
+    }
+
+    res.json({
+      data: cities.map((c) => ({
+        id: String(c._id),
+        name: c.name,
+        stateName: c.stateName,
+      })),
+    });
   }),
 );
 

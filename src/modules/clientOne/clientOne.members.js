@@ -7,7 +7,57 @@ import {
   resolveClientOnePinInput,
 } from './clientOne.service.js';
 
-export const MEMBER_LEVELS = Object.freeze(['ho', 'regional', 'location']);
+export const MEMBER_LEVELS = Object.freeze([
+  'zonal',
+  'regional',
+  'area',
+  'territory',
+  'ho',
+  'location',
+]);
+
+export const DESIGNATION_OPTIONS = Object.freeze([
+  'Zonal',
+  'Regional',
+  'Area',
+  'Territory',
+]);
+
+export function normalizeTier(value) {
+  const norm = String(value || '').trim().toLowerCase();
+  if (norm === 'zonal' || norm === 'ho') return 'zonal';
+  if (norm === 'regional') return 'regional';
+  if (norm === 'area') return 'area';
+  if (norm === 'territory' || norm === 'location') return 'territory';
+  return norm;
+}
+
+export function tierToCanonicalLevel(value) {
+  const t = normalizeTier(value);
+  if (t === 'zonal') return 'zonal';
+  if (t === 'regional') return 'regional';
+  if (t === 'area') return 'area';
+  if (t === 'territory') return 'territory';
+  return t || 'zonal';
+}
+
+export function tierToCanonicalDesignation(value) {
+  const t = normalizeTier(value);
+  if (t === 'zonal') return 'Zonal';
+  if (t === 'regional') return 'Regional';
+  if (t === 'area') return 'Area';
+  if (t === 'territory') return 'Territory';
+  return String(value || '').trim() || 'Zonal';
+}
+
+const TIER_RANKS = Object.freeze({
+  zonal: 0,
+  ho: 0,
+  regional: 1,
+  area: 2,
+  territory: 3,
+  location: 3,
+});
 
 function trimStr(value) {
   return String(value || '').trim();
@@ -72,7 +122,9 @@ export function buildMemberTree(members = []) {
   }
   const sortRec = (list) => {
     list.sort((a, b) => {
-      const levelRank = MEMBER_LEVELS.indexOf(a.level) - MEMBER_LEVELS.indexOf(b.level);
+      const rankA = TIER_RANKS[normalizeTier(a.level || a.designation)] ?? 99;
+      const rankB = TIER_RANKS[normalizeTier(b.level || b.designation)] ?? 99;
+      const levelRank = rankA - rankB;
       if (levelRank !== 0) return levelRank;
       return String(a.fullName).localeCompare(String(b.fullName));
     });
@@ -119,11 +171,15 @@ export function actorCapabilities(session = {}) {
     if (member.status === 'inactive') {
       return { canManage: false, role: 'inactive', actorMemberId: String(member._id), maxCreateLevel: null };
     }
-    if (member.level === 'ho') {
+    const tier = normalizeTier(member.level || member.designation);
+    if (tier === 'zonal' || member.level === 'ho') {
       return { canManage: true, role: 'ho', actorMemberId: String(member._id), maxCreateLevel: 'ho' };
     }
-    if (member.level === 'regional') {
+    if (tier === 'regional') {
       return { canManage: true, role: 'regional', actorMemberId: String(member._id), maxCreateLevel: 'location' };
+    }
+    if (tier === 'area') {
+      return { canManage: true, role: 'area', actorMemberId: String(member._id), maxCreateLevel: 'location' };
     }
     return { canManage: false, role: 'location', actorMemberId: String(member._id), maxCreateLevel: null };
   }
@@ -155,15 +211,15 @@ function collectDescendantIds(members, rootId) {
 export function filterMembersForActor(members, session) {
   const caps = actorCapabilities(session);
   const list = Array.isArray(members) ? members : [];
-  if (caps.role === 'preview' || caps.role === 'programme' || caps.role === 'ho') {
+  if (caps.role === 'preview' || caps.role === 'programme' || caps.role === 'zonal' || caps.role === 'ho') {
     return list;
   }
-  if (caps.role === 'regional' && caps.actorMemberId) {
+  if ((caps.role === 'regional' || caps.role === 'area') && caps.actorMemberId) {
     const allowed = collectDescendantIds(list, caps.actorMemberId);
     allowed.add(caps.actorMemberId);
     return list.filter((row) => allowed.has(String(row._id)));
   }
-  if (caps.role === 'location' && caps.actorMemberId) {
+  if ((caps.role === 'territory' || caps.role === 'location') && caps.actorMemberId) {
     return list.filter((row) => String(row._id) === caps.actorMemberId);
   }
   return [];
@@ -190,60 +246,128 @@ async function loadParentOrThrow(parentId, access) {
   return parent;
 }
 
-function validateHierarchyPayload({ level, parent, regions, locations }) {
-  if (!MEMBER_LEVELS.includes(level)) {
-    throw new AppError('Hierarchy level must be Head Office, Regional, or Location', 400, 'VALIDATION_ERROR');
+function validateHierarchyPayload({ level, designation, parent, regions, locations }) {
+  const tier = normalizeTier(designation || level);
+  if (!['zonal', 'regional', 'area', 'territory', 'ho', 'location'].includes(tier)) {
+    throw new AppError('Designation must be Zonal, Regional, Area, or Territory', 400, 'VALIDATION_ERROR');
   }
-  if (level === 'ho') {
-    if (parent) throw new AppError('Head Office users do not report to another member', 400, 'VALIDATION_ERROR');
-    return { parentId: null, regions: [], locations: [] };
-  }
-  if (level === 'regional') {
-    if (!parent || parent.level !== 'ho') {
-      throw new AppError('Regional users must report to a Head Office user', 400, 'VALIDATION_ERROR');
+
+  if (tier === 'zonal') {
+    if (parent) {
+      throw new AppError('Zonal users do not report to another member', 400, 'VALIDATION_ERROR');
     }
-    if (!regions.length) {
-      throw new AppError('Assign at least one region / state for Regional users', 400, 'VALIDATION_ERROR');
+    return { parentId: null, regions, locations };
+  }
+
+  if (tier === 'regional') {
+    if (!parent || normalizeTier(parent.level || parent.designation) !== 'zonal') {
+      throw new AppError('Regional users must report to an active Zonal user', 400, 'VALIDATION_ERROR');
     }
-    return { parentId: String(parent._id), regions, locations: [] };
+    // Geographical access restriction: states must be within parent's states if parent has any assigned
+    if (Array.isArray(parent.regions) && parent.regions.length > 0 && regions.length > 0) {
+      const parentRegSet = new Set(parent.regions.map((r) => r.toLowerCase()));
+      const invalid = regions.filter((r) => !parentRegSet.has(r.toLowerCase()));
+      if (invalid.length > 0) {
+        throw new AppError(
+          `Selected states (${invalid.join(', ')}) must be within reporting manager's assigned states`,
+          400,
+          'VALIDATION_ERROR',
+        );
+      }
+    }
+    return { parentId: String(parent._id), regions, locations };
   }
-  // location
-  if (!parent || parent.level !== 'regional') {
-    throw new AppError('Location users must report to a Regional user', 400, 'VALIDATION_ERROR');
+
+  if (tier === 'area') {
+    if (!parent || normalizeTier(parent.level || parent.designation) !== 'regional') {
+      throw new AppError('Area users must report to an active Regional user', 400, 'VALIDATION_ERROR');
+    }
+    // Geographical access restriction: states and cities must be within parent's assigned scope
+    if (Array.isArray(parent.regions) && parent.regions.length > 0 && regions.length > 0) {
+      const parentRegSet = new Set(parent.regions.map((r) => r.toLowerCase()));
+      const invalid = regions.filter((r) => !parentRegSet.has(r.toLowerCase()));
+      if (invalid.length > 0) {
+        throw new AppError(
+          `Selected states (${invalid.join(', ')}) must be within reporting manager's assigned states`,
+          400,
+          'VALIDATION_ERROR',
+        );
+      }
+    }
+    if (Array.isArray(parent.locations) && parent.locations.length > 0 && locations.length > 0) {
+      const parentLocSet = new Set(parent.locations.map((l) => l.toLowerCase()));
+      const invalid = locations.filter((l) => !parentLocSet.has(l.toLowerCase()));
+      if (invalid.length > 0) {
+        throw new AppError(
+          `Selected cities (${invalid.join(', ')}) must be within reporting manager's assigned cities`,
+          400,
+          'VALIDATION_ERROR',
+        );
+      }
+    }
+    return { parentId: String(parent._id), regions, locations };
   }
-  if (!locations.length) {
-    throw new AppError('Assign at least one location / branch for Location users', 400, 'VALIDATION_ERROR');
+
+  // territory / location
+  if (tier === 'territory') {
+    const parentTier = normalizeTier(parent?.level || parent?.designation);
+    if (!parent || (parentTier !== 'area' && parentTier !== 'regional')) {
+      throw new AppError('Territory users must report to an active Area user', 400, 'VALIDATION_ERROR');
+    }
+    // Geographical access restriction: states and cities must be within parent's assigned scope
+    if (Array.isArray(parent.regions) && parent.regions.length > 0 && regions.length > 0) {
+      const parentRegSet = new Set(parent.regions.map((r) => r.toLowerCase()));
+      const invalid = regions.filter((r) => !parentRegSet.has(r.toLowerCase()));
+      if (invalid.length > 0) {
+        throw new AppError(
+          `Selected states (${invalid.join(', ')}) must be within reporting manager's assigned states`,
+          400,
+          'VALIDATION_ERROR',
+        );
+      }
+    }
+    if (Array.isArray(parent.locations) && parent.locations.length > 0 && locations.length > 0) {
+      const parentLocSet = new Set(parent.locations.map((l) => l.toLowerCase()));
+      const invalid = locations.filter((l) => !parentLocSet.has(l.toLowerCase()));
+      if (invalid.length > 0) {
+        throw new AppError(
+          `Selected cities (${invalid.join(', ')}) must be within reporting manager's assigned cities`,
+          400,
+          'VALIDATION_ERROR',
+        );
+      }
+    }
+    return { parentId: String(parent._id), regions, locations };
   }
-  const parentRegions = Array.isArray(parent.regions) ? parent.regions : [];
-  return {
-    parentId: String(parent._id),
-    regions: parentRegions.slice(),
-    locations,
-  };
+
+  throw new AppError('Invalid designation or hierarchy level', 400, 'VALIDATION_ERROR');
 }
 
-function assertActorMayWrite(caps, { level, parentId, target } = {}) {
+function assertActorMayWrite(caps, { level, designation, parentId, target } = {}) {
   if (!caps.canManage) {
     throw new AppError('You do not have permission to manage users', 403, 'FORBIDDEN');
   }
+  const tier = normalizeTier(designation || level);
   if (caps.role === 'regional') {
-    if (level && level !== 'location') {
-      throw new AppError('Regional users may only create Location / Branch users', 403, 'FORBIDDEN');
+    if (tier && tier !== 'area' && tier !== 'territory' && tier !== 'location') {
+      throw new AppError('Regional users may only create Area or Territory users', 403, 'FORBIDDEN');
     }
-    if (parentId && String(parentId) !== String(caps.actorMemberId)) {
-      throw new AppError('Location users must report to you', 403, 'FORBIDDEN');
-    }
-    if (target && String(target.parentId || '') !== String(caps.actorMemberId)
-      && String(target._id) !== String(caps.actorMemberId)) {
-      throw new AppError('You can only manage your subordinate users', 403, 'FORBIDDEN');
+  }
+  if (caps.role === 'area') {
+    if (tier && tier !== 'territory' && tier !== 'location') {
+      throw new AppError('Area users may only create Territory users', 403, 'FORBIDDEN');
     }
   }
 }
 
 export async function createMember(access, session, body = {}) {
   const caps = actorCapabilities(session);
-  const level = trimStr(body.level).toLowerCase();
-  assertActorMayWrite(caps, { level, parentId: body.parentId });
+  const designationRaw = trimStr(body.designation);
+  const tier = normalizeTier(designationRaw || body.level);
+  const designation = tierToCanonicalDesignation(designationRaw || tier);
+  const level = tierToCanonicalLevel(tier || body.level);
+
+  assertActorMayWrite(caps, { level, designation, parentId: body.parentId });
 
   const fullName = trimStr(body.fullName);
   const mobile = normalizeMobile(body.mobile);
@@ -261,7 +385,7 @@ export async function createMember(access, session, body = {}) {
   const parent = await loadParentOrThrow(body.parentId, access);
   const regions = normalizeLabels(body.regions || body.regionNames || (body.region ? [body.region] : []));
   const locations = normalizeLabels(body.locations || body.locationNames || (body.location ? [body.location] : []));
-  const scoped = validateHierarchyPayload({ level, parent, regions, locations });
+  const scoped = validateHierarchyPayload({ level, designation, parent, regions, locations });
 
   const { pin, pinHash } = await mintUniqueMemberPin({
     excludeAccessId: access._id,
@@ -275,7 +399,7 @@ export async function createMember(access, session, body = {}) {
     fullName,
     mobile,
     email: trimStr(body.email).toLowerCase(),
-    designation: trimStr(body.designation),
+    designation,
     level,
     parentId: scoped.parentId,
     regions: scoped.regions,
@@ -301,7 +425,18 @@ export async function updateMember(access, session, memberId, body = {}) {
     clientMasterId: access.clientMasterId,
   });
   if (!row) throw new AppError('User not found', 404, 'NOT_FOUND');
-  assertActorMayWrite(caps, { target: row, level: body.level || row.level, parentId: body.parentId ?? row.parentId });
+
+  const nextDesignationRaw = body.designation != null ? trimStr(body.designation) : row.designation;
+  const nextTier = normalizeTier(nextDesignationRaw || body.level || row.level);
+  const nextDesignation = tierToCanonicalDesignation(nextDesignationRaw || nextTier);
+  const nextLevel = tierToCanonicalLevel(nextTier || body.level || row.level);
+
+  assertActorMayWrite(caps, {
+    target: row,
+    level: nextLevel,
+    designation: nextDesignation,
+    parentId: body.parentId !== undefined ? body.parentId : row.parentId,
+  });
 
   if (body.fullName != null) {
     const fullName = trimStr(body.fullName);
@@ -318,12 +453,11 @@ export async function updateMember(access, session, memberId, body = {}) {
     row.mobile = mobile;
   }
   if (body.email != null) row.email = trimStr(body.email).toLowerCase();
-  if (body.designation != null) row.designation = trimStr(body.designation);
+  if (body.designation != null) row.designation = nextDesignation;
   if (body.status != null) {
     row.status = body.status === 'inactive' ? 'inactive' : 'active';
   }
 
-  const level = body.level != null ? trimStr(body.level).toLowerCase() : row.level;
   const parentId = body.parentId !== undefined ? body.parentId : row.parentId;
   const parent = await loadParentOrThrow(parentId, access);
   const regions = body.regions != null || body.region != null || body.regionNames != null
@@ -333,9 +467,15 @@ export async function updateMember(access, session, memberId, body = {}) {
     ? normalizeLabels(body.locations || body.locationNames || (body.location ? [body.location] : []))
     : (Array.isArray(row.locations) ? row.locations : []);
 
-  if (body.level != null || body.parentId !== undefined || body.regions != null || body.locations != null
+  if (body.level != null || body.designation != null || body.parentId !== undefined || body.regions != null || body.locations != null
     || body.region != null || body.location != null) {
-    const scoped = validateHierarchyPayload({ level, parent, regions, locations });
+    const scoped = validateHierarchyPayload({
+      level: nextLevel,
+      designation: nextDesignation,
+      parent,
+      regions,
+      locations,
+    });
     // Prevent cycles: parent cannot be self or descendant
     if (scoped.parentId && String(scoped.parentId) === String(row._id)) {
       throw new AppError('A user cannot report to themselves', 400, 'VALIDATION_ERROR');
@@ -347,7 +487,8 @@ export async function updateMember(access, session, memberId, body = {}) {
         throw new AppError('Reporting manager cannot be a subordinate', 400, 'VALIDATION_ERROR');
       }
     }
-    row.level = level;
+    row.level = nextLevel;
+    row.designation = nextDesignation;
     row.parentId = scoped.parentId;
     row.regions = scoped.regions;
     row.locations = scoped.locations;
@@ -412,19 +553,25 @@ export async function changeMemberPin(member, { currentPin, newPin } = {}) {
   return { memberId: String(member._id), pin };
 }
 
-/** Narrow camp filters for regional/location members. */
+/** Narrow camp filters for regional/area/territory members. */
 export function applyMemberCampVisibility(filter, member) {
-  if (!member || member.level === 'ho') return filter;
+  if (!member) return filter;
+  const tier = normalizeTier(member.level || member.designation);
+  if (tier === 'zonal' || tier === 'ho') return filter;
   const next = { ...filter };
-  if (member.level === 'regional') {
+  if (tier === 'regional') {
     const regions = Array.isArray(member.regions) ? member.regions.filter(Boolean) : [];
     if (regions.length) next.state = { $in: regions };
-  }
-  if (member.level === 'location') {
+  } else if (tier === 'area') {
+    const locations = Array.isArray(member.locations) ? member.locations.filter(Boolean) : [];
+    const regions = Array.isArray(member.regions) ? member.regions.filter(Boolean) : [];
+    if (locations.length) next.city = { $in: locations };
+    else if (regions.length) next.state = { $in: regions };
+  } else if (tier === 'territory' || tier === 'location') {
     const locations = Array.isArray(member.locations) ? member.locations.filter(Boolean) : [];
     if (locations.length) next.city = { $in: locations };
   }
   return next;
 }
 
-export { assertPinHashAvailable, normalizeMobile, normalizeLabels };
+export { assertPinHashAvailable, normalizeMobile, normalizeLabels, validateHierarchyPayload };
