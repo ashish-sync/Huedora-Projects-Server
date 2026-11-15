@@ -621,6 +621,36 @@ router.post(
   }),
 );
 
+router.post(
+  '/members/import',
+  requireClientOneSession,
+  requireFeature('campRequestLink'),
+  asyncHandler(async (req, res) => {
+    const { importMembers } = await import('./clientOne.members.js');
+    const session = {
+      access: req.clientOne.access,
+      member: req.clientOne.member,
+      isPreview: req.clientOne.isPreview,
+    };
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : (Array.isArray(req.body) ? req.body : []);
+    const data = await importMembers(req.clientOne.access, session, rows);
+    await writeAudit({
+      action: 'CLIENT_ONE.MEMBERS_BULK_IMPORT',
+      entityType: 'client_one_members',
+      entityId: req.clientOne.access.clientMasterId,
+      after: { createdCount: data.created?.length || 0, errorCount: data.errors?.length || 0 },
+      source: 'UI',
+      actorType: 'USER',
+      actorEmail: req.clientOne.member?._id
+        ? `client-one-member:${req.clientOne.member._id}`
+        : `client-one:${req.clientOne.access.accessId}`,
+      ip: req.ip,
+      requestId: req.requestId,
+    });
+    res.status(201).json({ data });
+  }),
+);
+
 router.patch(
   '/members/:id',
   requireClientOneSession,

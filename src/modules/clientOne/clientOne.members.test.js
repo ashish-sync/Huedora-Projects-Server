@@ -4,6 +4,7 @@ import {
   actorCapabilities,
   applyMemberCampVisibility,
   buildMemberTree,
+  importMembers,
   publicMemberDto,
   validateHierarchyPayload,
 } from './clientOne.members.js';
@@ -185,4 +186,11 @@ test('validateHierarchyPayload enforces strict 4-tier reporting rules and geo re
     locations: ['Pune'],
   });
   assert.equal(territoryValid.parentId, 'a1');
+});
+
+test('importMembers validates empty rows and handles bulk input', async () => {
+  await assert.rejects(
+    () => importMembers({ clientMasterId: 'cm1', clientId: 'c1' }, {}, []),
+    /No rows provided for import/,
+  );
 });

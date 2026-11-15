@@ -418,6 +418,75 @@ export async function createMember(access, session, body = {}) {
   return publicMemberDto(created, { includePin: true, pin });
 }
 
+export async function importMembers(access, session, rows = []) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) {
+    throw new AppError('No rows provided for import', 400, 'VALIDATION_ERROR');
+  }
+
+  const created = [];
+  const errors = [];
+
+  const existingMembers = await ClientOneMember.find({ clientMasterId: access.clientMasterId });
+  const membersByMobile = new Map();
+  for (const m of existingMembers) {
+    membersByMobile.set(normalizeMobile(m.mobile), m);
+  }
+
+  const parseList = (val) => {
+    if (Array.isArray(val)) return val;
+    return String(val || '')
+      .split(/[,;|]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  };
+
+  for (let idx = 0; idx < list.length; idx += 1) {
+    const raw = list[idx] || {};
+    const rowNum = idx + 1;
+    try {
+      const fullName = trimStr(raw.fullName || raw.name || raw['full name']);
+      const mobile = normalizeMobile(raw.mobile || raw.phone || raw['mobile number']);
+      const designationRaw = trimStr(raw.designation);
+
+      if (!fullName) throw new Error('Full name is required');
+      if (mobile.length < 10) throw new Error('Valid 10-digit mobile number is required');
+
+      let parentId = raw.parentId ? String(raw.parentId) : null;
+      const reportingMobile = normalizeMobile(
+        raw.reportingToMobile || raw.reportingTo || raw.reportingManagerMobile || raw['reporting manager'] || raw['reporting to'],
+      );
+      if (!parentId && reportingMobile && membersByMobile.has(reportingMobile)) {
+        parentId = String(membersByMobile.get(reportingMobile)._id || membersByMobile.get(reportingMobile).id);
+      }
+
+      const regions = parseList(raw.states || raw.state || raw.regions || raw.region);
+      const locations = parseList(raw.cities || raw.city || raw.locations || raw.location);
+
+      const memberDto = await createMember(access, session, {
+        fullName,
+        mobile,
+        designation: designationRaw,
+        parentId,
+        regions,
+        locations,
+        status: raw.status || 'active',
+      });
+
+      membersByMobile.set(mobile, memberDto);
+      created.push(memberDto);
+    } catch (err) {
+      errors.push({
+        row: rowNum,
+        name: raw.fullName || raw.name || `Row ${rowNum}`,
+        error: err.message || 'Validation failed',
+      });
+    }
+  }
+
+  return { created, errors, total: list.length };
+}
+
 export async function updateMember(access, session, memberId, body = {}) {
   const caps = actorCapabilities(session);
   const row = await ClientOneMember.findOne({
