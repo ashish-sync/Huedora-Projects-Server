@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanSpaces, toProperTitleCase, formatTextValue, formatDoctorName, formatContactPersonName, getDoctorNameFormatError } from './textFormat.js';
+import { cleanSpaces, toProperTitleCase, formatTextValue, formatDoctorName, formatDoctorNameLive, formatContactPersonName, getDoctorNameFormatError } from './textFormat.js';
 
 test('cleanSpaces trims and collapses whitespace', () => {
   assert.equal(cleanSpaces('  hello   world  '), 'hello world');
@@ -35,16 +35,23 @@ test('formatTextValue respects field kinds', () => {
 test('formatDoctorName strips prefix and applies title case', () => {
   assert.equal(formatDoctorName('  dr. rajesh   kumar  '), 'Rajesh Kumar');
   assert.equal(formatDoctorName('Doctor Anita Desai'), 'Anita Desai');
+  assert.equal(formatDoctorName('DR RAJESH KUMAR'), 'Rajesh Kumar');
+  assert.equal(formatDoctorName('Dr.Rajesh Kumar'), 'Rajesh Kumar');
+  assert.equal(formatDoctorName('Drake Smith'), 'Drake Smith');
+});
+
+test('formatDoctorNameLive keeps trailing space for multi-word typing', () => {
+  assert.equal(formatDoctorNameLive('dr. rajesh '), 'Rajesh ');
+  assert.equal(formatDoctorNameLive('rajesh kumar'), 'Rajesh Kumar');
 });
 
 test('formatContactPersonName applies title case', () => {
   assert.equal(formatContactPersonName('  ravi   kumar  '), 'Ravi Kumar');
 });
 
-test('getDoctorNameFormatError rejects Dr prefix', () => {
-  assert.equal(
-    getDoctorNameFormatError('Dr. Rajesh Kumar'),
-    'Enter doctor name without Dr or Dr. — use Title Case (e.g. Rajesh Kumar)',
-  );
+test('getDoctorNameFormatError accepts Dr prefix (auto-stripped)', () => {
+  assert.equal(getDoctorNameFormatError('Dr. Rajesh Kumar'), null);
   assert.equal(getDoctorNameFormatError('Rajesh Kumar'), null);
+  assert.equal(getDoctorNameFormatError(''), 'Doctor name is required');
+  assert.equal(getDoctorNameFormatError('Dr.'), 'Doctor name is required');
 });

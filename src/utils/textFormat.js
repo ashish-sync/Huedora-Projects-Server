@@ -95,11 +95,14 @@ export function toProperTitleCase(value) {
     .join(' ');
 }
 
-const DOCTOR_NAME_PREFIX_RE = /^(?:dr|doctor)\.?\s+/i;
+/** Dr / Dr. / Doctor only when followed by "." or whitespace (keeps names like Drake). */
+const DOCTOR_NAME_PREFIX_RE = /^(?:dr|doctor)(?:\.|\s+)\s*/i;
 
 /** Remove Dr / Dr. / Doctor prefix from camp doctor names. */
 export function stripDoctorNamePrefix(value) {
   let text = cleanSpaces(value);
+  // Bare title with no name left → empty
+  if (/^(?:dr|doctor)\.?$/i.test(text)) return '';
   while (text && DOCTOR_NAME_PREFIX_RE.test(text)) {
     text = cleanSpaces(text.replace(DOCTOR_NAME_PREFIX_RE, ''));
   }
@@ -113,7 +116,21 @@ export function hasDoctorNamePrefix(value) {
 export function formatDoctorName(value) {
   const stripped = stripDoctorNamePrefix(value);
   if (!stripped) return '';
-  return toProperTitleCase(stripped);
+  // Lowercase first so ALL-CAPS input is not kept as "acronyms"
+  return toProperTitleCase(stripped.toLowerCase());
+}
+
+/**
+ * Live doctor-name normalize for controlled inputs: Title Case, strip Dr/Dr.,
+ * keep a trailing space so multi-word typing still works.
+ */
+export function formatDoctorNameLive(value) {
+  const raw = String(value ?? '');
+  if (!raw) return '';
+  const keepTrailingSpace = /\s$/.test(raw);
+  const formatted = formatDoctorName(raw);
+  if (!formatted) return '';
+  return keepTrailingSpace ? `${formatted} ` : formatted;
 }
 
 export function formatContactPersonName(value) {
@@ -121,12 +138,8 @@ export function formatContactPersonName(value) {
 }
 
 export function getDoctorNameFormatError(value) {
-  const raw = cleanSpaces(value);
-  if (!raw) return 'Doctor name is required';
-  if (hasDoctorNamePrefix(raw)) {
-    return 'Enter doctor name without Dr or Dr. — use Title Case (e.g. Rajesh Kumar)';
-  }
-  if (!formatDoctorName(raw)) return 'Doctor name is required';
+  // Always coerce to Title Case without Dr/Dr. — do not reject prefixed input.
+  if (!formatDoctorName(value)) return 'Doctor name is required';
   return null;
 }
 
