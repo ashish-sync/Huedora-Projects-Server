@@ -46,14 +46,27 @@ async function seedUser(suffix, overrides = {}) {
   });
 }
 
+function utcDaysFromToday(days, hour = 0, minute = 0) {
+  const now = new Date();
+  return new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + days,
+    hour,
+    minute,
+    0,
+  )).toISOString();
+}
+
 test('calendar task, block, availability accept/decline/suggest flow', async () => {
   const stamp = Date.now();
   const alice = await seedUser(`a_${stamp}`);
   const bob = await seedUser(`b_${stamp}`);
   const aliceId = String(alice._id);
   const bobId = String(bob._id);
-  const startAt = new Date(Date.UTC(2026, 10, 15, 4, 30, 0)).toISOString();
-  const endAt = new Date(Date.UTC(2026, 10, 15, 5, 30, 0)).toISOString();
+  // Keep fixtures ahead of summaryCounts' "today onward" cutoff.
+  const startAt = utcDaysFromToday(14, 4, 30);
+  const endAt = utcDaysFromToday(14, 5, 30);
 
   try {
     const task = await createEvent(
@@ -100,8 +113,8 @@ test('calendar task, block, availability accept/decline/suggest flow', async () 
     assert.equal(request.canRespond, false);
 
     const bobMonth = await listEvents(bobId, {
-      from: new Date(Date.UTC(2026, 10, 1)).toISOString(),
-      to: new Date(Date.UTC(2026, 10, 30, 23, 59, 59)).toISOString(),
+      from: utcDaysFromToday(-1),
+      to: utcDaysFromToday(45, 23, 59),
     });
     assert.ok(bobMonth.some((row) => row.id === block.id));
     assert.ok(bobMonth.some((row) => row.id === request.id && row.canRespond));
@@ -138,8 +151,8 @@ test('calendar task, block, availability accept/decline/suggest flow', async () 
       },
       alice,
     );
-    const altStart = new Date(Date.UTC(2026, 10, 16, 6, 0, 0)).toISOString();
-    const altEnd = new Date(Date.UTC(2026, 10, 16, 7, 0, 0)).toISOString();
+    const altStart = utcDaysFromToday(15, 6, 0);
+    const altEnd = utcDaysFromToday(15, 7, 0);
     const suggested = await suggestAlternative(
       bobId,
       request3.id,

@@ -128,12 +128,14 @@ export function normalizeFormPayload(body = {}) {
     uniqueFields.push({ ...field, key });
   }
 
+  const category = matchFormCategory(body.category);
   return {
     name,
     code,
-    category: matchFormCategory(body.category),
+    category,
     description: String(body.description || '').trim(),
     fields: uniqueFields,
+    settings: normalizeFormSettings(body.settings, category),
     isActive: body.isActive === false || body.isActive === 'false' ? false : true,
   };
 }
