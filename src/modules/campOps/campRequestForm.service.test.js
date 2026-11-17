@@ -102,6 +102,9 @@ test('sample template headers map onto the public camp request form fields', () 
   const matched = matchImportColumns(headers, PROGRAM_FORM_IMPORT_KEYS);
   assert.deepEqual(missingProgramFormImportColumns(matched.mapping), []);
   assert.equal(matched.mapping.doctorName, 'Doctor Name');
+  assert.equal(matched.mapping.doctorCode, 'Legacy Code');
+  assert.equal(matched.mapping.speciality, 'Specialty');
+  assert.equal(matched.mapping.remarks, 'Remarks');
   assert.equal(matched.mapping.pincode, 'PIN Code');
   assert.equal(matched.mapping.hq, 'HQ (Headquarter)');
   assert.equal(matched.mapping.fieldPersonName, 'Contact Person Name');
@@ -111,7 +114,8 @@ test('sample template headers map onto the public camp request form fields', () 
 test('missingProgramFormImportColumns allows TM Name/Number in place of contact person columns', () => {
   const missing = missingProgramFormImportColumns({
     doctorName: 'Doctor Name',
-    doctorCode: 'Doctor Code',
+    doctorCode: 'Legacy Code',
+    speciality: 'Specialty',
     campDate: 'Camp Date',
     startTime: 'Camp Start Time',
     endTime: 'Camp End Time',
@@ -119,6 +123,7 @@ test('missingProgramFormImportColumns allows TM Name/Number in place of contact 
     pincode: 'PIN Code',
     hq: 'HQ (Headquarter)',
     expectedPatients: 'Expected Patients',
+    remarks: 'Remarks',
     tmName: 'TM Name',
     tmPhone: 'TM Number',
   });
@@ -128,13 +133,15 @@ test('missingProgramFormImportColumns allows TM Name/Number in place of contact 
 test('missingProgramFormImportColumns flags PIN Code when missing from spreadsheet', () => {
   const missing = missingProgramFormImportColumns({
     doctorName: 'Doctor Name',
-    doctorCode: 'Doctor Code',
+    doctorCode: 'Legacy Code',
+    speciality: 'Specialty',
     campDate: 'Camp Date',
     startTime: 'Camp Start Time',
     endTime: 'Camp End Time',
     campAddress: 'Camp / Clinic Address',
     hq: 'HQ (Headquarter)',
     expectedPatients: 'Expected Patients',
+    remarks: 'Remarks',
     fieldPersonName: 'Contact Person Name',
     fieldPersonPhone: 'Contact Person Number',
   });

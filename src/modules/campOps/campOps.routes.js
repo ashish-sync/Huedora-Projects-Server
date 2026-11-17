@@ -3410,6 +3410,13 @@ function withSignedPoFile(row) {
       url: signStoredUploadUrl(plain.poFile.url),
     };
   }
+  // Client One portal brand — DB keeps /uploads/...; API responses must be signed.
+  if (plain.portalBrandImage?.url) {
+    plain.portalBrandImage = {
+      ...plain.portalBrandImage,
+      url: signStoredUploadUrl(plain.portalBrandImage.url),
+    };
+  }
   return plain;
 }
 

@@ -265,7 +265,7 @@ test('signClientOneSession marks preview tokens distinctly from external PIN ses
   });
   assert.equal(external.mode, 'external');
   assert.equal(external.client.displayName, 'Acme Care');
-  assert.equal(external.client.portalBrandImageUrl, '/uploads/camp-ops/logo.png');
+  assert.match(external.client.portalBrandImageUrl, /\/api\/v1\/files\/signed\?token=/);
   assert.equal(external.client.campName, 'ECG');
   assert.equal(external.client.method, 'ECG');
   assert.equal(preview.mode, 'preview');

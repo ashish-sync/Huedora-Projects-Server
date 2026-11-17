@@ -14,7 +14,7 @@
     { "key": "startTime", "label": "Camp Start Time", "required": true },
     { "key": "endTime", "label": "Camp End Time", "required": true },
     { "key": "doctorName", "label": "Doctor Name", "required": true },
-    { "key": "doctorCode", "label": "Doctor Code", "required": true },
+    { "key": "doctorCode", "label": "Legacy Code", "required": true, "aliases": ["Doctor Code"] },
     { "key": "speciality", "label": "Doctor Type / Specialty", "required": false },
     { "key": "campAddress", "label": "Camp / Clinic Address", "required": true },
     { "key": "pincode", "label": "PIN Code", "required": true },
@@ -168,6 +168,7 @@
     "doctor_name": ["doctor", "doctor name", "dr", "dr.", "dr name", "physician", "consultant", "plan dr"],
     "doctor_code": [
       "doctor code",
+      "legacy code",
       "dr code",
       "doctor id",
       "doctor number",

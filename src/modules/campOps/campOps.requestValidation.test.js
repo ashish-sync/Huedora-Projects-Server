@@ -15,6 +15,7 @@ const completeCamp = {
   endTime: '12:00',
   doctorName: 'Dr Sharma',
   doctorCode: 'D001',
+  speciality: 'General Practitioner',
   campAddress: '12 MG Road',
   pincode: '560001',
   state: 'Karnataka',

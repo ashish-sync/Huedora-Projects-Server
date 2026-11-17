@@ -22,6 +22,7 @@ import {
 } from '../dashboards/campQuality.metrics.js';
 import { ClientOneAccess, ClientOneMember } from './clientOne.model.js';
 import { normalizeClientOneFeatures } from './clientOne.features.js';
+import { toSignedUploadUrl } from '../files/file.routes.js';
 
 const PIN_LENGTH = 6;
 const SESSION_TTL = '12h';
@@ -410,7 +411,8 @@ export function signClientOneSession(access, { preview = false, actor = null, ma
     || trimStr(access.displayName)
     || trimStr(access.clientName);
   const brand = keys?.portalBrandImage || access.portalBrandImage || null;
-  const portalBrandImageUrl = trimStr(brand?.url || '');
+  const portalBrandImageUrl = toSignedUploadUrl(trimStr(brand?.url || ''))
+    || trimStr(brand?.url || '');
   // Method / Division always prefer live Client Master Program Configuration when loaded.
   const programName = trimStr(keys?.programName) || trimStr(access.programName);
   const campName = normalizeCampName(keys?.campName || access.campName || 'BMD');

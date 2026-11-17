@@ -181,7 +181,8 @@ export function getRequestStageBlockers(camp = {}, options = {}) {
       errors.push(doctorNameError);
     }
   }
-  if (!hasText(camp.doctorCode)) errors.push('Doctor code is required');
+  if (!hasText(camp.doctorCode)) errors.push('Legacy code is required');
+  if (!hasText(camp.speciality)) errors.push('Specialty is required');
   if (!hasText(camp.campAddress)) errors.push('Camp address is required');
   const pinMissingInMaster = camp.pinMasterMissing === true && /^\d{6}$/.test(trimStr(camp.pincode));
   if (!skipLocation) {
@@ -230,6 +231,10 @@ export function getRequestStageBlockers(camp = {}, options = {}) {
         errors.push(`${levelLabel} number must be exactly 10 digits`);
       }
     });
+  }
+
+  if (options.requireAllFields === true && !hasText(camp.remarks)) {
+    errors.push('Remarks is required');
   }
 
   const futureRequestDateError = getFutureRequestDateError(camp.requestDate);

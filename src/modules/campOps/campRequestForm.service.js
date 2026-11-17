@@ -74,8 +74,8 @@ export const PROGRAM_REQUEST_NOT_FOUND_MESSAGE = 'This camp request form is not 
 /** Public form columns — Client / Division / Method stay locked from the program token. */
 export const PROGRAM_FORM_SAMPLE_FIELDS = [
   { key: 'doctorName', label: 'Doctor Name', required: true },
-  { key: 'doctorCode', label: 'Doctor Code', required: true },
-  { key: 'speciality', label: 'Doctor Type / Specialty', required: false },
+  { key: 'doctorCode', label: 'Legacy Code', required: true },
+  { key: 'speciality', label: 'Specialty', required: true },
   { key: 'campDate', label: 'Camp Date', required: true },
   { key: 'startTime', label: 'Camp Start Time', required: true },
   { key: 'endTime', label: 'Camp End Time', required: true },
@@ -86,7 +86,7 @@ export const PROGRAM_FORM_SAMPLE_FIELDS = [
   { key: 'fieldPersonPhone', label: 'Contact Person Number', required: true },
   { key: 'hq', label: 'HQ (Headquarter)', required: true },
   { key: 'expectedPatients', label: 'Expected Patients', required: true },
-  { key: 'remarks', label: 'Remarks', required: false },
+  { key: 'remarks', label: 'Remarks', required: true },
 ];
 
 export const PROGRAM_FORM_SAMPLE_ROWS = [
@@ -442,7 +442,7 @@ function buildCampFromProgramForm(safeBody, client, pricing) {
     doctorCode: trimStr(safeBody.doctorCode),
     scCode: '',
     mslNo: '',
-    speciality: trimStr(safeBody.speciality) || 'General Practitioner',
+    speciality: trimStr(safeBody.speciality),
     hospitalName: '',
     clinicName: '',
     campAddress,
@@ -564,7 +564,7 @@ async function createProgramCampFromBody(master, client, body = {}, form = null)
       ...payload,
       clientId: client._id,
       clientName: client.name,
-    }, { skipLocation: true });
+    }, { skipLocation: true, requireAllFields: true });
   } catch (err) {
     throw new AppError(err.message || 'Complete all request stage fields', 400, 'VALIDATION_ERROR');
   }

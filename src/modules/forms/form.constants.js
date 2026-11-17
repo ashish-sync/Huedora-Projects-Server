@@ -80,7 +80,7 @@ export const PUBLIC_CAMP_REQUEST_TEMPLATE = {
     },
     {
       key: 'doctorCode',
-      label: 'Doctor Code',
+      label: 'Legacy Code',
       type: 'text',
       required: true,
       section: 'Doctor',
