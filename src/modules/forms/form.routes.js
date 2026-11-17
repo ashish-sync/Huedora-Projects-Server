@@ -15,6 +15,7 @@ import {
   HCW_ACTIVITY_TEMPLATE,
   PUBLIC_CAMP_REQUEST_TEMPLATE,
 } from './form.constants.js';
+import { DEFAULT_FORM_SETTINGS, defaultFormSettingsForCategory } from './formFieldRuntime.js';
 
 const router = Router();
 router.use(authenticate);

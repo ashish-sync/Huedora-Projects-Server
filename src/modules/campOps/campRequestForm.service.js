@@ -37,6 +37,14 @@ import {
   EXECUTION_INVITE_TOKEN_LENGTH,
   hashExecutionToken,
 } from './campExecute.service.js';
+import { FormMaster } from '../forms/form.model.js';
+import {
+  applyFormatsToValues,
+  getFormMasterCampDateErrors,
+  normalizeFormSettings,
+  validateFormMasterValues,
+} from '../forms/formFieldRuntime.js';
+import { assertAdvanceBookingAllowed } from './campAdvanceBooking.js';
 
 /** Same alphabet as execution invite tokens — URL-safe, unambiguous. */
 const PROGRAM_LINK_TOKEN_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
@@ -229,6 +237,9 @@ export function sanitizeProgramRequestBody(body, { client, master } = {}) {
 
 export function publicProgramRequestContext(master, client, form = null) {
   const formMasterId = trimStr(master?.formMasterId);
+  const settings = form
+    ? normalizeFormSettings(form.settings, form.category)
+    : normalizeFormSettings({}, 'PUBLIC_CAMP_REQUEST');
   return {
     clientId: client?._id || master?.clientId || '',
     clientName: client?.name || master?.clientName || '',
@@ -246,9 +257,49 @@ export function publicProgramRequestContext(master, client, form = null) {
           category: form.category,
           description: form.description,
           fields: Array.isArray(form.fields) ? form.fields : [],
+          settings,
         }
       : null,
+    formSettings: settings,
   };
+}
+
+async function loadLinkedFormMaster(master) {
+  const formMasterId = trimStr(master?.formMasterId);
+  if (!formMasterId) return null;
+  return FormMaster.findOne({
+    _id: formMasterId,
+    isDeleted: false,
+    isActive: true,
+  });
+}
+
+function enforceFormMasterOnBody(form, body = {}) {
+  if (!form) return body;
+  const settings = normalizeFormSettings(form.settings, form.category);
+  const fields = Array.isArray(form.fields) ? form.fields : [];
+  let next = { ...body };
+  if (settings.enforceFieldRules) {
+    next = applyFormatsToValues(fields, next);
+    const fieldErrors = validateFormMasterValues(fields, next);
+    if (fieldErrors.length) {
+      throw new AppError(fieldErrors[0], 400, 'VALIDATION_ERROR');
+    }
+  }
+  const dateErrors = getFormMasterCampDateErrors(next);
+  if (dateErrors.length) {
+    throw new AppError(dateErrors[0], 400, 'VALIDATION_ERROR');
+  }
+  return next;
+}
+
+function assertPublicAdvanceBooking(body = {}) {
+  assertAdvanceBookingAllowed({
+    campDate: body.campDate,
+    startTime: body.startTime,
+    requestDate: body.requestDate,
+    requestTime: body.requestTime,
+  });
 }
 
 export function programRequestFormUrl(token) {
@@ -458,8 +509,10 @@ export function normalizeProgramFormImportRow(row = {}) {
   };
 }
 
-async function createProgramCampFromBody(master, client, body = {}) {
-  const safeBody = sanitizeProgramRequestBody(body, { client, master });
+async function createProgramCampFromBody(master, client, body = {}, form = null) {
+  const linkedForm = form || (await loadLinkedFormMaster(master));
+  const enforcedBody = enforceFormMasterOnBody(linkedForm, body);
+  const safeBody = sanitizeProgramRequestBody(enforcedBody, { client, master });
   assertRawDoctorName(safeBody);
 
   const cleanPin = String(safeBody.pincode || '').replace(/\D/g, '').slice(0, 6);
@@ -521,6 +574,11 @@ async function createProgramCampFromBody(master, client, body = {}) {
     requestDate,
   });
   assertRequestDateNotFuture(requestDate);
+  assertPublicAdvanceBooking({
+    campDate: payload.campDate,
+    startTime: payload.startTime,
+    requestDate,
+  });
 
   const tracking = captureSubmissionTracking();
   let camp;
@@ -561,11 +619,17 @@ async function createProgramCampFromBody(master, client, body = {}) {
 
 export async function submitProgramCampRequest(rawToken, body = {}) {
   const { master, client } = await resolveProgramByRequestToken(rawToken);
-  return createProgramCampFromBody(master, client, body);
+  const form = await loadLinkedFormMaster(master);
+  return createProgramCampFromBody(master, client, body, form);
 }
 
 export async function importProgramFormFile(rawToken, file) {
   const { master, client } = await resolveProgramByRequestToken(rawToken);
+  const form = await loadLinkedFormMaster(master);
+  const settings = normalizeFormSettings(form?.settings, form?.category || 'PUBLIC_CAMP_REQUEST');
+  if (settings.allowExcelUpload === false) {
+    throw new AppError('Excel / bulk upload is disabled for this form', 403, 'FORBIDDEN');
+  }
   const parsed = await parsePasteImportFile(file, { fieldKeys: PROGRAM_FORM_IMPORT_KEYS });
   if (!parsed.rows?.length) {
     throw importAppError('NO_DATA_ROWS');
@@ -593,7 +657,7 @@ export async function importProgramFormFile(rawToken, file) {
     if (isBlankProgramFormRow(mapped)) continue;
     const row = normalizeProgramFormImportRow(mapped);
     try {
-      const camp = await createProgramCampFromBody(master, client, row);
+      const camp = await createProgramCampFromBody(master, client, row, form);
       created.push({
         rowNumber,
         campId: camp.campId,

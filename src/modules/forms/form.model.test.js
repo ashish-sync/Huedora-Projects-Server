@@ -82,4 +82,20 @@ describe('Form Master payload normalization', () => {
     assert.ok(payload.fields.some((field) => field.type === 'gps_photo'));
     assert.ok(payload.fields.some((field) => field.key === 'patientsCovered'));
   });
+
+  it('normalizes form-level settings', () => {
+    const payload = normalizeFormPayload({
+      name: 'Public Camp Request',
+      category: 'PUBLIC_CAMP_REQUEST',
+      settings: {
+        allowExcelUpload: false,
+        enforceFieldRules: false,
+      },
+      fields: [{ label: 'Doctor Name', type: 'text' }],
+    });
+    assert.deepEqual(payload.settings, {
+      allowExcelUpload: false,
+      enforceFieldRules: false,
+    });
+  });
 });

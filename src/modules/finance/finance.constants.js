@@ -93,7 +93,7 @@ export const COMMERCIAL_PAYMENT_STATUSES = [
   'Rejected',
 ];
 
-export const DEFAULT_SAC_CODE = '999316';
+export const DEFAULT_SAC_CODE = '';
 
 export const DEFAULT_ORG_PROFILE = {
   documentCode: 'TC',

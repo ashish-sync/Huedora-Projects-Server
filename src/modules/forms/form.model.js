@@ -7,6 +7,7 @@ import {
   matchFormFieldWidth,
   matchFormShowOperator,
 } from './form.constants.js';
+import { normalizeFormSettings } from './formFieldRuntime.js';
 
 /** Reusable form formats for Public Camp Request and other TYLO forms. */
 export const FormMaster = defineCollection('form_masters', {
@@ -16,6 +17,10 @@ export const FormMaster = defineCollection('form_masters', {
   category: 'OTHER',
   description: '',
   fields: [],
+  settings: {
+    allowExcelUpload: true,
+    enforceFieldRules: true,
+  },
   isActive: true,
   createdBy: null,
   updatedBy: null,
