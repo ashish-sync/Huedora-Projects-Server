@@ -2,6 +2,7 @@
  * Stamp TYLO dual signature footer onto an existing PDF (LibreOffice output).
  */
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import sharp from 'sharp';
 import { formatDate } from '../../utils/dateFormat.js';
 
 function dataUrlToUint8(dataUrl) {
@@ -23,24 +24,55 @@ function isSignerDone(signer) {
   );
 }
 
+function isImageSignaturePayload(signer) {
+  const data = signer?.signatureData || '';
+  return (
+    signer?.signatureType === 'DRAWN' ||
+    signer?.signatureType === 'UPLOADED' ||
+    (typeof data === 'string' && data.startsWith('data:image'))
+  );
+}
 
+/** pdf-lib only embeds PNG/JPEG — convert WebP (and other formats) to PNG first. */
+async function signatureBytesForPdf(dataUrl) {
+  const bytes = dataUrlToUint8(dataUrl);
+  if (!bytes?.length) return null;
+
+  const asPng = async (input) => {
+    const png = await sharp(input, { failOn: 'none' }).png().toBuffer();
+    return { kind: 'png', bytes: png };
+  };
+
+  if (/image\/png/i.test(String(dataUrl))) {
+    return { kind: 'png', bytes };
+  }
+  if (/image\/jpe?g/i.test(String(dataUrl))) {
+    return { kind: 'jpg', bytes };
+  }
+
+  // WebP and anything else pdf-lib cannot embed directly
+  try {
+    return await asPng(bytes);
+  } catch {
+    return null;
+  }
+}
 
 async function embedSignerImage(pdfDoc, signer) {
   if (!isSignerDone(signer)) return null;
   const data = signer.signatureData || '';
-  const isImage =
-    signer.signatureType === 'DRAWN' ||
-    signer.signatureType === 'UPLOADED' ||
-    (typeof data === 'string' && data.startsWith('data:image'));
-  if (!isImage) return null;
-  const bytes = dataUrlToUint8(data);
-  if (!bytes) return null;
+  if (!isImageSignaturePayload(signer)) return null;
+
+  const prepared = await signatureBytesForPdf(data);
+  if (!prepared?.bytes?.length) return null;
+
   try {
-    if (/image\/png/i.test(String(data))) return await pdfDoc.embedPng(bytes);
-    return await pdfDoc.embedJpg(bytes);
+    if (prepared.kind === 'jpg') return await pdfDoc.embedJpg(prepared.bytes);
+    return await pdfDoc.embedPng(prepared.bytes);
   } catch {
     try {
-      return await pdfDoc.embedPng(bytes);
+      const png = await sharp(prepared.bytes, { failOn: 'none' }).png().toBuffer();
+      return await pdfDoc.embedPng(png);
     } catch {
       return null;
     }
@@ -66,7 +98,13 @@ function drawParty(page, fonts, { x, y, width, label, signer, placeholder, showD
     const h = image.height * scale;
     page.drawImage(image, { x, y: y + 32, width: w, height: h });
   } else if (done) {
-    const text = String(signer.signatureData || signer.name || '').slice(0, 36);
+    // Never print raw data URLs when image embed fails — fall back to the name.
+    const raw = String(signer.signatureData || '');
+    const text = (
+      raw.startsWith('data:image')
+        ? String(signer.name || 'Signed')
+        : raw || String(signer.name || 'Signed')
+    ).slice(0, 36);
     page.drawText(text, {
       x,
       y: y + 40,

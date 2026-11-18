@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
 import PDFDocument from 'pdfkit';
+import sharp from 'sharp';
 import { formatDate } from '../../utils/dateFormat.js';
 import {
   remapLineRowsToLiveTables,
@@ -450,39 +451,59 @@ function isSignerDone(signer) {
   );
 }
 
+/** PDFKit cannot always paint WebP — normalize signature images to PNG. */
+async function signaturePngBuffer(dataUrl) {
+  const raw = dataUrlToBuffer(dataUrl);
+  if (!raw?.length) return null;
+  try {
+    if (/image\/png/i.test(String(dataUrl))) return raw;
+    return await sharp(raw, { failOn: 'none' }).png().toBuffer();
+  } catch {
+    return null;
+  }
+}
+
+async function resolveSignerImageBuffer(signer) {
+  if (!isSignerDone(signer)) return null;
+  const data = signer?.signatureData || '';
+  const isImage =
+    signer.signatureType === 'DRAWN' ||
+    signer.signatureType === 'UPLOADED' ||
+    (typeof data === 'string' && data.startsWith('data:image'));
+  if (!isImage) return null;
+  return signaturePngBuffer(data);
+}
+
 /** Draw one party column inside the footer. */
-function drawPartyColumn(doc, { x, y, width, label, signer, placeholder, showDate }) {
+function drawPartyColumn(doc, { x, y, width, label, signer, placeholder, showDate, image }) {
   const textOpts = { width, lineBreak: false };
   doc.fillColor('#5a6d79').fontSize(6.5).font('Helvetica-Bold');
   doc.text(label, x, y, textOpts);
 
   const done = isSignerDone(signer);
   const data = signer?.signatureData || '';
-  const isImage =
-    done &&
-    (signer.signatureType === 'DRAWN' ||
-      signer.signatureType === 'UPLOADED' ||
-      (typeof data === 'string' && data.startsWith('data:image')));
 
-  if (done && isImage) {
-    const img = dataUrlToBuffer(data);
-    if (img) {
-      try {
-        doc.image(img, x, y + 12, { height: 22, fit: [Math.min(width - 8, 140), 22] });
-      } catch {
-        doc
-          .font('Helvetica-Oblique')
-          .fontSize(9)
-          .fillColor('#0e1a22')
-          .text(signer.name || '', x, y + 16, textOpts);
-      }
+  if (done && image) {
+    try {
+      doc.image(image, x, y + 12, { height: 22, fit: [Math.min(width - 8, 140), 22] });
+    } catch {
+      doc
+        .font('Helvetica-Oblique')
+        .fontSize(9)
+        .fillColor('#0e1a22')
+        .text(signer.name || 'Signed', x, y + 16, textOpts);
     }
   } else if (done) {
+    const text = (
+      String(data).startsWith('data:image')
+        ? String(signer.name || 'Signed')
+        : String(data || signer.name || 'Signed')
+    ).slice(0, 36);
     doc
       .font('Helvetica-Oblique')
       .fontSize(11)
       .fillColor('#0e1a22')
-      .text(String(data || signer.name).slice(0, 36), x, y + 14, textOpts);
+      .text(text, x, y + 14, textOpts);
   } else {
     doc
       .font('Helvetica-Oblique')
@@ -518,7 +539,7 @@ function drawPartyColumn(doc, { x, y, width, label, signer, placeholder, showDat
  * Left = Sender · Right = Receiver + date line.
  * Must not trigger PDFKit page breaks (footer sits inside the bottom margin).
  */
-export function drawSignatureFooter(
+export async function drawSignatureFooter(
   doc,
   {
     signingType = 'SIGNING',
@@ -538,6 +559,11 @@ export function drawSignatureFooter(
   const prevY = doc.y;
   const prevBottom = doc.page.margins.bottom;
   doc.page.margins.bottom = 0;
+
+  const [senderImg, receiverImg] = await Promise.all([
+    resolveSignerImageBuffer(senderSignature),
+    resolveSignerImageBuffer(receiverSignature),
+  ]);
 
   doc.save();
   try {
@@ -559,6 +585,7 @@ export function drawSignatureFooter(
       signer: senderSignature,
       placeholder: senderSample || 'Sender',
       showDate: false,
+      image: senderImg,
     });
 
     drawPartyColumn(doc, {
@@ -569,6 +596,7 @@ export function drawSignatureFooter(
       signer: receiverSignature,
       placeholder: signingType === 'NON_SIGNING' ? 'Acknowledge' : 'Receiver',
       showDate: true,
+      image: receiverImg,
     });
   } finally {
     doc.restore();
@@ -978,6 +1006,7 @@ export function blocksToPdfBuffer(title, blocks = [], options = {}) {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
+    void (async () => {
     let regularFont = 'Helvetica';
     let boldFont = 'Helvetica-Bold';
     if (fontPair) {
@@ -992,12 +1021,12 @@ export function blocksToPdfBuffer(title, blocks = [], options = {}) {
       }
     }
 
-    const stampAllPages = () => {
+    const stampAllPages = async () => {
       if (!showSignatures) return;
       const range = doc.bufferedPageRange();
       for (let i = range.start; i < range.start + range.count; i += 1) {
         doc.switchToPage(i);
-        drawSignatureFooter(doc, {
+        await drawSignatureFooter(doc, {
           signingType,
           senderSample: options.senderSample || 'Sender',
           senderSignature: options.senderSignature || null,
@@ -1076,8 +1105,9 @@ export function blocksToPdfBuffer(title, blocks = [], options = {}) {
       doc.moveDown(titleLike ? 0.55 : isHeading ? 0.45 : 0.35);
     }
 
-    stampAllPages();
+    await stampAllPages();
     doc.end();
+    })().catch(reject);
   });
 }
 
