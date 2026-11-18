@@ -64,6 +64,8 @@ export function emptyQieSummary() {
     indicator: QIE_INDICATORS.GREY,
     status: '',
     documentId: '',
+    assessmentOutcome: '',
+    authenticityScore: null,
     updatedAt: '',
   };
 }
@@ -75,6 +77,8 @@ export function qieSummaryFromRecord(record) {
     indicator: deriveQieIndicator(record),
     status: String(record.status || ''),
     documentId: String(record.documentId || ''),
+    assessmentOutcome: String(record.risk?.assessmentOutcome || ''),
+    authenticityScore: record.forensic?.authenticityScore ?? record.risk?.authenticityScore ?? null,
     updatedAt: record.updatedAt || new Date().toISOString(),
   };
 }
