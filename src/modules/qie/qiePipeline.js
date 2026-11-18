@@ -1,5 +1,5 @@
-import fs from 'fs';
 import path from 'path';
+import fs from 'fs';
 import { absoluteUploadPath } from '../../storage/uploadKeys.js';
 import {
   QIE_STATUSES,
@@ -11,81 +11,30 @@ import {
   deriveAssessmentOutcome,
   runVisualForensics,
 } from './qieForensics.js';
+import {
+  namesLikelyMatch,
+  runDocumentExtraction,
+} from './qieExtraction.js';
 
-function normalizeName(value = '') {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+export { namesLikelyMatch };
 
-function nameTokens(value = '') {
-  return normalizeName(value).split(' ').filter((t) => t.length > 1);
-}
-
-/** Loose name overlap: shared tokens ≥ 1 and majority of shorter name. */
-export function namesLikelyMatch(a, b) {
-  const ta = nameTokens(a);
-  const tb = nameTokens(b);
-  if (!ta.length || !tb.length) return false;
-  const setB = new Set(tb);
-  const overlap = ta.filter((t) => setB.has(t));
-  const shorter = Math.min(ta.length, tb.length);
-  return overlap.length >= Math.max(1, Math.ceil(shorter * 0.6));
-}
-
-function readSnippet(absPath, maxBytes = 180_000) {
-  try {
-    if (!absPath || !fs.existsSync(absPath)) return '';
-    const buf = fs.readFileSync(absPath);
-    const slice = buf.subarray(0, Math.min(buf.length, maxBytes));
-    return slice.toString('utf8').replace(/[^\x09\x0A\x0D\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim();
-  } catch {
-    return '';
-  }
-}
-
-function extractFieldsFromText(text = '', originalName = '') {
-  const blob = `${originalName} ${text}`.slice(0, 40_000);
-  const degreeMatch = blob.match(
-    /\b(bachelor|master|diploma|certificate|educator|b\.?\s?sc|m\.?\s?sc|mbbs|bds|bpharm|nursing|phd|doctorate|diabetes)[^\n,]{0,80}/i,
-  );
-  const yearMatch = blob.match(/\b(19|20)\d{2}\b/);
-  const refMatch = blob.match(/\b(?:reg(?:istration)?|roll|cert(?:ificate)?|ref(?:erence)?|no\.?)\s*[:#-]?\s*([A-Z0-9\-\/]{4,})/i);
-  const universityMatch = blob.match(
-    /\b([A-Z][A-Za-z&.\s]{3,60}(?:University|College|Institute|Board|Academy|Association|Council))\b/,
-  );
-  const urlMatch = blob.match(/https?:\/\/[^\s)]+/i);
-  const qrHint = /\b(qr|verify|verification\s*url|scan\s*to\s*verify)\b/i.test(blob);
-
-  const fields = {
-    holderName: '',
-    institution: universityMatch ? universityMatch[1].trim() : '',
-    qualification: degreeMatch ? degreeMatch[0].trim() : '',
-    awardYear: yearMatch ? yearMatch[0] : '',
-    referenceNo: refMatch ? refMatch[1].trim() : '',
-    classification: degreeMatch ? 'educational_certificate' : 'unknown_document',
-    verificationUrl: urlMatch ? urlMatch[0] : '',
-    qrOrVerifyCue: qrHint,
-    rawTextSnippet: blob.slice(0, 600),
-    sourceFileName: originalName || '',
+function findingFromIssue(issue) {
+  return {
+    code: issue.code,
+    category: 'extraction',
+    severity: issue.severity || 'medium',
+    confidence: issue.severity === 'high' ? 0.85 : 0.65,
+    message: issue.message,
+    location: { region: 'ocr_text', page: 1, bboxNorm: null },
+    evidence: {},
+    recommendedAction: issue.recommendedAction || 'manual_review',
   };
-
-  let accuracyScore = 20;
-  if (fields.institution) accuracyScore += 20;
-  if (fields.qualification) accuracyScore += 20;
-  if (fields.awardYear) accuracyScore += 15;
-  if (fields.referenceNo) accuracyScore += 15;
-  if (blob.length > 80) accuracyScore += 10;
-  fields.ocrAccuracyScore = Math.max(0, Math.min(100, accuracyScore));
-  return fields;
 }
 
 /**
- * Run OCR → forensic → credential → risk phases.
- * Credential verification is independent of a clean forensic scan.
- * AI watermark alone never forces a fraud classification.
+ * Run OCR → forensic → independent verification checks → risk.
+ * Identity, document authenticity, and authoritative credential checks are separate.
+ * Forensic / AI watermark signals never alone prove authenticity or fraud.
  */
 export async function runQieAnalysisPhases(record, { expectedHolderName = '' } = {}) {
   let absPath = '';
@@ -97,22 +46,18 @@ export async function runQieAnalysisPhases(record, { expectedHolderName = '' } =
   const exists = Boolean(absPath && fs.existsSync(absPath));
   const ext = path.extname(record.originalName || record.storedPath || '').toLowerCase();
 
-  // 1) OCR & classification (separate accuracy score)
-  const snippet = exists ? readSnippet(absPath) : '';
-  const extracted = extractFieldsFromText(snippet, record.originalName || '');
-  if (!extracted.holderName && expectedHolderName) {
-    extracted.holderNameHint = expectedHolderName;
-  }
+  // 1) OCR & structured extraction (quality-gated)
+  const { extracted, ocr } = await runDocumentExtraction(
+    exists ? absPath : '',
+    record.originalName || '',
+  );
+  // Keep expected name as context only — never treat it as OCR-extracted holder name.
+  extracted.expectedHolderName = expectedHolderName || '';
   record.extracted = extracted;
-  record.ocr = {
-    accuracyScore: extracted.ocrAccuracyScore,
-    engine: 'tylo-qie-ocr-lite-v2',
-    textLength: snippet.length,
-    completedAt: new Date().toISOString(),
-  };
+  record.ocr = ocr;
   record.phase = 'ocr_classification';
 
-  // 2) Visual forensic authenticity (corners, watermarks, manipulation)
+  // 2) Visual forensic pass (evidence only)
   const visual = exists
     ? await runVisualForensics(absPath)
     : {
@@ -123,7 +68,7 @@ export async function runQieAnalysisPhases(record, { expectedHolderName = '' } =
           severity: 'high',
           confidence: 1,
           message: 'Stored file not found for forensic analysis',
-          location: { region: 'document' },
+          location: { region: 'document', page: 1, bboxNorm: null },
           evidence: {},
           recommendedAction: 'reupload_document',
         }],
@@ -141,10 +86,15 @@ export async function runQieAnalysisPhases(record, { expectedHolderName = '' } =
       severity: 'medium',
       confidence: 0.7,
       message: `Unexpected extension ${ext}`,
-      location: { region: 'file' },
+      location: { region: 'file', page: 1, bboxNorm: null },
       evidence: { ext },
       recommendedAction: 'confirm_file_type',
     });
+  }
+
+  for (const issue of extracted.extractionIssues || []) {
+    // Surface extraction problems as review findings (not automatic fraud).
+    visual.findings.push(findingFromIssue(issue));
   }
 
   if (extracted.verificationUrl) {
@@ -154,13 +104,13 @@ export async function runQieAnalysisPhases(record, { expectedHolderName = '' } =
       severity: 'low',
       confidence: 0.4,
       message: 'Embedded verification URL detected — confirm it belongs to the issuing institution',
-      location: { region: 'ocr_text' },
+      location: { region: 'ocr_text', page: 1, bboxNorm: null },
       evidence: { url: extracted.verificationUrl },
       recommendedAction: 'validate_verification_url',
     });
   }
 
-  const cleanScan = visual.findings.filter((f) => f.severity === 'high').length === 0;
+  const cleanScan = visual.findings.filter((f) => f.severity === 'high' && f.category !== 'extraction').length === 0;
   record.forensic = {
     cleanScan,
     findings: visual.findings,
@@ -172,58 +122,152 @@ export async function runQieAnalysisPhases(record, { expectedHolderName = '' } =
     durationMs: visual.durationMs || 0,
     dimensions: { width: visual.width || 0, height: visual.height || 0 },
     meta: visual.meta || {},
+    // Explicit: forensic score is not an authenticity verdict.
+    independentOfCredential: true,
+    doesNotProveAuthenticity: true,
+    doesNotProveFraud: true,
   };
   record.phase = 'forensic_analysis';
 
-  // 3) Credential verification (required for any path to green)
-  const holderFromDoc = extracted.holderName || extracted.holderNameHint || '';
-  const nameOk = expectedHolderName
-    ? namesLikelyMatch(expectedHolderName, holderFromDoc) || namesLikelyMatch(expectedHolderName, extracted.rawTextSnippet)
-    : Boolean(extracted.institution || extracted.qualification);
-  const fieldsPresent = Boolean(extracted.institution || extracted.qualification || extracted.referenceNo || extracted.awardYear);
+  // 3a) Identity matching — only against OCR-extracted holder name (never the expected-name hint)
+  const extractedName = String(extracted.holderName || '').trim();
+  let identityStatus = 'inconclusive';
+  let nameMatch = null;
+  if (!expectedHolderName) {
+    identityStatus = extractedName ? 'extracted_only' : 'inconclusive';
+  } else if (!extractedName) {
+    identityStatus = 'inconclusive';
+    nameMatch = false;
+  } else if (namesLikelyMatch(expectedHolderName, extractedName)) {
+    identityStatus = 'matched';
+    nameMatch = true;
+  } else {
+    identityStatus = 'mismatch';
+    nameMatch = false;
+  }
+
+  const identityCheck = {
+    status: identityStatus,
+    expectedHolderName: expectedHolderName || '',
+    extractedHolderName: extractedName,
+    nameMatch,
+    details:
+      identityStatus === 'matched'
+        ? 'Candidate name on the certificate matches the contact record'
+        : identityStatus === 'mismatch'
+          ? 'Candidate name on the certificate does not match the contact record'
+          : 'Candidate name could not be reliably read for identity matching',
+  };
+
+  // 3b) Document authenticity — summary of forensic evidence only (not a fraud verdict)
+  const authenticityStatus = visual.aiWatermarkOnly
+    ? 'review'
+    : visual.findings.some((f) => f.severity === 'high' && f.category !== 'extraction')
+      ? 'concerns'
+      : visual.findings.some((f) => f.severity === 'medium' && f.category !== 'extraction')
+        ? 'review'
+        : 'clear';
+
+  const documentAuthenticity = {
+    status: authenticityStatus,
+    score: visual.authenticityScore,
+    aiWatermarkOnly: Boolean(visual.aiWatermarkOnly),
+    cleanScan,
+    details:
+      authenticityStatus === 'clear'
+        ? 'No significant visual authenticity concerns were flagged'
+        : authenticityStatus === 'concerns'
+          ? 'Significant visual concerns were flagged for human review (not automatic fraud)'
+          : 'Authenticity indicators require manual review (including possible AI markers)',
+    doesNotProveAuthenticity: true,
+    doesNotProveFraud: true,
+  };
+
+  // 3c) Authoritative credential verification — independent; not auto-satisfied by OCR/forensics
+  const authoritativeVerification = {
+    status: 'not_checked',
+    verified: false,
+    method: '',
+    details: 'No authoritative issuer/registry check was completed for this document',
+  };
+
+  // Extraction quality gate
+  const quality = extracted.extractionQuality || { status: 'failed', score: 0 };
+  const trustedFields = [
+    extracted.qualification,
+    extracted.institution,
+    extracted.referenceNo,
+  ].filter(Boolean);
+  const yearTrusted = Boolean(
+    extracted.awardYear
+    && (extracted.fieldConfidence?.awardYear || 0) >= 0.4
+    && extracted.fieldSources?.awardYear !== 'filename_capture_date',
+  );
+  const fieldsPresent = trustedFields.length > 0 || yearTrusted;
+  const extractionOk = quality.status === 'good'
+    && trustedFields.length >= 1
+    && Boolean(extractedName)
+    && (extracted.fieldConfidence?.holderName || 0) >= 0.45;
+
+  // Overall credential gate used by green-tick / Approve rules:
+  // requires solid extraction + identity match. Forensics never flip this to true.
   const credentialPassed = Boolean(
     exists
-    && fieldsPresent
-    && (expectedHolderName ? nameOk : true)
-    && visual.findings.every((f) => f.code !== 'FILE_MISSING'),
+    && extractionOk
+    && identityStatus === 'matched'
+    && authoritativeVerification.status !== 'failed',
   );
 
   record.credentialVerification = {
     passed: credentialPassed,
-    method: 'local_field_and_identity_crosscheck',
+    method: 'structured_extraction_identity_gate_v3',
     expectedHolderName: expectedHolderName || '',
-    nameMatch: expectedHolderName ? nameOk : null,
+    nameMatch,
     fieldsPresent,
     authoritativeVerified: false,
+    extractionQuality: quality,
+    identityCheck,
+    documentAuthenticity,
+    authoritativeVerification,
     details: credentialPassed
-      ? 'Credential fields extracted and identity cross-check passed'
-      : 'Credential verification did not pass — requires HR review or reanalysis',
+      ? 'Structured extraction and identity match passed; authoritative verification still not completed'
+      : !extractionOk
+        ? 'Credential verification not passed — extraction quality is insufficient or core fields are missing/low-confidence'
+        : identityStatus === 'mismatch'
+          ? 'Credential verification not passed — identity mismatch requires HR review'
+          : 'Credential verification not passed — identity could not be confirmed from the document',
     checkedAt: new Date().toISOString(),
     cleanScanInsufficient: true,
   };
   record.phase = 'credential_verification';
 
-  // 4) Evidence-based risk assessment (4 outcomes)
+  // 4) Risk / assessment from extraction quality + independent checks (not watermark alone)
   const assessmentOutcome = deriveAssessmentOutcome({
     authenticityScore: visual.authenticityScore,
     findings: visual.findings,
     credentialPassed,
     authoritativeVerified: false,
+    extractionQuality: quality,
+    identityStatus,
+    authenticityStatus,
   });
 
-  let score = 100 - (visual.authenticityScore || 0);
-  score = Math.round(score);
-  if (!credentialPassed) score = Math.max(score, 55);
-  if (visual.aiWatermarkOnly) score = Math.max(score, 35); // elevates attention, not automatic fraud
-  score = Math.max(0, Math.min(100, score));
+  let score = 20;
+  if (quality.status === 'failed') score += 35;
+  if (quality.status === 'degraded') score += 20;
+  if (identityStatus === 'mismatch') score += 25;
+  if (identityStatus === 'inconclusive') score += 15;
+  if (authenticityStatus === 'concerns') score += 20;
+  if (authenticityStatus === 'review') score += 12;
+  if (visual.aiWatermarkOnly) score += 8; // attention only
+  if (!fieldsPresent) score += 10;
+  score = Math.max(0, Math.min(100, Math.round(score)));
 
   const level = assessmentOutcome === QIE_ASSESSMENT.HIGH_RISK
     ? 'high'
-    : assessmentOutcome === QIE_ASSESSMENT.LOW_RISK
+    : assessmentOutcome === QIE_ASSESSMENT.LOW_RISK || assessmentOutcome === QIE_ASSESSMENT.VERIFIED
       ? 'low'
-      : assessmentOutcome === QIE_ASSESSMENT.VERIFIED
-        ? 'low'
-        : 'medium';
+      : 'medium';
 
   record.risk = {
     score,
@@ -232,19 +276,24 @@ export async function runQieAnalysisPhases(record, { expectedHolderName = '' } =
     ocrAccuracyScore: extracted.ocrAccuracyScore,
     authenticityScore: visual.authenticityScore,
     factors: [
+      quality.status !== 'good' ? `extraction_${quality.status}` : null,
       !credentialPassed ? 'credential_verification_failed' : null,
-      !cleanScan ? 'forensic_findings' : null,
+      identityStatus === 'mismatch' ? 'identity_mismatch' : null,
+      identityStatus === 'inconclusive' ? 'identity_inconclusive' : null,
+      authenticityStatus !== 'clear' ? `authenticity_${authenticityStatus}` : null,
       visual.aiWatermarkOnly ? 'ai_tool_watermark_review' : null,
-      expectedHolderName && !nameOk ? 'name_mismatch' : null,
       !fieldsPresent ? 'sparse_extraction' : null,
+      'authoritative_not_checked',
     ].filter(Boolean),
     assessedAt: new Date().toISOString(),
   };
   record.phase = 'risk_assessment';
 
-  // 5) Route workflow status — never auto-green; AI watermark alone stays reviewable
+  // 5) Workflow routing — never auto-green
   const from = record.status;
-  if (!credentialPassed && assessmentOutcome === QIE_ASSESSMENT.HIGH_RISK) {
+  const severeIdentityOrExtraction = identityStatus === 'mismatch'
+    || (quality.status === 'failed' && authenticityStatus === 'concerns');
+  if (!credentialPassed && assessmentOutcome === QIE_ASSESSMENT.HIGH_RISK && severeIdentityOrExtraction) {
     record.status = QIE_STATUSES.DISCREPANCY;
     record.phase = 'discrepancy';
   } else {
@@ -263,6 +312,9 @@ export async function runQieAnalysisPhases(record, { expectedHolderName = '' } =
       assessmentOutcome,
       authenticityScore: visual.authenticityScore,
       ocrAccuracyScore: extracted.ocrAccuracyScore,
+      extractionQuality: quality.status,
+      identityStatus,
+      authenticityStatus,
       findingCount: visual.findings.length,
     },
   });

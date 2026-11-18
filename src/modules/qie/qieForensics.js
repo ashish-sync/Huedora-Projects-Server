@@ -20,7 +20,8 @@ const AI_TOOL_MARKERS = [
   { id: 'copilot', label: 'Microsoft Copilot', patterns: [/copilot/i, /microsoft\s*designer/i] },
   { id: 'firefly', label: 'Adobe Firefly', patterns: [/firefly/i, /adobe\s*firefly/i] },
   { id: 'midjourney', label: 'Midjourney', patterns: [/midjourney/i] },
-  { id: 'stable_diffusion', label: 'Stable Diffusion', patterns: [/stable\s*diffusion/i, /\bsd\b/i] },
+  // Avoid bare /\bsd\b/ — it false-positives inside JPEG/PNG binary noise.
+  { id: 'stable_diffusion', label: 'Stable Diffusion', patterns: [/stable\s*diffusion/i, /\bsd[-_\s]?xl\b/i] },
 ];
 
 function finding({
@@ -58,24 +59,33 @@ function readBinarySnippet(absPath, maxBytes = 256_000) {
   }
 }
 
-/** Scan file bytes / EXIF-ish strings for AI tool watermarks and editor traces. */
+/**
+ * Extract readable ASCII/UTF-ish runs from binary so marker scans do not
+ * false-positive on random JPEG entropy (e.g. bare "sd" bytes).
+ */
+function readableAsciiRuns(raw = '', minLen = 4) {
+  const runs = String(raw || '').match(/[\x20-\x7E]{4,}/g) || [];
+  return runs.filter((run) => run.length >= minLen).join('\n');
+}
+
+/** Scan metadata / readable embedded strings for AI tool watermarks and editor traces. */
 export function detectAiToolMarkersFromBytes(absPath, meta = {}) {
   const findings = [];
-  const blob = [
-    readBinarySnippet(absPath),
+  const readable = [
+    readableAsciiRuns(readBinarySnippet(absPath)),
     JSON.stringify(meta || {}),
   ].join('\n');
 
   for (const tool of AI_TOOL_MARKERS) {
-    if (tool.patterns.some((re) => re.test(blob))) {
+    if (tool.patterns.some((re) => re.test(readable))) {
       findings.push(finding({
         code: 'AI_TOOL_WATERMARK_TEXT',
         category: 'ai_generation',
         severity: 'medium',
         confidence: 0.72,
-        message: `Possible ${tool.label} watermark / generator marker detected in document bytes or metadata`,
+        message: `Possible ${tool.label} watermark / generator marker detected in document metadata or embedded text`,
         location: { region: 'metadata_or_embedded_text' },
-        evidence: { toolId: tool.id, toolLabel: tool.label, source: 'byte_scan' },
+        evidence: { toolId: tool.id, toolLabel: tool.label, source: 'readable_byte_scan' },
         recommendedAction: 'manual_verify_ai_origin',
       }));
     }
@@ -83,18 +93,18 @@ export function detectAiToolMarkersFromBytes(absPath, meta = {}) {
 
   const editorHints = [
     { re: /photoshop/i, label: 'Photoshop' },
-    { re: /gimp/i, label: 'GIMP' },
-    { re: /canva/i, label: 'Canva' },
-    { re: /affinity/i, label: 'Affinity' },
+    { re: /\bgimp\b/i, label: 'GIMP' },
+    { re: /\bcanva\b/i, label: 'Canva' },
+    { re: /affinity\s*photo/i, label: 'Affinity' },
   ];
   for (const hint of editorHints) {
-    if (hint.re.test(blob)) {
+    if (hint.re.test(readable)) {
       findings.push(finding({
         code: 'IMAGE_EDITOR_TRACE',
         category: 'manipulation',
         severity: 'low',
         confidence: 0.55,
-        message: `Editor trace mentioning ${hint.label} found in embedded metadata/bytes`,
+        message: `Editor trace mentioning ${hint.label} found in embedded metadata/text`,
         location: { region: 'metadata' },
         evidence: { editor: hint.label },
         recommendedAction: 'review_edit_history',
@@ -469,31 +479,60 @@ export async function runVisualForensics(absPath) {
 }
 
 /**
- * Map forensic + credential signals to the four assessment outcomes.
- * Verified requires authoritative confirmation (not auto from AI scan).
- * AI watermark alone => review_required (never fraudulent solely on that).
+ * Map extraction + independent verification signals to assessment outcomes.
+ * Verified requires authoritative confirmation (never from forensic score alone).
+ * AI watermark / forensic suspicion alone => review_required (never fraud solely on that).
+ * Failed OCR / inconclusive identity => review_required (not automatic high-risk fraud).
  */
 export function deriveAssessmentOutcome({
   authenticityScore = 100,
   findings = [],
   credentialPassed = false,
   authoritativeVerified = false,
+  extractionQuality = null,
+  identityStatus = '',
+  authenticityStatus = '',
 } = {}) {
   if (authoritativeVerified && credentialPassed) return QIE_ASSESSMENT.VERIFIED;
 
-  const highCount = findings.filter((f) => f.severity === 'high').length;
-  const mediumCount = findings.filter((f) => f.severity === 'medium').length;
+  const qualityStatus = String(extractionQuality?.status || '');
+  const forensicHigh = findings.filter((f) => f.severity === 'high' && f.category !== 'extraction').length;
+  const extractionHigh = findings.filter((f) => f.category === 'extraction' && f.severity === 'high').length;
+  const forensicMedium = findings.filter((f) => f.severity === 'medium' && f.category !== 'extraction').length;
   const aiOnly = findings.length > 0
-    && findings.every((f) => f.code.startsWith('AI_TOOL_WATERMARK') || f.severity === 'low');
+    && findings.every((f) => f.code.startsWith('AI_TOOL_WATERMARK') || f.severity === 'low' || f.category === 'extraction');
+  const resolvedAuthenticityStatus = authenticityStatus
+    || (forensicHigh || forensicMedium ? 'review' : 'clear');
 
-  if (!credentialPassed || highCount >= 2 || authenticityScore < 45) {
+  // High risk only with converging serious signals — never AI watermark alone.
+  if (
+    (identityStatus === 'mismatch' && (forensicHigh >= 1 || qualityStatus === 'failed'))
+    || forensicHigh >= 2
+    || (resolvedAuthenticityStatus === 'concerns' && authenticityScore < 45 && qualityStatus === 'failed')
+  ) {
     return QIE_ASSESSMENT.HIGH_RISK;
   }
-  if (aiOnly || mediumCount >= 1 || authenticityScore < 75) {
+
+  // Extraction / identity / AI watermark / medium forensic → human review.
+  if (
+    !credentialPassed
+    || aiOnly
+    || qualityStatus === 'failed'
+    || qualityStatus === 'degraded'
+    || identityStatus === 'inconclusive'
+    || identityStatus === 'mismatch'
+    || resolvedAuthenticityStatus === 'review'
+    || resolvedAuthenticityStatus === 'concerns'
+    || forensicMedium >= 1
+    || extractionHigh >= 1
+    || authenticityScore < 75
+  ) {
     return QIE_ASSESSMENT.REVIEW_REQUIRED;
   }
-  if (authenticityScore >= 75 && credentialPassed && highCount === 0) {
+
+  if (credentialPassed && resolvedAuthenticityStatus === 'clear' && forensicHigh === 0 && authenticityScore >= 75) {
     return QIE_ASSESSMENT.LOW_RISK;
   }
+
   return QIE_ASSESSMENT.REVIEW_REQUIRED;
 }
