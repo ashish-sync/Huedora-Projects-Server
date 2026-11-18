@@ -117,6 +117,7 @@ export async function runQieAnalysisPhases(record, { expectedHolderName = '' } =
     previewRegions: visual.previewRegions || [],
     authenticityScore: visual.authenticityScore,
     aiWatermarkOnly: Boolean(visual.aiWatermarkOnly),
+    channels: visual.channels || {},
     analyzedAt: new Date().toISOString(),
     engine: visual.engine || 'tylo-qie-forensics-v2',
     durationMs: visual.durationMs || 0,
@@ -129,25 +130,33 @@ export async function runQieAnalysisPhases(record, { expectedHolderName = '' } =
   };
   record.phase = 'forensic_analysis';
 
-  // 3a) Identity matching — only against OCR-extracted holder name (never the expected-name hint)
+  // 3a) Identity matching — only against OCR-extracted holder name (never the expected-name hint).
+  // Missing candidate name must NEVER yield IDENTITY_MATCHED.
   const extractedName = String(extracted.holderName || '').trim();
+  const nameConfidence = Number(extracted.fieldConfidence?.holderName || 0);
   let identityStatus = 'inconclusive';
+  let identityCode = 'IDENTITY_INCONCLUSIVE';
   let nameMatch = null;
   if (!expectedHolderName) {
     identityStatus = extractedName ? 'extracted_only' : 'inconclusive';
-  } else if (!extractedName) {
+    identityCode = extractedName ? 'IDENTITY_EXTRACTED_ONLY' : 'IDENTITY_INCONCLUSIVE';
+  } else if (!extractedName || nameConfidence < 0.45) {
     identityStatus = 'inconclusive';
+    identityCode = 'IDENTITY_INCONCLUSIVE';
     nameMatch = false;
   } else if (namesLikelyMatch(expectedHolderName, extractedName)) {
     identityStatus = 'matched';
+    identityCode = 'IDENTITY_MATCHED';
     nameMatch = true;
   } else {
     identityStatus = 'mismatch';
+    identityCode = 'IDENTITY_MISMATCH';
     nameMatch = false;
   }
 
   const identityCheck = {
     status: identityStatus,
+    code: identityCode,
     expectedHolderName: expectedHolderName || '',
     extractedHolderName: extractedName,
     nameMatch,
@@ -161,6 +170,8 @@ export async function runQieAnalysisPhases(record, { expectedHolderName = '' } =
 
   // 3b) Document authenticity — summary of forensic evidence only (not a fraud verdict)
   const authenticityStatus = visual.aiWatermarkOnly
+    || visual.channels?.visualWatermark?.status === 'DETECTED'
+    || visual.channels?.providerAttribution?.status === 'DETECTED'
     ? 'review'
     : visual.findings.some((f) => f.severity === 'high' && f.category !== 'extraction')
       ? 'concerns'
@@ -173,22 +184,35 @@ export async function runQieAnalysisPhases(record, { expectedHolderName = '' } =
     score: visual.authenticityScore,
     aiWatermarkOnly: Boolean(visual.aiWatermarkOnly),
     cleanScan,
+    channels: visual.channels || {},
     details:
       authenticityStatus === 'clear'
         ? 'No significant visual authenticity concerns were flagged'
         : authenticityStatus === 'concerns'
           ? 'Significant visual concerns were flagged for human review (not automatic fraud)'
-          : 'Authenticity indicators require manual review (including possible AI markers)',
+          : 'Authenticity indicators require manual review. AI markers never alone prove fraud.',
     doesNotProveAuthenticity: true,
     doesNotProveFraud: true,
   };
 
   // 3c) Authoritative credential verification — independent; not auto-satisfied by OCR/forensics
+  const institutionOk = Boolean(extracted.institution)
+    && Number(extracted.fieldConfidence?.institution || 0) >= 0.45;
+  const qualificationOk = Boolean(extracted.qualification)
+    && Number(extracted.fieldConfidence?.qualification || 0) >= 0.45;
   const authoritativeVerification = {
     status: 'not_checked',
+    code: 'AUTHORITATIVE_NOT_CHECKED',
     verified: false,
     method: '',
     details: 'No authoritative issuer/registry check was completed for this document',
+    localFieldReadiness: {
+      institutionReadable: institutionOk,
+      qualificationReadable: qualificationOk,
+      note: (!institutionOk || !qualificationOk)
+        ? 'Unreadable or low-confidence institution/qualification must not be treated as verified'
+        : 'Local fields are readable but still not issuer-verified',
+    },
   };
 
   // Extraction quality gate

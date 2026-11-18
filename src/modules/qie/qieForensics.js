@@ -1,6 +1,13 @@
 /**
  * QIE visual authenticity & forensic helpers (sharp-based).
  * Findings are evidence for human review — never sole grounds for fraud.
+ *
+ * Detection channels are independent:
+ * - visual watermark (no provider claim)
+ * - AI provider attribution (structured metadata only)
+ * - SynthID (official verification only → NOT_CHECKED without it)
+ * - AI-related metadata
+ * - C2PA provenance presence vs claim verification
  */
 
 import fs from 'fs';
@@ -14,14 +21,63 @@ export const QIE_ASSESSMENT = Object.freeze({
   VERIFIED: 'verified',
 });
 
-const AI_TOOL_MARKERS = [
-  { id: 'gemini', label: 'Google Gemini', patterns: [/gemini/i, /google\s*ai/i, /bard/i] },
-  { id: 'chatgpt', label: 'ChatGPT / OpenAI', patterns: [/chatgpt/i, /openai/i, /dall[-\s]?e/i] },
-  { id: 'copilot', label: 'Microsoft Copilot', patterns: [/copilot/i, /microsoft\s*designer/i] },
-  { id: 'firefly', label: 'Adobe Firefly', patterns: [/firefly/i, /adobe\s*firefly/i] },
-  { id: 'midjourney', label: 'Midjourney', patterns: [/midjourney/i] },
-  // Avoid bare /\bsd\b/ — it false-positives inside JPEG/PNG binary noise.
-  { id: 'stable_diffusion', label: 'Stable Diffusion', patterns: [/stable\s*diffusion/i, /\bsd[-_\s]?xl\b/i] },
+/** Explicit check outcomes — unsupported tech must use NOT_CHECKED, not NOT_DETECTED. */
+export const QIE_CHECK = Object.freeze({
+  DETECTED: 'DETECTED',
+  NOT_DETECTED: 'NOT_DETECTED',
+  NOT_CHECKED: 'NOT_CHECKED',
+  NOT_ATTRIBUTED: 'NOT_ATTRIBUTED',
+});
+
+/**
+ * Provider attribution patterns — applied ONLY to structured metadata corpora.
+ * Never scan raw JPEG/PNG entropy. No bare "sd" / incidental binary tokens.
+ */
+const AI_PROVIDER_METADATA_MARKERS = [
+  {
+    id: 'gemini',
+    label: 'Google Gemini',
+    patterns: [
+      /\bgoogle\s*gemini\b/i,
+      /\bcreated\s+with\s+google\s+gemini\b/i,
+      /\bimagen\b/i,
+      /\bbard\b/i,
+    ],
+  },
+  {
+    id: 'chatgpt',
+    label: 'ChatGPT / OpenAI',
+    patterns: [
+      /\bchatgpt\b/i,
+      /\bopenai\b/i,
+      /\bdall[-\s]?e\b/i,
+    ],
+  },
+  {
+    id: 'copilot',
+    label: 'Microsoft Copilot',
+    patterns: [/\bcopilot\b/i, /\bmicrosoft\s*designer\b/i],
+  },
+  {
+    id: 'firefly',
+    label: 'Adobe Firefly',
+    patterns: [/\badobe\s*firefly\b/i, /\bfirefly\b/i],
+  },
+  {
+    id: 'midjourney',
+    label: 'Midjourney',
+    patterns: [/\bmidjourney\b/i],
+  },
+  {
+    id: 'stable_diffusion',
+    label: 'Stable Diffusion',
+    patterns: [
+      /\bstable\s*diffusion\b/i,
+      /\bstability\s*ai\b/i,
+      /\bautomatic1111\b/i,
+      /\bcomfyui\b/i,
+    ],
+  },
 ];
 
 function finding({
@@ -50,74 +106,251 @@ function finding({
   };
 }
 
-function readBinarySnippet(absPath, maxBytes = 256_000) {
+function bufferToUtfish(buf) {
+  if (!buf) return '';
   try {
-    const buf = fs.readFileSync(absPath);
-    return buf.subarray(0, Math.min(buf.length, maxBytes)).toString('latin1');
+    return Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf);
   } catch {
     return '';
   }
 }
 
-/**
- * Extract readable ASCII/UTF-ish runs from binary so marker scans do not
- * false-positive on random JPEG entropy (e.g. bare "sd" bytes).
- */
-function readableAsciiRuns(raw = '', minLen = 4) {
-  const runs = String(raw || '').match(/[\x20-\x7E]{4,}/g) || [];
-  return runs.filter((run) => run.length >= minLen).join('\n');
+function extractXmpPacket(raw = '') {
+  const text = String(raw || '');
+  const start = text.search(/<x:xmpmeta[\s>]/i);
+  if (start < 0) return '';
+  const end = text.indexOf('</x:xmpmeta>', start);
+  if (end < 0) return text.slice(start, start + 50_000);
+  return text.slice(start, end + '</x:xmpmeta>'.length);
 }
 
-/** Scan metadata / readable embedded strings for AI tool watermarks and editor traces. */
-export function detectAiToolMarkersFromBytes(absPath, meta = {}) {
-  const findings = [];
-  const readable = [
-    readableAsciiRuns(readBinarySnippet(absPath)),
-    JSON.stringify(meta || {}),
-  ].join('\n');
+/**
+ * Build a structured metadata corpus from EXIF / IPTC / XMP / comments only.
+ * Deliberately excludes raw image entropy / incidental JPEG ASCII runs.
+ */
+export function extractStructuredMetadataCorpus(absPath, meta = {}) {
+  const parts = [];
+  const sources = [];
 
-  for (const tool of AI_TOOL_MARKERS) {
-    if (tool.patterns.some((re) => re.test(readable))) {
-      findings.push(finding({
-        code: 'AI_TOOL_WATERMARK_TEXT',
-        category: 'ai_generation',
-        severity: 'medium',
-        confidence: 0.72,
-        message: `Possible ${tool.label} watermark / generator marker detected in document metadata or embedded text`,
-        location: { region: 'metadata_or_embedded_text' },
-        evidence: { toolId: tool.id, toolLabel: tool.label, source: 'readable_byte_scan' },
-        recommendedAction: 'manual_verify_ai_origin',
-      }));
+  if (meta?.exif) {
+    parts.push(bufferToUtfish(meta.exif));
+    sources.push('exif');
+  }
+  if (meta?.iptc) {
+    parts.push(bufferToUtfish(meta.iptc));
+    sources.push('iptc');
+  }
+  if (meta?.xmp) {
+    parts.push(bufferToUtfish(meta.xmp));
+    sources.push('xmp');
+  }
+  if (Array.isArray(meta?.comments) && meta.comments.length) {
+    parts.push(meta.comments.map((c) => c?.text || c).join('\n'));
+    sources.push('comments');
+  }
+
+  // Pull XMP packet from file header/trailer without treating full binary as text.
+  try {
+    const buf = fs.readFileSync(absPath);
+    const latin = buf.toString('latin1');
+    const xmp = extractXmpPacket(latin);
+    if (xmp) {
+      parts.push(xmp);
+      if (!sources.includes('xmp')) sources.push('xmp');
     }
+    // C2PA JUMBF marker presence is handled separately; do not dump entropy here.
+  } catch {
+    // ignore
+  }
+
+  // sharp metadata JSON keys that are human labels (not pixel buffers)
+  const safeMeta = {
+    format: meta.format,
+    space: meta.space,
+    density: meta.density,
+    hasProfile: meta.hasProfile,
+    orientation: meta.orientation,
+  };
+  parts.push(JSON.stringify(safeMeta));
+
+  const corpus = parts.join('\n').replace(/\u0000/g, ' ');
+  return { corpus, sources };
+}
+
+function checkChannel({ status, confidence = null, providers = [], evidence = {}, note = '' }) {
+  return {
+    status,
+    confidence,
+    providers,
+    evidence,
+    note,
+  };
+}
+
+/**
+ * Metadata / provider attribution — structured metadata only.
+ * Kept export name for compatibility; no longer scans JPEG entropy.
+ */
+export function detectAiToolMarkersFromBytes(absPath, meta = {}) {
+  const { findings } = classifyAiMetadataAndProviders(absPath, meta);
+  return findings;
+}
+
+/**
+ * Independent AI-metadata + provider attribution from structured corpora.
+ */
+export function classifyAiMetadataAndProviders(absPath, meta = {}) {
+  const findings = [];
+  const { corpus, sources } = extractStructuredMetadataCorpus(absPath, meta);
+  const attributed = [];
+
+  for (const tool of AI_PROVIDER_METADATA_MARKERS) {
+    const matched = tool.patterns.find((re) => re.test(corpus));
+    if (!matched) continue;
+    attributed.push({ id: tool.id, label: tool.label, pattern: String(matched) });
+    findings.push(finding({
+      code: 'AI_PROVIDER_METADATA',
+      category: 'ai_metadata',
+      severity: 'medium',
+      confidence: 0.84,
+      message: `Structured metadata references ${tool.label}. Provider attribution is based on metadata text only — not a visual watermark identity.`,
+      location: { region: 'structured_metadata' },
+      evidence: {
+        toolId: tool.id,
+        toolLabel: tool.label,
+        source: 'structured_metadata',
+        metadataSources: sources,
+      },
+      recommendedAction: 'manual_verify_ai_origin',
+    }));
   }
 
   const editorHints = [
-    { re: /photoshop/i, label: 'Photoshop' },
+    { re: /\badobe\s*photoshop\b/i, label: 'Photoshop' },
     { re: /\bgimp\b/i, label: 'GIMP' },
     { re: /\bcanva\b/i, label: 'Canva' },
-    { re: /affinity\s*photo/i, label: 'Affinity' },
+    { re: /\baffinity\s*photo\b/i, label: 'Affinity' },
   ];
   for (const hint of editorHints) {
-    if (hint.re.test(readable)) {
+    if (hint.re.test(corpus)) {
       findings.push(finding({
         code: 'IMAGE_EDITOR_TRACE',
         category: 'manipulation',
         severity: 'low',
         confidence: 0.55,
-        message: `Editor trace mentioning ${hint.label} found in embedded metadata/text`,
-        location: { region: 'metadata' },
-        evidence: { editor: hint.label },
+        message: `Editor trace mentioning ${hint.label} found in structured metadata`,
+        location: { region: 'structured_metadata' },
+        evidence: { editor: hint.label, metadataSources: sources },
         recommendedAction: 'review_edit_history',
       }));
     }
   }
 
-  return findings;
+  const providerAttribution = attributed.length
+    ? checkChannel({
+      status: QIE_CHECK.DETECTED,
+      confidence: 0.84,
+      providers: attributed.map((a) => a.id),
+      evidence: { attributed, metadataSources: sources },
+      note: 'Provider names found in structured metadata only',
+    })
+    : checkChannel({
+      status: QIE_CHECK.NOT_ATTRIBUTED,
+      confidence: null,
+      providers: [],
+      evidence: { metadataSources: sources },
+      note: 'No explicit AI provider attribution in structured metadata',
+    });
+
+  const aiRelatedMetadata = attributed.length || findings.some((f) => f.code === 'IMAGE_EDITOR_TRACE')
+    ? checkChannel({
+      status: QIE_CHECK.DETECTED,
+      confidence: attributed.length ? 0.84 : 0.55,
+      providers: attributed.map((a) => a.id),
+      evidence: { metadataSources: sources },
+      note: 'AI-related or editor metadata strings were present',
+    })
+    : checkChannel({
+      status: sources.length ? QIE_CHECK.NOT_DETECTED : QIE_CHECK.NOT_CHECKED,
+      confidence: sources.length ? 0.7 : null,
+      evidence: { metadataSources: sources },
+      note: sources.length
+        ? 'Structured metadata inspected; no AI-related strings found'
+        : 'No structured metadata available to inspect',
+    });
+
+  return { findings, providerAttribution, aiRelatedMetadata, metadataSources: sources };
 }
 
 /**
- * Detect a faint multi-point "sparkle" (Gemini-like) in the bottom-right corner.
- * Looks for 3–5 bright local peaks on a relatively dark local background.
+ * C2PA: detect manifest container presence only.
+ * Cryptographic claim verification is NOT_CHECKED without an official verifier.
+ */
+export function classifyC2paProvenance(absPath) {
+  try {
+    const buf = fs.readFileSync(absPath);
+    const latin = buf.toString('latin1');
+    const head = latin.slice(0, Math.min(latin.length, 512_000));
+    // Require stronger provenance markers than a bare 4-letter token in JPEG entropy.
+    const hasJumbf = /jumb/i.test(head) && (/c2pa/i.test(head) || /c2ma/i.test(head) || /c2cl/i.test(head));
+    const hasC2paXmp = /c2pa\.(claim|assertion|manifest)/i.test(head);
+    if (hasJumbf || hasC2paXmp) {
+      return {
+        presence: checkChannel({
+          status: QIE_CHECK.DETECTED,
+          confidence: 0.7,
+          evidence: { marker: 'c2pa_or_jumbf' },
+          note: 'C2PA/JUMBF-like container marker found',
+        }),
+        verification: checkChannel({
+          status: QIE_CHECK.NOT_CHECKED,
+          note: 'C2PA claim verification requires an official C2PA verifier (not available in this engine)',
+        }),
+        findings: [finding({
+          code: 'C2PA_MANIFEST_PRESENT',
+          category: 'provenance',
+          severity: 'low',
+          confidence: 0.7,
+          message: 'A C2PA/JUMBF-like provenance container appears present. Claim verification was not performed.',
+          location: { region: 'provenance' },
+          evidence: { verification: QIE_CHECK.NOT_CHECKED },
+          recommendedAction: 'manual_review',
+        })],
+      };
+    }
+    return {
+      presence: checkChannel({
+        status: QIE_CHECK.NOT_DETECTED,
+        confidence: 0.65,
+        note: 'No C2PA/JUMBF container marker found',
+      }),
+      verification: checkChannel({
+        status: QIE_CHECK.NOT_CHECKED,
+        note: 'C2PA claim verification requires an official C2PA verifier (not available in this engine)',
+      }),
+      findings: [],
+    };
+  } catch {
+    return {
+      presence: checkChannel({ status: QIE_CHECK.NOT_CHECKED, note: 'Could not read file for C2PA scan' }),
+      verification: checkChannel({ status: QIE_CHECK.NOT_CHECKED, note: 'C2PA verifier not available' }),
+      findings: [],
+    };
+  }
+}
+
+/** SynthID requires Google's official verification technology — never invent a result. */
+export function classifySynthId() {
+  return checkChannel({
+    status: QIE_CHECK.NOT_CHECKED,
+    confidence: null,
+    note: 'SynthID verification is not performed — official Google SynthID verification technology is not integrated',
+  });
+}
+
+/**
+ * Detect a faint multi-point sparkle pattern in the bottom-right corner.
+ * Visual detection only — does NOT attribute a provider (Gemini/etc.).
  */
 export async function detectCornerSparkleWatermark(imageBuffer) {
   const findings = [];
@@ -193,18 +426,20 @@ export async function detectCornerSparkleWatermark(imageBuffer) {
       h: +(regionH / h).toFixed(4),
     };
     findings.push(finding({
-      code: 'AI_TOOL_WATERMARK_SPARKLE',
-      category: 'ai_generation',
+      code: 'VISUAL_WATERMARK_SPARKLE',
+      category: 'visual_watermark',
       severity: 'medium',
-      confidence: Math.min(0.92, 0.55 + sparkleCount * 0.08),
+      confidence: Math.min(0.9, 0.55 + sparkleCount * 0.08),
       message:
-        'Faint multi-point sparkle pattern detected in the bottom-right corner (resembles Google Gemini watermark). Requires manual verification.',
+        'Faint multi-point sparkle pattern detected in the bottom-right corner. This is a visual watermark indicator only — provider identity is not attributed from this pattern alone. Manual verification required.',
       location: {
         region: 'bottom_right_corner',
         bboxNorm,
       },
       evidence: {
-        toolHint: 'Google Gemini',
+        providerAttribution: QIE_CHECK.NOT_ATTRIBUTED,
+        visualOnly: true,
+        resemblesKnownStyles: ['gemini_style_sparkle'],
         peakCount: sparkleCount,
         regionAverage: Math.round(avg),
         peakThreshold: Math.round(peakThreshold),
@@ -214,6 +449,8 @@ export async function detectCornerSparkleWatermark(imageBuffer) {
           yNorm: +(p.y / h).toFixed(4),
           luminance: p.v,
         })),
+        // Backward-compatible alias for older report consumers.
+        legacyCode: 'AI_TOOL_WATERMARK_SPARKLE',
       },
       recommendedAction: 'manual_verify_ai_watermark',
     }));
@@ -349,9 +586,19 @@ async function loadRasterBuffer(absPath) {
   }
 }
 
+function isAiIndicatorFinding(f) {
+  return f.code === 'VISUAL_WATERMARK_SPARKLE'
+    || f.code === 'AI_PROVIDER_METADATA'
+    || f.code === 'AI_TOOL_WATERMARK_SPARKLE'
+    || f.code === 'AI_TOOL_WATERMARK_TEXT'
+    || f.category === 'visual_watermark'
+    || f.category === 'ai_metadata'
+    || f.category === 'ai_generation';
+}
+
 /**
- * Full forensic pass. Returns structured findings + scores.
- * AI watermark alone must NOT force a fraudulent/high-risk-only verdict.
+ * Full forensic pass with separated detection channels.
+ * AI watermark / metadata alone must NOT force a fraudulent verdict.
  */
 export async function runVisualForensics(absPath) {
   const started = Date.now();
@@ -374,6 +621,14 @@ export async function runVisualForensics(absPath) {
       })],
       previewRegions: [],
       authenticityScore: 0,
+      channels: {
+        visualWatermark: checkChannel({ status: QIE_CHECK.NOT_CHECKED, note: 'File missing' }),
+        providerAttribution: checkChannel({ status: QIE_CHECK.NOT_CHECKED, note: 'File missing' }),
+        synthId: classifySynthId(),
+        aiRelatedMetadata: checkChannel({ status: QIE_CHECK.NOT_CHECKED, note: 'File missing' }),
+        c2paPresence: checkChannel({ status: QIE_CHECK.NOT_CHECKED, note: 'File missing' }),
+        c2paVerification: checkChannel({ status: QIE_CHECK.NOT_CHECKED, note: 'C2PA verifier not available' }),
+      },
     };
   }
 
@@ -385,12 +640,37 @@ export async function runVisualForensics(absPath) {
     meta = {};
   }
 
-  findings.push(...detectAiToolMarkersFromBytes(absPath, meta));
+  const metaClass = classifyAiMetadataAndProviders(absPath, meta);
+  findings.push(...metaClass.findings);
+
+  const c2pa = classifyC2paProvenance(absPath);
+  findings.push(...c2pa.findings);
+
+  const synthId = classifySynthId();
+
+  let visualWatermark = checkChannel({
+    status: QIE_CHECK.NOT_DETECTED,
+    confidence: 0.6,
+    note: 'No visual watermark pattern detected in scanned regions',
+  });
 
   const raster = await loadRasterBuffer(absPath);
   if (raster) {
     try {
-      findings.push(...await detectCornerSparkleWatermark(raster));
+      const sparkleFindings = await detectCornerSparkleWatermark(raster);
+      findings.push(...sparkleFindings);
+      if (sparkleFindings.length) {
+        visualWatermark = checkChannel({
+          status: QIE_CHECK.DETECTED,
+          confidence: sparkleFindings[0].confidence,
+          providers: [],
+          evidence: {
+            codes: sparkleFindings.map((f) => f.code),
+            providerAttribution: QIE_CHECK.NOT_ATTRIBUTED,
+          },
+          note: 'Visual watermark pattern detected without provider attribution',
+        });
+      }
       findings.push(...await detectCompressionAnomalies(raster));
       findings.push(...await inspectMarginsAndBackground(raster));
     } catch (err) {
@@ -402,6 +682,10 @@ export async function runVisualForensics(absPath) {
         message: `Visual inspection partially failed: ${err?.message || 'unknown error'}`,
         recommendedAction: 'manual_review',
       }));
+      visualWatermark = checkChannel({
+        status: QIE_CHECK.NOT_CHECKED,
+        note: `Visual watermark scan incomplete: ${err?.message || 'error'}`,
+      });
     }
   } else {
     findings.push(finding({
@@ -409,9 +693,13 @@ export async function runVisualForensics(absPath) {
       category: 'integrity',
       severity: 'low',
       confidence: 0.45,
-      message: 'Could not rasterize document for full visual inspection; byte/metadata checks only',
+      message: 'Could not rasterize document for full visual inspection; structured metadata checks only',
       recommendedAction: 'manual_visual_review',
     }));
+    visualWatermark = checkChannel({
+      status: QIE_CHECK.NOT_CHECKED,
+      note: 'Rasterization unavailable — visual watermark not checked',
+    });
   }
 
   // Soft size / resolution cues
@@ -448,17 +736,31 @@ export async function runVisualForensics(absPath) {
       label: f.message,
     }));
 
-  // Authenticity score: 100 minus weighted severities; AI watermark capped impact.
+  // Authenticity score: 100 minus weighted severities; AI indicators capped (never fraud alone).
   let penalty = 0;
   let aiWatermarkOnly = true;
   for (const f of findings) {
-    const isAiMark = f.code.startsWith('AI_TOOL_WATERMARK');
+    const isAiMark = isAiIndicatorFinding(f);
     if (!isAiMark && f.severity !== 'low') aiWatermarkOnly = false;
     const weight = f.severity === 'high' ? 28 : f.severity === 'medium' ? 14 : 6;
     const capped = isAiMark ? Math.min(weight, 12) : weight;
     penalty += capped * (f.confidence || 0.5);
   }
   const authenticityScore = Math.max(0, Math.min(100, Math.round(100 - penalty)));
+
+  const channels = {
+    visualWatermark,
+    providerAttribution: metaClass.providerAttribution,
+    synthId,
+    aiRelatedMetadata: metaClass.aiRelatedMetadata,
+    c2paPresence: c2pa.presence,
+    c2paVerification: c2pa.verification,
+    detectionConfidence: {
+      visual: visualWatermark.confidence,
+      provider: metaClass.providerAttribution.confidence,
+      metadata: metaClass.aiRelatedMetadata.confidence,
+    },
+  };
 
   return {
     engine: 'tylo-qie-forensics-v2',
@@ -468,12 +770,14 @@ export async function runVisualForensics(absPath) {
     findings,
     previewRegions,
     authenticityScore,
-    aiWatermarkOnly: aiWatermarkOnly && findings.some((f) => f.code.startsWith('AI_TOOL_WATERMARK')),
+    aiWatermarkOnly: aiWatermarkOnly && findings.some((f) => isAiIndicatorFinding(f)),
+    channels,
     meta: {
       format: meta.format || '',
       space: meta.space || '',
       hasAlpha: Boolean(meta.hasAlpha),
       density: meta.density || null,
+      metadataSources: metaClass.metadataSources || [],
     },
   };
 }
@@ -500,7 +804,7 @@ export function deriveAssessmentOutcome({
   const extractionHigh = findings.filter((f) => f.category === 'extraction' && f.severity === 'high').length;
   const forensicMedium = findings.filter((f) => f.severity === 'medium' && f.category !== 'extraction').length;
   const aiOnly = findings.length > 0
-    && findings.every((f) => f.code.startsWith('AI_TOOL_WATERMARK') || f.severity === 'low' || f.category === 'extraction');
+    && findings.every((f) => isAiIndicatorFinding(f) || f.severity === 'low' || f.category === 'extraction');
   const resolvedAuthenticityStatus = authenticityStatus
     || (forensicHigh || forensicMedium ? 'review' : 'clear');
 

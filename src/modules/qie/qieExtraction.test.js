@@ -55,6 +55,8 @@ test('WhatsApp capture filename year is low-confidence and does not invent a pas
 test('identity matching never uses expected name as document text', () => {
   assert.equal(namesLikelyMatch('Anita Sharma', 'Anita Sharma'), true);
   assert.equal(namesLikelyMatch('Anita Sharma', ''), false);
+  // Missing extracted name must never be treated as a match candidate.
+  assert.equal(Boolean('' && namesLikelyMatch('Anita Sharma', '')), false);
 });
 
 test('failed extraction and inconclusive identity require review, not automatic fraud', () => {

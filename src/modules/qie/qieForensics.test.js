@@ -6,29 +6,22 @@ import path from 'path';
 import sharp from 'sharp';
 import {
   QIE_ASSESSMENT,
+  QIE_CHECK,
+  classifyAiMetadataAndProviders,
+  classifySynthId,
   deriveAssessmentOutcome,
+  detectAiToolMarkersFromBytes,
   detectCornerSparkleWatermark,
   runVisualForensics,
 } from './qieForensics.js';
 
-/** Synthetic Diabetes Educator certificate page with a faint 4-point Gemini-like sparkle. */
-async function buildDiabetesEducatorFixture(outPath) {
+/** Synthetic certificate page with a faint 4-point sparkle (visual only). */
+async function buildSparkleFixture(outPath, { embedGeminiExif = false } = {}) {
   const width = 900;
   const height = 1200;
   const channels = 3;
   const pixels = Buffer.alloc(width * height * channels, 245);
 
-  // Soft certificate-like header band
-  for (let y = 40; y < 120; y += 1) {
-    for (let x = 80; x < width - 80; x += 1) {
-      const i = (y * width + x) * channels;
-      pixels[i] = 230;
-      pixels[i + 1] = 236;
-      pixels[i + 2] = 245;
-    }
-  }
-
-  // Darker bottom-right plate (watermark sits on quieter background, like Gemini sparkles)
   for (let y = Math.floor(height * 0.82); y < height; y += 1) {
     for (let x = Math.floor(width * 0.82); x < width; x += 1) {
       const i = (y * width + x) * channels;
@@ -38,7 +31,6 @@ async function buildDiabetesEducatorFixture(outPath) {
     }
   }
 
-  // Four bright sparkle peaks in bottom-right (Gemini-style watermark cue)
   const peaks = [
     { x: 820, y: 1080 },
     { x: 845, y: 1095 },
@@ -61,88 +53,159 @@ async function buildDiabetesEducatorFixture(outPath) {
     }
   }
 
-  // Keep a valid PNG and stamp Gemini into EXIF so byte/metadata scans can catch it.
-  await sharp(pixels, { raw: { width, height, channels } })
-    .withMetadata({
+  let pipeline = sharp(pixels, { raw: { width, height, channels } });
+  if (embedGeminiExif) {
+    pipeline = pipeline.withMetadata({
       exif: {
         IFD0: {
           ImageDescription: 'Diabetes Educator Certificate — Created with Google Gemini',
           Software: 'Google Gemini',
         },
       },
-    })
-    .png()
-    .toFile(outPath);
+    });
+  }
+  await pipeline.png().toFile(outPath);
   return outPath;
 }
 
-test('Diabetes Educator fixture: detects faint four-point Gemini sparkle watermark', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qie-gemini-'));
+test('Gemini-style sparkle is visual-only and does not attribute Stable Diffusion or Gemini provider', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qie-sparkle-'));
   const fixture = path.join(dir, 'diabetes-educator-certificate.png');
-  await buildDiabetesEducatorFixture(fixture);
+  await buildSparkleFixture(fixture, { embedGeminiExif: false });
 
   const raster = await sharp(fixture).png().toBuffer();
   const sparkleFindings = await detectCornerSparkleWatermark(raster);
-  assert.ok(
-    sparkleFindings.some((f) => f.code === 'AI_TOOL_WATERMARK_SPARKLE'),
-    'expected AI_TOOL_WATERMARK_SPARKLE finding for bottom-right four-point sparkle',
-  );
-  const sparkle = sparkleFindings.find((f) => f.code === 'AI_TOOL_WATERMARK_SPARKLE');
-  assert.equal(sparkle.severity, 'medium');
-  assert.equal(sparkle.recommendedAction, 'manual_verify_ai_watermark');
-  assert.ok(sparkle.evidence?.peakCount >= 3 && sparkle.evidence?.peakCount <= 6);
-  assert.equal(sparkle.location?.region, 'bottom_right_corner');
+  assert.ok(sparkleFindings.some((f) => f.code === 'VISUAL_WATERMARK_SPARKLE'));
+  const sparkle = sparkleFindings.find((f) => f.code === 'VISUAL_WATERMARK_SPARKLE');
+  assert.equal(sparkle.evidence.providerAttribution, QIE_CHECK.NOT_ATTRIBUTED);
+  assert.ok(!/stable diffusion/i.test(sparkle.message));
+  assert.ok(!sparkle.evidence.toolHint);
 
   const visual = await runVisualForensics(fixture);
-  assert.ok(visual.findings.some((f) => f.code === 'AI_TOOL_WATERMARK_SPARKLE'));
-  assert.ok(
-    visual.findings.some((f) => f.code === 'AI_TOOL_WATERMARK_TEXT' && f.evidence?.toolId === 'gemini'),
-    'expected Gemini text watermark marker from embedded bytes',
+  assert.ok(visual.findings.some((f) => f.code === 'VISUAL_WATERMARK_SPARKLE'));
+  assert.equal(visual.channels.visualWatermark.status, QIE_CHECK.DETECTED);
+  assert.equal(visual.channels.providerAttribution.status, QIE_CHECK.NOT_ATTRIBUTED);
+  assert.equal(visual.channels.synthId.status, QIE_CHECK.NOT_CHECKED);
+  assert.equal(visual.channels.c2paVerification.status, QIE_CHECK.NOT_CHECKED);
+  assert.equal(
+    visual.findings.some((f) => f.evidence?.toolId === 'stable_diffusion'),
+    false,
+    'must not attribute Stable Diffusion from sparkle/binary noise',
   );
-  assert.ok(visual.previewRegions.some((r) => r.code === 'AI_TOOL_WATERMARK_SPARKLE'));
-  assert.ok(visual.aiWatermarkOnly || visual.findings.some((f) => f.code.startsWith('AI_TOOL_WATERMARK')));
-
-  // AI watermark alone must map to review_required — never automatic fraud/high_risk.
-  const outcome = deriveAssessmentOutcome({
-    authenticityScore: visual.authenticityScore,
-    findings: visual.findings.filter((f) => f.code.startsWith('AI_TOOL_WATERMARK') || f.severity === 'low'),
-    credentialPassed: true,
-    authoritativeVerified: false,
-  });
-  assert.equal(outcome, QIE_ASSESSMENT.REVIEW_REQUIRED);
+  assert.equal(
+    visual.findings.some((f) => f.code === 'AI_TOOL_WATERMARK_TEXT'),
+    false,
+  );
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('deriveAssessmentOutcome respects four outcomes and AI-watermark rule', () => {
-  assert.equal(
-    deriveAssessmentOutcome({
-      authenticityScore: 90,
-      findings: [],
-      credentialPassed: true,
-      authoritativeVerified: true,
-    }),
-    QIE_ASSESSMENT.VERIFIED,
-  );
+test('incidental JPEG binary text does not create Stable Diffusion false positives', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qie-jpeg-'));
+  const fixture = path.join(dir, 'camera.jpg');
+  await sharp({
+    create: {
+      width: 640,
+      height: 480,
+      channels: 3,
+      background: { r: 170, g: 165, b: 160 },
+    },
+  }).jpeg({ quality: 85 }).toFile(fixture);
 
+  // Append incidental entropy tokens that previously false-triggered sdxl / stable diffusion / gemini scans.
+  const poisoned = Buffer.concat([
+    fs.readFileSync(fixture),
+    Buffer.from('\n....sdxl....stable diffusion....gemini....openai....\n'),
+  ]);
+  fs.writeFileSync(fixture, poisoned);
+
+  const findings = detectAiToolMarkersFromBytes(fixture, await sharp(fixture).metadata().catch(() => ({})));
+  assert.equal(findings.length, 0, 'appended JPEG entropy must not drive provider attribution');
+
+  const visual = await runVisualForensics(fixture);
+  assert.equal(visual.channels.providerAttribution.status, QIE_CHECK.NOT_ATTRIBUTED);
+  assert.equal(visual.findings.some((f) => f.evidence?.toolId === 'stable_diffusion'), false);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('explicit Stable Diffusion metadata attributes provider; SynthID remains NOT_CHECKED', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qie-sd-meta-'));
+  const fixture = path.join(dir, 'sd.png');
+  await sharp({
+    create: {
+      width: 500,
+      height: 500,
+      channels: 3,
+      background: { r: 220, g: 220, b: 220 },
+    },
+  }).withMetadata({
+    exif: {
+      IFD0: {
+        Software: 'Stable Diffusion Automatic1111',
+        ImageDescription: 'Generated with Stable Diffusion',
+      },
+    },
+  }).png().toFile(fixture);
+
+  const classified = classifyAiMetadataAndProviders(fixture, await sharp(fixture).metadata());
+  assert.equal(classified.providerAttribution.status, QIE_CHECK.DETECTED);
+  assert.ok(classified.providerAttribution.providers.includes('stable_diffusion'));
+  assert.ok(classified.findings.some((f) => f.code === 'AI_PROVIDER_METADATA'));
+
+  assert.equal(classifySynthId().status, QIE_CHECK.NOT_CHECKED);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('ordinary camera / WhatsApp-like JPEG without AI indicators stays clean on provider channel', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qie-wa-'));
+  const fixture = path.join(dir, 'WhatsApp Image 2026-11-13 at 9.25.17 PM.jpeg');
+  await sharp({
+    create: {
+      width: 800,
+      height: 1000,
+      channels: 3,
+      background: { r: 245, g: 245, b: 245 },
+    },
+  }).jpeg({ quality: 70 }).toFile(fixture);
+
+  const visual = await runVisualForensics(fixture);
+  assert.equal(visual.channels.providerAttribution.status, QIE_CHECK.NOT_ATTRIBUTED);
+  assert.ok([QIE_CHECK.NOT_DETECTED, QIE_CHECK.NOT_CHECKED].includes(visual.channels.visualWatermark.status));
+  assert.equal(visual.channels.synthId.status, QIE_CHECK.NOT_CHECKED);
+  assert.equal(visual.findings.some((f) => f.code === 'AI_PROVIDER_METADATA'), false);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('structured Gemini EXIF can attribute Gemini without inventing Stable Diffusion', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qie-gem-meta-'));
+  const fixture = path.join(dir, 'gem.png');
+  await buildSparkleFixture(fixture, { embedGeminiExif: true });
+
+  const visual = await runVisualForensics(fixture);
+  assert.ok(visual.findings.some((f) => f.code === 'VISUAL_WATERMARK_SPARKLE'));
+  // EXIF may or may not round-trip depending on sharp/libvips; provider must never be SD.
+  assert.equal(visual.findings.some((f) => f.evidence?.toolId === 'stable_diffusion'), false);
+  if (visual.channels.providerAttribution.status === QIE_CHECK.DETECTED) {
+    assert.ok(visual.channels.providerAttribution.providers.includes('gemini'));
+  }
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('deriveAssessmentOutcome: AI indicators require review, never automatic fraud', () => {
   assert.equal(
     deriveAssessmentOutcome({
       authenticityScore: 88,
-      findings: [],
-      credentialPassed: true,
-    }),
-    QIE_ASSESSMENT.LOW_RISK,
-  );
-
-  assert.equal(
-    deriveAssessmentOutcome({
-      authenticityScore: 80,
       findings: [{
-        code: 'AI_TOOL_WATERMARK_SPARKLE',
+        code: 'VISUAL_WATERMARK_SPARKLE',
+        category: 'visual_watermark',
         severity: 'medium',
-        confidence: 0.8,
       }],
       credentialPassed: true,
+      authenticityStatus: 'review',
     }),
     QIE_ASSESSMENT.REVIEW_REQUIRED,
   );
@@ -160,7 +223,7 @@ test('deriveAssessmentOutcome respects four outcomes and AI-watermark rule', () 
   );
 });
 
-test('blank certificate-like page does not invent a sparkle watermark', async () => {
+test('blank page does not invent a sparkle watermark', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qie-clean-'));
   const fixture = path.join(dir, 'clean.png');
   await sharp({
