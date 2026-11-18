@@ -1,6 +1,6 @@
 /**
- * Contact Directory KYC attachments: PAN Card Copy + Bank Account Proof.
- * Accept PDF and common image formats (field keys stay passbookCopyUrl / panCardCopyUrl).
+ * Contact Directory attachments: PAN Card Copy, Bank Account Proof,
+ * and Educational Qualification certificates (same file rules).
  */
 
 import {
@@ -65,7 +65,7 @@ export function isAllowedContactKycFile({ mimetype = '', originalname = '' } = {
 }
 
 export const CONTACT_KYC_REJECT_MESSAGE =
-  'Bank Account Proof and PAN Card Copy must be a PDF or common image (JPG, JPEG, PNG, WEBP, GIF, BMP, TIFF).';
+  'Contact documents must be a PDF or common image (JPG, JPEG, PNG, WEBP, GIF, BMP, TIFF).';
 
 /** Production blocks direct /uploads — return a short-lived signed file URL for View links. */
 export function signContactKycUrl(url = '') {
@@ -94,9 +94,20 @@ export function storageContactKycUrl(clientValue, existingValue = '') {
 export function withSignedContactKyc(contact) {
   if (!contact) return contact;
   const obj = contact.toObject ? contact.toObject() : { ...contact };
+  const providerEmployees = Array.isArray(obj.providerEmployees)
+    ? obj.providerEmployees.map((emp) => ({
+        ...emp,
+        educationalQualificationUrl: signContactKycUrl(emp?.educationalQualificationUrl),
+      }))
+    : obj.providerEmployees;
   return {
     ...obj,
     panCardCopyUrl: signContactKycUrl(obj.panCardCopyUrl),
     passbookCopyUrl: signContactKycUrl(obj.passbookCopyUrl),
+    aadhaarFrontUrl: signContactKycUrl(obj.aadhaarFrontUrl),
+    aadhaarBackUrl: signContactKycUrl(obj.aadhaarBackUrl),
+    educationalQualificationUrl: signContactKycUrl(obj.educationalQualificationUrl),
+    resumeUrl: signContactKycUrl(obj.resumeUrl),
+    providerEmployees,
   };
 }

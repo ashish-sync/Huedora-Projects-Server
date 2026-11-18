@@ -2,6 +2,7 @@
 
 import { randomUUID } from 'crypto';
 import { canonicalizeDieticianLabel } from '../../utils/dieticianSpelling.js';
+import { storageContactKycUrl } from './contactKycUpload.js';
 
 export const CONTACT_CATEGORIES = ['Resource', 'Client', 'Vendor', 'Healthcare Worker'];
 
@@ -58,6 +59,16 @@ export function normalizeProviderEmployees(raw, contactCategory, resourceType) {
         mobile,
         profession,
         campAmount: parseCampAmount(entry?.campAmount ?? entry?.['Camp Amount'] ?? entry?.camp_amount),
+        educationalQualificationUrl: storageContactKycUrl(
+          entry?.educationalQualificationUrl
+            || entry?.educationalQualification
+            || entry?.['Educational Certificate']
+            || '',
+          '',
+        ),
+        educationalQie: entry?.educationalQie && typeof entry.educationalQie === 'object'
+          ? entry.educationalQie
+          : undefined,
       };
     })
     .filter(Boolean);

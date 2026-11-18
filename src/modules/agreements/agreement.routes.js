@@ -759,7 +759,36 @@ router.post(
       module: 'documents',
     });
 
-    res.json({ data: { ...redactAgreement(agreement), recipientAccessToken: token } });
+    res.json({
+      data: {
+        ...redactAgreement(agreement),
+        recipientAccessToken: token,
+        recipientShortCode: agreement.recipientShortCode || null,
+      },
+    });
+  })
+);
+
+/** Writer-only: restore the receiver signing link for manual share / Copy Link. */
+router.get(
+  '/:id/recipient-link',
+  requirePermission(PERMISSIONS.AGREEMENTS_WRITE),
+  asyncHandler(async (req, res) => {
+    let agreement = await Agreement.findOne({ _id: req.params.id, isDeleted: false });
+    if (!agreement) throw new AppError('Agreement not found', 404);
+    if (!['SENT', 'PARTIALLY_SIGNED'].includes(agreement.status)) {
+      throw new AppError('Document has not been sent to the receiver yet', 400, 'NOT_SENT');
+    }
+    if (!agreement.recipientAccessToken) {
+      throw new AppError('Signing link is not available for this document', 404, 'NOT_FOUND');
+    }
+    agreement = await ensureRecipientShortCode(agreement);
+    res.json({
+      data: {
+        recipientShortCode: agreement.recipientShortCode || null,
+        recipientAccessToken: agreement.recipientAccessToken,
+      },
+    });
   })
 );
 

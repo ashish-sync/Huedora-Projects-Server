@@ -50,6 +50,8 @@ import {
   storageContactKycUrl,
 } from './contactKycUpload.js';
 import { requireSafeUploads } from '../../utils/rejectUnsafeUpload.js';
+import { triggerEducationalQieAfterUpload } from '../qie/qie.service.js';
+import { EDUCATIONAL_QIE_DOC_TYPES } from '../qie/qieStatus.js';
 
 const contactUploadRoot = uploadDir('contacts');
 
@@ -142,7 +144,16 @@ const kycUpload = multer({
 const KYC_DOC_TYPES = {
   passbook: 'passbookCopyUrl',
   pan_card: 'panCardCopyUrl',
+  aadhaar_front: 'aadhaarFrontUrl',
+  aadhaar_back: 'aadhaarBackUrl',
+  educational_qualification: 'educationalQualificationUrl',
+  resume: 'resumeUrl',
 };
+
+const KYC_DOC_TYPE_LIST = [
+  ...Object.keys(KYC_DOC_TYPES),
+  'employee_educational_qualification',
+].join(', ');
 
 function sheetRows(buffer) {
   return parseSheetRows(buffer);
@@ -551,6 +562,9 @@ router.patch(
         supplyCategory:
           req.body.supplyCategory !== undefined ? req.body.supplyCategory : contact.supplyCategory,
         panNumber: req.body.panNumber !== undefined ? req.body.panNumber : contact.panNumber,
+        aadhaarNumber:
+          req.body.aadhaarNumber !== undefined ? req.body.aadhaarNumber : contact.aadhaarNumber,
+        upiId: req.body.upiId !== undefined ? req.body.upiId : contact.upiId,
         ifscCode: req.body.ifscCode !== undefined ? req.body.ifscCode : contact.ifscCode,
         bankName: req.body.bankName !== undefined ? req.body.bankName : contact.bankName,
         accountNumber:
@@ -562,6 +576,24 @@ router.patch(
         panCardCopyUrl: storageContactKycUrl(
           req.body.panCardCopyUrl !== undefined ? req.body.panCardCopyUrl : undefined,
           contact.panCardCopyUrl,
+        ),
+        aadhaarFrontUrl: storageContactKycUrl(
+          req.body.aadhaarFrontUrl !== undefined ? req.body.aadhaarFrontUrl : undefined,
+          contact.aadhaarFrontUrl,
+        ),
+        aadhaarBackUrl: storageContactKycUrl(
+          req.body.aadhaarBackUrl !== undefined ? req.body.aadhaarBackUrl : undefined,
+          contact.aadhaarBackUrl,
+        ),
+        educationalQualificationUrl: storageContactKycUrl(
+          req.body.educationalQualificationUrl !== undefined
+            ? req.body.educationalQualificationUrl
+            : undefined,
+          contact.educationalQualificationUrl,
+        ),
+        resumeUrl: storageContactKycUrl(
+          req.body.resumeUrl !== undefined ? req.body.resumeUrl : undefined,
+          contact.resumeUrl,
         ),
         notes: req.body.notes !== undefined ? req.body.notes : contact.notes,
         stateId: req.body.stateId !== undefined ? req.body.stateId : contact.stateId,
@@ -661,8 +693,13 @@ router.post(
   asyncHandler(async (req, res) => {
     const docType = String(req.body?.docType || '').trim();
     const field = KYC_DOC_TYPES[docType];
-    if (!field) {
-      throw new AppError('docType must be passbook or pan_card', 400, 'VALIDATION_ERROR');
+    const isEmployeeEdu = docType === 'employee_educational_qualification';
+    if (!field && !isEmployeeEdu) {
+      throw new AppError(
+        `docType must be one of: ${KYC_DOC_TYPE_LIST}`,
+        400,
+        'VALIDATION_ERROR',
+      );
     }
     if (!req.file) throw new AppError('Select a file to upload', 400, 'VALIDATION_ERROR');
 
@@ -679,7 +716,37 @@ router.post(
     const objectKey = String(req.file.objectKey || toUploadObjectKey(req.file.path) || '').trim()
       || `contacts/${req.file.filename}`;
     const storedPath = publicUploadPath(objectKey) || `/uploads/contacts/${req.file.filename}`;
-    contact[field] = storedPath;
+
+    let uploadedEmployeeId = '';
+    if (isEmployeeEdu) {
+      if (!isServiceProviderContact(contact)) {
+        throw new AppError(
+          'Employee documents can only be uploaded for Service Provider contacts',
+          400,
+          'VALIDATION_ERROR',
+        );
+      }
+      const employeeId = String(req.body?.employeeId || '').trim();
+      if (!employeeId) {
+        throw new AppError('employeeId is required for employee document uploads', 400, 'VALIDATION_ERROR');
+      }
+      const employees = Array.isArray(contact.providerEmployees)
+        ? contact.providerEmployees.map((row) => ({ ...row }))
+        : [];
+      const idx = employees.findIndex((row) => String(row.id || '') === employeeId);
+      if (idx < 0) {
+        throw new AppError('Employee not found on this Service Provider', 404, 'NOT_FOUND');
+      }
+      employees[idx] = {
+        ...employees[idx],
+        educationalQualificationUrl: storedPath,
+      };
+      contact.providerEmployees = employees;
+      uploadedEmployeeId = employeeId;
+    } else {
+      contact[field] = storedPath;
+    }
+
     contact.updatedBy = req.user._id;
     await contact.save();
 
@@ -693,6 +760,22 @@ router.post(
       after: contact.toObject(),
       requestId: req.requestId,
     });
+
+    // QIE post-upload verification — never blocks or rolls back a successful upload.
+    if (EDUCATIONAL_QIE_DOC_TYPES.has(docType)) {
+      void triggerEducationalQieAfterUpload({
+        contactId: String(contact._id),
+        employeeId: uploadedEmployeeId,
+        docType,
+        storedPath,
+        objectKey,
+        originalName: req.file.originalname,
+        contentType: req.file.mimetype,
+        actorId: req.user._id,
+        actorEmail: req.user.email,
+        requestId: req.requestId,
+      });
+    }
 
     res.json({ data: withSignedContactKyc(contact) });
   })

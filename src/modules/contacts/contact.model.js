@@ -42,11 +42,20 @@ export const Contact = defineCollection('contacts', {
   organization: '',
   supplyCategory: '',
   panNumber: '',
+  aadhaarNumber: '',
+  upiId: '',
   ifscCode: '',
   bankName: '',
   accountNumber: '',
   passbookCopyUrl: '',
   panCardCopyUrl: '',
+  aadhaarFrontUrl: '',
+  aadhaarBackUrl: '',
+  /** Educational qualification certificate / supporting document */
+  educationalQualificationUrl: '',
+  resumeUrl: '',
+  /** Denormalized QIE post-upload verification summary for educational certificate */
+  educationalQie: null,
   notes: '',
   district: '',
   stateId: null,
@@ -154,6 +163,17 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
     panNumber: isClient
       ? ''
       : formatTextValue(String(body.panNumber || body.PAN || body['PAN Number'] || body.pan || ''), 'panNumber'),
+    aadhaarNumber: isClient
+      ? ''
+      : String(body.aadhaarNumber || body.aadhaar || body.Aadhaar || body['Aadhaar Number'] || '')
+          .replace(/\s+/g, '')
+          .trim()
+          .slice(0, 12),
+    upiId: isClient
+      ? ''
+      : String(body.upiId || body.upi || body.UPI || body['UPI ID'] || '')
+          .trim()
+          .toLowerCase(),
     ifscCode: isClient
       ? ''
       : formatTextValue(String(body.ifscCode || body.IFSC || body['IFSC Code'] || body.ifsc || ''), 'ifscCode'),
@@ -169,6 +189,23 @@ export function normalizeContactPayload(body = {}, { validate = false } = {}) {
     panCardCopyUrl: isClient
       ? ''
       : String(body.panCardCopyUrl || body.panCardCopy || '').trim(),
+    aadhaarFrontUrl: isClient
+      ? ''
+      : String(body.aadhaarFrontUrl || body.aadhaarFront || '').trim(),
+    aadhaarBackUrl: isClient
+      ? ''
+      : String(body.aadhaarBackUrl || body.aadhaarBack || '').trim(),
+    educationalQualificationUrl: isClient
+      ? ''
+      : String(
+        body.educationalQualificationUrl
+          || body.educationalQualification
+          || body['Educational Qualification']
+          || '',
+      ).trim(),
+    resumeUrl: isClient
+      ? ''
+      : String(body.resumeUrl || body.resume || body.Resume || '').trim(),
     notes: formatTextValue(String(body.notes || ''), 'notes'),
     district: formatTextValue(String(body.district || body.District || ''), 'district'),
     stateId: body.stateId || null,

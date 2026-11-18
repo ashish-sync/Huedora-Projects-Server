@@ -17,6 +17,7 @@ import deviceRoutes from './modules/devices/device.routes.js';
 import assetRoutes from './modules/assets/asset.routes.js';
 import agreementRoutes from './modules/agreements/agreement.routes.js';
 import contactRoutes from './modules/contacts/contact.routes.js';
+import qieRoutes from './modules/qie/qie.routes.js';
 import templateRoutes from './modules/templates/template.routes.js';
 import signatureRoutes from './modules/signatures/signature.routes.js';
 import formRoutes from './modules/forms/form.routes.js';
@@ -208,6 +209,7 @@ export function createApp(options = {}) {
   app.use('/api/v1/agreements', agreementRoutes);
   app.use('/api/v1/recipient', recipientRoutes);
   app.use('/api/v1/contacts', contactRoutes);
+  app.use('/api/v1/qie', qieRoutes);
   app.use('/api/v1/templates', templateRoutes);
   app.use('/api/v1/signatures', signatureRoutes);
   app.use('/api/v1/forms', formRoutes);
