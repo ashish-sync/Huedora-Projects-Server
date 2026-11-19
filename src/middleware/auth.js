@@ -4,6 +4,7 @@ import { User } from '../modules/users/user.model.js';
 import { AppError } from '../utils/helpers.js';
 import { PERMISSIONS } from '../config/constants.js';
 import { collectUserPermissions } from '../modules/users/userAccess.js';
+import { userCanDeleteRecords, userIsSuperAdmin } from '../modules/users/systemRole.js';
 
 const AUTH_CACHE_TTL_MS = Number(process.env.AUTH_CACHE_TTL_MS) || 30_000;
 /** @type {Map<string, { expires: number, user: object, permissions: Set<string>, tokenVersion: number }>} */
@@ -94,3 +95,30 @@ export function userHasAnyPermission(user, ...needed) {
 
 /** Only users with the Admin role (permission `*`) may delete records. */
 export const requireAdmin = requirePermission(PERMISSIONS.ALL);
+
+/** RBAC Admin (`*`) or platform System Role Super Admin. */
+export function requireDeleteAccess(req, _res, next) {
+  if (!req.user || !req.permissions) {
+    return next(new AppError('Authentication required', 401, 'UNAUTHORIZED'));
+  }
+  if (userCanDeleteRecords(req.user, req.permissions)) return next();
+  return next(new AppError('Forbidden', 403, 'FORBIDDEN'));
+}
+
+/**
+ * Allow a normal write permission, Admin (`*`), or platform Super Admin.
+ * Used where Super Admin must reach delete without holding the write key.
+ */
+export function requirePermissionOrSuperAdmin(...needed) {
+  return (req, _res, next) => {
+    if (!req.permissions || !req.user) {
+      return next(new AppError('Authentication required', 401, 'UNAUTHORIZED'));
+    }
+    if (req.permissions.has(PERMISSIONS.ALL) || userIsSuperAdmin(req.user)) return next();
+    const ok = needed.some((p) => req.permissions.has(p));
+    if (!ok) return next(new AppError('Forbidden', 403, 'FORBIDDEN'));
+    next();
+  };
+}
+
+export { userIsSuperAdmin, userCanDeleteRecords };

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import { Router } from 'express';
 import multer from 'multer';
-import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireDeleteAccess } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { Contact, normalizeContactPayload } from './contact.model.js';
@@ -52,6 +52,13 @@ import {
 import { requireSafeUploads } from '../../utils/rejectUnsafeUpload.js';
 import { triggerEducationalQieAfterUpload } from '../qie/qie.service.js';
 import { EDUCATIONAL_QIE_DOC_TYPES } from '../qie/qieStatus.js';
+import {
+  buildContactExportRows,
+  CONTACT_HEADERS,
+  CONTACT_SAMPLE_ROWS,
+  mergeProviderEmployee,
+  normalizeImportEmployee,
+} from './contact.excel.js';
 
 const contactUploadRoot = uploadDir('contacts');
 
@@ -74,8 +81,6 @@ router.use((req, res, next) => {
   if (req.method !== 'GET') return next();
   return canReadContacts(req, res, next);
 });
-
-import { buildContactExportRows, CONTACT_HEADERS, CONTACT_SAMPLE_ROWS } from './contact.excel.js';
 
 async function validateServiceProviderLink(payload, contactId = null) {
   if (payload.contactCategory !== 'Healthcare Worker') return;
@@ -803,72 +808,109 @@ router.post(
       const rowNum = i + 2;
       let payload;
       try {
+        const fullName = cell(row, ['Full Name', 'Name', 'name']);
+        const organizationRaw = cell(row, [
+          'Organization Name',
+          'Organization',
+          'organization',
+          'Org',
+        ]);
+        const categoryHint = cell(row, [
+          'Contact Category',
+          'ContactCategory',
+          'contactCategory',
+          'Category',
+        ]);
         payload = normalizeContactPayload(
           {
-            name: cell(row, ['Name', 'name']),
-            email: cell(row, ['Email', 'email']),
-            contactCategory: cell(row, [
-              'Contact Category',
-              'ContactCategory',
-              'contactCategory',
-              'Category',
-            ]),
+            name: fullName,
+            email: cell(row, ['Email ID', 'Email', 'email']),
+            contactCategory: categoryHint,
             resourceType: cell(row, ['Resource Type', 'ResourceType', 'resourceType']),
             profession: cell(row, ['Profession / Role', 'Profession', 'profession']),
-            organization: cell(row, [
-              'Organization Name',
-              'Organization',
-              'organization',
-              'Org',
-            ]),
+            // Client form requires Organization Name; sample correlates it from Full Name when omitted.
+            organization:
+              organizationRaw
+              || (String(categoryHint || '').trim().toLowerCase() === 'client' ? fullName : ''),
             supplyCategory: cell(row, [
               'Supply Category',
               'SupplyCategory',
               'supplyCategory',
             ]),
-            contact: cell(row, ['Contact', 'contact', 'Mobile', 'Phone']),
-            city: cell(row, ['City', 'city']),
+            contact: cell(row, [
+              'Contact Number',
+              'Contact',
+              'contact',
+              'Mobile',
+              'Phone',
+            ]),
+            city: cell(row, ['City / District', 'City', 'city']),
             state: cell(row, ['State', 'state']),
-            address: cell(row, ['Address', 'address']),
+            address: cell(row, ['Street Address', 'Address', 'address']),
             pinCode: cell(row, ['PIN Code', 'Pin Code', 'pinCode', 'PIN']),
             panNumber: cell(row, ['PAN Number', 'PAN', 'panNumber']),
+            aadhaarNumber: cell(row, [
+              'Aadhaar Number',
+              'Aadhaar',
+              'aadhaarNumber',
+              'Aadhar Number',
+              'Aadhar',
+            ]),
+            upiId: cell(row, ['UPI ID', 'UPI', 'upiId', 'Upi Id']),
             ifscCode: cell(row, ['IFSC Code', 'IFSC', 'ifscCode']),
             bankName: cell(row, ['Bank Name', 'bankName']),
             accountNumber: cell(row, ['Account Number', 'accountNumber', 'Account']),
+            // Legacy columns still accepted for older workbooks (not in current sample headers).
             campAmount: cell(row, ['Camp Amount', 'campAmount', 'CampAmount']),
-            serviceProvider: cell(row, [
-              'Service Provider (agency)',
-              'Service Provider',
-              'serviceProvider',
-              'ServiceProvider',
-            ]),
           },
           { validate: true }
         );
-        const spName = cell(row, [
+        // Directory Record form: Individual/Full-Time never sit under a Service Provider agency.
+        payload.serviceProviderContactId = null;
+
+        const agencyCol = cell(row, [
           'Service Provider (agency)',
           'Service Provider',
           'serviceProvider',
           'ServiceProvider',
         ]);
-        if (spName && payload.contactCategory === 'Healthcare Worker') {
-          const provider = await Contact.findOne({
-            isDeleted: false,
-            contactCategory: 'Healthcare Worker',
-            resourceType: 'Service Provider',
-            name: new RegExp(`^${spName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+        if (agencyCol) {
+          errors.push({
+            row: rowNum,
+            field: 'Service Provider (agency)',
+            message:
+              'Individual / Full-Time contacts cannot be linked to a Service Provider via Excel. '
+              + 'Create the Service Provider in the Directory Record form, then add employees under that agency.',
           });
-          if (!provider) {
-            errors.push({
-              row: rowNum,
-              field: 'Service Provider',
-              message: `Service provider not found: ${spName}`,
-            });
-            continue;
-          }
-          payload.serviceProviderContactId = provider._id;
+          continue;
+        }
+
+        const importEmployee = normalizeImportEmployee({
+          name: cell(row, ['Employee Full Name', 'Employee Name', 'employeeName']),
+          mobile: cell(row, [
+            'Employee Contact Number',
+            'Employee Contact',
+            'Employee Mobile',
+            'employeeMobile',
+          ]),
+          profession: cell(row, [
+            'Employee Profession / Role',
+            'Employee Profession',
+            'employeeProfession',
+          ]),
+        });
+        if (importEmployee && !isServiceProviderContact(payload)) {
+          errors.push({
+            row: rowNum,
+            field: 'Employee Full Name',
+            message:
+              'Employee Details columns apply only to Service Provider rows. '
+              + 'Add employees under an existing Service Provider agency.',
+          });
+          continue;
         }
         await validateServiceProviderLink(payload);
+        payload._importEmployee = importEmployee;
       } catch (err) {
         errors.push({ row: rowNum, field: 'import', message: err.message });
         continue;
@@ -876,18 +918,23 @@ router.post(
 
       const emailKey = payload.email;
       const phoneKey = normalizePhone(payload.contact);
-      if (emailKey && seenEmails.has(emailKey)) {
+      const importEmployee = payload._importEmployee || null;
+      delete payload._importEmployee;
+
+      // Same Service Provider may appear on multiple rows (one per employee). Allow that.
+      const spEmployeeAppend = Boolean(importEmployee && isServiceProviderContact(payload));
+      if (emailKey && seenEmails.has(emailKey) && !spEmployeeAppend) {
         errors.push({
           row: rowNum,
-          field: 'Email',
+          field: 'Email ID',
           message: 'Duplicate email in this file',
         });
         continue;
       }
-      if (phoneKey && seenPhones.has(phoneKey)) {
+      if (phoneKey && seenPhones.has(phoneKey) && !spEmployeeAppend) {
         errors.push({
           row: rowNum,
-          field: 'Contact',
+          field: 'Contact Number',
           message: 'Duplicate phone number in this file',
         });
         continue;
@@ -901,6 +948,34 @@ router.post(
             email: payload.email,
             phone: payload.contact,
           });
+
+          // Service Provider agencies must be created in the form first.
+          if (isServiceProviderContact(payload) && !existing) {
+            errors.push({
+              row: rowNum,
+              field: 'Resource Type',
+              message:
+                'Service Provider agencies can only be created in the Directory Record form. '
+                + 'After the agency exists, use Excel to add employees under it '
+                + '(match the agency by Full Name / Email ID / Contact Number).',
+            });
+            continue;
+          }
+          if (
+            isServiceProviderContact(payload)
+            && existing
+            && !isServiceProviderContact(existing)
+          ) {
+            errors.push({
+              row: rowNum,
+              field: 'Resource Type',
+              message:
+                `Matched existing contact “${existing.name || existing.email || existing._id}” `
+                + 'which is not a Service Provider agency. Create the agency in the form first.',
+            });
+            continue;
+          }
+
           if (existing) {
             await assertContactIdentityAvailable({
               email: payload.email,
@@ -913,11 +988,16 @@ router.post(
               payload,
               { allowReclassify: false },
             );
+            // Excel must not re-link Individual/Full-Time under an agency.
+            delete mergePayload.serviceProviderContactId;
             assignPreservingExisting(existing, mergePayload);
+            if (importEmployee && isServiceProviderContact(existing)) {
+              mergeProviderEmployee(existing, importEmployee);
+            }
             existing.updatedBy = req.user._id;
             await existing.save();
             updated += 1;
-            if (preservedClassification.length) {
+            if (preservedClassification.length && !(importEmployee && isServiceProviderContact(existing))) {
               classificationPreserved += 1;
               warnings.push({
                 row: rowNum,
@@ -925,11 +1005,14 @@ router.post(
                 message:
                   `Matched existing contact “${existing.name || existing.email || existing._id}” `
                   + `(${existing.contactCategory || '—'}/${existing.resourceType || '—'}). `
-                  + 'Category, resource type, provider link, and employee roster were left unchanged; other fields were updated.',
+                  + 'Category, resource type, and employee roster were left unchanged; other fields were updated.',
                 code: 'CLASSIFICATION_PRESERVED',
               });
             }
           } else {
+            // Never create agency links or SP agencies through Excel.
+            delete payload.serviceProviderContactId;
+            delete payload.providerEmployees;
             const resolved = await resolveOrCreateContact(payload, req.user._id, {
               rejectClassificationConflict: false,
             });
@@ -950,6 +1033,23 @@ router.post(
             }
           }
         } else {
+          // DRY_RUN: still validate SP-create rule without writing.
+          if (isServiceProviderContact(payload)) {
+            const existingSp = await findContactByIdentity({
+              email: payload.email,
+              phone: payload.contact,
+            });
+            if (!existingSp) {
+              errors.push({
+                row: rowNum,
+                field: 'Resource Type',
+                message:
+                  'Service Provider agencies can only be created in the Directory Record form. '
+                  + 'After the agency exists, use Excel to add employees under it.',
+              });
+              continue;
+            }
+          }
           skipped += 1;
         }
       } catch (err) {
@@ -1009,6 +1109,44 @@ router.post(
       },
     });
   })
+);
+
+async function softDeleteContact(req, res) {
+  const contact = await Contact.findOne({ _id: req.params.id, isDeleted: false });
+  if (!contact) throw new AppError('Contact not found', 404, 'NOT_FOUND');
+
+  const before = contact.toObject();
+  contact.isDeleted = true;
+  contact.deletedAt = new Date().toISOString();
+  contact.deletedBy = req.user._id;
+  contact.updatedBy = req.user._id;
+  await contact.save();
+
+  await writeAudit({
+    actorId: req.user._id,
+    actorEmail: req.user.email,
+    action: 'CONTACT.DELETE',
+    entityType: 'Contact',
+    entityId: contact._id,
+    before,
+    after: contact.toObject(),
+    requestId: req.requestId,
+  });
+
+  res.json({ data: { ok: true, id: contact._id } });
+}
+
+// Prefer POST /:id/delete — some hosts/proxies do not forward DELETE reliably.
+router.post(
+  '/:id/delete',
+  requireDeleteAccess,
+  asyncHandler(softDeleteContact)
+);
+
+router.delete(
+  '/:id',
+  requireDeleteAccess,
+  asyncHandler(softDeleteContact)
 );
 
 export default router;

@@ -1,8 +1,54 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildContactExportRows, CONTACT_HEADERS } from './contact.excel.js';
+import {
+  buildContactExportRows,
+  CONTACT_HEADERS,
+  CONTACT_SAMPLE_ROWS,
+  mergeProviderEmployee,
+  normalizeImportEmployee,
+} from './contact.excel.js';
 
-test('export includes Service Provider embedded staff as Healthcare Worker rows', () => {
+test('sample headers match Directory Record form without agency link column', () => {
+  assert.deepEqual(CONTACT_HEADERS, [
+    'Full Name',
+    'Email ID',
+    'Contact Number',
+    'Contact Category',
+    'Resource Type',
+    'Profession / Role',
+    'Street Address',
+    'State',
+    'City / District',
+    'PAN Number',
+    'Aadhaar Number',
+    'UPI ID',
+    'IFSC Code',
+    'Bank Name',
+    'Account Number',
+    'Employee Full Name',
+    'Employee Contact Number',
+    'Employee Profession / Role',
+  ]);
+  assert.ok(!CONTACT_HEADERS.includes('Service Provider (agency)'));
+
+  for (const row of CONTACT_SAMPLE_ROWS) {
+    assert.equal(row.length, CONTACT_HEADERS.length);
+  }
+
+  const individual = CONTACT_SAMPLE_ROWS.find((r) => r[4] === 'Individual');
+  assert.ok(individual);
+  assert.equal(individual[15], '');
+  assert.equal(individual[16], '');
+  assert.equal(individual[17], '');
+
+  const spEmployeeRow = CONTACT_SAMPLE_ROWS.find((r) => r[4] === 'Service Provider');
+  assert.ok(spEmployeeRow);
+  assert.equal(spEmployeeRow[15], 'Ravi Kumar');
+  assert.equal(spEmployeeRow[16], '9111000001');
+  assert.equal(spEmployeeRow[17], 'Nurse');
+});
+
+test('export puts Service Provider employees into Employee Details columns', () => {
   const rows = buildContactExportRows([
     {
       _id: 'sp1',
@@ -13,10 +59,10 @@ test('export includes Service Provider embedded staff as Healthcare Worker rows'
       contact: '9000000001',
       city: 'Pune',
       state: 'Maharashtra',
-      campAmount: 8000,
+      address: '22 Service Lane',
       providerEmployees: [
-        { id: 'e1', name: 'Ravi Kumar', mobile: '9111000001', profession: 'Nurse', campAmount: 1600 },
-        { id: 'e2', name: 'Anita Desai', mobile: '9111000002', profession: 'Doctor', campAmount: 2200 },
+        { id: 'e1', name: 'Ravi Kumar', mobile: '9111000001', profession: 'Nurse' },
+        { id: 'e2', name: 'Anita Desai', mobile: '9111000002', profession: 'Doctor' },
       ],
     },
     {
@@ -25,57 +71,43 @@ test('export includes Service Provider embedded staff as Healthcare Worker rows'
       contactCategory: 'Client',
       resourceType: '',
       contact: '9000000002',
-    },
-  ]);
-
-  assert.equal(rows.length, 4); // agency + 2 staff + client
-  assert.equal(CONTACT_HEADERS.length, rows[0].length);
-
-  const agency = rows.find((r) => r[0] === 'Care Agency');
-  assert.ok(agency);
-  assert.equal(agency[3], 'Service Provider');
-  assert.equal(agency[12], '', 'agency row must not export a Camp Amount');
-
-  const ravi = rows.find((r) => r[0] === 'Ravi Kumar');
-  assert.ok(ravi, 'embedded staff must appear in export');
-  assert.equal(ravi[2], 'Healthcare Worker');
-  assert.equal(ravi[3], 'Individual');
-  assert.equal(ravi[4], 'Nurse');
-  assert.equal(ravi[7], '9111000001');
-  assert.equal(ravi[12], 1600);
-  assert.equal(ravi[17], 'Care Agency');
-  assert.equal(ravi[8], 'Pune');
-
-  const anita = rows.find((r) => r[0] === 'Anita Desai');
-  assert.ok(anita);
-  assert.equal(anita[17], 'Care Agency');
-});
-
-test('export skips roster staff already present as linked Contact rows', () => {
-  const rows = buildContactExportRows([
-    {
-      _id: 'sp1',
-      name: 'Care Agency',
-      contactCategory: 'Healthcare Worker',
-      resourceType: 'Service Provider',
-      contact: '9000000001',
-      providerEmployees: [
-        { id: 'e1', name: 'Ravi Kumar', mobile: '9111000001', profession: 'Nurse' },
-      ],
+      city: 'Mumbai',
+      state: 'Maharashtra',
     },
     {
-      _id: 'staff1',
-      name: 'Ravi Kumar',
+      _id: 'ind1',
+      name: 'Solo Nurse',
       contactCategory: 'Healthcare Worker',
       resourceType: 'Individual',
-      contact: '9111000001',
+      contact: '9111000099',
       serviceProviderContactId: 'sp1',
       serviceProviderName: 'Care Agency',
-      profession: 'Nurse',
     },
   ]);
 
-  const raviRows = rows.filter((r) => r[0] === 'Ravi Kumar');
-  assert.equal(raviRows.length, 1, 'must not duplicate linked + roster staff');
-  assert.equal(raviRows[0][17], 'Care Agency');
+  assert.equal(rows.length, 4); // 2 SP employee rows + client + individual
+  assert.equal(CONTACT_HEADERS.length, rows[0].length);
+
+  const ravi = rows.find((r) => r[15] === 'Ravi Kumar');
+  assert.ok(ravi);
+  assert.equal(ravi[0], 'Care Agency');
+  assert.equal(ravi[4], 'Service Provider');
+  assert.equal(ravi[16], '9111000001');
+
+  const individual = rows.find((r) => r[0] === 'Solo Nurse');
+  assert.ok(individual);
+  assert.equal(individual.length, CONTACT_HEADERS.length);
+  assert.equal(individual[15], '');
+  assert.equal(individual[4], 'Individual');
+});
+
+test('mergeProviderEmployee upserts by mobile and ignores empty employee cells', () => {
+  assert.equal(normalizeImportEmployee({ name: '', mobile: '' }), null);
+
+  const contact = { providerEmployees: [] };
+  assert.equal(mergeProviderEmployee(contact, { name: 'Ravi', mobile: '9111000001', profession: 'Nurse' }), true);
+  assert.equal(contact.providerEmployees.length, 1);
+  assert.equal(mergeProviderEmployee(contact, { name: 'Ravi Kumar', mobile: '9111000001', profession: 'Nurse' }), true);
+  assert.equal(contact.providerEmployees.length, 1);
+  assert.equal(contact.providerEmployees[0].name, 'Ravi Kumar');
 });

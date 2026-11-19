@@ -5,7 +5,12 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { v4 as uuid } from 'uuid';
 import { randomBytes } from 'crypto';
-import { authenticate, requirePermission, hasPermission } from '../../middleware/auth.js';
+import {
+  authenticate,
+  requirePermission,
+  requireDeleteAccess,
+  hasPermission,
+} from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { env } from '../../config/env.js';
@@ -1126,6 +1131,80 @@ router.post(
     }
     res.json({ data: agreement });
   })
+);
+
+async function softDeleteAgreement(req, res) {
+  const agreement = await Agreement.findOne({ _id: req.params.id, isDeleted: false });
+  if (!agreement) throw new AppError('Agreement not found', 404);
+
+  const before = {
+    agreementNumber: agreement.agreementNumber,
+    title: agreement.title,
+    status: agreement.status,
+  };
+
+  agreement.isDeleted = true;
+  agreement.deletedAt = new Date().toISOString();
+  agreement.deletedBy = req.user._id;
+  agreement.updatedBy = req.user._id;
+  if (agreement.status === 'ACTIVE') {
+    agreement.status = 'TERMINATED';
+  }
+  await agreement.save();
+
+  const links = await AgreementAsset.find({ agreementId: agreement._id, isActive: true });
+  for (const link of links) {
+    link.isActive = false;
+    link.unlinkedAt = new Date();
+    await link.save();
+    await Asset.updateOne(
+      { _id: link.assetId, activeAgreementId: agreement._id },
+      { $set: { activeAgreementId: null, agreementStatus: 'Not Initiated' } }
+    );
+  }
+
+  await AgreementDocument.updateMany(
+    { agreementId: agreement._id, isDeleted: false },
+    {
+      $set: {
+        isDeleted: true,
+        deletedAt: new Date().toISOString(),
+        deletedBy: req.user._id,
+      },
+    }
+  );
+
+  await logActivity(agreement._id, req, 'DELETED', 'Agreement deleted by Super Admin');
+  await writeAudit({
+    actorId: req.user._id,
+    actorEmail: req.user.email,
+    action: 'AGREEMENT.DELETE',
+    entityType: 'Agreement',
+    entityId: agreement._id,
+    before,
+    after: {
+      agreementNumber: agreement.agreementNumber,
+      title: agreement.title,
+      status: agreement.status,
+      isDeleted: true,
+    },
+    requestId: req.requestId,
+  });
+
+  res.json({ data: { ok: true, id: agreement._id } });
+}
+
+// Prefer POST /:id/delete — some hosts/proxies do not forward DELETE reliably.
+router.post(
+  '/:id/delete',
+  requireDeleteAccess,
+  asyncHandler(softDeleteAgreement)
+);
+
+router.delete(
+  '/:id',
+  requireDeleteAccess,
+  asyncHandler(softDeleteAgreement)
 );
 
 router.post(

@@ -65,6 +65,26 @@ export async function applySystemRolesFromDesignation(User) {
   return updated;
 }
 
+/** Platform Super Admin (systemRole), independent of RBAC `*`. */
+export function userIsSuperAdmin(user) {
+  return normalizeSystemRole(user?.systemRole) === 'Super Admin';
+}
+
+/**
+ * Record delete power: RBAC Admin (`*`) or platform Super Admin.
+ * Used for Contact Directory and Document One destructive actions.
+ */
+export function userCanDeleteRecords(user, permissions) {
+  if (permissions instanceof Set) {
+    if (permissions.has('*')) return true;
+  } else if (Array.isArray(permissions) && permissions.includes('*')) {
+    return true;
+  } else if (permissions?.has?.('*')) {
+    return true;
+  }
+  return userIsSuperAdmin(user);
+}
+
 export function assertValidSystemRole(value, { required = false } = {}) {
   const normalized = normalizeSystemRole(value);
   if (!normalized) {

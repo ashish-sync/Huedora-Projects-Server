@@ -13,6 +13,7 @@ import { ensureLogisticsSeed } from './modules/logistics/logistics.seed.js';
 import { ensureGeoSeed, ensureDistrictSupplements } from './modules/geo/geo.seed.js';
 import { ensureCampOpsSeed, CAMP_ONE_DEMO } from './modules/campOps/campOps.seed.js';
 import { ensureDemoNotifications } from './modules/notifications/notification.seed.js';
+import { ensureDocumentOneDemo, DOCUMENT_ONE_DEMO } from './modules/agreements/documentOne.seed.js';
 import { alternateLegacyLocalEmail } from './utils/legacyMigration.js';
 
 const LEASE_TEMPLATE = `ASSET LEASE AGREEMENT
@@ -277,6 +278,15 @@ export async function ensureSeed() {
         city: 'Pune',
       });
       console.log('[seed] Sample contact created');
+    }
+
+    const docOne = await ensureDocumentOneDemo();
+    if (docOne.created) {
+      console.log(
+        `[seed] Document One demo created: "${DOCUMENT_ONE_DEMO.title}" (${docOne.agreementId})`,
+      );
+    } else {
+      console.log(`[seed] Document One demo already present: "${DOCUMENT_ONE_DEMO.title}"`);
     }
   }
 
