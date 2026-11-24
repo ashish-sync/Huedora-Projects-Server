@@ -14,10 +14,13 @@ assert.equal(systemRoleFromDesignation('Lead - Process & Tech'), 'Super Admin');
 assert.equal(systemRoleFromDesignation('Senior Manager'), 'Super Admin');
 assert.equal(systemRoleFromDesignation('Data Analyst'), 'User');
 assert.equal(systemRoleFromDesignation('Healthcare Camp Coordinator'), 'User');
+assert.equal(systemRoleFromDesignation('Camp Coordinator'), 'User');
 assert.equal(systemRoleFromDesignation('Individual Contributor'), 'User');
 assert.equal(systemRoleFromDesignation('Logistics Associate'), 'User');
 assert.equal(systemRoleFromDesignation('Training Manager'), 'User');
 assert.equal(systemRoleFromDesignation('Ops Support Team'), 'User');
+assert.equal(systemRoleFromDesignation('Ops. Support Team'), 'User');
+assert.equal(systemRoleFromDesignation('Ops. Manager'), 'Admin');
 assert.equal(systemRoleFromDesignation('Team Lead'), 'Admin');
 assert.equal(systemRoleFromDesignation('Unknown Title'), '');
 

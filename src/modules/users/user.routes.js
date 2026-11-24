@@ -2,7 +2,12 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import multer from 'multer';
-import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
+import {
+  authenticate,
+  requirePermission,
+  requireAdmin,
+  requireSuperAdmin,
+} from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { env } from '../../config/env.js';
@@ -371,7 +376,7 @@ router.post(
 
 router.get(
   '/designations',
-  requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),
+  requireSuperAdmin,
   asyncHandler(async (_req, res) => {
     res.json({
       data: USER_DESIGNATIONS,
@@ -383,7 +388,7 @@ router.get(
 
 router.get(
   '/hierarchy',
-  requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),
+  requireSuperAdmin,
   asyncHandler(async (_req, res) => {
     const rows = await User.find({ isDeleted: false })
       .populate('roleIds', 'name')
@@ -400,7 +405,7 @@ router.get(
 
 router.get(
   '/permissions',
-  requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),
+  requireSuperAdmin,
   asyncHandler(async (_req, res) => {
     res.json({
       data: {
@@ -415,7 +420,7 @@ router.get(
 
 router.get(
   '/roles/export',
-  requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE, PERMISSIONS.ALL),
+  requireSuperAdmin,
   asyncHandler(async (_req, res) => {
     const roles = await Role.find({ isDeleted: false }).sort('name');
     sendExcel(
@@ -435,7 +440,7 @@ router.get(
 
 router.get(
   '/export',
-  requirePermission(PERMISSIONS.USERS_WRITE, PERMISSIONS.USERS_READ, PERMISSIONS.ALL),
+  requireSuperAdmin,
   asyncHandler(async (_req, res) => {
     const users = await User.find({ isDeleted: false })
       .populate('roleIds', 'name')
@@ -462,7 +467,7 @@ router.get(
 
 router.get(
   '/roles',
-  requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),
+  requireSuperAdmin,
   asyncHandler(async (_req, res) => {
     const roles = await Role.find({ isDeleted: false }).sort('name');
     res.json({ data: roles });
@@ -471,7 +476,7 @@ router.get(
 
 router.get(
   '/roles/:id',
-  requirePermission(PERMISSIONS.USERS_READ, PERMISSIONS.USERS_WRITE),
+  requireSuperAdmin,
   asyncHandler(async (req, res) => {
     const role = await Role.findOne({ _id: req.params.id, isDeleted: false });
     if (!role) throw new AppError('Role not found', 404);
@@ -481,7 +486,7 @@ router.get(
 
 router.post(
   '/roles',
-  requirePermission(PERMISSIONS.USERS_WRITE),
+  requireSuperAdmin,
   asyncHandler(async (req, res) => {
     const name = String(req.body.name || '').trim();
     if (!name) throw new AppError('Role name is required', 400, 'VALIDATION_ERROR');
@@ -492,7 +497,10 @@ router.post(
     permissions = permissions.filter((p) => ALL_PERMISSION_KEYS.includes(p) || p === PERMISSIONS.ALL);
     if (permissions.includes(PERMISSIONS.ALL)) permissions = [PERMISSIONS.ALL];
 
-    const grantOk = assertActorMaySetRolePermissions(req.permissions, permissions, { roleName: name });
+    const grantOk = assertActorMaySetRolePermissions(req.permissions, permissions, {
+      roleName: name,
+      actorUser: req.user,
+    });
     if (!grantOk.ok) {
       throw new AppError(grantOk.message, 403, grantOk.code || 'PRIVILEGE_ESCALATION');
     }
@@ -522,7 +530,7 @@ router.post(
 
 router.patch(
   '/roles/:id',
-  requirePermission(PERMISSIONS.USERS_WRITE),
+  requireSuperAdmin,
   asyncHandler(async (req, res) => {
     const role = await Role.findOne({ _id: req.params.id, isDeleted: false });
     if (!role) throw new AppError('Role not found', 404);
@@ -552,6 +560,7 @@ router.patch(
       }
       const grantOk = assertActorMaySetRolePermissions(req.permissions, permissions, {
         roleName: role.name,
+        actorUser: req.user,
       });
       if (!grantOk.ok) {
         throw new AppError(grantOk.message, 403, grantOk.code || 'PRIVILEGE_ESCALATION');
@@ -582,7 +591,7 @@ router.patch(
 
 router.delete(
   '/roles/:id',
-  requireAdmin,
+  requireSuperAdmin,
   asyncHandler(async (req, res) => {
     const role = await Role.findOne({ _id: req.params.id, isDeleted: false });
     if (!role) throw new AppError('Role not found', 404);
@@ -610,7 +619,7 @@ router.delete(
 
 router.get(
   '/',
-  requirePermission(PERMISSIONS.USERS_WRITE, PERMISSIONS.USERS_READ, PERMISSIONS.ALL),
+  requireSuperAdmin,
   asyncHandler(async (req, res) => {
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
@@ -637,7 +646,7 @@ router.get(
 
 router.post(
   '/',
-  requirePermission(PERMISSIONS.USERS_WRITE),
+  requireSuperAdmin,
   asyncHandler(async (req, res) => {
     const { email, username, fullName, password, phone, roleIds, grantedPermissions, designation, systemRole, reportingManagerId } =
       req.body;
@@ -650,7 +659,7 @@ router.post(
     if (access.roleIds.some((id) => !valid.has(id))) {
       throw new AppError('One or more roles are invalid', 400, 'VALIDATION_ERROR');
     }
-    const grantOk = assertActorMayAssignAccess(req.permissions, access, roleRows);
+    const grantOk = assertActorMayAssignAccess(req.permissions, access, roleRows, req.user);
     if (!grantOk.ok) {
       throw new AppError(grantOk.message, 403, grantOk.code || 'PRIVILEGE_ESCALATION');
     }
@@ -703,7 +712,7 @@ router.post(
 
 router.post(
   '/:id/avatar',
-  requirePermission(PERMISSIONS.USERS_WRITE),
+  requireSuperAdmin,
   (req, res, next) => {
     avatarUpload.single('avatar')(req, res, (err) => {
       if (!err) return next();
@@ -745,7 +754,7 @@ router.post(
 
 router.delete(
   '/:id/avatar',
-  requirePermission(PERMISSIONS.USERS_WRITE),
+  requireSuperAdmin,
   asyncHandler(async (req, res) => {
     const user = await User.findOne({ _id: req.params.id, isDeleted: false });
     if (!user) throw new AppError('User not found', 404);
@@ -779,7 +788,7 @@ router.delete(
 
 router.patch(
   '/:id',
-  requirePermission(PERMISSIONS.USERS_WRITE),
+  requireSuperAdmin,
   asyncHandler(async (req, res) => {
     const user = await User.findOne({ _id: req.params.id, isDeleted: false });
     if (!user) throw new AppError('User not found', 404);
@@ -841,7 +850,7 @@ router.patch(
       if (access.roleIds.some((id) => !valid.has(id))) {
         throw new AppError('One or more roles are invalid', 400, 'VALIDATION_ERROR');
       }
-      const grantOk = assertActorMayAssignAccess(req.permissions, access, roleRows);
+      const grantOk = assertActorMayAssignAccess(req.permissions, access, roleRows, req.user);
       if (!grantOk.ok) {
         throw new AppError(grantOk.message, 403, grantOk.code || 'PRIVILEGE_ESCALATION');
       }
@@ -899,7 +908,7 @@ router.patch(
 
 router.delete(
   '/:id',
-  requireAdmin,
+  requireSuperAdmin,
   asyncHandler(async (req, res) => {
     const user = await User.findOne({ _id: req.params.id, isDeleted: false });
     if (!user) throw new AppError('User not found', 404);

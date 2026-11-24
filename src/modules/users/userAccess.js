@@ -1,5 +1,6 @@
 import { PERMISSIONS } from '../../config/constants.js';
 import { ALL_PERMISSION_KEYS } from './permission.catalog.js';
+import { userIsSuperAdmin } from './systemRole.js';
 
 export function normalizeGrantedPermissions(list) {
   if (!Array.isArray(list)) return [];
@@ -57,7 +58,8 @@ function isAdminEquivalentRole(role) {
  * @param {Array<{ _id: string, name?: string, permissions?: string[] }>} roleDocs
  * @returns {{ ok: true } | { ok: false, message: string, code: string }}
  */
-export function assertActorMayAssignAccess(actorPermissions, access, roleDocs = []) {
+export function assertActorMayAssignAccess(actorPermissions, access, roleDocs = [], actorUser = null) {
+  if (userIsSuperAdmin(actorUser)) return { ok: true };
   const actor = actorPermissionSet(actorPermissions);
   if (actor.has(PERMISSIONS.ALL)) return { ok: true };
 
@@ -117,7 +119,12 @@ export function assertActorMayAssignAccess(actorPermissions, access, roleDocs = 
  * Non-Admin actors may only set role permissions that are a subset of their own,
  * and may never create/update a role to Admin-equivalent (*).
  */
-export function assertActorMaySetRolePermissions(actorPermissions, permissions = [], { roleName } = {}) {
+export function assertActorMaySetRolePermissions(
+  actorPermissions,
+  permissions = [],
+  { roleName, actorUser = null } = {}
+) {
+  if (userIsSuperAdmin(actorUser)) return { ok: true };
   const actor = actorPermissionSet(actorPermissions);
   if (actor.has(PERMISSIONS.ALL)) return { ok: true };
 

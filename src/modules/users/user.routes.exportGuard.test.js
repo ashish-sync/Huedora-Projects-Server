@@ -3,13 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import { PERMISSIONS } from '../../config/constants.js';
 
-test('roles export route declares USERS_READ/WRITE/ALL permission gate', () => {
+test('roles export route requires Super Admin system role', () => {
   const src = fs.readFileSync(new URL('./user.routes.js', import.meta.url), 'utf8');
   assert.match(src, /\/roles\/export/);
-  assert.match(
-    src,
-    /\/roles\/export[\s\S]{0,240}requirePermission\(\s*PERMISSIONS\.USERS_READ\s*,\s*PERMISSIONS\.USERS_WRITE\s*,\s*PERMISSIONS\.ALL\s*\)/
-  );
+  assert.match(src, /\/roles\/export[\s\S]{0,240}requireSuperAdmin/);
 });
 
 test('permission constants include finance SoD keys', () => {

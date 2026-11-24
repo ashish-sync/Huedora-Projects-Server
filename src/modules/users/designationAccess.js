@@ -3,20 +3,24 @@ import { ROLE_PERMISSIONS } from '../../config/constants.js';
 /** Keep in sync with ROLE_PERMISSIONS['Camp Coordinator'] (seed overwrites this role). */
 export const CAMP_COORDINATOR_PERMISSIONS = [...ROLE_PERMISSIONS['Camp Coordinator']];
 
+const CAMP_COORDINATOR_TEMPLATE = {
+  roleNames: ['Camp Coordinator'],
+  summary:
+    'Document One, Camp One (incl. Confirm / Hold / Unhold / Submit to Finance One), Request One, Operations Dashboard & Notifications, and Verification One.',
+  modules: [
+    { moduleId: 'agreements', access: 'All' },
+    { moduleId: 'camps', access: 'All' },
+    { moduleId: 'assetRequests', access: 'View, Request' },
+    { moduleId: 'platform', access: 'All' },
+    { moduleId: 'verifications', access: 'Viewer' },
+    { moduleId: 'finance', access: 'View, Add' },
+  ],
+};
+
 export const DESIGNATION_ACCESS_TEMPLATES = {
-  'healthcare camp coordinator': {
-    roleNames: ['Camp Coordinator'],
-    summary:
-      'Document One, Camp One (incl. Confirm / Hold / Unhold / Submit to Finance One), Request One, Operations Dashboard & Notifications, and Verification One.',
-    modules: [
-      { moduleId: 'agreements', access: 'All' },
-      { moduleId: 'camps', access: 'All' },
-      { moduleId: 'assetRequests', access: 'View, Request' },
-      { moduleId: 'platform', access: 'All' },
-      { moduleId: 'verifications', access: 'Viewer' },
-      { moduleId: 'finance', access: 'View, Add' },
-    ],
-  },
+  'camp coordinator': CAMP_COORDINATOR_TEMPLATE,
+  // Legacy title — same access as Camp Coordinator
+  'healthcare camp coordinator': CAMP_COORDINATOR_TEMPLATE,
 };
 
 export function normalizeDesignationKey(designation) {

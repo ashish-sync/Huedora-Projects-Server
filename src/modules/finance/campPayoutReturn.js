@@ -24,6 +24,8 @@ export const CAMP_PAYOUT_RETURN_SYSTEM_ROLES = new Set([
  * Normalized with lowercase + collapsed spaces + en/em dash → hyphen.
  */
 export const CAMP_PAYOUT_RETURN_DESIGNATIONS = new Set([
+  'ops. support team',
+  'ops. manager',
   'ops support team',
   'manager',
   // Pre-rename titles (transitional)

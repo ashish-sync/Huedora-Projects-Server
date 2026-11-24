@@ -11,9 +11,13 @@ const SYSTEM_ROLE_SET = new Set(SYSTEM_ROLES);
 const DESIGNATION_SYSTEM_ROLE = {
   'team leader': 'Admin',
   'business head': 'Super Admin',
+  'camp coordinator': 'User',
+  'ops. manager': 'Admin',
+  'ops. support team': 'User',
+  // Legacy titles (pre-rename) — kept so empty systemRole still backfills.
   'healthcare camp coordinator': 'User',
   'ops support team': 'User',
-  // Legacy titles (pre-rename) — kept so empty systemRole still backfills.
+  manager: 'Admin',
   'operations leader': 'Admin',
   'system analyst': 'Admin',
   'lead - process & tech': 'Super Admin',

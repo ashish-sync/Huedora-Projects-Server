@@ -316,6 +316,21 @@ export async function ensureSeed() {
     }
   }
 
+  try {
+    const { reconcileAgreementSignedWithoutDocuments } = await import(
+      './modules/assets/assetAgreementDocument.js'
+    );
+    const healed = await reconcileAgreementSignedWithoutDocuments();
+    if (healed.fixed || healed.mastersFixed) {
+      console.log(
+        `[seed] Agreement Signed reconcile: assets fixed=${healed.fixed}/${healed.scanned}, `
+          + `masters fixed=${healed.mastersFixed}/${healed.mastersScanned}`,
+      );
+    }
+  } catch (err) {
+    console.warn('[seed] Agreement Signed reconcile skipped:', err?.message || err);
+  }
+
   await ensureGeoSeed();
   await ensureDistrictSupplements();
 

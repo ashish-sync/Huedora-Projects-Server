@@ -44,6 +44,7 @@ import {
 import {
   agreementDocumentHasContent,
   assertCanSetAgreementSigned,
+  ensureAgreementSignedReconciled,
 } from './assetAgreementDocument.js';
 import { findContactForCustodian } from '../contacts/contactIdentity.js';
 import { buildAssetPlaceholderSnapshot } from './assetPlaceholderSnapshot.js';
@@ -115,6 +116,12 @@ router.get(
     PERMISSIONS.AGREEMENTS_WRITE
   ),
   asyncHandler(async (req, res) => {
+    // Heal legacy Agreement Signed rows that have no Actions document.
+    try {
+      await ensureAgreementSignedReconciled();
+    } catch {
+      /* list still works if reconcile fails */
+    }
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
     if (req.query.status) filter.status = req.query.status;

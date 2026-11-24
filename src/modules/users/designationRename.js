@@ -2,21 +2,43 @@
  * Canonical old → new designation titles (org rename).
  * Keep aliases in access/approval matchers so transitional rows still work
  * until every user has been migrated.
+ *
+ * Locked picklist: Business Head, Camp Coordinator, Ops. Manager,
+ * Ops. Support Team, Team Leader.
  */
 
 export const DESIGNATION_RENAME_MAP = Object.freeze({
-  accounts: 'Ops Support Team',
-  'data analyst': 'Ops Support Team',
-  'individual contributor': 'Ops Support Team',
-  'logistics associate': 'Ops Support Team',
-  'system analyst': 'Ops Support Team',
-  'training manager': 'Ops Support Team',
-  'lead - process & tech': 'Manager',
-  'lead – process & tech': 'Manager',
-  'lead — process & tech': 'Manager',
-  'operations leader': 'Manager',
-  'senior manager': 'Manager',
+  // → Ops. Support Team
+  accounts: 'Ops. Support Team',
+  'data analyst': 'Ops. Support Team',
+  'individual contributor': 'Ops. Support Team',
+  'logistics associate': 'Ops. Support Team',
+  'system analyst': 'Ops. Support Team',
+  'training manager': 'Ops. Support Team',
+  'ops support team': 'Ops. Support Team',
+
+  // → Ops. Manager
+  'lead - process & tech': 'Ops. Manager',
+  'lead – process & tech': 'Ops. Manager',
+  'lead — process & tech': 'Ops. Manager',
+  'operations leader': 'Ops. Manager',
+  'senior manager': 'Ops. Manager',
+  manager: 'Ops. Manager',
+  'operations manager': 'Ops. Manager',
+  'operations head': 'Ops. Manager',
+  'product manager': 'Ops. Manager',
+  'senior team lead': 'Ops. Manager',
+
+  // → Camp Coordinator (Healthcare Camp Coordinator is the same title)
+  'healthcare camp coordinator': 'Camp Coordinator',
+
+  // → Team Leader
   'team lead': 'Team Leader',
+
+  // → Business Head (legacy senior titles)
+  director: 'Business Head',
+  'vice president': 'Business Head',
+  'head of department': 'Business Head',
 });
 
 export function normalizeDesignationRenameKey(value) {

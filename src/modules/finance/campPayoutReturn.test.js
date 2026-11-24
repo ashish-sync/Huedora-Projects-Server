@@ -44,7 +44,15 @@ test('Accounts role or designation can return', () => {
     true,
   );
   assert.equal(
+    canReturnCampFromPayoutQueue({ designation: 'Ops. Support Team' }, new Set(['finance:write'])),
+    true,
+  );
+  assert.equal(
     canReturnCampFromPayoutQueue({ designation: 'Manager' }, new Set(['finance:write'])),
+    true,
+  );
+  assert.equal(
+    canReturnCampFromPayoutQueue({ designation: 'Ops. Manager' }, new Set(['finance:write'])),
     true,
   );
 });

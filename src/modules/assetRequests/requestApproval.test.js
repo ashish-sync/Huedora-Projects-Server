@@ -12,44 +12,46 @@ import { PERMISSIONS } from '../../config/constants.js';
 describe('requestApproval matrix', () => {
   it('maps request types to required approvers', () => {
     assert.deepEqual(requiredApproverKeysForType('REPAIR'), [
-      'manager',
-      'ops support team',
+      'ops. manager',
+      'ops. support team',
     ]);
     assert.deepEqual(requiredApproverKeysForType('MAINTENANCE'), [
-      'manager',
-      'ops support team',
+      'ops. manager',
+      'ops. support team',
     ]);
-    assert.deepEqual(requiredApproverKeysForType('LOGISTICS'), ['manager']);
-    assert.deepEqual(requiredApproverKeysForType('TRAINING'), ['ops support team']);
-    assert.deepEqual(requiredApproverKeysForType('HIRING'), ['manager']);
+    assert.deepEqual(requiredApproverKeysForType('LOGISTICS'), ['ops. manager']);
+    assert.deepEqual(requiredApproverKeysForType('TRAINING'), ['ops. support team']);
+    assert.deepEqual(requiredApproverKeysForType('HIRING'), ['ops. manager']);
     assert.deepEqual(requiredApproverKeysForType('REIMBURSEMENT'), []);
   });
 
-  it('allows Manager or Ops Support Team (and pre-rename titles) for Repair & Service', () => {
-    const ops = { designation: 'Manager', roleIds: [] };
-    const support = { designation: 'Ops Support Team', roleIds: [] };
+  it('allows Ops. Manager or Ops. Support Team (and pre-rename titles) for Repair & Service', () => {
+    const ops = { designation: 'Ops. Manager', roleIds: [] };
+    const support = { designation: 'Ops. Support Team', roleIds: [] };
     const legacyOps = { designation: 'Operations Leader', roleIds: [] };
-    const other = { designation: 'Product Manager', roleIds: [] };
+    const legacyManager = { designation: 'Manager', roleIds: [] };
+    const other = { designation: 'Camp Coordinator', roleIds: [] };
     assert.equal(canApproveRequestType(ops, new Set(), 'REPAIR'), true);
     assert.equal(canApproveRequestType(support, new Set(), 'REPAIR'), true);
     assert.equal(canApproveRequestType(legacyOps, new Set(), 'REPAIR'), true);
+    assert.equal(canApproveRequestType(legacyManager, new Set(), 'REPAIR'), true);
     assert.equal(canApproveRequestType(other, new Set(), 'REPAIR'), false);
     assert.equal(canApproveRequestType(other, new Set([PERMISSIONS.ALL]), 'REPAIR'), true);
   });
 
-  it('requires Manager for Goods Issuance and Hiring', () => {
-    const ops = { designation: 'Operations Head', roleIds: [] };
-    const support = { designation: 'Ops Support Team', roleIds: [] };
+  it('requires Ops. Manager for Goods Issuance and Hiring', () => {
+    const ops = { designation: 'Ops. Manager', roleIds: [] };
+    const support = { designation: 'Ops. Support Team', roleIds: [] };
     assert.equal(canApproveRequestType(ops, new Set(), 'LOGISTICS'), true);
     assert.equal(canApproveRequestType(support, new Set(), 'LOGISTICS'), false);
     assert.equal(canApproveRequestType(ops, new Set(), 'HIRING'), true);
     assert.equal(canApproveRequestType(support, new Set(), 'HIRING'), false);
   });
 
-  it('requires Ops Support Team for Training Request', () => {
-    const support = { designation: 'Ops Support Team', roles: [{ name: 'Editor' }] };
-    const ops = { designation: 'Manager' };
-    assert.equal(userMatchesApproverKeys(support, ['ops support team']), true);
+  it('requires Ops. Support Team for Training Request', () => {
+    const support = { designation: 'Ops. Support Team', roles: [{ name: 'Editor' }] };
+    const ops = { designation: 'Ops. Manager' };
+    assert.equal(userMatchesApproverKeys(support, ['ops. support team']), true);
     assert.equal(canApproveRequestType(support, new Set(), 'TRAINING'), true);
     assert.equal(canApproveRequestType(ops, new Set(), 'TRAINING'), false);
   });
@@ -89,9 +91,9 @@ describe('requestApproval matrix', () => {
   });
 
   it('labels approval rules clearly', () => {
-    assert.match(approvalRuleLabel('REPAIR'), /Manager/);
+    assert.match(approvalRuleLabel('REPAIR'), /Ops\. Manager/);
     assert.match(approvalRuleLabel('REPAIR'), /Admin/);
-    assert.match(approvalRuleLabel('TRAINING'), /Ops Support Team/);
+    assert.match(approvalRuleLabel('TRAINING'), /Ops\. Support Team/);
     assert.match(approvalRuleLabel('TRAINING'), /Admin/);
   });
 });

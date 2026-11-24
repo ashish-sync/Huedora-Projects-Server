@@ -8,21 +8,23 @@
 import { AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 
-export const DESIGNATION_OPERATIONS_LEADER = 'Manager';
-export const DESIGNATION_TRAINING_MANAGER = 'Ops Support Team';
+export const DESIGNATION_OPERATIONS_LEADER = 'Ops. Manager';
+export const DESIGNATION_TRAINING_MANAGER = 'Ops. Support Team';
 
 /** Canonical keys used in matching (lowercase, collapsed spaces). */
 export const APPROVER_KEYS = Object.freeze({
-  OPERATIONS_LEADER: 'manager',
-  TRAINING_MANAGER: 'ops support team',
+  OPERATIONS_LEADER: 'ops. manager',
+  TRAINING_MANAGER: 'ops. support team',
   ADMIN: 'admin',
 });
 
 /**
  * Accept current titles plus pre-rename synonyms so transitional rows still match.
- * Manager covers former Operations Leader; Ops Support Team covers former Training Manager.
+ * Ops. Manager covers former Manager / Operations Leader;
+ * Ops. Support Team covers former Training Manager / Ops Support Team.
  */
 const OPERATIONS_LEADER_ALIASES = new Set([
+  'ops. manager',
   'manager',
   'operations leader',
   'operations head',
@@ -30,6 +32,7 @@ const OPERATIONS_LEADER_ALIASES = new Set([
 ]);
 
 const TRAINING_MANAGER_ALIASES = new Set([
+  'ops. support team',
   'ops support team',
   'training manager',
   'training head',
@@ -90,13 +93,13 @@ export function approvalRuleLabel(requestType) {
   switch (t) {
     case 'REPAIR':
     case 'MAINTENANCE':
-      return 'Manager, Ops Support Team, or Admin';
+      return 'Ops. Manager, Ops. Support Team, or Admin';
     case 'LOGISTICS':
     case 'MOVEMENT':
     case 'HIRING':
-      return 'Manager or Admin';
+      return 'Ops. Manager or Admin';
     case 'TRAINING':
-      return 'Ops Support Team or Admin';
+      return 'Ops. Support Team or Admin';
     default:
       return 'an authorized approver or Admin';
   }

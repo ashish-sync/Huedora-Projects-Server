@@ -96,6 +96,17 @@ export function userHasAnyPermission(user, ...needed) {
 /** Only users with the Admin role (permission `*`) may delete records. */
 export const requireAdmin = requirePermission(PERMISSIONS.ALL);
 
+/** Access Control and related user/role APIs: System Role Super Admin only. */
+export function requireSuperAdmin(req, _res, next) {
+  if (!req.user || !req.permissions) {
+    return next(new AppError('Authentication required', 401, 'UNAUTHORIZED'));
+  }
+  if (!userIsSuperAdmin(req.user)) {
+    return next(new AppError('Forbidden', 403, 'FORBIDDEN'));
+  }
+  next();
+}
+
 /** RBAC Admin (`*`) or platform System Role Super Admin. */
 export function requireDeleteAccess(req, _res, next) {
   if (!req.user || !req.permissions) {
