@@ -399,9 +399,13 @@ async function loadCampModule({ fromIso, toIso, user }) {
 
 async function loadMasterModule({ fromDate, toDate, fromIso, toIso }) {
   const base = { isDeleted: false, contactCategory: 'Healthcare Worker' };
+  const verifiedFilter = { ...base, 'educationalQie.indicator': 'green' };
 
   if (!fromDate && !toDate) {
-    const total = await Contact.countDocuments(base);
+    const [total, verifiedCount] = await Promise.all([
+      Contact.countDocuments(base),
+      Contact.countDocuments(verifiedFilter),
+    ]);
     return {
       id: 'master-one',
       label: 'Master One',
@@ -415,6 +419,11 @@ async function loadMasterModule({ fromDate, toDate, fromIso, toIso }) {
         pct: 0,
         href: hrefMaster({ fromIso: '', toIso: '', cohort: 'existing' }),
       },
+      verifiedHcws: {
+        qty: verifiedCount,
+        pct: pct(verifiedCount, total),
+        href: hrefMaster({ fromIso: '', toIso: '', cohort: 'verified' }),
+      },
       total,
       requiresDateRange: true,
     };
@@ -424,11 +433,13 @@ async function loadMasterModule({ fromDate, toDate, fromIso, toIso }) {
   if (fromDate) newFilter.createdAt.$gte = fromDate;
   if (toDate) newFilter.createdAt.$lte = toDate;
 
-  const [newCount, existingCount] = await Promise.all([
+  const [newCount, existingCount, verifiedCount, allHcws] = await Promise.all([
     Contact.countDocuments(newFilter),
     fromDate
       ? Contact.countDocuments({ ...base, createdAt: { $lt: fromDate } })
       : Promise.resolve(0),
+    Contact.countDocuments(verifiedFilter),
+    Contact.countDocuments(base),
   ]);
 
   const existing = fromDate ? existingCount : 0;
@@ -445,6 +456,11 @@ async function loadMasterModule({ fromDate, toDate, fromIso, toIso }) {
       qty: existing,
       pct: pct(existing, total),
       href: hrefMaster({ fromIso: '', toIso: fromIso || '', cohort: 'existing' }),
+    },
+    verifiedHcws: {
+      qty: verifiedCount,
+      pct: pct(verifiedCount, allHcws),
+      href: hrefMaster({ fromIso: '', toIso: '', cohort: 'verified' }),
     },
     total,
   };
