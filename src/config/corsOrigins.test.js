@@ -34,3 +34,16 @@ test('CORS middleware callback applies the configured aliases and rejects unknow
   assert.equal(evaluate('https://evil.example'), false);
   assert.equal(evaluate(undefined), true);
 });
+
+test('allows localhost and 127.0.0.1 twins for local Vite', () => {
+  const origins = allowedClientOrigins('http://localhost:5173');
+  assert.ok(origins.includes('http://localhost:5173'));
+  assert.ok(origins.includes('http://127.0.0.1:5173'));
+  assert.equal(isAllowedClientOrigin('http://127.0.0.1:5173', 'http://localhost:5173'), true);
+});
+
+test('in development allows alternate local Vite ports when CLIENT_ORIGIN is loopback', () => {
+  assert.equal(isAllowedClientOrigin('http://127.0.0.1:5174', 'http://localhost:5173'), true);
+  assert.equal(isAllowedClientOrigin('http://localhost:5175', 'http://127.0.0.1:5173'), true);
+  assert.equal(isAllowedClientOrigin('https://evil.example', 'http://localhost:5173'), false);
+});

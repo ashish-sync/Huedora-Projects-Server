@@ -2,7 +2,7 @@ import { Router } from 'express';
 import path from 'path';
 import { pipeUploadToResponse } from '../../storage/serveUpload.js';
 import { createHash, randomBytes } from 'crypto';
-import { authenticate, requirePermission } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireDeleteAccess } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
@@ -1934,6 +1934,61 @@ router.post(
     res.json({ data: row });
   })
 );
+
+async function softDeleteAssetRequest(req, res) {
+  const current = await AssetRequest.findOne({
+    _id: req.params.id,
+    isDeleted: false,
+  });
+  if (!current) throw new AppError('Request not found', 404);
+  if ((current.fulfillmentPendingLineIds || []).length) {
+    throw new AppError(
+      'Request has a goods issue in progress',
+      409,
+      'FULFILLMENT_IN_PROGRESS'
+    );
+  }
+
+  const before = {
+    requestNumber: current.requestNumber,
+    requestType: current.requestType,
+    status: current.status,
+  };
+
+  if (current.status === 'APPROVED') {
+    await releaseRequestAssetLock(current, { restoreServiceStatus: true });
+  }
+  await revokePendingUploadInvites(current._id);
+
+  const deletedAt = new Date().toISOString();
+  current.isDeleted = true;
+  current.deletedAt = deletedAt;
+  current.deletedBy = req.user._id;
+  await current.save();
+
+  await writeAudit({
+    actorId: req.user._id,
+    actorEmail: req.user.email,
+    action: 'ASSET_REQUEST.DELETE',
+    entityType: 'AssetRequest',
+    entityId: current._id,
+    before,
+    after: {
+      requestNumber: current.requestNumber,
+      requestType: current.requestType,
+      status: current.status,
+      isDeleted: true,
+      deletedAt,
+    },
+    requestId: req.requestId,
+  });
+
+  res.json({ data: { ok: true, id: current._id } });
+}
+
+// Prefer POST /:id/delete — some hosts/proxies do not forward DELETE reliably.
+router.post('/:id/delete', requireDeleteAccess, asyncHandler(softDeleteAssetRequest));
+router.delete('/:id', requireDeleteAccess, asyncHandler(softDeleteAssetRequest));
 
 router.post(
   '/:id/complete',

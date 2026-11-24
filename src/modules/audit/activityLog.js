@@ -141,6 +141,7 @@ const ACTION_TITLES = {
   'ASSET_REQUEST.APPROVE': 'Approved a request',
   'ASSET_REQUEST.REJECT': 'Refused a request',
   'ASSET_REQUEST.CANCEL': 'Cancelled a request',
+  'ASSET_REQUEST.DELETE': 'Deleted a request',
   'FINANCE.EXPENSE.CREATE': 'Recorded an expense',
   'FINANCE.EXPENSE.UPDATE': 'Updated an expense',
   'FINANCE.CLIENT_INVOICE.ISSUE': 'Issued a client invoice',
