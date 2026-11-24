@@ -133,8 +133,24 @@ test('applyActivityLogFilters accepts severity source activityType and programme
   });
   assert.equal(filter.severity, 'critical');
   assert.equal(filter.source, 'UI');
-  assert.equal(filter.activityType, 'finance');
   assert.equal(filter.programmeId, 'Oncology');
+  // Creation/type filters match stored activityType and legacy rows missing the field.
+  assert.equal(Array.isArray(filter.$and), true);
+  const typeClause = filter.$and.find((part) => Array.isArray(part.$or));
+  assert.equal(Boolean(typeClause), true);
+  assert.equal(typeClause.$or.some((part) => part.activityType === 'finance'), true);
+});
+
+test('applyActivityLogFilters Creation type includes legacy camp_ops.create rows', () => {
+  const filter = {};
+  applyActivityLogFilters(filter, { activityType: 'create' });
+  const typeClause = filter.$and.find((part) => Array.isArray(part.$or));
+  assert.equal(typeClause.$or.some((part) => part.activityType === 'create'), true);
+  assert.equal(
+    typeClause.$or.some((part) => part.activityType?.$exists === false && part.action instanceof RegExp),
+    true,
+  );
+  assert.equal(typeClause.$or.find((part) => part.action)?.action.test('camp_ops.create'), true);
 });
 
 test('applyProgrammeScopeFilter constrains programme-scoped readers', () => {

@@ -395,6 +395,7 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
 
   const tracking = captureSubmissionTracking();
   const results = [];
+  const createdCamps = [];
   const catalog = await buildClientMasterImportCatalog();
 
   for (const entry of bodyPreview) {
@@ -594,6 +595,8 @@ export async function processManualPaste({ previewData, text = '', defaults = {}
     created: created.length,
     campIds: created.map((item) => item.campId),
     camps: created.map((item) => withCampSchedule({ campId: item.campId, _id: item.id })),
+    /** Full camp docs for Activity Log writers (not returned to the client). */
+    createdCamps,
     duplicates: duplicates.length,
     duplicateCampIds: duplicates.map((item) => item.campId),
     partial: created.filter((item) => item.partial).length,

@@ -635,6 +635,43 @@ async function audit(req, action, entityType, entityId, before = null, after = n
   });
 }
 
+/** Slim camp snapshot for bulk create audits (paste / Excel import). */
+function slimCampCreateAfter(camp) {
+  const o = camp?.toObject ? camp.toObject() : (camp || {});
+  return {
+    _id: o._id,
+    campId: o.campId,
+    clientId: o.clientId,
+    clientName: o.clientName,
+    campaignName: o.campaignName,
+    campaignType: o.campaignType,
+    campDate: o.campDate,
+    requestDate: o.requestDate,
+    status: o.status,
+    lifecycleStage: o.lifecycleStage,
+    source: o.source,
+    programName: o.programName,
+    drugTherapyName: o.drugTherapyName,
+    city: o.city,
+    state: o.state,
+  };
+}
+
+async function auditCampCreates(req, camps = [], extras = {}) {
+  for (const camp of camps) {
+    if (!camp?._id) continue;
+    await audit(
+      req,
+      'camp_ops.create',
+      'camp_ops_camp',
+      camp._id,
+      null,
+      slimCampCreateAfter(camp),
+      extras,
+    );
+  }
+}
+
 const EXECUTION_CAPTURE_FIELDS = [
   'chargeableStatus',
   'inTime',
@@ -5376,12 +5413,16 @@ router.post(
 
     await notifyCampCreates(createdCamps, a.id);
 
+    // Per-camp create rows so Activity Log shows each imported camp, not only the bulk summary.
+    await auditCampCreates(req, createdCamps, { source: 'Import' });
+
     await audit(req, 'camp_ops.import_confirm', 'camp_ops_import', null, null, {
       created: created.length,
       skipped: skipped.length,
       skippedDuplicates: skipped.filter((s) => s.skipReason === 'duplicate').length,
       invalid: invalidRows.length,
-    });
+      campIds: createdCamps.map((c) => c.campId).filter(Boolean),
+    }, { source: 'Import' });
 
     await notifyCampBulkSummary({
       action: 'import',
@@ -5717,8 +5758,10 @@ router.post(
       actor(req),
       { resolveClientFromBody, campPayloadFromBody, user: req.user, permissions: req.permissions },
     );
+    await auditCampCreates(req, data.createdCamps || [], { source: 'UI' });
+    const { createdCamps: _createdCamps, ...publicData } = data;
     res.json({
-      data,
+      data: publicData,
       message: `Created ${data.created} camp(s) from pasted content`,
     });
   })

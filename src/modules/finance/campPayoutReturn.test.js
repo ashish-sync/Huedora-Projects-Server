@@ -39,6 +39,14 @@ test('Accounts role or designation can return', () => {
     canReturnCampFromPayoutQueue({ designation: 'Accounts' }, new Set(['finance:write'])),
     true,
   );
+  assert.equal(
+    canReturnCampFromPayoutQueue({ designation: 'Ops Support Team' }, new Set(['finance:write'])),
+    true,
+  );
+  assert.equal(
+    canReturnCampFromPayoutQueue({ designation: 'Manager' }, new Set(['finance:write'])),
+    true,
+  );
 });
 
 test('Lead Technology designation can return (en-dash)', () => {

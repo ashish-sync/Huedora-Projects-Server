@@ -6,6 +6,7 @@ import { Role } from './modules/users/role.model.js';
 import { User } from './modules/users/user.model.js';
 import { consolidateLegacyRoles, dedupeActiveUsersByEmail, roleDescription } from './modules/users/role.consolidation.js';
 import { applyDesignationAccessRoles } from './modules/users/designationAccess.js';
+import { applyDesignationRenames } from './modules/users/designationRename.js';
 import { applySystemRolesFromDesignation } from './modules/users/systemRole.js';
 import { DocumentTemplate } from './modules/templates/template.model.js';
 import { Contact } from './modules/contacts/contact.model.js';
@@ -134,7 +135,9 @@ export async function ensureSeed() {
   }
 
   await consolidateLegacyRoles();
+  await applyDesignationRenames(User);
   await applyDesignationAccessRoles(User, Role);
+  await applySystemRolesFromDesignation(User);
   await dedupeActiveUsersByEmail();
 
   // Repair users that previously saved populated role documents into roleIds

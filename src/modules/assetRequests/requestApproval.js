@@ -1,33 +1,36 @@
 /**
  * Request One approval matrix (designation / role name).
- * Repair & Service: either Operations Leader OR Training Manager — one approval completes.
+ * Repair & Service: either Manager OR Ops Support Team — one approval completes.
+ * (Org rename: Operations Leader → Manager, Training Manager → Ops Support Team.)
  * Admin (role, designation, or `*` permission) may approve every request type.
  */
 
 import { AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 
-export const DESIGNATION_OPERATIONS_LEADER = 'Operations Leader';
-export const DESIGNATION_TRAINING_MANAGER = 'Training Manager';
+export const DESIGNATION_OPERATIONS_LEADER = 'Manager';
+export const DESIGNATION_TRAINING_MANAGER = 'Ops Support Team';
 
 /** Canonical keys used in matching (lowercase, collapsed spaces). */
 export const APPROVER_KEYS = Object.freeze({
-  OPERATIONS_LEADER: 'operations leader',
-  TRAINING_MANAGER: 'training manager',
+  OPERATIONS_LEADER: 'manager',
+  TRAINING_MANAGER: 'ops support team',
   ADMIN: 'admin',
 });
 
 /**
- * Accept common synonyms so existing titles still match the matrix.
- * "Operations Leader" is the product name; Head/Manager map as the ops side.
+ * Accept current titles plus pre-rename synonyms so transitional rows still match.
+ * Manager covers former Operations Leader; Ops Support Team covers former Training Manager.
  */
 const OPERATIONS_LEADER_ALIASES = new Set([
+  'manager',
   'operations leader',
   'operations head',
   'operations manager',
 ]);
 
 const TRAINING_MANAGER_ALIASES = new Set([
+  'ops support team',
   'training manager',
   'training head',
 ]);
@@ -87,13 +90,13 @@ export function approvalRuleLabel(requestType) {
   switch (t) {
     case 'REPAIR':
     case 'MAINTENANCE':
-      return 'Operations Leader, Training Manager, or Admin';
+      return 'Manager, Ops Support Team, or Admin';
     case 'LOGISTICS':
     case 'MOVEMENT':
     case 'HIRING':
-      return 'Operations Leader or Admin';
+      return 'Manager or Admin';
     case 'TRAINING':
-      return 'Training Manager or Admin';
+      return 'Ops Support Team or Admin';
     default:
       return 'an authorized approver or Admin';
   }

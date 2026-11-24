@@ -17,6 +17,8 @@ assert.equal(systemRoleFromDesignation('Healthcare Camp Coordinator'), 'User');
 assert.equal(systemRoleFromDesignation('Individual Contributor'), 'User');
 assert.equal(systemRoleFromDesignation('Logistics Associate'), 'User');
 assert.equal(systemRoleFromDesignation('Training Manager'), 'User');
+assert.equal(systemRoleFromDesignation('Ops Support Team'), 'User');
+assert.equal(systemRoleFromDesignation('Team Lead'), 'Admin');
 assert.equal(systemRoleFromDesignation('Unknown Title'), '');
 
 assert.equal(normalizeSystemRole('super admin'), 'Super Admin');

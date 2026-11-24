@@ -117,14 +117,37 @@ router.post(
     try {
       assertSpreadsheetUpload(req.file);
       const result = await importProgramFormFile(req.params.token, req.file);
+      // Per-camp create rows so Activity Log lists each camp, not only the import summary.
+      for (const row of result.created || []) {
+        if (!row?.id) continue;
+        await writeAudit({
+          action: 'camp_ops.create',
+          entityType: 'camp_ops_camp',
+          entityId: row.id,
+          after: {
+            campId: row.campId,
+            source: 'program_form_import',
+            rowNumber: row.rowNumber,
+          },
+          actorEmail: 'program-form',
+          requestId: req.correlationId,
+          actorType: 'SYSTEM',
+          source: 'Import',
+          ip: req.ip,
+        });
+      }
       await writeAudit({
         action: 'camp_ops.program_form_import',
         entityType: 'camp_ops_import',
         entityId: null,
-        after: result.summary,
+        after: {
+          ...result.summary,
+          campIds: (result.created || []).map((row) => row.campId).filter(Boolean),
+        },
         actorEmail: 'program-form',
         requestId: req.correlationId,
         actorType: 'SYSTEM',
+        source: 'Import',
         ip: req.ip,
       });
       await notifyCampBulkSummary({

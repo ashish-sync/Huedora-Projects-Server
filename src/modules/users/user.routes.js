@@ -16,6 +16,7 @@ import { sendExcel } from '../../utils/excelExport.js';
 import { normalizeEmail, normalizePhone, throwIfIdentityClash, assertValidEmail, assertValidPhone } from '../../utils/identityNormalize.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { USER_DESIGNATIONS } from './user.constants.js';
+import { resolveRenamedDesignation } from './designationRename.js';
 import {
   assertReportingManager,
   buildHierarchyTree,
@@ -80,7 +81,7 @@ async function assertUserIdentityAvailable({ email, phone, excludeId } = {}) {
 }
 
 function normalizeDesignation(value) {
-  return String(value || '').trim().slice(0, 120);
+  return resolveRenamedDesignation(String(value || '').trim()).slice(0, 120);
 }
 
 function usernameFromEmail(email) {

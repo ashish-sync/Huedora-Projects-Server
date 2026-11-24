@@ -1332,13 +1332,17 @@ export function assertApprovable(status) {
 }
 
 /** Designations allowed to approve/reject commercial documents (either one). */
-export const COMMERCIAL_APPROVER_DESIGNATIONS = ['operations head', 'senior manager'];
+export const COMMERCIAL_APPROVER_DESIGNATIONS = [
+  'operations head',
+  'manager',
+  'senior manager', // pre-rename transitional
+];
 
 /** Who may edit Organisation master (Admin via *). */
 export const ORG_MASTER_EDITOR_DESIGNATIONS = [
   'operations head',
-  'senior manager',
   'manager',
+  'senior manager', // pre-rename transitional
 ];
 
 export function normalizeDesignationKey(designation) {
@@ -1357,28 +1361,28 @@ export function isOrgMasterEditorDesignation(designation) {
 }
 
 /**
- * Operations Head or Senior Manager may approve/reject; Admin (*) always can.
+ * Operations Head or Manager may approve/reject; Admin (*) always can.
  */
 export function assertCommercialApprover(user, permissions) {
   const perms = permissions instanceof Set ? permissions : new Set(permissions || []);
   if (perms.has('*')) return;
   if (isCommercialApproverDesignation(user?.designation)) return;
   throw new AppError(
-    'Only Operations Head or Senior Manager can approve commercial documents',
+    'Only Operations Head or Manager can approve commercial documents',
     403,
     'FORBIDDEN',
   );
 }
 
 /**
- * Admin, Operations Head, Senior Manager, or Manager may edit Organisation master.
+ * Admin, Operations Head, or Manager may edit Organisation master.
  */
 export function assertOrgMasterEditor(user, permissions) {
   const perms = permissions instanceof Set ? permissions : new Set(permissions || []);
   if (perms.has('*')) return;
   if (isOrgMasterEditorDesignation(user?.designation)) return;
   throw new AppError(
-    'Only Admin, Operations Head, Senior Manager, or Manager can edit Organisation master',
+    'Only Admin, Operations Head, or Manager can edit Organisation master',
     403,
     'FORBIDDEN',
   );

@@ -3,19 +3,26 @@ export const SYSTEM_ROLES = ['Super Admin', 'Admin', 'User'];
 
 const SYSTEM_ROLE_SET = new Set(SYSTEM_ROLES);
 
-/** Designation → System Role for backfill of existing people. */
+/**
+ * Designation → System Role for backfill when systemRole is empty.
+ * After the org rename, Ops Support Team / Manager titles are not forced here so
+ * migrated people keep the platform tier they already had.
+ */
 const DESIGNATION_SYSTEM_ROLE = {
-  'operations leader': 'Admin',
-  'system analyst': 'Admin',
   'team leader': 'Admin',
   'business head': 'Super Admin',
+  'healthcare camp coordinator': 'User',
+  'ops support team': 'User',
+  // Legacy titles (pre-rename) — kept so empty systemRole still backfills.
+  'operations leader': 'Admin',
+  'system analyst': 'Admin',
   'lead - process & tech': 'Super Admin',
   'senior manager': 'Super Admin',
   'data analyst': 'User',
-  'healthcare camp coordinator': 'User',
   'individual contributor': 'User',
   'logistics associate': 'User',
   'training manager': 'User',
+  'team lead': 'Admin',
 };
 
 export function normalizeSystemRoleKey(value) {
@@ -46,15 +53,18 @@ export function resolveSystemRole({ systemRole, designation, fallback = '' } = {
   return normalizeSystemRole(fallback) || '';
 }
 
-/** Backfill systemRole from designation for existing users (idempotent). */
+/**
+ * Backfill empty systemRole from designation only.
+ * Never overwrite an existing platform tier (protects designation renames).
+ */
 export async function applySystemRolesFromDesignation(User) {
   const users = await User.find({ isDeleted: false });
   let updated = 0;
   for (const user of users) {
+    const current = normalizeSystemRole(user.systemRole);
+    if (current) continue;
     const mapped = systemRoleFromDesignation(user.designation);
     if (!mapped) continue;
-    const current = normalizeSystemRole(user.systemRole);
-    if (current === mapped) continue;
     user.systemRole = mapped;
     await user.save();
     updated += 1;

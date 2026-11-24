@@ -24,6 +24,9 @@ export const CAMP_PAYOUT_RETURN_SYSTEM_ROLES = new Set([
  * Normalized with lowercase + collapsed spaces + en/em dash → hyphen.
  */
 export const CAMP_PAYOUT_RETURN_DESIGNATIONS = new Set([
+  'ops support team',
+  'manager',
+  // Pre-rename titles (transitional)
   'accounts',
   'lead - technology & process implementation',
   'lead - process & tech',
@@ -51,8 +54,8 @@ function collectRoleNames(user = {}) {
 }
 
 /**
- * Admin (* / systemRole), Accounts role/designation, Lead – Technology & Process
- * Implementation (or Lead – Process & Tech), or Zohra (by email / name) may push
+ * Admin (* / systemRole), Ops Support Team / Manager (and pre-rename Accounts /
+ * Lead – Process & Tech), Accounts role, or Zohra (by email / name) may push
  * a camp back from Payout Queue.
  */
 export function canReturnCampFromPayoutQueue(user, permissions) {
@@ -81,7 +84,7 @@ export function canReturnCampFromPayoutQueue(user, permissions) {
 export function assertCanReturnCampFromPayoutQueue(user, permissions) {
   if (canReturnCampFromPayoutQueue(user, permissions)) return;
   throw new AppError(
-    'Only Admin, Accounts, Lead – Technology & Process Implementation, or Zohra can return a camp from Payout Queue',
+    'Only Admin, Ops Support Team, Manager, or Zohra can return a camp from Payout Queue',
     403,
     'FORBIDDEN',
   );

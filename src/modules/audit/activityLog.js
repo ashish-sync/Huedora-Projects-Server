@@ -500,7 +500,36 @@ export function applyActivityLogFilters(filter, query = {}) {
 
   const activityType = String(query.activityType || '').trim().toLowerCase();
   if (ACTIVITY_TYPES.some((t) => t.id === activityType)) {
-    filter.activityType = activityType;
+    // Prefer stored activityType; also match legacy rows written before enrichment.
+    const legacyActionByType = {
+      create: /create|register/i,
+      update: /update/i,
+      status: /transition|status|execute|activate|send/i,
+      assignment: /assign|hcw|executor/i,
+      approval: /approve/i,
+      cancellation: /reject|cancel|void|close|refuse/i,
+      finance: /finance|invoice|expense|payout|payment|vendor_bill|confirm_payment/i,
+      stock: /logistics|stock|dispatch|reverse|inout/i,
+      document: /agreement|document|signature|execution_docs/i,
+      import_export: /import|export/i,
+      system: /job|sweep|retention|system|login|token/i,
+    };
+    const legacyAction = legacyActionByType[activityType];
+    if (legacyAction) {
+      filter.$and = [
+        ...(filter.$and || []),
+        {
+          $or: [
+            { activityType },
+            { activityType: null, action: legacyAction },
+            { activityType: { $exists: false }, action: legacyAction },
+            { activityType: '', action: legacyAction },
+          ],
+        },
+      ];
+    } else {
+      filter.activityType = activityType;
+    }
   }
 
   const programmeId = String(query.programmeId || '').trim();
