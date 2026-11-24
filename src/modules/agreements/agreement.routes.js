@@ -21,6 +21,7 @@ import {
   AgreementActivity,
 } from './agreement.model.js';
 import { Asset } from '../assets/asset.model.js';
+import { agreementHasStoredDocument } from '../assets/assetAgreementDocument.js';
 import { Contact, normalizeContactPayload } from '../contacts/contact.model.js';
 import { resolveOrCreateContact } from '../contacts/contactIdentity.js';
 import { DocumentTemplate } from '../templates/template.model.js';
@@ -1075,19 +1076,24 @@ router.post(
 
     await freezeAgreementAssetSnapshots(agreement._id, { source: 'activate' });
 
+    const hasAgreementDocument = await agreementHasStoredDocument(agreement._id);
     const links = await AgreementAsset.find({ agreementId: agreement._id, isActive: true });
     for (const link of links) {
       const asset = await Asset.findOne({ _id: link.assetId, isDeleted: false });
       if (!asset) continue;
       asset.activeAgreementId = agreement._id;
-      asset.agreementStatus = 'Agreement Signed';
+      if (hasAgreementDocument) {
+        asset.agreementStatus = 'Agreement Signed';
+      }
       await syncAssetContactFromAgreement(asset, agreement);
       await asset.save();
       await AssetEvent.create({
         assetId: asset._id,
         at: new Date().toISOString(),
         type: 'AGREEMENT_ACTIVATED',
-        message: `Signed agreement ${agreement.agreementNumber} attached from Document One`,
+        message: hasAgreementDocument
+          ? `Signed agreement ${agreement.agreementNumber} attached from Document One`
+          : `Agreement ${agreement.agreementNumber} activated (no document file yet)`,
         actorId: req.user._id,
       });
     }
@@ -1253,7 +1259,9 @@ router.post(
         linked.push(link);
         if (['ACTIVE', 'COMPLETED'].includes(agreement.status)) {
           asset.activeAgreementId = agreement._id;
-          asset.agreementStatus = 'Agreement Signed';
+          if (await agreementHasStoredDocument(agreement._id)) {
+            asset.agreementStatus = 'Agreement Signed';
+          }
           await syncAssetContactFromAgreement(asset, agreement);
           await asset.save();
         }

@@ -1,6 +1,7 @@
 import { Contact } from '../contacts/contact.model.js';
 import { Asset } from './asset.model.js';
 import { AgreementAsset } from '../agreements/agreement.model.js';
+import { agreementHasStoredDocument } from './assetAgreementDocument.js';
 
 /** Link asset inventory custodian to the agreement's Contact Directory entry. */
 export async function syncAssetContactFromAgreement(asset, agreement) {
@@ -32,6 +33,7 @@ export async function syncLinkedAssetsFromAgreement(agreement) {
  */
 export async function lockAssetsForSignedAgreement(agreement) {
   if (!agreement || !['COMPLETED', 'ACTIVE'].includes(agreement.status)) return;
+  const hasDocument = await agreementHasStoredDocument(agreement._id);
   const links = await AgreementAsset.find({ agreementId: agreement._id, isActive: true });
   for (const link of links) {
     const asset = await Asset.findOne({ _id: link.assetId, isDeleted: false });
@@ -39,7 +41,9 @@ export async function lockAssetsForSignedAgreement(agreement) {
     const current = asset.activeAgreementId ? String(asset.activeAgreementId) : '';
     if (!current || current === String(agreement._id)) {
       asset.activeAgreementId = agreement._id;
-      asset.agreementStatus = 'Agreement Signed';
+      if (hasDocument) {
+        asset.agreementStatus = 'Agreement Signed';
+      }
     }
     await syncAssetContactFromAgreement(asset, agreement);
     await asset.save();

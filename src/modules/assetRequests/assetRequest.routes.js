@@ -1599,7 +1599,7 @@ router.post(
     if (!row) throw new AppError('Request not found', 404);
     if (row.requestType === 'HIRING') {
       throw new AppError(
-        'Hiring requests are fulfilled directly. Use Fulfill with hiree details.',
+        'Hiring requests are assigned directly. Use Assign with Name, Number, and Amount.',
         400,
         'USE_FULFILL'
       );
@@ -1827,8 +1827,14 @@ router.post(
     });
 
     const rejectedAt = new Date().toISOString();
-    const rejectionReason =
-      String(req.body.reason || req.body.rejectionReason || '').trim() || null;
+    const rejectionReason = String(req.body.reason || req.body.rejectionReason || '').trim();
+    if (!rejectionReason) {
+      throw new AppError(
+        'Remark is required when refusing a request',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
     row = await AssetRequest.findOneAndUpdate(
       { _id: row._id, isDeleted: false, status: 'REQUESTED' },
       {
@@ -2205,18 +2211,18 @@ router.post(
       payableRaw === '' || payableRaw == null ? null : Number(payableRaw);
 
     if (!hireeName) {
-      throw new AppError('Name is required to fulfill a hiring request', 400, 'VALIDATION_ERROR');
+      throw new AppError('Name is required to assign a hiring request', 400, 'VALIDATION_ERROR');
     }
     if (!hireeContact) {
       throw new AppError(
-        'Contact Number is required to fulfill a hiring request',
+        'Number is required to assign a hiring request',
         400,
         'VALIDATION_ERROR'
       );
     }
     if (!Number.isFinite(payableAmount) || payableAmount < 0) {
       throw new AppError(
-        'Payable Amount is required and must be a non-negative number',
+        'Amount is required and must be a non-negative number',
         400,
         'VALIDATION_ERROR'
       );
@@ -2268,7 +2274,7 @@ router.post(
     if (row.requestorId) {
       await notifyUser(row.requestorId, {
         type: 'ASSET_REQUEST_APPROVAL',
-        title: `Request ${row.requestNumber} fulfilled`,
+        title: `Request ${row.requestNumber} assigned`,
         body: `${hireeName} · ${hireeContact} · ₹${payableAmount}`,
         entityType: 'AssetRequest',
         entityId: row._id,

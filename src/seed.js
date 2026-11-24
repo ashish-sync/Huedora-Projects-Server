@@ -15,6 +15,7 @@ import { ensureGeoSeed, ensureDistrictSupplements } from './modules/geo/geo.seed
 import { ensureCampOpsSeed, CAMP_ONE_DEMO } from './modules/campOps/campOps.seed.js';
 import { ensureDemoNotifications } from './modules/notifications/notification.seed.js';
 import { ensureDocumentOneDemo, DOCUMENT_ONE_DEMO } from './modules/agreements/documentOne.seed.js';
+import { ensureAssetOneAgreementDemo, ASSET_ONE_DEMO } from './modules/assets/assetOne.seed.js';
 import { alternateLegacyLocalEmail } from './utils/legacyMigration.js';
 
 const LEASE_TEMPLATE = `ASSET LEASE AGREEMENT
@@ -294,6 +295,27 @@ export async function ensureSeed() {
   }
 
   await ensureLogisticsSeed();
+
+  if (env.seedAgreementSamples) {
+    try {
+      const assetDemo = await ensureAssetOneAgreementDemo();
+      if (assetDemo.created || assetDemo.linked) {
+        console.log(
+          `[seed] Asset One demo ${assetDemo.created ? 'created' : 'present'} `
+            + `serial=${ASSET_ONE_DEMO.serialNumber} `
+            + `linked=${Boolean(assetDemo.linked)} `
+            + `agreement="${DOCUMENT_ONE_DEMO.title}"`,
+        );
+      } else {
+        console.warn(
+          `[seed] Asset One demo skipped: ${assetDemo.reason || 'unknown'}`,
+        );
+      }
+    } catch (err) {
+      console.warn('[seed] Asset One Document One demo skipped:', err?.message || err);
+    }
+  }
+
   await ensureGeoSeed();
   await ensureDistrictSupplements();
 

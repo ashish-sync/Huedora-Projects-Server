@@ -25,7 +25,9 @@ import {
   custodyRequiresCustodianContact,
   contactMatchesCustody,
   custodyContactTypeError,
+  isAgreementSignedStatus,
 } from './device.constants.js';
+import { assertCanSetAgreementSigned } from '../assets/assetAgreementDocument.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { formatTextValue, cleanSpaces } from '../../utils/textFormat.js';
 import { assertSerialNumberAvailable, normalizeSerialNumber } from '../assets/serialNumber.js';
@@ -141,6 +143,14 @@ function parseMasterFields(input) {
     if (!agreementStatus) {
       throw new AppError(
         `Asset Status must be one of: ${AGREEMENT_STATUS_OPTIONS.join(', ')}`,
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    if (isAgreementSignedStatus(agreementStatus)) {
+      // Create / import has no Actions document yet — Agreement Signed is not allowed.
+      throw new AppError(
+        'Asset Status cannot be Agreement Signed until a document is uploaded under Actions',
         400,
         'VALIDATION_ERROR'
       );
@@ -707,6 +717,13 @@ router.patch(
           400,
           'VALIDATION_ERROR'
         );
+      }
+      if (isAgreementSignedStatus(agreementStatus)) {
+        const linkedAsset = await Asset.findOne({
+          deviceMasterId: device._id,
+          isDeleted: false,
+        }).select('_id');
+        await assertCanSetAgreementSigned(linkedAsset?._id || null, { allowCreate: true });
       }
       updates.agreementStatus = agreementStatus;
     }

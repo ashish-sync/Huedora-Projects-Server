@@ -39,7 +39,12 @@ import {
   custodyRequiresCustodianContact,
   contactMatchesCustody,
   custodyContactTypeError,
+  isAgreementSignedStatus,
 } from '../devices/device.constants.js';
+import {
+  agreementDocumentHasContent,
+  assertCanSetAgreementSigned,
+} from './assetAgreementDocument.js';
 import { findContactForCustodian } from '../contacts/contactIdentity.js';
 import { buildAssetPlaceholderSnapshot } from './assetPlaceholderSnapshot.js';
 import { uploadDir } from '../../config/paths.js';
@@ -329,7 +334,7 @@ router.get(
           isPrimary: Boolean(d.isPrimary),
           sizeBytes: d.sizeBytes || 0,
           createdAt: d.createdAt,
-          hasFile: Boolean(d.storageKey),
+          hasFile: agreementDocumentHasContent(d),
         })),
       });
     }
@@ -746,6 +751,9 @@ router.patch(
             'VALIDATION_ERROR'
           );
         }
+      }
+      if (isAgreementSignedStatus(normalized)) {
+        await assertCanSetAgreementSigned(asset._id);
       }
       asset.agreementStatus = normalized || 'Not Initiated';
       masterPatch.agreementStatus = asset.agreementStatus;
