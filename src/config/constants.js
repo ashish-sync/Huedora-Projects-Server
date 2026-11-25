@@ -59,6 +59,13 @@ export const PERMISSIONS = {
   ASSET_REQUESTS_READ: 'asset-requests:read',
   ASSET_REQUESTS_REQUEST: 'asset-requests:request',
   ASSET_REQUESTS_APPROVE: 'asset-requests:approve',
+  /** Type-scoped processing teams (Access Control — not designation) */
+  ASSET_REQUESTS_SERVICE_MANAGE: 'asset-requests:service:manage',
+  ASSET_REQUESTS_LOGISTICS_MANAGE: 'asset-requests:logistics:manage',
+  ASSET_REQUESTS_TRAINING_MANAGE: 'asset-requests:training:manage',
+  ASSET_REQUESTS_FINANCE_MANAGE: 'asset-requests:finance:manage',
+  ASSET_REQUESTS_HIRING_MANAGE: 'asset-requests:hiring:manage',
+  ASSET_REQUESTS_OTHER_MANAGE: 'asset-requests:other:manage',
   /** Inventory & Logistics */
   LOGISTICS_READ: 'logistics:read',
   LOGISTICS_WRITE: 'logistics:write',

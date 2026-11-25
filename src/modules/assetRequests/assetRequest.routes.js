@@ -67,6 +67,15 @@ import {
   filterApproverUsers,
   isAdminApprover,
 } from './requestApproval.js';
+import {
+  ALL_TYPE_MANAGE_PERMISSIONS,
+  applyActorListScope,
+  canCancelRequest,
+  canMutateRequestAttachments,
+  canProcessRequest,
+  canViewRequest,
+  cancelRequiresRemark,
+} from './requestAccess.js';
 import { assertApprovalAuthority } from '../users/approvalAuthority.js';
 import fs from 'fs';
 
@@ -79,17 +88,14 @@ const canRead = requirePermission(
   PERMISSIONS.ASSET_REQUESTS_APPROVE,
   PERMISSIONS.REPAIRS_READ,
   // Deprecated aliases (kept for existing roles until catalog cleanup settles)
-  PERMISSIONS.MOVEMENTS_READ
+  PERMISSIONS.MOVEMENTS_READ,
+  ...ALL_TYPE_MANAGE_PERMISSIONS
 );
 const canRequest = requirePermission(
   PERMISSIONS.ASSET_REQUESTS_REQUEST,
   PERMISSIONS.REPAIRS_WRITE,
   PERMISSIONS.MAINTENANCE_WRITE,
   PERMISSIONS.MOVEMENTS_REQUEST
-);
-const canApprove = requirePermission(
-  PERMISSIONS.ASSET_REQUESTS_APPROVE,
-  PERMISSIONS.MOVEMENTS_APPROVE
 );
 
 function hasAnyPermission(req, permissions) {
@@ -109,17 +115,6 @@ function assertCreatePermission(req, requestType) {
   }
 }
 
-function isRequestOwner(req, row) {
-  return String(row.requestorId?._id || row.requestorId) === String(req.user._id);
-}
-
-function canManageRequest(req, row) {
-  return (
-    isRequestOwner(req, row) ||
-    hasAnyPermission(req, [PERMISSIONS.ASSET_REQUESTS_APPROVE])
-  );
-}
-
 function assertProductImageAccess(req, row) {
   if (!['REPAIR', 'MAINTENANCE'].includes(row.requestType)) {
     throw new AppError(
@@ -131,7 +126,7 @@ function assertProductImageAccess(req, row) {
   if (!['REQUESTED', 'APPROVED'].includes(row.status)) {
     throw new AppError('Request is no longer active', 409, 'INVALID_STATUS');
   }
-  if (!canManageRequest(req, row)) {
+  if (!canMutateRequestAttachments(req.user, req.permissions, row)) {
     throw new AppError('Forbidden', 403, 'FORBIDDEN');
   }
 }
@@ -147,7 +142,7 @@ function assertBillAccess(req, row) {
   if (!['REQUESTED', 'APPROVED'].includes(row.status)) {
     throw new AppError('Request is no longer active', 409, 'INVALID_STATUS');
   }
-  if (!canManageRequest(req, row)) {
+  if (!canMutateRequestAttachments(req.user, req.permissions, row)) {
     throw new AppError('Forbidden', 403, 'FORBIDDEN');
   }
 }
@@ -163,7 +158,7 @@ function assertOtherAttachmentAccess(req, row) {
   if (!['REQUESTED', 'APPROVED'].includes(row.status)) {
     throw new AppError('Request is no longer active', 409, 'INVALID_STATUS');
   }
-  if (!canManageRequest(req, row)) {
+  if (!canMutateRequestAttachments(req.user, req.permissions, row)) {
     throw new AppError('Forbidden', 403, 'FORBIDDEN');
   }
 }
@@ -179,9 +174,14 @@ function assertJdAccess(req, row) {
   if (!['REQUESTED', 'APPROVED'].includes(row.status)) {
     throw new AppError('Request is no longer active', 409, 'INVALID_STATUS');
   }
-  if (!canManageRequest(req, row)) {
+  if (!canMutateRequestAttachments(req.user, req.permissions, row)) {
     throw new AppError('Forbidden', 403, 'FORBIDDEN');
   }
+}
+
+function assertCanProcessRequest(req, row, action = 'process') {
+  if (canProcessRequest(req.user, req.permissions, row)) return;
+  throw new AppError(`Forbidden to ${action} this request`, 403, 'FORBIDDEN');
 }
 
 function contactIdOf(asset) {
@@ -806,6 +806,7 @@ router.get(
     const { page, limit, skip, sort } = parsePagination(req.query);
     const filter = { isDeleted: false };
     applyArchiveListFilter(filter, req.query);
+    await applyActorListScope(filter, req.user, req.permissions);
     if (req.query.status) filter.status = req.query.status;
     if (req.query.requestType) {
       const raw = String(req.query.requestType).trim().toUpperCase();
@@ -841,8 +842,10 @@ router.get(
 router.get(
   '/export',
   canRead,
-  asyncHandler(async (_req, res) => {
-    const rows = await AssetRequest.find({ isDeleted: false })
+  asyncHandler(async (req, res) => {
+    const exportFilter = { isDeleted: false };
+    await applyActorListScope(exportFilter, req.user, req.permissions);
+    const rows = await AssetRequest.find(exportFilter)
       .populate('requestorId', 'fullName email designation reportingManagerId')
       .populate('approverId', 'fullName email')
       .sort('-createdAt');
@@ -955,6 +958,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
+    if (!canViewRequest(req.user, req.permissions, row)) {
+      throw new AppError('Forbidden', 403, 'FORBIDDEN');
+    }
     const filePath = await existingImageFilePath(row.productImage);
     if (!filePath) {
       throw new AppError('Product image not found', 404);
@@ -1016,6 +1022,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
+    if (!canViewRequest(req.user, req.permissions, row)) {
+      throw new AppError('Forbidden', 403, 'FORBIDDEN');
+    }
     if (row.requestType !== 'REIMBURSEMENT') {
       throw new AppError('Bill is not available for this request type', 400);
     }
@@ -1078,6 +1087,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
+    if (!canViewRequest(req.user, req.permissions, row)) {
+      throw new AppError('Forbidden', 403, 'FORBIDDEN');
+    }
     if (row.requestType !== 'OTHER' && row.requestType !== 'MASTER_ADD') {
       throw new AppError('Attachment is not available for this request type', 400);
     }
@@ -1140,6 +1152,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
+    if (!canViewRequest(req.user, req.permissions, row)) {
+      throw new AppError('Forbidden', 403, 'FORBIDDEN');
+    }
     if (row.requestType !== 'HIRING') {
       throw new AppError('Job description is not available for this request type', 400);
     }
@@ -1280,6 +1295,9 @@ router.get(
       .populate('fromContactId', 'name contact city state')
       .populate('toContactId', 'name contact city state');
     if (!row) throw new AppError('Request not found', 404);
+    if (!canViewRequest(req.user, req.permissions, row)) {
+      throw new AppError('Forbidden', 403, 'FORBIDDEN');
+    }
     res.json({ data: row });
   })
 );
@@ -1885,7 +1903,7 @@ router.post(
       isDeleted: false,
     });
     if (!current) throw new AppError('Request not found', 404);
-    if (!canManageRequest(req, current)) {
+    if (!canCancelRequest(req.user, req.permissions, current)) {
       throw new AppError('Forbidden', 403, 'FORBIDDEN');
     }
     if (!['REQUESTED', 'APPROVED'].includes(current.status)) {
@@ -1906,6 +1924,13 @@ router.post(
     const cancelledAt = new Date().toISOString();
     const cancellationReason =
       String(req.body.reason || req.body.cancellationReason || '').trim() || null;
+    if (cancelRequiresRemark(req.user, current) && !cancellationReason) {
+      throw new AppError(
+        'A remark is required when cancelling your own request',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
     const row = await AssetRequest.findOneAndUpdate(
       {
         _id: current._id,
@@ -1998,10 +2023,10 @@ router.delete('/:id', requireDeleteAccess, asyncHandler(softDeleteAssetRequest))
 
 router.post(
   '/:id/complete',
-  canApprove,
   asyncHandler(async (req, res) => {
     let row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Request not found', 404);
+    assertCanProcessRequest(req, row, 'complete');
     if (row.requestType === 'HIRING') {
       throw new AppError(
         'Hiring requests must be fulfilled with Name, Contact Number, and Payable Amount.',
@@ -2195,12 +2220,9 @@ router.post(
         'INVALID_STATUS'
       );
     }
-    await assertApprovalAuthority({
-      actor: req.user,
-      subjectUserId: row.requestorId,
-      permissions: req.permissions,
-      action: 'fulfill',
-    });
+    // Hiring assign is Recruitment & HR (hiring:manage) / Super Admin only —
+    // Reporting Manager may view, but must not process other departments' types.
+    assertCanProcessRequest(req, row, 'assign');
 
     const hireeName = String(req.body.hireeName || req.body.name || '').trim();
     const hireeContact = String(

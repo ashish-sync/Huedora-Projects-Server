@@ -11,6 +11,13 @@ export const ACCESS_ACTIONS = [
   { id: 'verify', label: 'Verify' },
   { id: 'approve', label: 'Approve' },
   { id: 'pay', label: 'Pay' },
+  /** Request One type-scoped processing teams */
+  { id: 'manageService', label: 'Asset Management' },
+  { id: 'manageLogistics', label: 'Supply Chain' },
+  { id: 'manageTraining', label: 'Training Team' },
+  { id: 'manageFinance', label: 'Accounts' },
+  { id: 'manageHiring', label: 'Recruitment & HR' },
+  { id: 'manageOther', label: 'System Admin (Other)' },
 ];
 
 function withAll(actions) {
@@ -101,6 +108,12 @@ export const MODULE_ACCESS_CATALOG = [
         PERMISSIONS.MOVEMENTS_REQUEST,
       ],
       approve: [PERMISSIONS.ASSET_REQUESTS_APPROVE, PERMISSIONS.MOVEMENTS_APPROVE],
+      manageService: [PERMISSIONS.ASSET_REQUESTS_SERVICE_MANAGE],
+      manageLogistics: [PERMISSIONS.ASSET_REQUESTS_LOGISTICS_MANAGE],
+      manageTraining: [PERMISSIONS.ASSET_REQUESTS_TRAINING_MANAGE],
+      manageFinance: [PERMISSIONS.ASSET_REQUESTS_FINANCE_MANAGE],
+      manageHiring: [PERMISSIONS.ASSET_REQUESTS_HIRING_MANAGE],
+      manageOther: [PERMISSIONS.ASSET_REQUESTS_OTHER_MANAGE],
     }),
   },
   {
