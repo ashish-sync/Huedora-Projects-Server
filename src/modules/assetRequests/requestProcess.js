@@ -4,6 +4,7 @@
  */
 
 import { AppError } from '../../utils/helpers.js';
+import { LOGISTICS_MODES, normalizeLogisticsMode } from './assetRequest.model.js';
 
 export const PROCESSABLE_TYPES = [
   'REIMBURSEMENT',
@@ -30,15 +31,21 @@ export function buildProcessOutcome(requestType, body = {}, row = {}) {
   const remark = String(body.processRemark || body.remark || '').trim();
 
   if (type === 'REIMBURSEMENT') {
-    const processReference = String(body.processReference || body.paymentRef || '').trim();
-    const amountRaw = body.processAmount ?? body.amount ?? row.amount;
+    const processReference = String(
+      body.processReference || body.utr || body.paymentRef || ''
+    ).trim();
+    const amountRaw = body.processAmount ?? body.amountPaid ?? body.amount;
     const processAmount =
       amountRaw === '' || amountRaw == null ? null : Number(amountRaw);
     if (!processReference) {
-      throw new AppError('Payment reference is required', 400, 'VALIDATION_ERROR');
+      throw new AppError('UTR is required', 400, 'VALIDATION_ERROR');
     }
-    if (processAmount == null || !Number.isFinite(processAmount) || processAmount < 0) {
-      throw new AppError('Amount is required and must be non-negative', 400, 'VALIDATION_ERROR');
+    if (processAmount == null || !Number.isFinite(processAmount) || processAmount <= 0) {
+      throw new AppError(
+        'Exact payment amount is required and must be greater than zero',
+        400,
+        'VALIDATION_ERROR'
+      );
     }
     return {
       actionLabel: 'Process',
@@ -50,8 +57,8 @@ export function buildProcessOutcome(requestType, body = {}, row = {}) {
         currency: row.currency || body.currency || 'INR',
       },
       logMessage: remark
-        ? `Processed · ${processReference} · ₹${processAmount} — ${remark}`
-        : `Processed · ${processReference} · ₹${processAmount}`,
+        ? `Processed · UTR ${processReference} · ₹${processAmount} — ${remark}`
+        : `Processed · UTR ${processReference} · ₹${processAmount}`,
     };
   }
 
@@ -87,14 +94,32 @@ export function buildProcessOutcome(requestType, body = {}, row = {}) {
     if (!processRemark) {
       throw new AppError('Issue note is required', 400, 'VALIDATION_ERROR');
     }
+    const transportMode = normalizeLogisticsMode(
+      body.transportMode || body.deliveryMode || row.transportMode || ''
+    );
+    if (!LOGISTICS_MODES.includes(transportMode)) {
+      throw new AppError(
+        `Mode of delivery must be one of: ${LOGISTICS_MODES.join(', ')}`,
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    const awbNumber = String(body.awbNumber || body.awb || body.trackingNumber || '').trim();
+    if (transportMode === 'Courier' && !awbNumber) {
+      throw new AppError('AWB number is required for Courier', 400, 'VALIDATION_ERROR');
+    }
     return {
       actionLabel: 'Issue',
       patch: {
         processAction: 'ISSUE',
         processRemark,
+        transportMode,
+        awbNumber,
         issuedAt: new Date().toISOString(),
       },
-      logMessage: `Issued — ${processRemark}`,
+      logMessage: awbNumber
+        ? `Issued · ${transportMode} · AWB ${awbNumber} — ${processRemark}`
+        : `Issued · ${transportMode} — ${processRemark}`,
     };
   }
 

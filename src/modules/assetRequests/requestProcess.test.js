@@ -3,20 +3,29 @@ import assert from 'node:assert/strict';
 import { buildProcessOutcome } from './requestProcess.js';
 
 describe('buildProcessOutcome', () => {
-  it('requires finance payment ref and amount', () => {
-    assert.throws(() => buildProcessOutcome('REIMBURSEMENT', {}), /Payment reference/i);
+  it('requires finance UTR and exact payment amount', () => {
+    assert.throws(() => buildProcessOutcome('REIMBURSEMENT', {}), /UTR/i);
     assert.throws(
       () => buildProcessOutcome('REIMBURSEMENT', { processReference: 'UTR-1' }),
-      /Amount/i
+      /Exact payment amount/i
+    );
+    assert.throws(
+      () =>
+        buildProcessOutcome('REIMBURSEMENT', {
+          utr: 'UTR-1',
+          processAmount: 0,
+        }),
+      /greater than zero/i
     );
     const out = buildProcessOutcome(
       'REIMBURSEMENT',
-      { processReference: 'UTR-1', processAmount: 1200, processRemark: 'Paid' },
+      { utr: 'UTR-1', processAmount: 1200, processRemark: 'Paid' },
       { currency: 'INR' }
     );
     assert.equal(out.patch.processReference, 'UTR-1');
     assert.equal(out.patch.processAmount, 1200);
     assert.equal(out.actionLabel, 'Process');
+    assert.match(out.logMessage, /UTR UTR-1/);
   });
 
   it('requires training schedule and venue', () => {
@@ -32,11 +41,37 @@ describe('buildProcessOutcome', () => {
     assert.equal(out.actionLabel, 'Schedule');
   });
 
-  it('requires goods issue note', () => {
+  it('requires goods issue note, delivery mode, and AWB for Courier', () => {
     assert.throws(() => buildProcessOutcome('LOGISTICS', {}), /Issue note/i);
-    const out = buildProcessOutcome('LOGISTICS', { issueNote: 'Dispatched via courier' });
-    assert.equal(out.patch.processRemark, 'Dispatched via courier');
-    assert.equal(out.actionLabel, 'Issue');
+    assert.throws(
+      () => buildProcessOutcome('LOGISTICS', { issueNote: 'Dispatched' }),
+      /Mode of delivery/i
+    );
+    assert.throws(
+      () =>
+        buildProcessOutcome('LOGISTICS', {
+          issueNote: 'Dispatched',
+          transportMode: 'Courier',
+        }),
+      /AWB number/i
+    );
+    const courier = buildProcessOutcome('LOGISTICS', {
+      issueNote: 'Dispatched via courier',
+      transportMode: 'Courier',
+      awbNumber: 'AWB-123',
+    });
+    assert.equal(courier.patch.processRemark, 'Dispatched via courier');
+    assert.equal(courier.patch.transportMode, 'Courier');
+    assert.equal(courier.patch.awbNumber, 'AWB-123');
+    assert.equal(courier.actionLabel, 'Issue');
+
+    const hand = buildProcessOutcome(
+      'LOGISTICS',
+      { issueNote: 'Handed over', deliveryMode: 'Hand Delivery' },
+      {}
+    );
+    assert.equal(hand.patch.transportMode, 'Hand Delivery');
+    assert.equal(hand.patch.awbNumber, '');
   });
 
   it('requires repair assignee name and phone', () => {

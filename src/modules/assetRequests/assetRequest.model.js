@@ -222,6 +222,10 @@ export const AssetRequest = defineCollection('asset_requests', {
   processAmount: null,
   scheduledAt: null,
   scheduleVenue: '',
+  /** Calendar To-Do created for the scheduler when TRAINING is scheduled */
+  calendarEventId: '',
+  /** Goods Issuance: Supply Chain confirms mode + AWB on Issue */
+  awbNumber: '',
   assigneeName: '',
   assigneeContact: '',
   issuedAt: null,

@@ -88,6 +88,8 @@ import {
   resolveOpenClarifications,
 } from './hiringUpdates.js';
 import { buildProcessOutcome, PROCESSABLE_TYPES } from './requestProcess.js';
+import { createTrainingTodoForScheduler } from './scheduleTrainingTodo.js';
+import { createEvent } from '../calendar/calendar.service.js';
 import { assertApprovalAuthority } from '../users/approvalAuthority.js';
 import fs from 'fs';
 
@@ -2447,6 +2449,28 @@ router.post(
 
     await revokePendingUploadInvites(row._id);
 
+    if (row.requestType === 'TRAINING' && outcome.patch?.scheduledAt) {
+      const calendarEventId = await createTrainingTodoForScheduler({
+        row,
+        schedule: {
+          scheduledAt: outcome.patch.scheduledAt,
+          scheduleVenue: outcome.patch.scheduleVenue,
+        },
+        ownerId: req.user._id,
+        actor: req.user,
+        createEvent,
+      });
+      if (calendarEventId) {
+        row = await AssetRequest.findOneAndUpdate(
+          { _id: row._id, isDeleted: false },
+          { $set: { calendarEventId } }
+        );
+        if (!row) {
+          row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
+        }
+      }
+    }
+
     await writeAudit({
       actorId: req.user._id,
       actorEmail: req.user.email,
@@ -2457,6 +2481,7 @@ router.post(
         status: row.status,
         completedAt,
         processAction: outcome.patch.processAction,
+        calendarEventId: row.calendarEventId || '',
         ...outcome.patch,
       },
       requestId: req.requestId,
