@@ -107,7 +107,7 @@ export function requireSuperAdmin(req, _res, next) {
   next();
 }
 
-/** RBAC Admin (`*`) or platform System Role Super Admin. */
+/** Platform System Role Super Admin only — record delete across modules. */
 export function requireDeleteAccess(req, _res, next) {
   if (!req.user || !req.permissions) {
     return next(new AppError('Authentication required', 401, 'UNAUTHORIZED'));

@@ -1,7 +1,7 @@
 import { assignPreservingExisting, assertNotStale, resolveClearKeys } from '../../store/dataIntegrity.js';
 import { assertEntityNotStale } from '../../utils/mutationGuards.js';
 import { Router } from 'express';
-import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin, requireDeleteAccess } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { importAppError } from '../../utils/importErrors.js';
 import { PERMISSIONS } from '../../config/constants.js';
@@ -2915,7 +2915,7 @@ router.post(
 
 router.delete(
   '/camps/:id',
-  requireAdmin,
+  requireDeleteAccess,
   asyncHandler(async (req, res) => {
     const camp = await loadCampForUser(req, req.params.id);
     const before = camp.toObject();
@@ -3022,7 +3022,7 @@ router.put(
 
 router.delete(
   '/clients/:id',
-  requireAdmin,
+  requireDeleteAccess,
   asyncHandler(async (req, res) => {
     const client = await CampOpsClient.findOne({ _id: req.params.id, isDeleted: false });
     if (!client) throw new AppError('Client not found', 404, 'NOT_FOUND');
@@ -4532,7 +4532,7 @@ router.put(
 
 router.delete(
   '/client-masters/:id',
-  requireAdmin,
+  requireDeleteAccess,
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
@@ -4651,7 +4651,7 @@ router.get(
 
 router.delete(
   '/client-masters/:id/camp-terms-files/:fileId',
-  requireAdmin,
+  requireDeleteAccess,
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
@@ -4976,7 +4976,7 @@ router.post(
 
 router.delete(
   '/client-masters/:id/po-file/:poId/:fileId',
-  requireAdmin,
+  requireDeleteAccess,
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
@@ -5006,7 +5006,7 @@ router.delete(
 
 router.delete(
   '/client-masters/:id/po-file/:poId',
-  requireAdmin,
+  requireDeleteAccess,
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
@@ -5031,7 +5031,7 @@ router.delete(
 
 router.delete(
   '/client-masters/:id/po-file',
-  requireAdmin,
+  requireDeleteAccess,
   asyncHandler(async (req, res) => {
     const row = await CampOpsClientMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Client master not found', 404, 'NOT_FOUND');
@@ -5103,7 +5103,7 @@ router.post(
 
 router.delete(
   '/import/templates/:id',
-  requireAdmin,
+  requireDeleteAccess,
   asyncHandler(async (req, res) => {
     const row = await CampOpsImportTemplate.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Template not found', 404, 'NOT_FOUND');

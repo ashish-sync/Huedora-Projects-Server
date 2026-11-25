@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { requirePermission, requireAdmin, hasPermission, authenticate } from '../../middleware/auth.js';
+import { requirePermission, requireAdmin, requireDeleteAccess, hasPermission, authenticate } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
@@ -697,7 +697,7 @@ router.post(
   ensureUploadCommit(),
   asyncHandler(uploadVendorBillAttachment),
 );
-router.delete('/vendor-bills/:id', requireAdmin, asyncHandler(softDeleteVendorBill));
+router.delete('/vendor-bills/:id', requireDeleteAccess, asyncHandler(softDeleteVendorBill));
 
 // Back-compat aliases for legacy /finance/invoices clients
 router.get('/invoices', canRead, asyncHandler(listVendorBills));
@@ -723,6 +723,6 @@ router.post(
   ensureUploadCommit(),
   asyncHandler(uploadVendorBillAttachment),
 );
-router.delete('/invoices/:id', requireAdmin, asyncHandler(softDeleteVendorBill));
+router.delete('/invoices/:id', requireDeleteAccess, asyncHandler(softDeleteVendorBill));
 
 export default router;

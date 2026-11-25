@@ -85,17 +85,10 @@ export function userIsSuperAdmin(user) {
 }
 
 /**
- * Record delete power: RBAC Admin (`*`) or platform Super Admin.
- * Used for Contact Directory and Document One destructive actions.
+ * Record delete power: platform System Role Super Admin only.
+ * Admin / User (and RBAC `*` alone) cannot soft-delete operational records.
  */
-export function userCanDeleteRecords(user, permissions) {
-  if (permissions instanceof Set) {
-    if (permissions.has('*')) return true;
-  } else if (Array.isArray(permissions) && permissions.includes('*')) {
-    return true;
-  } else if (permissions?.has?.('*')) {
-    return true;
-  }
+export function userCanDeleteRecords(user, _permissions) {
   return userIsSuperAdmin(user);
 }
 

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin, requireDeleteAccess } from '../../middleware/auth.js';
 import { asyncHandler, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';

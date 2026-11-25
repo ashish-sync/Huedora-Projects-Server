@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin, requireDeleteAccess } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { writeAudit } from '../../utils/audit.js';
@@ -382,7 +382,7 @@ router.patch(
 
 router.delete(
   '/expenses/:id',
-  requireAdmin,
+  requireDeleteAccess,
   asyncHandler(async (req, res) => {
     const row = await FinanceExpense.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Expense not found', 404);

@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { v4 as uuid } from 'uuid';
-import { authenticate, requirePermission, requirePermissionOrSuperAdmin } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requirePermissionOrSuperAdmin, requireDeleteAccess } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { env } from '../../config/env.js';
@@ -783,13 +783,13 @@ async function softDeleteTemplate(req, res) {
 // Prefer POST /:id/delete — some hosts/proxies do not forward DELETE reliably.
 router.post(
   '/:id/delete',
-  requirePermissionOrSuperAdmin(PERMISSIONS.AGREEMENTS_WRITE),
+  requireDeleteAccess,
   asyncHandler(softDeleteTemplate)
 );
 
 router.delete(
   '/:id',
-  requirePermissionOrSuperAdmin(PERMISSIONS.AGREEMENTS_WRITE),
+  requireDeleteAccess,
   asyncHandler(softDeleteTemplate)
 );
 

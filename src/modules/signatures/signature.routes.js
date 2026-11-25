@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requirePermission, hasPermission, requireAdmin } from '../../middleware/auth.js';
+import { authenticate, requirePermission, hasPermission, requireAdmin, requireDeleteAccess } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { SignatureMaster, normalizeSignaturePayload } from './signature.model.js';
@@ -271,7 +271,7 @@ router.patch(
 
 router.delete(
   '/:id',
-  requireAdmin,
+  requireDeleteAccess,
   asyncHandler(async (req, res) => {
     const row = await SignatureMaster.findOne({ _id: req.params.id, isDeleted: false });
     if (!row) throw new AppError('Signature not found', 404);

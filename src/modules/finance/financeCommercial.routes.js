@@ -4,7 +4,7 @@ import fs from 'fs';
 import multer from 'multer';
 import { fileURLToPath } from 'url';
 import { v4 as uuid } from 'uuid';
-import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin, requireDeleteAccess } from '../../middleware/auth.js';
 import { asyncHandler, parsePagination, paginated, AppError } from '../../utils/helpers.js';
 import { assignPreservingExisting } from '../../store/dataIntegrity.js';
 import { PERMISSIONS } from '../../config/constants.js';
@@ -614,7 +614,7 @@ router.post(
 
 router.delete(
   '/commercial-documents/:id',
-  requireAdmin,
+  requireDeleteAccess,
   asyncHandler(async (req, res) => {
     const row = await loadCommercialById(req.params.id);
     const before = row.toObject ? row.toObject() : { ...row };
@@ -998,7 +998,7 @@ router.post(
 
 router.delete(
   '/proformas/:id',
-  requireAdmin,
+  requireDeleteAccess,
   asyncHandler(async (req, res) => {
     const row = await FinanceCommercialDocument.findOne({
       _id: req.params.id,
@@ -1283,7 +1283,7 @@ router.post(
 
 router.delete(
   '/purchase-orders/:id',
-  requireAdmin,
+  requireDeleteAccess,
   asyncHandler(async (req, res) => {
     const row = await FinanceCommercialDocument.findOne({
       _id: req.params.id,

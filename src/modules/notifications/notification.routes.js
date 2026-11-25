@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import fs from 'fs';
-import { authenticate, requirePermission, requireAdmin } from '../../middleware/auth.js';
+import { authenticate, requirePermission, requireAdmin, requireDeleteAccess } from '../../middleware/auth.js';
 import { asyncHandler, AppError, parsePagination, paginated } from '../../utils/helpers.js';
 import { PERMISSIONS } from '../../config/constants.js';
 import { Notification } from './notification.model.js';

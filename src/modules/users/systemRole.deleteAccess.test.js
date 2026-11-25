@@ -10,9 +10,11 @@ test('userIsSuperAdmin recognizes platform Super Admin systemRole', () => {
   assert.equal(userIsSuperAdmin({}), false);
 });
 
-test('userCanDeleteRecords allows RBAC * or Super Admin', () => {
-  assert.equal(userCanDeleteRecords({ systemRole: 'User' }, new Set(['*'])), true);
+test('userCanDeleteRecords allows platform Super Admin only', () => {
+  assert.equal(userCanDeleteRecords({ systemRole: 'User' }, new Set(['*'])), false);
+  assert.equal(userCanDeleteRecords({ systemRole: 'Admin' }, new Set(['*'])), false);
   assert.equal(userCanDeleteRecords({ systemRole: 'Super Admin' }, new Set(['agreements:write'])), true);
+  assert.equal(userCanDeleteRecords({ systemRole: 'Super Admin' }, new Set(['*'])), true);
   assert.equal(userCanDeleteRecords({ systemRole: 'Admin' }, new Set(['agreements:write'])), false);
   assert.equal(userCanDeleteRecords({ systemRole: 'User' }, new Set(['agreements:write'])), false);
 });
