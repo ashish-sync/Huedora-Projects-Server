@@ -15,6 +15,13 @@ import { configureSharpForLowMemory } from './storage/media/sharpConfig.js';
 
 configureSharpForLowMemory();
 
+process.on('uncaughtException', (err) => {
+  console.error('[process] Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[process] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const freshStartTrigger = path.resolve(__dirname, '../.fresh-start');
 

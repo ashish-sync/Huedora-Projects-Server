@@ -74,8 +74,20 @@ import {
   canMutateRequestAttachments,
   canProcessRequest,
   canViewRequest,
-  cancelRequiresRemark,
+  isRequestAdmin,
+  isRequestOwner,
 } from './requestAccess.js';
+import {
+  buildHiringUpdateEntry,
+  canCreatorEditHiringDetails,
+  hasOpenClarification,
+  hiringUpdatesOf,
+  normalizeHiringProgress,
+  normalizeHiringUpdateKind,
+  pickHiringDetailPatch,
+  resolveOpenClarifications,
+} from './hiringUpdates.js';
+import { buildProcessOutcome, PROCESSABLE_TYPES } from './requestProcess.js';
 import { assertApprovalAuthority } from '../users/approvalAuthority.js';
 import fs from 'fs';
 
@@ -1588,6 +1600,8 @@ router.post(
       logisticsProducts,
       ...vendor,
       ...logisticsEndpoints,
+      hiringProgress: 'OPEN',
+      hiringUpdates: [],
     });
 
     if (requestType === 'HIRING') {
@@ -1724,6 +1738,23 @@ router.post(
         ownerUser: row.requestorId ? { _id: row.requestorId } : req.user,
       });
 
+      const processRemark = String(
+        req.body?.processRemark || req.body?.remark || ''
+      ).trim();
+      if (!processRemark) {
+        throw new AppError('Remark is required to add this master record', 400, 'VALIDATION_ERROR');
+      }
+      const masterLogEntry = buildHiringUpdateEntry({
+        kind: 'STATUS',
+        message: `Master added · ${created.code} — ${processRemark}`,
+        actor: req.user,
+        progress: 'FULFILLED',
+      });
+      const masterUpdates = [
+        ...resolveOpenClarifications(hiringUpdatesOf(row), req.user._id, approvedAt),
+        masterLogEntry,
+      ];
+
       row = await AssetRequest.findOneAndUpdate(
         { _id: row._id, isDeleted: false, status: 'REQUESTED' },
         {
@@ -1734,6 +1765,10 @@ router.post(
             completedAt: approvedAt,
             createdMasterId: created.id,
             createdMasterCode: created.code,
+            processAction: 'ADD',
+            processRemark,
+            hiringProgress: 'FULFILLED',
+            hiringUpdates: masterUpdates,
           },
         }
       );
@@ -1749,6 +1784,7 @@ router.post(
           createdMasterId: created.id,
           createdMasterCode: created.code,
           masterEntity: row.masterEntity,
+          processRemark,
         },
         requestId: req.requestId,
       });
@@ -1778,6 +1814,10 @@ router.post(
           approverId: req.user._id,
           approvedAt,
           fromStatus: row.fromStatus || null,
+          hiringProgress:
+            row.hiringProgress && row.hiringProgress !== 'OPEN'
+              ? row.hiringProgress
+              : 'IN_PROGRESS',
         },
       }
     );
@@ -1924,9 +1964,9 @@ router.post(
     const cancelledAt = new Date().toISOString();
     const cancellationReason =
       String(req.body.reason || req.body.cancellationReason || '').trim() || null;
-    if (cancelRequiresRemark(req.user, current) && !cancellationReason) {
+    if (!cancellationReason) {
       throw new AppError(
-        'A remark is required when cancelling your own request',
+        'Remark is required when refusing a request',
         400,
         'VALIDATION_ERROR'
       );
@@ -2111,7 +2151,7 @@ router.post(
         status: 'APPROVED',
         fulfillmentPendingLineIds: { $nin: requestProductLineIds(row) },
       },
-      { $set: { status: 'COMPLETED', completedAt } }
+      { $set: { status: 'COMPLETED', completedAt, hiringProgress: 'FULFILLED' } }
     );
     if (!row) throw new AppError('Request status changed', 409, 'INVALID_STATUS');
 
@@ -2206,6 +2246,241 @@ router.post(
 );
 
 router.post(
+  '/:id/process',
+  asyncHandler(async (req, res) => {
+    let row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
+    if (!row) throw new AppError('Request not found', 404);
+    if (row.requestType === 'HIRING') {
+      throw new AppError(
+        'Hiring requests must be assigned via fulfill',
+        400,
+        'USE_FULFILL'
+      );
+    }
+    if (row.requestType === 'MASTER_ADD') {
+      throw new AppError(
+        'Master One requests are added via approve',
+        400,
+        'USE_APPROVE'
+      );
+    }
+    if (!PROCESSABLE_TYPES.includes(row.requestType) && row.requestType !== 'SERVICE') {
+      throw new AppError('This request type cannot be processed here', 400, 'INVALID_TYPE');
+    }
+    assertCanProcessRequest(req, row, 'process');
+    if (row.status !== 'APPROVED') {
+      throw new AppError('Only APPROVED items can be processed', 400, 'INVALID_STATUS');
+    }
+
+    if (isLogistics(row.requestType) && (row.logisticsProducts || []).length) {
+      const lineIds = requestProductLineIds(row);
+      const fulfilled = new Set(row.fulfilledLineIds || []);
+      const remainingLineIds = lineIds.filter((lineId) => !fulfilled.has(lineId));
+      if (remainingLineIds.length) {
+        throw new AppError(
+          'All goods issue product lines must be issued before completion',
+          409,
+          'FULFILLMENT_INCOMPLETE',
+          {
+            totalLines: lineIds.length,
+            fulfilledLineIds: [...fulfilled],
+            remainingLineIds,
+            allProductLinesFulfilled: false,
+          }
+        );
+      }
+    }
+
+    const outcome = buildProcessOutcome(row.requestType, req.body || {}, row);
+
+    const asset = row.assetId
+      ? await Asset.findOne({ _id: row.assetId, isDeleted: false })
+      : null;
+    if (asset) {
+      if (
+        row.requestType === 'REPAIR' &&
+        ((asset.openRepairId && String(asset.openRepairId) !== String(row._id)) ||
+          asset.openMaintenanceId ||
+          asset.openMovementId)
+      ) {
+        throw new AppError('Asset is locked by another request', 409, 'ASSET_LOCKED');
+      }
+      if (
+        row.requestType === 'MAINTENANCE' &&
+        ((asset.openMaintenanceId &&
+          String(asset.openMaintenanceId) !== String(row._id)) ||
+          asset.openRepairId ||
+          asset.openMovementId)
+      ) {
+        throw new AppError('Asset is locked by another request', 409, 'ASSET_LOCKED');
+      }
+      if (
+        isLogistics(row.requestType) &&
+        ((asset.openMovementId && String(asset.openMovementId) !== String(row._id)) ||
+          asset.openRepairId ||
+          asset.openMaintenanceId)
+      ) {
+        throw new AppError('Asset is locked by another request', 409, 'ASSET_LOCKED');
+      }
+      if (isLogistics(row.requestType) && logisticsFlow(row.logisticsKind) === 'RECALL_PICKUP') {
+        const currentContactId = contactIdOf(asset);
+        const expectedContactId = row.fromContactId?._id || row.fromContactId;
+        if (
+          currentContactId &&
+          expectedContactId &&
+          String(currentContactId) !== String(expectedContactId)
+        ) {
+          throw new AppError(
+            'Recall source no longer matches the asset’s current contact',
+            409,
+            'CUSTODY_CONFLICT'
+          );
+        }
+      }
+    }
+
+    const completedAt = new Date().toISOString();
+    const processEntry = buildHiringUpdateEntry({
+      kind: 'STATUS',
+      message: outcome.logMessage,
+      actor: req.user,
+      progress: 'FULFILLED',
+    });
+    processEntry.at = completedAt;
+    const updates = [
+      ...resolveOpenClarifications(hiringUpdatesOf(row), req.user._id, completedAt),
+      processEntry,
+    ];
+
+    row = await AssetRequest.findOneAndUpdate(
+      {
+        _id: row._id,
+        isDeleted: false,
+        status: 'APPROVED',
+        fulfillmentPendingLineIds: { $nin: requestProductLineIds(row) },
+      },
+      {
+        $set: {
+          status: 'COMPLETED',
+          completedAt,
+          hiringProgress: 'FULFILLED',
+          hiringUpdates: updates,
+          ...outcome.patch,
+        },
+      }
+    );
+    if (!row) throw new AppError('Request status changed', 409, 'INVALID_STATUS');
+
+    if (asset) {
+      if (row.requestType === 'REPAIR' || row.requestType === 'MAINTENANCE') {
+        await releaseRequestAssetLock(row, { restoreServiceStatus: true });
+      }
+      if (isLogistics(row.requestType)) {
+        const before = {
+          contactId: contactIdOf(asset),
+          location: asset.location || null,
+          status: asset.status,
+          custody: asset.custody,
+        };
+        const flow = logisticsFlow(row.logisticsKind);
+        let patch;
+        if (flow === 'RECALL_PICKUP') {
+          patch = {
+            openMovementId: null,
+            contactId: null,
+            hcwId: null,
+            hcwBusinessId: null,
+            status: 'Warehouse',
+            custody: 'Tylo Office',
+            custodianName: '',
+            custodianContact: '',
+            custodianCity: '',
+            custodianState: '',
+            location: { type: 'Warehouse', name: 'Warehouse' },
+          };
+        } else {
+          const contact = row.toContactId
+            ? await Contact.findOne({ _id: row.toContactId, isDeleted: false })
+            : null;
+          patch = {
+            openMovementId: null,
+            contactId: row.toContactId || null,
+            hcwId: null,
+            hcwBusinessId: null,
+            status: 'Assigned',
+            custody: contact?.resourceType || row.toName || asset.custody,
+            custodianName: row.toName || contact?.name || '',
+            custodianContact:
+              row.toNumber || contact?.contact || contact?.mobile || '',
+            custodianCity: row.toCity || contact?.city || '',
+            custodianState: row.toState || contact?.state || '',
+            location: {
+              type: 'Field',
+              name: row.toName || contact?.name || '',
+              city: row.toCity || contact?.city || '',
+              state: row.toState || contact?.state || '',
+            },
+          };
+        }
+        const updatedAsset = await Asset.findOneAndUpdate(
+          { _id: asset._id },
+          { $set: patch }
+        );
+        await AssetEvent.create({
+          assetId: asset._id,
+          eventType: 'CUSTODY_CHANGE',
+          fromContactId: before.contactId,
+          toContactId: updatedAsset?.contactId || null,
+          fromLocation: before.location,
+          toLocation: updatedAsset?.location || null,
+          fromStatus: before.status,
+          toStatus: updatedAsset?.status || patch.status,
+          relatedEntityType: 'AssetRequest',
+          relatedEntityId: row._id,
+          actorId: req.user._id,
+          actorType: 'USER',
+          at: completedAt,
+          reason: `${outcome.actionLabel} ${row.requestNumber || row._id}`,
+        });
+      }
+    }
+
+    await revokePendingUploadInvites(row._id);
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'ASSET_REQUEST.PROCESS',
+      entityType: 'AssetRequest',
+      entityId: row._id,
+      after: {
+        status: row.status,
+        completedAt,
+        processAction: outcome.patch.processAction,
+        ...outcome.patch,
+      },
+      requestId: req.requestId,
+    });
+
+    if (row.requestorId) {
+      await notifyUser(row.requestorId, {
+        type: 'ASSET_REQUEST_APPROVAL',
+        title: `Request ${row.requestNumber}: ${outcome.actionLabel}`,
+        body: outcome.logMessage.slice(0, 180),
+        entityType: 'AssetRequest',
+        entityId: row._id,
+        includeWatchers: true,
+        includeReportingManagers: 'chain',
+        module: 'assets',
+        meta: { kind: 'update' },
+      });
+    }
+
+    res.json({ data: row });
+  })
+);
+
+router.post(
   '/:id/fulfill',
   asyncHandler(async (req, res) => {
     let row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false });
@@ -2242,15 +2517,29 @@ router.post(
         'VALIDATION_ERROR'
       );
     }
-    if (!Number.isFinite(payableAmount) || payableAmount < 0) {
+    if (payableAmount != null && (!Number.isFinite(payableAmount) || payableAmount < 0)) {
       throw new AppError(
-        'Amount is required and must be a non-negative number',
+        'Amount must be a non-negative number when provided',
         400,
         'VALIDATION_ERROR'
       );
     }
 
     const fulfilledAt = new Date().toISOString();
+    const fulfillEntry = buildHiringUpdateEntry({
+      kind: 'STATUS',
+      message:
+        payableAmount != null
+          ? `Assigned ${hireeName} · ${hireeContact} · ₹${payableAmount}`
+          : `Assigned ${hireeName} · ${hireeContact}`,
+      actor: req.user,
+      progress: 'FULFILLED',
+    });
+    const priorUpdates = resolveOpenClarifications(
+      hiringUpdatesOf(row),
+      req.user._id,
+      fulfilledAt
+    );
     row = await AssetRequest.findOneAndUpdate(
       {
         _id: row._id,
@@ -2270,6 +2559,8 @@ router.post(
           completedAt: fulfilledAt,
           approverId: req.user._id,
           approvedAt: fulfilledAt,
+          hiringProgress: 'FULFILLED',
+          hiringUpdates: [...priorUpdates, fulfillEntry],
         },
       }
     );
@@ -2289,6 +2580,7 @@ router.post(
         hireeContact,
         payableAmount,
         fulfilledAt,
+        hiringProgress: 'FULFILLED',
       },
       requestId: req.requestId,
     });
@@ -2297,11 +2589,292 @@ router.post(
       await notifyUser(row.requestorId, {
         type: 'ASSET_REQUEST_APPROVAL',
         title: `Request ${row.requestNumber} assigned`,
-        body: `${hireeName} · ${hireeContact} · ₹${payableAmount}`,
+        body:
+          payableAmount != null
+            ? `${hireeName} · ${hireeContact} · ₹${payableAmount}`
+            : `${hireeName} · ${hireeContact}`,
         entityType: 'AssetRequest',
         entityId: row._id,
         includeWatchers: true,
         includeReportingManagers: 'chain',
+        module: 'assets',
+        meta: { kind: 'update' },
+      });
+    }
+
+    res.json({ data: row });
+  })
+);
+
+router.get(
+  '/:id/hiring-updates',
+  canRead,
+  asyncHandler(async (req, res) => {
+    const row = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false }).populate(
+      'requestorId',
+      'fullName email designation reportingManagerId'
+    );
+    if (!row) throw new AppError('Request not found', 404);
+    if (!canViewRequest(req.user, req.permissions, row)) {
+      throw new AppError('Forbidden', 403, 'FORBIDDEN');
+    }
+    res.json({
+      data: {
+        requestId: row._id,
+        requestNumber: row.requestNumber,
+        requestType: row.requestType,
+        status: row.status,
+        hiringProgress: row.hiringProgress || 'OPEN',
+        openClarification: hasOpenClarification(row),
+        canEditDetails:
+          row.requestType === 'HIRING' &&
+          canCreatorEditHiringDetails(row) &&
+          isRequestOwner(req.user, row),
+        rejectionReason: row.rejectionReason || '',
+        cancellationReason: row.cancellationReason || '',
+        rejectedAt: row.rejectedAt || null,
+        cancelledAt: row.cancelledAt || null,
+        updates: hiringUpdatesOf(row),
+      },
+    });
+  })
+);
+
+router.post(
+  '/:id/hiring-updates',
+  asyncHandler(async (req, res) => {
+    const current = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false }).populate(
+      'requestorId',
+      'fullName email designation reportingManagerId'
+    );
+    if (!current) throw new AppError('Request not found', 404);
+    if (!canViewRequest(req.user, req.permissions, current)) {
+      throw new AppError('Forbidden', 403, 'FORBIDDEN');
+    }
+    if (!['REQUESTED', 'APPROVED'].includes(current.status)) {
+      throw new AppError('Request is no longer active', 409, 'INVALID_STATUS');
+    }
+
+    const kind = normalizeHiringUpdateKind(req.body.kind);
+    const message = String(req.body.message || '').trim();
+    if (!kind) {
+      throw new AppError(
+        'kind must be STATUS, UPDATE, CLARIFICATION, or REPLY',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    if (!message) {
+      throw new AppError('Message is required', 400, 'VALIDATION_ERROR');
+    }
+
+    const isProcessor =
+      canProcessRequest(req.user, req.permissions, current) ||
+      isRequestAdmin(req.user, req.permissions);
+    const isOwner = isRequestOwner(req.user, current);
+
+    if (kind === 'REPLY') {
+      if (!isOwner && !isRequestAdmin(req.user, req.permissions)) {
+        throw new AppError('Only the requestor can reply', 403, 'FORBIDDEN');
+      }
+      if (!hasOpenClarification(current) && current.hiringProgress !== 'AWAITING_INFO') {
+        throw new AppError('No open clarification to reply to', 409, 'INVALID_STATUS');
+      }
+    } else if (!isProcessor) {
+      throw new AppError('Only processors can post request updates', 403, 'FORBIDDEN');
+    }
+
+    let nextProgress = current.hiringProgress || 'OPEN';
+    let entryProgress = null;
+    if (kind === 'STATUS') {
+      const progress = normalizeHiringProgress(req.body.progress);
+      if (!['IN_PROGRESS', 'AWAITING_INFO', 'ON_HOLD'].includes(progress)) {
+        throw new AppError(
+          'Progress must be Accepted, Clarification, or On hold',
+          400,
+          'VALIDATION_ERROR'
+        );
+      }
+      nextProgress = progress;
+      entryProgress = progress;
+    } else if (kind === 'CLARIFICATION') {
+      nextProgress = 'AWAITING_INFO';
+      entryProgress = 'AWAITING_INFO';
+    } else if (kind === 'REPLY' && current.hiringProgress === 'AWAITING_INFO') {
+      nextProgress = 'IN_PROGRESS';
+    }
+
+    const entry = buildHiringUpdateEntry({
+      kind,
+      message,
+      actor: req.user,
+      progress: entryProgress,
+      requiresReply: kind === 'CLARIFICATION',
+    });
+
+    let updates = hiringUpdatesOf(current);
+    if (kind === 'REPLY') {
+      updates = resolveOpenClarifications(updates, req.user._id, entry.at);
+    }
+    updates = [...updates, entry];
+
+    const row = await AssetRequest.findOneAndUpdate(
+      {
+        _id: current._id,
+        isDeleted: false,
+        status: { $in: ['REQUESTED', 'APPROVED'] },
+      },
+      {
+        $set: {
+          hiringProgress: nextProgress,
+          hiringUpdates: updates,
+        },
+      }
+    );
+    if (!row) throw new AppError('Request status changed', 409, 'INVALID_STATUS');
+
+    const typeLabelText = typeLabel(current.requestType);
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: `ASSET_REQUEST.UPDATE.${kind}`,
+      entityType: 'AssetRequest',
+      entityId: row._id,
+      after: { kind, message, hiringProgress: nextProgress, entryId: entry.id },
+      requestId: req.requestId,
+    });
+
+    if (kind === 'REPLY') {
+      const lastRecruiter = [...hiringUpdatesOf(current)]
+        .reverse()
+        .find((u) => u?.actorId && String(u.actorId) !== String(req.user._id));
+      if (lastRecruiter?.actorId) {
+        await notifyUser(lastRecruiter.actorId, {
+          type: 'ASSET_REQUEST_APPROVAL',
+          title: `${typeLabelText} ${current.requestNumber}: reply received`,
+          body: message.slice(0, 180),
+          entityType: 'AssetRequest',
+          entityId: current._id,
+          module: 'assets',
+          meta: { kind: 'update' },
+        });
+      }
+    } else if (current.requestorId) {
+      const titleVerb =
+        kind === 'CLARIFICATION'
+          ? 'needs your input'
+          : kind === 'STATUS'
+            ? 'progress updated'
+            : 'new update';
+      await notifyUser(current.requestorId, {
+        type: 'ASSET_REQUEST_APPROVAL',
+        title: `${typeLabelText} ${current.requestNumber}: ${titleVerb}`,
+        body: message.slice(0, 180),
+        entityType: 'AssetRequest',
+        entityId: current._id,
+        includeWatchers: true,
+        includeReportingManagers: 'chain',
+        module: 'assets',
+        meta: { kind: 'update' },
+      });
+    }
+
+    res.status(201).json({
+      data: {
+        requestId: row._id,
+        hiringProgress: row.hiringProgress,
+        openClarification: hasOpenClarification(row),
+        entry,
+        updates: hiringUpdatesOf(row),
+      },
+    });
+  })
+);
+
+router.patch(
+  '/:id/hiring-details',
+  asyncHandler(async (req, res) => {
+    const current = await AssetRequest.findOne({ _id: req.params.id, isDeleted: false }).populate(
+      'requestorId',
+      'fullName email designation reportingManagerId'
+    );
+    if (!current) throw new AppError('Request not found', 404);
+    if (current.requestType !== 'HIRING') {
+      throw new AppError('Only Hiring Request details can be updated here', 400, 'INVALID_TYPE');
+    }
+    const admin = isRequestAdmin(req.user, req.permissions);
+    if (!admin && !isRequestOwner(req.user, current)) {
+      throw new AppError('Only the requestor can update hiring details', 403, 'FORBIDDEN');
+    }
+    if (!canCreatorEditHiringDetails(current) && !admin) {
+      throw new AppError(
+        'Hiring details can only be updated while clarification is open',
+        409,
+        'INVALID_STATUS'
+      );
+    }
+
+    const detailPatch = pickHiringDetailPatch(req.body);
+    if (!Object.keys(detailPatch).length && !String(req.body.message || req.body.reply || '').trim()) {
+      throw new AppError('No hiring fields or reply message provided', 400, 'VALIDATION_ERROR');
+    }
+
+    const replyMessage = String(req.body.message || req.body.reply || '').trim();
+    let updates = hiringUpdatesOf(current);
+    let nextProgress = current.hiringProgress || 'OPEN';
+    let entry = null;
+    if (replyMessage || Object.keys(detailPatch).length) {
+      const at = new Date().toISOString();
+      updates = resolveOpenClarifications(updates, req.user._id, at);
+      entry = buildHiringUpdateEntry({
+        kind: 'REPLY',
+        message:
+          replyMessage ||
+          `Updated hiring details: ${Object.keys(detailPatch).join(', ')}`,
+        actor: req.user,
+      });
+      entry.at = at;
+      updates = [...updates, entry];
+      if (nextProgress === 'AWAITING_INFO') nextProgress = 'IN_PROGRESS';
+    }
+
+    const row = await AssetRequest.findOneAndUpdate(
+      {
+        _id: current._id,
+        isDeleted: false,
+        requestType: 'HIRING',
+        status: { $in: ['REQUESTED', 'APPROVED'] },
+      },
+      {
+        $set: {
+          ...detailPatch,
+          hiringProgress: nextProgress,
+          hiringUpdates: updates,
+        },
+      }
+    );
+    if (!row) throw new AppError('Request status changed', 409, 'INVALID_STATUS');
+
+    await writeAudit({
+      actorId: req.user._id,
+      actorEmail: req.user.email,
+      action: 'ASSET_REQUEST.HIRING_DETAILS.UPDATE',
+      entityType: 'AssetRequest',
+      entityId: row._id,
+      after: { ...detailPatch, hiringProgress: nextProgress, entryId: entry?.id || null },
+      requestId: req.requestId,
+    });
+
+    const lastRecruiter = [...hiringUpdatesOf(current)]
+      .reverse()
+      .find((u) => u?.actorId && String(u.actorId) !== String(req.user._id));
+    if (lastRecruiter?.actorId) {
+      await notifyUser(lastRecruiter.actorId, {
+        type: 'ASSET_REQUEST_APPROVAL',
+        title: `Hiring ${current.requestNumber}: details updated`,
+        body: (replyMessage || 'Requestor updated hiring details').slice(0, 180),
+        entityType: 'AssetRequest',
+        entityId: current._id,
         module: 'assets',
         meta: { kind: 'update' },
       });

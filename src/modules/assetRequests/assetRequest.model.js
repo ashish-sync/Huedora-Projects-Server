@@ -77,6 +77,27 @@ export const HIRING_CAMP_TYPES = [
 ];
 export const HIRING_METHODS = ['BMD', 'Neuro & Physio', 'Uroflowmetery', 'Diagnostics', 'Dietician', 'Others'];
 
+/** Hiring recruitment progress (independent of REQUESTED → COMPLETED lifecycle). */
+export const HIRING_PROGRESS = [
+  'OPEN',
+  'IN_PROGRESS',
+  'AWAITING_INFO',
+  'SHORTLISTING',
+  'ON_HOLD',
+  'FULFILLED',
+];
+
+export const HIRING_PROGRESS_LABELS = {
+  OPEN: 'Requested',
+  IN_PROGRESS: 'Accepted',
+  AWAITING_INFO: 'Clarification',
+  SHORTLISTING: 'Accepted',
+  ON_HOLD: 'On hold',
+  FULFILLED: 'Assigned',
+};
+
+export const HIRING_UPDATE_KINDS = ['STATUS', 'UPDATE', 'CLARIFICATION', 'REPLY'];
+
 export const REQUEST_STATUSES = ['REQUESTED', 'APPROVED', 'REJECTED', 'CANCELLED', 'COMPLETED'];
 
 /** Types that always require a linked Asset Registry asset. */
@@ -191,6 +212,19 @@ export const AssetRequest = defineCollection('asset_requests', {
   campOpsCampId: '',
   budgetMin: null,
   budgetMax: null,
+  /** Shared workflow progress + threaded updates (all request types). */
+  hiringProgress: 'OPEN',
+  hiringUpdates: [],
+  /** Type-specific process / close-out outcome (non-hiring). */
+  processAction: '',
+  processRemark: '',
+  processReference: '',
+  processAmount: null,
+  scheduledAt: null,
+  scheduleVenue: '',
+  assigneeName: '',
+  assigneeContact: '',
+  issuedAt: null,
   /** Populated when an approver fulfills a hiring request */
   hireeName: '',
   hireeContact: '',
