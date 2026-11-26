@@ -41,7 +41,7 @@ import {
   IN_OUT_PRODUCT_TYPE_ALIASES,
   DOCUMENT_PRODUCT_NAMES,
 } from '../logistics/logistics.constants.js';
-import { nextSequence } from '../../utils/counters.js';
+import { nextRequestNumber } from './requestNumbering.js';
 import { notifyEvent, notifyUser } from '../notifications/notifyEvent.js';
 import { scopeApproversToSubjectManagers } from '../notifications/notificationRecipients.js';
 import { User } from '../users/user.model.js';
@@ -117,6 +117,60 @@ function hasAnyPermission(req, permissions) {
     req.permissions?.has(PERMISSIONS.ALL) ||
     permissions.some((permission) => req.permissions?.has(permission))
   );
+}
+
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Shared list/export filters: type, status, text search, created date range. */
+function applyRequestListQueryFilters(filter, query = {}) {
+  if (query.status) {
+    filter.status = String(query.status).trim().toUpperCase();
+  }
+  if (query.requestType) {
+    const raw = String(query.requestType).trim().toUpperCase();
+    if (raw === 'SERVICE') {
+      filter.requestType = { $in: ['REPAIR', 'MAINTENANCE'] };
+    } else {
+      const t = normalizeRequestType(query.requestType);
+      if (t === 'LOGISTICS') {
+        filter.requestType = { $in: ['LOGISTICS', 'MOVEMENT'] };
+      } else if (t) {
+        filter.requestType = t;
+      }
+    }
+  }
+  const q = String(query.q || '').trim();
+  if (q) {
+    const re = escapeRegex(q);
+    filter.$or = [
+      { requestNumber: { $regex: re, $options: 'i' } },
+      { reason: { $regex: re, $options: 'i' } },
+      { assetName: { $regex: re, $options: 'i' } },
+      { hireeName: { $regex: re, $options: 'i' } },
+      { hiringName: { $regex: re, $options: 'i' } },
+      { trainingTopic: { $regex: re, $options: 'i' } },
+      { trainingName: { $regex: re, $options: 'i' } },
+      { awbNumber: { $regex: re, $options: 'i' } },
+      { processReference: { $regex: re, $options: 'i' } },
+    ];
+  }
+  const dateFrom = String(query.dateFrom || query.from || '').trim();
+  const dateTo = String(query.dateTo || query.to || '').trim();
+  if (dateFrom || dateTo) {
+    filter.createdAt = {};
+    if (dateFrom) {
+      const from = new Date(`${dateFrom}T00:00:00.000`);
+      if (Number.isFinite(from.getTime())) filter.createdAt.$gte = from.toISOString();
+    }
+    if (dateTo) {
+      const to = new Date(`${dateTo}T23:59:59.999`);
+      if (Number.isFinite(to.getTime())) filter.createdAt.$lte = to.toISOString();
+    }
+    if (!filter.createdAt.$gte && !filter.createdAt.$lte) delete filter.createdAt;
+  }
+  return filter;
 }
 
 function assertCreatePermission(req, requestType) {
@@ -821,20 +875,7 @@ router.get(
     const filter = { isDeleted: false };
     applyArchiveListFilter(filter, req.query);
     await applyActorListScope(filter, req.user, req.permissions);
-    if (req.query.status) filter.status = req.query.status;
-    if (req.query.requestType) {
-      const raw = String(req.query.requestType).trim().toUpperCase();
-      if (raw === 'SERVICE') {
-        filter.requestType = { $in: ['REPAIR', 'MAINTENANCE'] };
-      } else {
-        const t = normalizeRequestType(req.query.requestType);
-        if (t === 'LOGISTICS') {
-          filter.requestType = { $in: ['LOGISTICS', 'MOVEMENT'] };
-        } else {
-          filter.requestType = t;
-        }
-      }
-    }
+    applyRequestListQueryFilters(filter, req.query);
     const [data, total] = await Promise.all([
       AssetRequest.find(filter)
         .populate('requestorId', 'fullName email designation reportingManagerId')
@@ -859,6 +900,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const exportFilter = { isDeleted: false };
     await applyActorListScope(exportFilter, req.user, req.permissions);
+    applyRequestListQueryFilters(exportFilter, req.query);
     const rows = await AssetRequest.find(exportFilter)
       .populate('requestorId', 'fullName email designation reportingManagerId')
       .populate('approverId', 'fullName email')
@@ -1581,7 +1623,7 @@ router.post(
     }
 
     const row = await AssetRequest.create({
-      requestNumber: await nextSequence('assetRequestNumber', 'ARQ'),
+      requestNumber: await nextRequestNumber(requestType),
       requestType,
       status: 'REQUESTED',
       requestorId: req.user._id,
@@ -2711,17 +2753,32 @@ router.post(
 
     let nextProgress = current.hiringProgress || 'OPEN';
     let entryProgress = null;
+    let closeAsHcwExists = false;
     if (kind === 'STATUS') {
       const progress = normalizeHiringProgress(req.body.progress);
-      if (!['IN_PROGRESS', 'AWAITING_INFO', 'ON_HOLD'].includes(progress)) {
+      const allowedProgress =
+        current.requestType === 'HIRING'
+          ? ['IN_PROGRESS', 'AWAITING_INFO', 'ON_HOLD', 'HCW_EXISTS']
+          : ['IN_PROGRESS', 'AWAITING_INFO', 'ON_HOLD'];
+      if (!allowedProgress.includes(progress)) {
         throw new AppError(
-          'Progress must be Accepted, Clarification, or On hold',
+          current.requestType === 'HIRING'
+            ? 'Progress must be Accepted, Clarification, On hold, or HCW Exists'
+            : 'Progress must be Accepted, Clarification, or On hold',
           400,
           'VALIDATION_ERROR'
         );
       }
+      if (progress === 'HCW_EXISTS' && current.requestType !== 'HIRING') {
+        throw new AppError(
+          'HCW Exists is only available for Hiring requests',
+          400,
+          'INVALID_TYPE'
+        );
+      }
       nextProgress = progress;
       entryProgress = progress;
+      closeAsHcwExists = progress === 'HCW_EXISTS' && current.requestType === 'HIRING';
     } else if (kind === 'CLARIFICATION') {
       nextProgress = 'AWAITING_INFO';
       entryProgress = 'AWAITING_INFO';
@@ -2738,11 +2795,12 @@ router.post(
     });
 
     let updates = hiringUpdatesOf(current);
-    if (kind === 'REPLY') {
+    if (kind === 'REPLY' || closeAsHcwExists) {
       updates = resolveOpenClarifications(updates, req.user._id, entry.at);
     }
     updates = [...updates, entry];
 
+    const completedAt = closeAsHcwExists ? entry.at || new Date().toISOString() : null;
     const row = await AssetRequest.findOneAndUpdate(
       {
         _id: current._id,
@@ -2750,10 +2808,17 @@ router.post(
         status: { $in: ['REQUESTED', 'APPROVED'] },
       },
       {
-        $set: {
-          hiringProgress: nextProgress,
-          hiringUpdates: updates,
-        },
+        $set: closeAsHcwExists
+          ? {
+              status: 'COMPLETED',
+              completedAt,
+              hiringProgress: 'HCW_EXISTS',
+              hiringUpdates: updates,
+            }
+          : {
+              hiringProgress: nextProgress,
+              hiringUpdates: updates,
+            },
       }
     );
     if (!row) throw new AppError('Request status changed', 409, 'INVALID_STATUS');
@@ -2765,7 +2830,13 @@ router.post(
       action: `ASSET_REQUEST.UPDATE.${kind}`,
       entityType: 'AssetRequest',
       entityId: row._id,
-      after: { kind, message, hiringProgress: nextProgress, entryId: entry.id },
+      after: {
+        kind,
+        message,
+        hiringProgress: closeAsHcwExists ? 'HCW_EXISTS' : nextProgress,
+        status: closeAsHcwExists ? 'COMPLETED' : current.status,
+        entryId: entry.id,
+      },
       requestId: req.requestId,
     });
 
@@ -2785,8 +2856,9 @@ router.post(
         });
       }
     } else if (current.requestorId) {
-      const titleVerb =
-        kind === 'CLARIFICATION'
+      const titleVerb = closeAsHcwExists
+        ? 'closed — HCW Exists'
+        : kind === 'CLARIFICATION'
           ? 'needs your input'
           : kind === 'STATUS'
             ? 'progress updated'
@@ -2807,6 +2879,7 @@ router.post(
     res.status(201).json({
       data: {
         requestId: row._id,
+        status: row.status,
         hiringProgress: row.hiringProgress,
         openClarification: hasOpenClarification(row),
         entry,

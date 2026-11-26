@@ -37,6 +37,9 @@ export function normalizeHiringProgress(raw) {
     COMPLETED: 'FULFILLED',
     CLOSED: 'FULFILLED',
     ASSIGNED: 'FULFILLED',
+    HCW_EXISTS: 'HCW_EXISTS',
+    HCWEXISTS: 'HCW_EXISTS',
+    'HCW EXISTS': 'HCW_EXISTS',
   };
   return aliases[value] || aliases[String(raw || '').trim().toUpperCase()] || '';
 }

@@ -14,6 +14,7 @@ describe('hiringUpdates helpers', () => {
   it('normalizes progress and kinds', () => {
     assert.equal(normalizeHiringProgress('awaiting info'), 'AWAITING_INFO');
     assert.equal(normalizeHiringProgress('Shortlisting'), 'SHORTLISTING');
+    assert.equal(normalizeHiringProgress('HCW Exists'), 'HCW_EXISTS');
     assert.equal(normalizeHiringUpdateKind('clarification'), 'CLARIFICATION');
     assert.equal(normalizeHiringUpdateKind('nope'), '');
   });

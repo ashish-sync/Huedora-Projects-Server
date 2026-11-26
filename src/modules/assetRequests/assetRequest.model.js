@@ -84,6 +84,7 @@ export const HIRING_PROGRESS = [
   'AWAITING_INFO',
   'SHORTLISTING',
   'ON_HOLD',
+  'HCW_EXISTS',
   'FULFILLED',
 ];
 
@@ -93,6 +94,7 @@ export const HIRING_PROGRESS_LABELS = {
   AWAITING_INFO: 'Clarification',
   SHORTLISTING: 'Accepted',
   ON_HOLD: 'On hold',
+  HCW_EXISTS: 'HCW Exists',
   FULFILLED: 'Assigned',
 };
 
