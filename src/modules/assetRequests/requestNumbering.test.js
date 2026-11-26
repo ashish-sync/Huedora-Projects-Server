@@ -23,25 +23,32 @@ describe('requestNumbering', () => {
     assert.equal(requestTypeLetter('unknown'), 'O');
   });
 
-  it('formats Letter-MM-SEQ like R-11-001', () => {
-    assert.equal(formatRequestNumber('R', '11', 1), 'R-11-001');
-    assert.equal(formatRequestNumber('G', 11, 42), 'G-11-042');
-    assert.equal(formatRequestNumber('h', '3', 7), 'H-03-007');
+  it('formats LetterYY-MM-SEQ like R26-11-003', () => {
+    assert.equal(formatRequestNumber('R', '26', '11', 3), 'R26-11-003');
+    assert.equal(formatRequestNumber('G', 26, 11, 42), 'G26-11-042');
+    assert.equal(formatRequestNumber('h', '27', '3', 7), 'H27-03-007');
   });
 
-  it('parses the new request number shape', () => {
-    assert.deepEqual(parseRequestNumber('R-11-001'), {
+  it('parses the LetterYY-MM-SEQ shape', () => {
+    assert.deepEqual(parseRequestNumber('R26-11-003'), {
       letter: 'R',
+      yy: '26',
       mm: '11',
-      sequence: 1,
+      sequence: 3,
     });
+    assert.equal(parseRequestNumber('R-11-001'), null);
     assert.equal(parseRequestNumber('ARQ-000001'), null);
   });
 
-  it('builds year-month counter keys per letter', () => {
+  it('builds year-month counter keys and yy from calendar year', () => {
     const period = requestNumberPeriod(new Date(2026, 10, 15)); // Nov 2026
+    assert.equal(period.yy, '26');
     assert.equal(period.mm, '11');
     assert.equal(period.periodKey, '202611');
     assert.equal(requestNumberCounterName('R', period.periodKey), 'requestOne.R.202611');
+
+    const nextYear = requestNumberPeriod(new Date(2027, 0, 5)); // Jan 2027
+    assert.equal(nextYear.yy, '27');
+    assert.equal(nextYear.mm, '01');
   });
 });

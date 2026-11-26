@@ -854,12 +854,15 @@ router.patch(
       if (!grantOk.ok) {
         throw new AppError(grantOk.message, 403, grantOk.code || 'PRIVILEGE_ESCALATION');
       }
-      if (req.body.roleIds !== undefined) {
-        user.roleIds = access.roleIds;
-      }
-      if (req.body.grantedPermissions !== undefined) {
-        user.grantedPermissions = access.grantedPermissions;
-      }
+      // Exact replace (same as POST create). Empty [] must clear via __clearKeys —
+      // blank-preserve merge otherwise keeps prior roleIds / grantedPermissions.
+      user.roleIds = access.roleIds;
+      user.grantedPermissions = access.grantedPermissions;
+      user.__clearKeys = [
+        ...(Array.isArray(user.__clearKeys) ? user.__clearKeys : []),
+        'roleIds',
+        'grantedPermissions',
+      ];
     }
     if (req.body.reportingManagerId !== undefined) {
       user.reportingManagerId = await assertReportingManager({
