@@ -385,6 +385,13 @@ export async function ensureListIndexes() {
         { key: { isDeleted: 1, campDate: 1, startTime: 1 }, name: 'list_deleted_date_time' },
         { key: { isDeleted: 1, clientId: 1, campDate: 1 }, name: 'list_deleted_client_date' },
         { key: { isDeleted: 1, status: 1, lifecycleStage: 1 }, name: 'list_deleted_status_stage' },
+        {
+          key: { campId: 1 },
+          name: 'uniq_campId',
+          unique: true,
+          // Non-blocking so boot survives until gated dedupe clears collisions.
+          blocking: false,
+        },
       ],
     },
     {

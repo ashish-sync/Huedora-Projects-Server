@@ -1,17 +1,16 @@
 import { CampOpsCamp } from './campOps.model.js';
-import { buildCampFilter, isCampOverdue, trimStr, withCampSchedule } from './campOps.helpers.js';
-import { withCampLifecycle } from './campOps.lifecycle.js';
-import { withRequestReview } from './campOps.requestReview.js';
+import { buildCampFilter, isCampOverdue, trimStr } from './campOps.helpers.js';
 import { matchesExecutionFilter } from './campStageFilters.js';
+import {
+  cheapEffectiveCamp,
+  cheapIsOverdue,
+  cheapRequestReviewStatus,
+} from './campOps.listDto.js';
 import { MAX_CAMP_EXPORT_ROWS } from '../../utils/spreadsheetLimits.js';
 import { resolveCampClientScope, filterRowsByCampClientScope } from './campOps.clientAccess.js';
 
 function toPlainCamp(row) {
   return row && typeof row.toObject === 'function' ? row.toObject() : row;
-}
-
-function enrichCampForExportFilter(camp = {}) {
-  return withRequestReview(withCampLifecycle(withCampSchedule(toPlainCamp(camp) || {})));
 }
 
 export function serializeExportTemplate(row) {
@@ -37,6 +36,57 @@ export function normalizeExportQuery(query = {}) {
   return next;
 }
 
+export function campIdsFromRows(rows = []) {
+  return [...new Set(
+    (rows || [])
+      .map((row) => String(row?.campId || '').trim())
+      .filter(Boolean),
+  )].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Diff list vs export Camp ID sets for the same filter universe.
+ */
+export function diffCampIdSets(listIds = [], exportIds = []) {
+  const list = new Set(listIds);
+  const exported = new Set(exportIds);
+  return {
+    missingFromExport: listIds.filter((id) => !exported.has(id)),
+    extraInExport: exportIds.filter((id) => !list.has(id)),
+    listCount: listIds.length,
+    exportCount: exportIds.length,
+  };
+}
+
+/**
+ * Apply the same in-memory predicates used by GET /camps list paging.
+ * Uses cheap* helpers so list and export cannot drift.
+ */
+export function filterCampsForExportPredicates(rows = [], query = {}) {
+  const overdueOnly = query.overdue === '1' || query.overdue === 'true';
+  const requestReviewStatus = trimStr(query.requestReviewStatus);
+  const executionFilter = trimStr(query.executionFilter);
+  let next = (rows || []).map(toPlainCamp);
+
+  if (requestReviewStatus) {
+    next = next.filter((row) => cheapRequestReviewStatus(row, requestReviewStatus));
+  }
+  if (executionFilter) {
+    next = next.filter((row) => matchesExecutionFilter(cheapEffectiveCamp(row), executionFilter));
+  }
+  if (overdueOnly) {
+    next = next.filter((row) => cheapIsOverdue(row) || isCampOverdue(row));
+  }
+  return next;
+}
+
+/**
+ * Fetch camps for Excel/CSV export.
+ * - Mongo/File filter mirrors Manage via buildCampFilter + scopeCampFilter.
+ * - In-memory predicates mirror list (cheapRequestReviewStatus / execution / overdue).
+ * - Does NOT pre-truncate before those predicates (root cause of missing Camp IDs).
+ * - Final spreadsheet cap still applies; truncated=true when matched > cap.
+ */
 export async function fetchCampsForExport(req, query = {}, { scopeCampFilter }) {
   const MAX_CAMP_EXPORT = MAX_CAMP_EXPORT_ROWS;
   const normalized = normalizeExportQuery(query);
@@ -44,38 +94,37 @@ export async function fetchCampsForExport(req, query = {}, { scopeCampFilter }) 
   const requestReviewStatus = trimStr(normalized.requestReviewStatus);
   const executionFilter = trimStr(normalized.executionFilter);
   const scoped = await resolveCampClientScope(req.user);
-  if (Array.isArray(scoped) && scoped.length === 0) return [];
+  if (Array.isArray(scoped) && scoped.length === 0) {
+    return { camps: [], truncated: false, matchedCount: 0, returnedCount: 0 };
+  }
 
   const filter = await scopeCampFilter(req, buildCampFilter(normalized));
-  const inMemoryFilter = Boolean(requestReviewStatus || executionFilter || overdueOnly || Array.isArray(scoped));
-  const fetchLimit = inMemoryFilter ? MAX_CAMP_EXPORT * 4 : MAX_CAMP_EXPORT;
-
-  const finish = (rows) => applyExportProgramScope(rows, scoped).slice(0, MAX_CAMP_EXPORT);
-
-  if (requestReviewStatus) {
-    const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt').limit(fetchLimit);
-    return finish(
-      rows.filter((row) => enrichCampForExportFilter(row).requestReviewStatus === requestReviewStatus),
-    );
-  }
-
-  if (executionFilter) {
-    const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt').limit(fetchLimit);
-    return finish(
-      rows
-        .map((row) => enrichCampForExportFilter(row))
-        .filter((row) => matchesExecutionFilter(row, executionFilter)),
-    );
-  }
-
   if (overdueOnly) {
     filter.status = 'approved';
-    const approved = await CampOpsCamp.find(filter).sort('-campDate -createdAt').limit(fetchLimit);
-    return finish(approved.filter(isCampOverdue));
   }
 
-  const rows = await CampOpsCamp.find(filter).sort('-campDate -createdAt').limit(fetchLimit);
-  return finish(rows);
+  const needsInMemoryPredicates = Boolean(requestReviewStatus || executionFilter || overdueOnly);
+
+  // Unrestricted find for predicate paths — never drop rows before JS filters.
+  // Direct path: fetch one past the cap so we can detect truncation.
+  const cursor = CampOpsCamp.find(filter).sort('-campDate -createdAt');
+  const rows = needsInMemoryPredicates
+    ? await cursor.exec()
+    : await cursor.limit(MAX_CAMP_EXPORT + 1).exec();
+
+  let matched = filterCampsForExportPredicates(rows, normalized);
+  matched = applyExportProgramScope(matched, scoped);
+
+  const matchedCount = matched.length;
+  const truncated = matchedCount > MAX_CAMP_EXPORT;
+  const camps = truncated ? matched.slice(0, MAX_CAMP_EXPORT) : matched;
+
+  return {
+    camps,
+    truncated,
+    matchedCount,
+    returnedCount: camps.length,
+  };
 }
 
 export function parseExportColumnKeys(raw) {

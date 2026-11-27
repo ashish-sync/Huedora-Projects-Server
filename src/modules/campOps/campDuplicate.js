@@ -352,12 +352,38 @@ export async function createCampEnsuringNoDuplicate(CampModel, doc, { client = n
 
   return withDuplicateKeyLock(key, async () => {
     await assertNoDuplicateCamp({ client, row: checkRow });
+
+    const { campIdExists, isCampIdUniqueViolation, allocateCampId } = await import('./campIdSequence.js');
+
+    const attemptCreate = async () => {
+      const campId = String(doc.campId || '').trim();
+      if (campId && (await campIdExists(campId))) {
+        const conflict = new Error(`Camp ID already exists: ${campId}`);
+        conflict.code = 'CAMP_ID_CONFLICT';
+        throw conflict;
+      }
+      return CampModel.create(doc);
+    };
+
     try {
-      return await CampModel.create(doc);
+      return await attemptCreate();
     } catch (err) {
       if (isMongoDuplicateKeyError(err)) {
         const existing = await findExistingDuplicateCamp({ client, row: checkRow });
         throw new CampDuplicateError(existing || { campId: 'existing camp' });
+      }
+      // Unique campId collision: burn prior id, allocate once, single retry.
+      if (isCampIdUniqueViolation(err)) {
+        doc.campId = await allocateCampId(doc.campDate || checkRow?.campDate || new Date());
+        try {
+          return await attemptCreate();
+        } catch (retryErr) {
+          if (isMongoDuplicateKeyError(retryErr)) {
+            const existing = await findExistingDuplicateCamp({ client, row: checkRow });
+            throw new CampDuplicateError(existing || { campId: 'existing camp' });
+          }
+          throw retryErr;
+        }
       }
       throw err;
     }

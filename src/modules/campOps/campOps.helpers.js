@@ -279,6 +279,12 @@ export function isCampOverdue(camp) {
 
 export function buildCampFilter(query = {}) {
   const filter = { isDeleted: false };
+  const deletedMode = String(query.deleted ?? '').trim().toLowerCase();
+  if (deletedMode === '1' || deletedMode === 'true' || deletedMode === 'only') {
+    filter.isDeleted = true;
+  } else if (deletedMode === 'all' || deletedMode === '*') {
+    delete filter.isDeleted;
+  }
   applyArchiveListFilter(filter, query);
 
   const status = trimStr(query.status);
@@ -562,30 +568,13 @@ export function buildCampFilter(query = {}) {
   return filter;
 }
 
+/**
+ * Mint next Camp ID (YY-MM-####) via atomic monthly counter.
+ * Soft-deleted / burned sequences are never reused.
+ */
 export async function generateCampId(campDate = new Date()) {
-  const date =
-    typeof campDate === 'string'
-      ? new Date(parseLocalDateInput(campDate) || campDate)
-      : new Date(campDate);
-  const yy = String(date.getFullYear()).slice(-2);
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const prefix = `${yy}-${mm}-`;
-  const { queryCollection } = await import('../../store/persistence.js');
-  // Project campId only — never full-hydrate camp_ops_camps into the process cache.
-  const { data: rows } = await queryCollection('camp_ops_camps', {
-    filter: {
-      isDeleted: { $ne: true },
-      campId: { $regex: `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}` },
-    },
-    projection: { campId: 1 },
-  });
-  let maxSeq = 0;
-  for (const row of rows) {
-    const parts = String(row.campId || '').split('-');
-    const seq = Number(parts[2]);
-    if (!Number.isNaN(seq) && seq > maxSeq) maxSeq = seq;
-  }
-  return `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
+  const { allocateCampId } = await import('./campIdSequence.js');
+  return allocateCampId(campDate);
 }
 
 export function captureSubmissionTracking(now = new Date()) {
@@ -897,11 +886,4 @@ export function validateMappedImportRows(rows, { source = 'excel', allowPartial 
 }
 
 /** Soft-delete (archive) a camp — used by admin delete actions. */
-export function archiveCampRecord(camp, { actorId = null, deletedAt = null } = {}) {
-  if (!camp) return camp;
-  const now = deletedAt || new Date().toISOString();
-  camp.isDeleted = true;
-  camp.deletedAt = now;
-  camp.deletedBy = actorId ? String(actorId) : null;
-  return camp;
-}
+export { archiveCampRecord, restoreCampRecord } from './campLifecycle.js';

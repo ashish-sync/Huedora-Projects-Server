@@ -189,6 +189,46 @@ export async function hardDeleteCampsByCampaignTypeExact(targetType, { dryRun = 
   }
 
   const ids = matching.map((c) => c._id);
+
+  // Full before-snapshots so hard-delete remains recoverable via audit.
+  try {
+    const { writeAudit } = await import('./audit.js');
+    for (const camp of matching) {
+      const before =
+        typeof camp.toObject === 'function' ? camp.toObject() : { ...camp };
+      await writeAudit({
+        actorId: 'system:hard-delete-campaign-type',
+        actorType: 'SYSTEM',
+        action: 'SYSTEM.PURGE_CAMPS_BY_CAMPAIGN_TYPE',
+        entityType: 'camp_ops_camp',
+        entityId: camp._id,
+        before,
+        after: null,
+        reason: `hard_delete campaignType=${String(targetType || '').trim()}`,
+        message: `Hard-deleted camp ${camp.campId || camp._id} before permanent remove`,
+      });
+    }
+  } catch (err) {
+    console.error(
+      '[camps-hard-delete] Failed to write before-snapshots — aborting hard delete:',
+      err?.message || err
+    );
+    return {
+      ok: false,
+      skipped: false,
+      dryRun: false,
+      completed: false,
+      error: `audit_before_snapshot_failed: ${err?.message || err}`,
+      collection: CAMP_OPS_COLLECTION,
+      mongoCollection: MONGO_COLLECTION,
+      field: CAMP_CAMPAIGN_TYPE_FIELD,
+      campaignType: String(targetType || '').trim(),
+      campaignTypeNormalized: normalizedTarget,
+      matchingCount: matching.length,
+      deletedCount: 0,
+    };
+  }
+
   const { deletedCount } = await hardDeleteCampIds(ids);
 
   return {

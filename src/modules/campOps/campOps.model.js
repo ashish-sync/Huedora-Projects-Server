@@ -4,6 +4,13 @@ import { softDelete, archiveFields } from '../common/counter.model.js';
 export const CampOpsCamp = defineCollection('camp_ops_camps', {
   ...softDelete,
   ...archiveFields,
+  /** Optional reason captured on soft-delete. */
+  deletionReason: '',
+  restoredAt: null,
+  restoredBy: null,
+  restoreReason: '',
+  rehydratedAt: null,
+  rehydratedFromAudit: false,
   campId: '',
   /** Canonical duplicate guard: client + doctor + division + camp date + start time.
    * Absent/null when incomplete — never store empty string (Mongo partial unique index). */

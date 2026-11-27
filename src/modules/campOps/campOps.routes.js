@@ -92,6 +92,16 @@ import {
   validateMappedImportRows,
   archiveCampRecord,
 } from './campOps.helpers.js';
+import {
+  restoreCampById,
+  createRestoreBatch,
+  rollbackRestoreBatch,
+} from './campLifecycle.js';
+import {
+  buildCampRecoveryInventory,
+  recoveryInventoryToCsv,
+} from './campRecoveryInventory.js';
+import { rehydrateHistoricalCamps } from './campHistoricalRehydrate.js';
 import { matchesExecutionFilter } from './campStageFilters.js';
 import {
   enrichCampList,
@@ -507,9 +517,18 @@ async function paginateCampsInMemory(filter, { page, limit, skip }, predicate = 
   return paginated(pageRows, total, page, limit);
 }
 
-async function loadCampForUser(req, campId) {
-  const camp = await CampOpsCamp.findOne({ _id: campId, isDeleted: false });
+async function loadCampForUser(req, campId, { allowDeleted = false } = {}) {
+  const filter = allowDeleted
+    ? { _id: campId }
+    : { _id: campId, isDeleted: false };
+  const camp = await CampOpsCamp.findOne(filter);
   if (!camp) throw new AppError('Camp not found', 404, 'NOT_FOUND');
+  if (camp.isDeleted === true && !allowDeleted) {
+    throw new AppError('Camp not found', 404, 'NOT_FOUND');
+  }
+  if (camp.isDeleted === true && !isCampAdmin(req)) {
+    throw new AppError('Camp not found', 404, 'NOT_FOUND');
+  }
   await assertCampClientAccess(req.user, camp);
   return camp;
 }
@@ -541,12 +560,21 @@ async function scopeEntityIdFilter(req, filter, field = '_id') {
   return applyClientScopeToIdField(filter, scoped, field);
 }
 
-async function sendCampExportResponse(res, camps, columnKeys, format) {
+async function sendCampExportResponse(res, camps, columnKeys, format, meta = {}) {
   const columns = resolveExportColumns(columnKeys);
   const headers = campFullExportHeaders(columns);
   const enriched = await enrichCampsAssignedHcwForExport(camps);
   const rows = campFullExportRows(enriched, columns);
   const filename = format === 'csv' ? 'Camps_Export.csv' : 'Camps_Export.xlsx';
+  if (meta.matchedCount != null) {
+    res.setHeader('X-Tylo-Export-Matched', String(meta.matchedCount));
+  }
+  if (meta.returnedCount != null) {
+    res.setHeader('X-Tylo-Export-Returned', String(meta.returnedCount));
+  }
+  if (meta.truncated) {
+    res.setHeader('X-Tylo-Export-Truncated', '1');
+  }
   if (format === 'csv') {
     sendCsv(res, filename, headers, rows);
     return;
@@ -1345,8 +1373,8 @@ router.post(
       throw new AppError('Select at least one export column', 400, 'VALIDATION_ERROR');
     }
     const format = parseExportFormat(body.format);
-    const camps = await fetchCampsForExport(req, query, { scopeCampFilter });
-    await sendCampExportResponse(res, camps, columns, format);
+    const result = await fetchCampsForExport(req, query, { scopeCampFilter });
+    await sendCampExportResponse(res, result.camps, columns, format, result);
   }),
 );
 
@@ -1358,10 +1386,10 @@ router.get(
     const query = { ...req.query };
     delete query.columns;
     delete query.format;
-    const camps = await fetchCampsForExport(req, query, { scopeCampFilter });
+    const result = await fetchCampsForExport(req, query, { scopeCampFilter });
     const columns = parseExportColumnKeys(req.query.columns);
     const format = parseExportFormat(req.query.format);
-    await sendCampExportResponse(res, camps, columns, format);
+    await sendCampExportResponse(res, result.camps, columns, format, result);
   }),
 );
 
@@ -1443,9 +1471,18 @@ router.post(
         const before = camp.toObject();
 
         if (config.archive) {
-          archiveCampRecord(camp, { actorId: a.id });
+          const deletionReason = trimStr(req.body?.deletionReason || req.body?.reason || req.body?.remarks);
+          archiveCampRecord(camp, { actorId: a.id, deletionReason: deletionReason || null });
           await camp.save();
-          await audit(req, 'camp_ops.camp_delete', 'camp_ops_camp', camp._id, before, camp.toObject());
+          await audit(
+            req,
+            'camp_ops.camp_delete',
+            'camp_ops_camp',
+            camp._id,
+            before,
+            camp.toObject(),
+            { reason: deletionReason || null },
+          );
           results.success.push({ id: camp._id, campId: camp.campId });
           continue;
         }
@@ -1703,10 +1740,153 @@ router.post(
 );
 
 router.get(
+  '/camps/recovery/inventory',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const inventory = await buildCampRecoveryInventory();
+    if (String(req.query.format || '').toLowerCase() === 'csv') {
+      const csv = recoveryInventoryToCsv(inventory);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="camp-recovery-inventory.csv"');
+      return res.send(csv);
+    }
+    res.json({ data: inventory });
+  }),
+);
+
+router.post(
+  '/camps/restore-batch',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const reason = trimStr(req.body?.reason || req.body?.restoreReason);
+    const dryRun = req.body?.dryRun === true || req.body?.dryRun === '1';
+    if (!reason) {
+      throw new AppError('Restore reason is required', 400, 'RESTORE_REASON_REQUIRED');
+    }
+    const a = actor(req);
+    const result = await createRestoreBatch({
+      ids,
+      reason,
+      actorId: a.id,
+      dryRun,
+    });
+    if (!dryRun) {
+      for (const row of result.results || []) {
+        if (!row.ok || !row.restored || !row.after) continue;
+        await audit(
+          req,
+          'camp_ops.camp_restore',
+          'camp_ops_camp',
+          row.id,
+          row.before || null,
+          row.after,
+          { reason },
+        );
+      }
+    }
+    res.json({
+      data: {
+        batchId: result.batchId,
+        dryRun: result.dryRun,
+        results: result.results,
+        restoredIds: result.restoredIds,
+      },
+    });
+  }),
+);
+
+router.post(
+  '/camps/restore-batch/:batchId/rollback',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const a = actor(req);
+    const reason = trimStr(req.body?.reason) || `rollback:${req.params.batchId}`;
+    const result = await rollbackRestoreBatch(req.params.batchId, {
+      actorId: a.id,
+      reason,
+    });
+    res.json({ data: result });
+  }),
+);
+
+router.post(
+  '/camps/recovery/rehydrate',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const apply = req.body?.apply === true || req.body?.apply === '1';
+    const dryRun = !apply || req.body?.dryRun === true;
+    if (apply && String(process.env.TYLO_CAMP_REHYDRATE || '') !== '1') {
+      throw new AppError(
+        'Rehydrate apply is gated. Set TYLO_CAMP_REHYDRATE=1 on the server after dry-run review.',
+        403,
+        'REHYDRATE_GATED',
+      );
+    }
+    const campIds = Array.isArray(req.body?.campIds) ? req.body.campIds : null;
+    const a = actor(req);
+    const result = await rehydrateHistoricalCamps({
+      dryRun,
+      apply,
+      actorId: a.id,
+      campIds,
+    });
+    res.json({ data: result });
+  }),
+);
+
+router.post(
+  '/camps/:id/restore',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const reason = trimStr(req.body?.reason || req.body?.restoreReason);
+    if (!reason) {
+      throw new AppError('Restore reason is required', 400, 'RESTORE_REASON_REQUIRED');
+    }
+    const a = actor(req);
+    let result;
+    try {
+      result = await restoreCampById(req.params.id, { actorId: a.id, reason });
+    } catch (err) {
+      if (err.code === 'NOT_FOUND') throw new AppError('Camp not found', 404, 'NOT_FOUND');
+      if (err.code === 'RESTORE_REASON_REQUIRED') {
+        throw new AppError(err.message, 400, err.code);
+      }
+      throw err;
+    }
+    if (result.restored) {
+      await audit(
+        req,
+        'camp_ops.camp_restore',
+        'camp_ops_camp',
+        result.camp._id,
+        result.before,
+        result.after,
+        { reason },
+      );
+    }
+    res.json({
+      data: await enrichCamp(result.camp),
+      meta: { restored: result.restored, alreadyLive: result.alreadyLive },
+    });
+  }),
+);
+
+router.get(
   '/camps/:id',
   canRead,
   asyncHandler(async (req, res) => {
-    const camp = await loadCampForUser(req, req.params.id);
+    const allowDeleted =
+      isCampAdmin(req) &&
+      (req.query.deleted === '1' ||
+        req.query.deleted === 'true' ||
+        req.query.includeDeleted === '1' ||
+        req.query.includeDeleted === 'true');
+    const camp = await loadCampForUser(req, req.params.id, { allowDeleted });
+    if (camp.isDeleted === true) {
+      // Trash inspect: read-only enrichment, no lifecycle promotions.
+      return res.json({ data: await enrichCamp(camp) });
+    }
     let campChanged = false;
     if (promoteAssignedCampToExecutionIfDue(camp)) {
       campChanged = true;
@@ -2920,9 +3100,18 @@ router.delete(
     const camp = await loadCampForUser(req, req.params.id);
     const before = camp.toObject();
     const a = actor(req);
-    archiveCampRecord(camp, { actorId: a.id });
+    const deletionReason = trimStr(req.body?.deletionReason || req.body?.reason || req.query?.reason);
+    archiveCampRecord(camp, { actorId: a.id, deletionReason: deletionReason || null });
     await camp.save();
-    await audit(req, 'camp_ops.camp_delete', 'camp_ops_camp', camp._id, before, camp.toObject());
+    await audit(
+      req,
+      'camp_ops.camp_delete',
+      'camp_ops_camp',
+      camp._id,
+      before,
+      camp.toObject(),
+      { reason: deletionReason || null },
+    );
     res.json({ message: 'Camp archived successfully', data: { ok: true } });
   }),
 );

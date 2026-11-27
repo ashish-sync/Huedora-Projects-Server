@@ -6,6 +6,17 @@ import { EXECUTION_STATUS } from './campOps.lifecycle.js';
 import { resolveExportColumns } from './campFullExport.js';
 import { parseExportColumnKeys, parseExportFormat } from './campOps.export.js';
 
+test('buildCampFilter supports deleted=1 and deleted=all admin visibility', () => {
+  const onlyDeleted = buildCampFilter({ deleted: '1' });
+  assert.equal(onlyDeleted.isDeleted, true);
+
+  const all = buildCampFilter({ deleted: 'all' });
+  assert.equal(all.isDeleted, undefined);
+
+  const live = buildCampFilter({});
+  assert.equal(live.isDeleted, false);
+});
+
 test('buildCampFilter scopes request stage lifecycle for pending review filters', () => {
   const filter = buildCampFilter({
     lifecycleStage: 'request',
